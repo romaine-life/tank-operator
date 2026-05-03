@@ -108,6 +108,14 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
   }
 }
 
+function readCodexNoAltScreenFlag(): boolean {
+  try {
+    return localStorage.getItem("tankCodexNoAltScreen") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function readCompletionSoundEnabled(): boolean {
   try {
     return localStorage.getItem(COMPLETION_SOUND_ENABLED_KEY) !== "0";
@@ -648,7 +656,10 @@ export function App() {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({
+          mode,
+          codex_no_alt_screen: mode === "codex_subscription" && readCodexNoAltScreenFlag(),
+        }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = await res.json();

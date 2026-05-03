@@ -233,6 +233,7 @@ class SessionManager:
         owner: str,
         mode: str,
         glimmung_context: dict[str, Any] | None = None,
+        codex_no_alt_screen: bool = False,
     ) -> dict[str, Any]:
         owner_label = _owner_label(owner)
         selector_labels = {"tank-operator/session-id": session_id}
@@ -301,6 +302,10 @@ class SessionManager:
                         {
                             "name": "TANK_GLIMMUNG_VALIDATION_URL",
                             "value": str((glimmung_context or {}).get("validation_url") or ""),
+                        },
+                        {
+                            "name": "TANK_CODEX_NO_ALT_SCREEN",
+                            "value": "1" if codex_no_alt_screen else "",
                         },
                         # Force claude (and anything else using the
                         # `supports-hyperlinks` npm lib) to emit OSC 8
@@ -456,6 +461,7 @@ class SessionManager:
         owner: str,
         mode: str = DEFAULT_SESSION_MODE,
         glimmung_context: dict[str, Any] | None = None,
+        codex_no_alt_screen: bool = False,
     ) -> SessionInfo:
         assert self._apps is not None
         if mode not in SESSION_MODES:
@@ -477,7 +483,13 @@ class SessionManager:
         session_id = uuid.uuid4().hex[:10]
         await self._apps.create_namespaced_deployment(
             namespace=SESSIONS_NAMESPACE,
-            body=self._deployment_manifest(session_id, owner, mode, glimmung_context),
+            body=self._deployment_manifest(
+                session_id,
+                owner,
+                mode,
+                glimmung_context,
+                codex_no_alt_screen=codex_no_alt_screen,
+            ),
         )
         # Seed activity so the reaper gives the session a full
         # IDLE_TIMEOUT to receive its first WS before being eligible

@@ -23,6 +23,7 @@ from .credentials_seed import CredentialsSeedError, harvest_and_save, harvest_co
 from .exec_proxy import bridge
 from .profiles import ProfileStore
 from .sessions import (
+    CODEX_SUBSCRIPTION_MODE,
     DEFAULT_SESSION_MODE,
     SESSION_MODES,
     SESSIONS_NAMESPACE,
@@ -215,6 +216,7 @@ class CreateSessionBody(BaseModel):
     # Body is optional on the wire (POST with no JSON still works) so the
     # default-mode `+ new` button doesn't have to send anything.
     mode: str = DEFAULT_SESSION_MODE
+    codex_no_alt_screen: bool = False
 
 
 class CreateSessionWithContextBody(BaseModel):
@@ -224,6 +226,7 @@ class CreateSessionWithContextBody(BaseModel):
     validation_url: str | None = None
     caller_email: str | None = None
     mode: str = DEFAULT_SESSION_MODE
+    codex_no_alt_screen: bool = False
 
 
 class CreateSessionWithContextResponse(BaseModel):
@@ -237,9 +240,19 @@ async def create_session(
     user: User = Depends(current_user),
 ) -> SessionInfo:
     mode = body.mode if body else DEFAULT_SESSION_MODE
+    codex_no_alt_screen = bool(body.codex_no_alt_screen) if body else False
     if mode not in SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
-    return await sessions.create(owner=user.email, mode=mode)
+    if codex_no_alt_screen and mode != CODEX_SUBSCRIPTION_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail="codex_no_alt_screen is only valid for codex_subscription sessions",
+        )
+    return await sessions.create(
+        owner=user.email,
+        mode=mode,
+        codex_no_alt_screen=codex_no_alt_screen,
+    )
 
 
 @app.post("/api/sessions/with-context", response_model=CreateSessionWithContextResponse)
@@ -256,6 +269,11 @@ async def create_session_with_context(
     """
     if body.mode not in SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
+    if body.codex_no_alt_screen and body.mode != CODEX_SUBSCRIPTION_MODE:
+        raise HTTPException(
+            status_code=400,
+            detail="codex_no_alt_screen is only valid for codex_subscription sessions",
+        )
     if body.caller_email and body.caller_email.lower() != user.email.lower():
         raise HTTPException(status_code=403, detail="caller_email does not match session user")
 
@@ -270,6 +288,7 @@ async def create_session_with_context(
         owner=user.email,
         mode=body.mode,
         glimmung_context=context,
+        codex_no_alt_screen=body.codex_no_alt_screen,
     )
     session_url = str(request.base_url).rstrip("/") + f"/?session={created.id}"
     return CreateSessionWithContextResponse(session_url=session_url, session=created)
