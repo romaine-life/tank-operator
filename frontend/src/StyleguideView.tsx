@@ -155,16 +155,21 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>new session row</h2>
           <p style={captionStyle}>
-            The plus starts the saved default provider; the chevron opens
-            launch-mode selection.
+            Provider selector first, then default session, API-key fallback,
+            and provider-specific config.
           </p>
-          <div className="new-row" data-menu="mode" style={{ maxWidth: 280 }}>
-            <button className="new-row-main" type="button" aria-label="start default session">
-              <span className="row-icon">+</span>
+          <div className="new-row new-row-launcher" data-menu="mode">
+            <button className="new-row-provider-toggle" type="button" aria-label="choose provider">
               <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
             </button>
-            <button className="new-row-toggle" type="button" aria-label="choose auth mode">
-              ▾
+            <button className="new-row-action" type="button" aria-label="start default session">
+              <span className="row-icon">+</span>
+            </button>
+            <button className="new-row-action" type="button" aria-label="start API key session">
+              <IconKey className="new-row-action-icon" />
+            </button>
+            <button className="new-row-action" type="button" aria-label="start config session">
+              <IconWrench className="new-row-action-icon" />
             </button>
           </div>
         </section>
@@ -264,24 +269,29 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>mode dropdown</h2>
           <p style={captionStyle}>
-            Appears under the launch row when the chevron toggles. Default
-            modes are provider-only; setup modes add the wrench.
+            Provider selection is the only dropdown; action icons stay in the
+            launcher row.
           </p>
-          <div className={`new-row${dropdownOpen ? " is-open" : ""}`} data-menu="mode" style={{ maxWidth: 280 }}>
-            <button className="new-row-main" type="button" aria-label="start default session">
-              <span className="row-icon">+</span>
-              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
-            </button>
+          <div className="new-row new-row-launcher" data-menu="mode">
             <button
-              className="new-row-toggle"
+              className={`new-row-provider-toggle${dropdownOpen ? " is-open" : ""}`}
               type="button"
-              aria-label="choose auth mode"
+              aria-label="choose provider"
               onClick={() => setDropdownOpen((v) => !v)}
             >
-              ▾
+              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+            </button>
+            <button className="new-row-action" type="button" aria-label="start default session">
+              <span className="row-icon">+</span>
+            </button>
+            <button className="new-row-action" type="button" aria-label="start API key session">
+              <IconKey className="new-row-action-icon" />
+            </button>
+            <button className="new-row-action" type="button" aria-label="start config session">
+              <IconWrench className="new-row-action-icon" />
             </button>
             {dropdownOpen && (
-              <ul className="dropdown dropdown-mode" role="menu">
+              <ul className="dropdown dropdown-provider" role="menu">
                 <li>
                   <button type="button" aria-label="Claude">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
@@ -289,30 +299,9 @@ export function StyleguideView() {
                   </button>
                 </li>
                 <li>
-                  <button type="button">
-                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <IconKey className="dropdown-key-icon" />
-                    <span className="sr-only">Claude API key</span>
-                  </button>
-                </li>
-                <li>
-                  <button type="button" aria-label="Claude config">
-                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <IconWrench className="dropdown-wrench-icon" />
-                    <span className="sr-only">Claude config</span>
-                  </button>
-                </li>
-                <li>
                   <button type="button" aria-label="Codex">
                     <ProviderIcon provider="openai" className="dropdown-provider-icon" />
                     <span className="sr-only">Codex</span>
-                  </button>
-                </li>
-                <li>
-                  <button type="button" aria-label="Codex config">
-                    <ProviderIcon provider="openai" className="dropdown-provider-icon" />
-                    <IconWrench className="dropdown-wrench-icon" />
-                    <span className="sr-only">Codex config</span>
                   </button>
                 </li>
               </ul>
