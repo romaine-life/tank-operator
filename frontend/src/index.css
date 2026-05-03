@@ -458,7 +458,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: currentColor;
 }
 
 .new-row-provider-icon {
@@ -475,9 +475,10 @@ button:disabled {
   flex-shrink: 0;
 }
 
-.new-row:hover .row-icon,
-.new-row:hover .new-row-provider-icon,
-.new-row:hover .new-row-provider-chevron {
+.new-row-provider-toggle:hover:not(:disabled) .new-row-provider-icon,
+.new-row-provider-toggle:hover:not(:disabled) .new-row-provider-chevron,
+.new-row-provider-toggle.is-open .new-row-provider-icon,
+.new-row-provider-toggle.is-open .new-row-provider-chevron {
   color: var(--text-primary);
 }
 
