@@ -201,7 +201,7 @@ EOF
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
   chmod 600 $HOME/.codex/auth.json
-  exec tmux new-session -s tank 'codex; exec bash'
+  exec tmux new-session -s tank 'codex --no-alt-screen; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
 # in-cluster HTTP MCP servers via 127.0.0.1 ports declared in

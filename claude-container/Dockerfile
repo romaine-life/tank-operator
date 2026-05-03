@@ -143,10 +143,11 @@ RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills \
           ;; \
     esac
 
-# Hide tmux's status bar so the claude TUI gets the full terminal height.
-# tmux is the WS-reconnect-survival wrapper for the claude session
-# (see tank-bootstrap.sh); the status bar would steal one row.
-RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\n' > /home/node/.tmux.conf \
+# Hide tmux's status bar so the TUI gets the full terminal height.
+# tmux is the WS-reconnect-survival wrapper for agent sessions
+# (see tank-bootstrap.sh); the status bar would steal one row. Mouse mode
+# lets tmux handle wheel scrolling when the browser is attached to tmux.
+RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\n' > /home/node/.tmux.conf \
     && chown node:node /home/node/.tmux.conf
 
 # Run the agent as a non-root user so claude's safety check accepts
