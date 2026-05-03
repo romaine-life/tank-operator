@@ -536,6 +536,10 @@ export function App() {
               title={`new session (${MODE_LABELS[defaultSessionMode]})`}
             >
               <span className="row-icon"><IconPlus /></span>
+              <ProviderIcon
+                provider={MODE_MENU_ICONS[defaultSessionMode]}
+                className="new-row-provider-icon"
+              />
               <span className="row-label">New session</span>
             </button>
             <button

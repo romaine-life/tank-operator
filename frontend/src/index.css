@@ -333,7 +333,7 @@ button:disabled {
 .new-row-main {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: var(--space-2) 0.625rem;            /* px-2.5 py-2 */
   flex: 1;
   min-width: 0;
@@ -357,7 +357,17 @@ button:disabled {
   color: var(--text-muted);
 }
 
-.new-row:hover .row-icon { color: var(--text-primary); }
+.new-row-provider-icon {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.new-row:hover .row-icon,
+.new-row:hover .new-row-provider-icon {
+  color: var(--text-primary);
+}
 
 .new-row-toggle {
   display: inline-flex;
