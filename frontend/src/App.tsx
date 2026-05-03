@@ -145,6 +145,27 @@ function IconPlus() {
   );
 }
 
+function IconWrench({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <path d="M10.5 2.4a3.2 3.2 0 0 0 3.1 4L7 13a2 2 0 0 1-2.8-2.8l6.6-6.6a3.2 3.2 0 0 0-.3-1.2Z" />
+      <path d="M4.6 10.9 5.1 11.4" />
+    </svg>
+  );
+}
+
 function IconChevron() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
@@ -214,6 +235,19 @@ function ModeChip({ mode }: { mode: SessionMode }) {
         label
       )}
     </span>
+  );
+}
+
+function ModeMenuItem({ mode }: { mode: SessionMode }) {
+  const isConfig = mode === "config" || mode === "codex_config";
+
+  return (
+    <>
+      <ProviderIcon provider={MODE_MENU_ICONS[mode]} className="dropdown-provider-icon" />
+      {isConfig && <IconWrench className="dropdown-wrench-icon" />}
+      {mode === "api_key" && <span className="dropdown-title">API key</span>}
+      {mode !== "api_key" && <span className="sr-only">{MODE_LABELS[mode]}</span>}
+    </>
   );
 }
 
@@ -533,14 +567,13 @@ export function App() {
               className="new-row-main"
               onClick={() => createSession()}
               disabled={busy}
-              title={`new session (${MODE_LABELS[defaultSessionMode]})`}
+              aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
             >
               <span className="row-icon"><IconPlus /></span>
               <ProviderIcon
                 provider={MODE_MENU_ICONS[defaultSessionMode]}
                 className="new-row-provider-icon"
               />
-              <span className="row-label">New session</span>
             </button>
             <button
               className="new-row-toggle"
@@ -555,9 +588,12 @@ export function App() {
               <ul className="dropdown dropdown-mode" role="menu">
                 {MODE_ORDER.map((m) => (
                   <li key={m}>
-                    <button onClick={() => createSession(m)} disabled={busy}>
-                      <ProviderIcon provider={MODE_MENU_ICONS[m]} className="dropdown-provider-icon" />
-                      <span className="dropdown-title">{MODE_LABELS[m]}</span>
+                    <button
+                      onClick={() => createSession(m)}
+                      disabled={busy}
+                      aria-label={MODE_LABELS[m]}
+                    >
+                      <ModeMenuItem mode={m} />
                     </button>
                   </li>
                 ))}
