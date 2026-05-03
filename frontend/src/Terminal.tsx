@@ -11,6 +11,12 @@ function reportsAgentActivity(mode: string): boolean {
   return mode.startsWith("codex_") || mode.startsWith("pi_");
 }
 
+function usesExtendedEnterKeybindings(mode: string): boolean {
+  return mode.startsWith("codex_") || mode.startsWith("pi_");
+}
+
+const SHIFT_ENTER_CSI_U = "\x1b[13;2u";
+
 const completionSound = (() => {
   let audio: HTMLAudioElement | null = null;
   let context: AudioContext | null = null;
@@ -433,8 +439,16 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
           shiftKey: event.shiftKey,
         });
       }
-      if (!mode.startsWith("codex_") || event.type !== "keydown") return true;
+      if (event.type !== "keydown") return true;
       if (event.altKey || event.ctrlKey || event.metaKey) return true;
+
+      if (event.key === "Enter" && event.shiftKey && usesExtendedEnterKeybindings(mode)) {
+        event.preventDefault();
+        sendIfOpen(SHIFT_ENTER_CSI_U);
+        return false;
+      }
+
+      if (!mode.startsWith("codex_")) return true;
 
       if (event.key === "PageUp") {
         if (!canScrollXterm(-1)) {

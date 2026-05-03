@@ -165,7 +165,7 @@ RUN if [ "${TANK_AGENT}" = "pi" ]; then \
 # tmux is the WS-reconnect-survival wrapper for agent sessions
 # (see tank-bootstrap.sh); the status bar would steal one row. Mouse mode
 # lets tmux handle wheel scrolling when the browser is attached to tmux.
-RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\n' > /home/node/.tmux.conf \
+RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\nset -s extended-keys on\nset -as terminal-features "xterm*:extkeys"\n' > /home/node/.tmux.conf \
     && chown node:node /home/node/.tmux.conf
 
 # Run the agent as a non-root user so claude's safety check accepts
