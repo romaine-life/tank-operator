@@ -15,6 +15,7 @@ ARG UV_VERSION=0.5.18
 ARG RUFF_VERSION=0.15.12
 ARG PYTEST_VERSION=8.4.2
 ARG GO_VERSION=1.26.2
+ARG VITE_VERSION=5.4.21
 ARG TANK_AGENT=claude
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
@@ -77,8 +78,8 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
     && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
 
 RUN case "${TANK_AGENT}" in \
-        claude) npm install -g @anthropic-ai/claude-code ;; \
-        codex) npm install -g @openai/codex ;; \
+        claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" ;; \
+        codex) npm install -g @openai/codex "vite@${VITE_VERSION}" ;; \
         *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude or codex" >&2; exit 1 ;; \
     esac
 
