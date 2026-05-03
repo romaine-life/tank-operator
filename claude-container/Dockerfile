@@ -141,7 +141,7 @@ RUN chmod +x /opt/tank/bootstrap.sh
 # the CLI can discover them before it starts. Rebuild the image to update
 # skills; do not fetch them during session bootstrap.
 COPY claude-container/skills /opt/claude-container/skills
-RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills \
+RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills /home/node/.pi/agent \
     && case "${TANK_AGENT}" in \
         claude) \
           cp -R /opt/claude-container/skills/done /home/node/.claude/skills/done; \
@@ -151,7 +151,6 @@ RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills \
           cp -R /opt/claude-container/skills/rollout /home/node/.codex/skills/rollout; \
           ;; \
         pi) \
-          mkdir -p /home/node/.pi/agent; \
           ;; \
     esac
 
