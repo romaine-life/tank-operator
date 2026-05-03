@@ -244,10 +244,9 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       cursorBlink: true,
       scrollback: 10_000,
       macOptionClickForcesSelection: true,
-      // "Symbols Nerd Font Mono" is loaded last as a fallback so private-use-area
-      // glyphs (Powerline arrows, branded marks, status icons) render instead of
-      // the U+FFFD replacement diamond. Latin still resolves to the earlier
-      // monospace fonts via per-glyph CSS font fallback.
+      // unicode-range in fonts.css keeps Nerd Font out of ASCII punctuation
+      // while still letting it satisfy private-use terminal glyphs before the
+      // browser settles for generic monospace tofu.
       fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", "Symbols Nerd Font Mono", monospace',
       fontSize: 13,
       theme: TERMINAL_THEME,
