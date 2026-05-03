@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 
 import aiohttp
 from fastapi import WebSocket, WebSocketDisconnect
@@ -112,6 +113,76 @@ async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> byt
     if error_status is not None and error_status.get("status") != "Success":
         raise RuntimeError(f"exec {command} failed: {error_status}")
     return b"".join(stdout_chunks)
+
+
+async def exec_write_file(namespace: str, pod_name: str, path: str, data: bytes) -> None:
+    """Write `data` to `path` inside the session container.
+
+    The command reads an exact byte count, so we do not need a channel-specific
+    stdin close signal from the Kubernetes exec protocol.
+    """
+    ws_client = WsApiClient()
+    core = client.CoreV1Api(api_client=ws_client)
+    quoted_path = shlex.quote(path)
+    quoted_dir = shlex.quote(path.rsplit("/", 1)[0] or ".")
+    command = [
+        "bash",
+        "-lc",
+        f"set -euo pipefail; mkdir -p {quoted_dir}; umask 077; head -c {len(data)} > {quoted_path}",
+    ]
+    try:
+        cm = await core.connect_get_namespaced_pod_exec(
+            name=pod_name,
+            namespace=namespace,
+            container=SESSION_CONTAINER,
+            command=command,
+            stdin=True,
+            stdout=True,
+            stderr=True,
+            tty=False,
+            _preload_content=False,
+        )
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        error_status: dict[str, str] | None = None
+        async with cm as k8s_ws:
+            for offset in range(0, len(data), 64 * 1024):
+                await k8s_ws.send_bytes(bytes([STDIN_CHANNEL]) + data[offset:offset + 64 * 1024])
+            async for wsmsg in k8s_ws:
+                if wsmsg.type == aiohttp.WSMsgType.BINARY:
+                    if not wsmsg.data:
+                        continue
+                    channel = wsmsg.data[0]
+                    payload = wsmsg.data[1:]
+                    if channel == STDOUT_CHANNEL:
+                        stdout_chunks.append(payload)
+                    elif channel == STDERR_CHANNEL:
+                        stderr_chunks.append(payload)
+                    elif channel == ERROR_CHANNEL:
+                        try:
+                            error_status = json.loads(payload)
+                        except ValueError:
+                            error_status = {
+                                "status": "Failure",
+                                "message": payload.decode(errors="replace"),
+                            }
+                elif wsmsg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.ERROR,
+                ):
+                    break
+    finally:
+        await ws_client.close()
+
+    if stderr_chunks:
+        log.warning(
+            "exec write %s stderr: %s",
+            path,
+            b"".join(stderr_chunks).decode(errors="replace")[:500],
+        )
+    if error_status is not None and error_status.get("status") != "Success":
+        raise RuntimeError(f"exec write {path} failed: {error_status}")
 
 
 async def bridge(browser: WebSocket, namespace: str, pod_name: str) -> None:
