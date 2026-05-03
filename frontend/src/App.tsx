@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
+import { Terminal, playCompletionSound, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 
@@ -83,6 +83,8 @@ const MODE_ORDER: SessionMode[] = [
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
+const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
+const MIN_COMPLETION_SOUND_VOLUME = 0.05;
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
   return value === "subscription" || value === "codex_subscription";
@@ -125,18 +127,23 @@ function writeCompletionSoundEnabled(enabled: boolean): void {
 function readCompletionSoundVolume(): number {
   try {
     const storedValue = localStorage.getItem(COMPLETION_SOUND_VOLUME_KEY);
-    if (storedValue == null || storedValue === "") return 0.55;
+    if (storedValue == null || storedValue === "") return DEFAULT_COMPLETION_SOUND_VOLUME;
     const stored = Number(storedValue);
-    if (Number.isFinite(stored)) return Math.max(0, Math.min(1, stored));
+    if (Number.isFinite(stored) && stored > 0) {
+      return Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, stored));
+    }
   } catch {
     // Fall through to the default.
   }
-  return 0.55;
+  return DEFAULT_COMPLETION_SOUND_VOLUME;
 }
 
 function writeCompletionSoundVolume(volume: number): void {
   try {
-    localStorage.setItem(COMPLETION_SOUND_VOLUME_KEY, String(Math.max(0, Math.min(1, volume))));
+    localStorage.setItem(
+      COMPLETION_SOUND_VOLUME_KEY,
+      String(Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, volume))),
+    );
   } catch {
     // Preference persistence is best-effort.
   }
@@ -664,10 +671,14 @@ export function App() {
   function updateCompletionSoundEnabled(enabled: boolean) {
     setCompletionSoundEnabled(enabled);
     writeCompletionSoundEnabled(enabled);
+    if (enabled && completionSoundVolume <= 0) {
+      setCompletionSoundVolume(DEFAULT_COMPLETION_SOUND_VOLUME);
+      writeCompletionSoundVolume(DEFAULT_COMPLETION_SOUND_VOLUME);
+    }
   }
 
   function updateCompletionSoundVolume(volume: number) {
-    const nextVolume = Math.max(0, Math.min(1, volume));
+    const nextVolume = Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, volume));
     setCompletionSoundVolume(nextVolume);
     writeCompletionSoundVolume(nextVolume);
   }
@@ -1061,7 +1072,7 @@ export function App() {
                   <span>Volume</span>
                   <input
                     type="range"
-                    min="0"
+                    min={MIN_COMPLETION_SOUND_VOLUME}
                     max="1"
                     step="0.01"
                     value={completionSoundVolume}
@@ -1071,6 +1082,14 @@ export function App() {
                   />
                   <span className="setting-value">{Math.round(completionSoundVolume * 100)}%</span>
                 </label>
+                <button
+                  className="setting-test-button"
+                  type="button"
+                  disabled={!completionSoundEnabled}
+                  onClick={() => playCompletionSound(completionSoundVolume)}
+                >
+                  Test sound
+                </button>
               </li>
               <li className="dropdown-divider" role="separator" />
               <li>
