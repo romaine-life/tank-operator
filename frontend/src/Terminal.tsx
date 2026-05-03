@@ -180,6 +180,10 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
         ...extra,
       });
     };
+    const canScrollXterm = (direction: -1 | 1) => {
+      const buffer = term.buffer.active;
+      return direction < 0 ? buffer.viewportY > 0 : buffer.viewportY < buffer.baseY;
+    };
     const onCaptureKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "PageUp" && event.key !== "PageDown") return;
       logTerminalEvent("capture keydown", event, {
@@ -208,12 +212,20 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       if (event.altKey || event.ctrlKey || event.metaKey) return true;
 
       if (event.key === "PageUp") {
+        if (!canScrollXterm(-1)) {
+          logTerminalEvent("xterm cannot scroll page", event, { direction: -1 });
+          return true;
+        }
         event.preventDefault();
         term.scrollPages(-1);
         logTerminalEvent("xterm scroll page", event, { direction: -1 });
         return false;
       }
       if (event.key === "PageDown") {
+        if (!canScrollXterm(1)) {
+          logTerminalEvent("xterm cannot scroll page", event, { direction: 1 });
+          return true;
+        }
         event.preventDefault();
         term.scrollPages(1);
         logTerminalEvent("xterm scroll page", event, { direction: 1 });
@@ -228,16 +240,20 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
         ctrlKey: event.ctrlKey,
       });
       if (!mode.startsWith("codex_") || event.ctrlKey || event.deltaY === 0) return;
+      const direction = Math.sign(event.deltaY) as -1 | 1;
+      if (!canScrollXterm(direction)) {
+        logTerminalEvent("xterm cannot scroll wheel", event, { direction });
+        return;
+      }
       // Codex's TUI enables mouse reporting, which makes xterm forward wheel
       // events into the process instead of scrolling the browser terminal
-      // viewport. Treat ordinary wheel and PageUp/PageDown gestures as
-      // scrollback navigation in Codex sessions; keep ctrl+wheel available
-      // for browser zoom.
+      // viewport. Use xterm scrollback only when xterm actually has viewport
+      // history to move through; otherwise let Codex's TUI handle the gesture.
       event.preventDefault();
       event.stopPropagation();
-      term.scrollLines(Math.sign(event.deltaY) * Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30)));
+      term.scrollLines(direction * Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30)));
       logTerminalEvent("wheel scroll lines", event, {
-        direction: Math.sign(event.deltaY),
+        direction,
       });
     };
     containerRef.current.addEventListener("wheel", onWheel, { capture: true, passive: false });
