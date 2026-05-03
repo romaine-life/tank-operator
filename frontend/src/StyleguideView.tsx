@@ -56,6 +56,27 @@ const rowStyle: React.CSSProperties = {
   alignItems: "center",
 };
 
+function IconWrench({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <path d="M10.5 2.4a3.2 3.2 0 0 0 3.1 4L7 13a2 2 0 0 1-2.8-2.8l6.6-6.6a3.2 3.2 0 0 0-.3-1.2Z" />
+      <path d="M4.6 10.9 5.1 11.4" />
+    </svg>
+  );
+}
+
 export function StyleguideView() {
   const [dropdownOpen, setDropdownOpen] = useState(true);
 
@@ -112,14 +133,13 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>new session row</h2>
           <p style={captionStyle}>
-            The saved default provider is visible beside the action label, with
-            the chevron reserved for choosing a different launch mode.
+            The plus starts the saved default provider; the chevron opens
+            launch-mode selection.
           </p>
           <div className="new-row" data-menu="mode" style={{ maxWidth: 280 }}>
-            <button className="new-row-main" type="button">
+            <button className="new-row-main" type="button" aria-label="start default session">
               <span className="row-icon">+</span>
               <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
-              <span className="row-label">New session</span>
             </button>
             <button className="new-row-toggle" type="button" aria-label="choose auth mode">
               ▾
@@ -222,8 +242,8 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>mode dropdown</h2>
           <p style={captionStyle}>
-            Appears under the "New session" CTA when the chevron toggles.
-            Entries stay compact: provider mark plus mode name.
+            Appears under the launch row when the chevron toggles. Default
+            modes are provider-only; setup modes add the wrench.
           </p>
           <div style={{ position: "relative", maxWidth: 280 }}>
             <button
@@ -232,38 +252,40 @@ export function StyleguideView() {
               onClick={() => setDropdownOpen((v) => !v)}
               style={{ width: "100%", justifyContent: "flex-start" }}
             >
-              + New session ▾
+              + <ProviderIcon provider="anthropic" className="new-row-provider-icon" /> ▾
             </button>
             {dropdownOpen && (
               <ul className="dropdown dropdown-mode" role="menu" style={{ position: "static", marginTop: 8 }}>
                 <li>
-                  <button type="button">
+                  <button type="button" aria-label="Claude">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">Claude</span>
+                    <span className="sr-only">Claude</span>
                   </button>
                 </li>
                 <li>
                   <button type="button">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">Claude API key</span>
+                    <span className="dropdown-title">API key</span>
                   </button>
                 </li>
                 <li>
-                  <button type="button">
+                  <button type="button" aria-label="Claude config">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">Claude config</span>
+                    <IconWrench className="dropdown-wrench-icon" />
+                    <span className="sr-only">Claude config</span>
                   </button>
                 </li>
                 <li>
-                  <button type="button">
+                  <button type="button" aria-label="Codex">
                     <ProviderIcon provider="openai" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">Codex</span>
+                    <span className="sr-only">Codex</span>
                   </button>
                 </li>
                 <li>
-                  <button type="button">
+                  <button type="button" aria-label="Codex config">
                     <ProviderIcon provider="openai" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">Codex config</span>
+                    <IconWrench className="dropdown-wrench-icon" />
+                    <span className="sr-only">Codex config</span>
                   </button>
                 </li>
               </ul>
