@@ -1132,12 +1132,9 @@ button:disabled {
   cursor: pointer;
 }
 
-.demo-profile-sub {
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.demo-sign-in {
+  justify-content: flex-start;
+  padding: var(--space-2) var(--space-3);
 }
 
 .dropdown-profile {

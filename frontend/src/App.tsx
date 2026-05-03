@@ -80,65 +80,99 @@ const MODE_ORDER: SessionMode[] = [
   "codex_config",
 ];
 
-const DEMO_SESSIONS: Session[] = [
+const DEMO_BASE_SESSIONS: Session[] = [
   {
-    id: "repo-triage",
-    pod_name: "tank-demo-repo-triage",
-    owner: "preview",
-    status: "Active",
-    mode: "codex_subscription",
-    name: "repo triage",
-  },
-  {
-    id: "infra-check",
-    pod_name: "tank-demo-infra-check",
+    id: "claude-code",
+    pod_name: "tank-demo-claude-code",
     owner: "preview",
     status: "Active",
     mode: "subscription",
-    name: "infra check",
+    name: "Claude Code",
   },
   {
-    id: "credential-setup",
-    pod_name: "tank-demo-credential-setup",
+    id: "codex-cli",
+    pod_name: "tank-demo-codex-cli",
     owner: "preview",
-    status: "Pending",
-    mode: "codex_config",
-    name: "credential setup",
+    status: "Active",
+    mode: "codex_subscription",
+    name: "Codex",
   },
 ];
 
-const DEMO_TERMINAL_LINES: Record<string, string[]> = {
-  "repo-triage": [
-    "$ tank-operator preview",
-    "Welcome. This is the app shell you get after signing in.",
+const DEMO_CLAUDE_LINES = [
+  " ▐▛███▜▌   Claude Code v2.1.126",
+  "▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max",
+  "  ▘▘ ▝▝    /workspace",
+  "",
+  "  Welcome to Opus 4.7 xhigh! · /effort to tune speed vs. intelligence",
+  "",
+  "",
+  "",
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "❯ ",
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+];
+
+const DEMO_CODEX_LINES = [
+  "› Implement {feature}",
+  "",
+  "  gpt-5.5 default · /workspace",
+  "",
+  "╭─────────────────────────────────────────╮",
+  "│ >_ OpenAI Codex (v0.128.0)              │",
+  "│                                         │",
+  "│ model:       gpt-5.5   /model to change │",
+  "│ directory:   /workspace                 │",
+  "│ permissions: YOLO mode                  │",
+  "╰─────────────────────────────────────────╯",
+  "",
+  "  Tip: GPT-5.5 is now available in Codex. It's our strongest agentic coding model yet, built to reason",
+  "  through large codebases, check assumptions with tools, and keep going until the work is done.",
+  "",
+  "  Learn more: https://openai.com/index/introducing-gpt-5-5/",
+  "",
+  "",
+  "› Implement {feature}",
+  "",
+  "  gpt-5.5 default · /workspace",
+];
+
+function demoTerminalLines(session: Session): string[] {
+  const template = session.mode === "codex_subscription"
+    ? DEMO_CODEX_LINES
+    : DEMO_CLAUDE_LINES;
+  if (!session.id.includes("-preview-")) return template;
+  return [
+    ...template,
     "",
-    "Sessions run in short-lived pods with your selected agent and repo context.",
-    "Use the left rail to switch sessions, rename them, refresh pods, or open remote control.",
-    "",
-    "Preview data:",
-    "  - repo triage: active Codex session",
-    "  - infra check: active Claude session",
-    "  - credential setup: config pod waiting for auth",
-    "",
-    "When you sign in, tank-operator will load your real sessions here.",
-  ],
-  "infra-check": [
-    "$ kubectl get pods -n tank-operator",
-    "NAME                                  READY   STATUS",
-    "tank-demo-infra-check                 1/1     Running",
-    "tank-demo-repo-triage                  1/1     Running",
-    "tank-demo-credential-setup             0/1     Pending",
-    "",
-    "This preview is static, but the real terminal streams from the selected pod.",
-  ],
-  "credential-setup": [
-    "$ codex login --device-auth",
-    "Waiting for device authorization...",
-    "",
-    "Config sessions are used to seed credentials for future agent sessions.",
-    "After sign-in, the save action writes harvested credentials to the backend KV.",
-  ],
-};
+    "Preview session only. The real app creates a Kubernetes pod here.",
+  ];
+}
+
+function createDemoSession(mode: DefaultSessionMode, index: number): Session {
+  const provider = MODE_MENU_ICONS[mode];
+  const label = mode === "codex_subscription" ? "Codex" : "Claude Code";
+  return {
+    id: `${provider}-preview-${index}`,
+    pod_name: `tank-demo-${provider}-${index}`,
+    owner: "preview",
+    status: "Active",
+    mode,
+    name: `${label} ${index}`,
+  };
+}
+
+const DEMO_LANDING_LINES = [
+  "$ tank-operator preview",
+  "Welcome. This is the real app shell with demo sessions.",
+  "",
+  "Click the provider icon to switch between Claude and Codex.",
+  "Click + to add a local preview session.",
+  "The key and wrench buttons are present but disabled in preview mode.",
+  "",
+  "Sign in from the lower-left profile area when you want real pods.",
+];
 
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
@@ -512,9 +546,22 @@ function OnboardingWall({
 }
 
 function DemoLanding() {
-  const [activeDemoSession, setActiveDemoSession] = useState(DEMO_SESSIONS[0].id);
-  const selected = DEMO_SESSIONS.find((s) => s.id === activeDemoSession) ?? DEMO_SESSIONS[0];
-  const terminalLines = DEMO_TERMINAL_LINES[selected.id] ?? DEMO_TERMINAL_LINES[DEMO_SESSIONS[0].id];
+  const [demoSessions, setDemoSessions] = useState<Session[]>(DEMO_BASE_SESSIONS);
+  const [activeDemoSession, setActiveDemoSession] = useState(DEMO_BASE_SESSIONS[0].id);
+  const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
+  const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
+  const selectedMode = PROVIDER_DEFAULT_MODES[selectedProvider];
+  const terminalLines = selected ? demoTerminalLines(selected) : DEMO_LANDING_LINES;
+
+  function toggleDemoProvider() {
+    setSelectedProvider((provider) => provider === "anthropic" ? "openai" : "anthropic");
+  }
+
+  function createPreviewSession() {
+    const next = createDemoSession(selectedMode, demoSessions.length + 1);
+    setDemoSessions((prev) => [...prev, next]);
+    setActiveDemoSession(next.id);
+  }
 
   return (
     <div className="shell shell-demo">
@@ -527,37 +574,37 @@ function DemoLanding() {
           <div className="new-row new-row-launcher">
             <button
               className="new-row-provider-toggle"
-              onClick={() => { startLogin(); }}
-              aria-label="choose provider"
-              title="sign in to choose a provider"
+              onClick={toggleDemoProvider}
+              aria-label="toggle preview provider"
+              title={`preview provider: ${MODE_LABELS[selectedMode]}`}
             >
               <span className="new-row-provider-slot">
-                <ProviderIcon provider="openai" className="new-row-provider-icon" />
+                <ProviderIcon provider={selectedProvider} className="new-row-provider-icon" />
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
             <div className="new-row-action-group" role="group" aria-label="preview session actions">
               <button
                 className="new-row-action"
-                onClick={() => { startLogin(); }}
-                aria-label="Start session"
-                title="sign in to start a real session"
+                onClick={createPreviewSession}
+                aria-label={`Start ${MODE_LABELS[selectedMode]} preview session`}
+                title={`start ${MODE_LABELS[selectedMode]} preview session`}
               >
                 <span className="row-icon"><IconPlus /></span>
               </button>
               <button
                 className="new-row-action"
-                onClick={() => { startLogin(); }}
+                onClick={() => {}}
                 aria-label="Start API key session"
-                title="sign in to start a real session"
+                title="API key sessions are not shown in preview"
               >
                 <IconKey className="new-row-action-icon" />
               </button>
               <button
                 className="new-row-action"
-                onClick={() => { startLogin(); }}
+                onClick={() => {}}
                 aria-label="Start config session"
-                title="sign in to start a real session"
+                title="Config sessions are not shown in preview"
               >
                 <IconWrench className="new-row-action-icon" />
               </button>
@@ -568,8 +615,8 @@ function DemoLanding() {
         <div className="sidebar-list">
           <div className="sidebar-section-label">Preview sessions</div>
           <ul className="sessions">
-            {DEMO_SESSIONS.map((s) => {
-              const isActive = s.id === selected.id;
+            {demoSessions.map((s) => {
+              const isActive = s.id === selected?.id;
               const statusDotClass = s.mode.startsWith("codex")
                 ? "status-dot status-codex-waiting"
                 : `status-dot status-${s.status.toLowerCase()}`;
@@ -596,9 +643,6 @@ function DemoLanding() {
                         <IconExternal />
                       </span>
                     )}
-                    {CONFIG_MODES.has(s.mode) && (
-                      <span className="session-action">save</span>
-                    )}
                   </div>
                 </li>
               );
@@ -607,11 +651,9 @@ function DemoLanding() {
         </div>
 
         <div className="sidebar-footer">
-          <button className="profile demo-profile" onClick={() => { startLogin(); }}>
-            <span className="avatar" aria-hidden="true">TO</span>
+          <button className="profile demo-profile demo-sign-in" onClick={() => { startLogin(); }}>
             <span className="profile-text">
-              <span className="profile-name">Preview mode</span>
-              <span className="demo-profile-sub">sign in for real pods</span>
+              <span className="profile-name">sign in</span>
             </span>
           </button>
         </div>
@@ -620,8 +662,8 @@ function DemoLanding() {
       <main className="workspace demo-workspace">
         <div className="demo-terminal" role="img" aria-label="tank-operator terminal preview">
           <div className="demo-terminal-titlebar">
-            <span>{selected.name ?? selected.id}</span>
-            <ModeChip mode={selected.mode} />
+            <span>{selected?.name ?? "tank-operator"}</span>
+            {selected && <ModeChip mode={selected.mode} />}
           </div>
           <pre className="demo-terminal-screen">
             {terminalLines.join("\n")}
