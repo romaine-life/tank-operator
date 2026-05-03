@@ -11,6 +11,7 @@ FROM mcr.microsoft.com/playwright:v1.49.1-noble
 
 ARG TARGETARCH=amd64
 ARG GO_VERSION=1.26.2
+ARG VITE_VERSION=5.4.21
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
@@ -42,7 +43,7 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # scripts/agent/capture-screenshot.mjs) would fail without this. Browsers
 # are already on disk so we skip re-downloading.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-RUN npm install -g @anthropic-ai/claude-code playwright
+RUN npm install -g @anthropic-ai/claude-code playwright "vite@${VITE_VERSION}"
 
 # NODE_PATH lets bare `import "playwright"` resolve from the global
 # install above without per-script `npm link`. Standard global path on
