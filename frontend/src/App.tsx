@@ -108,6 +108,13 @@ interface SessionUser {
   installation_id: number | null;
 }
 
+type GlimmungLaunchContext = {
+  glimmung_run_id: string;
+  glimmung_issue_id: string;
+  glimmung_pr_id: string | null;
+  validation_url: string | null;
+};
+
 // One-line summaries for the install_error reasons the backend may surface
 // via redirect query param after a failed install callback. Anything not in
 // the map renders as the raw reason — keeps unknown errors visible without
@@ -141,6 +148,32 @@ function readInitialSessionId(): string | null {
 function clearInitialSessionId(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("session");
+  window.history.replaceState({}, "", url.toString());
+}
+
+function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
+  const params = new URLSearchParams(window.location.search);
+  const runId = params.get("glimmung_run_id");
+  const issueId = params.get("glimmung_issue_id");
+  if (!runId || !issueId) return null;
+  return {
+    glimmung_run_id: runId,
+    glimmung_issue_id: issueId,
+    glimmung_pr_id: params.get("glimmung_pr_id"),
+    validation_url: params.get("validation_url"),
+  };
+}
+
+function clearGlimmungLaunchContext(): void {
+  const url = new URL(window.location.href);
+  for (const key of [
+    "glimmung_run_id",
+    "glimmung_issue_id",
+    "glimmung_pr_id",
+    "validation_url",
+  ]) {
+    url.searchParams.delete(key);
+  }
   window.history.replaceState({}, "", url.toString());
 }
 
@@ -362,6 +395,9 @@ export function App() {
   // /remote-control slash command into the live WS.
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
   const initialSessionId = useRef<string | null>(readInitialSessionId());
+  const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
+    readGlimmungLaunchContext()
+  );
 
   useEffect(() => {
     bootstrapAuth()
@@ -405,6 +441,40 @@ export function App() {
   useEffect(() => {
     if (user) void refresh();
   }, [user]);
+
+  useEffect(() => {
+    const context = glimmungLaunchContext.current;
+    if (!user || user.installation_id == null || !context) return;
+    glimmungLaunchContext.current = null;
+
+    async function launch() {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await authedFetch("/api/sessions/with-context", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...context,
+            caller_email: user!.email,
+            mode: defaultSessionMode,
+          }),
+        });
+        if (!res.ok) throw new Error(`glimmung launch failed: ${res.status}`);
+        const created = await res.json();
+        clearGlimmungLaunchContext();
+        const session: Session = created.session;
+        await refresh();
+        activate(session.id);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    void launch();
+  }, [user, defaultSessionMode]);
 
   useEffect(() => {
     if (!user) return;
