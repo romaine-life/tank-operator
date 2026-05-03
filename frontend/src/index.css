@@ -86,6 +86,8 @@
   --status-error-fg: #ef6f6f;
   --status-pending-bg: var(--gray-850);
   --status-pending-fg: var(--gray-400);
+  --status-agent-working: #fbbf24;
+  --status-agent-waiting: #67e8f9;
 
   /* Mode chips (auth modes). subscription rides the unified accent; api-key
      uses muted lavender; config-sub uses warm clay — distinct without the
@@ -952,6 +954,8 @@ button:disabled {
 .status-dot.status-active  { background: var(--status-online); }
 .status-dot.status-failed  { background: var(--status-error-fg); }
 .status-dot.status-pending { background: var(--text-faint); }
+.status-dot.status-codex-working { background: var(--status-agent-working); }
+.status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 
 .mode {
   display: inline-flex;

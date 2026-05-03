@@ -5,10 +5,78 @@ import { registerWrappedLinks } from "./wrappedLinkProvider";
 import "@xterm/xterm/css/xterm.css";
 import "./fonts.css";
 
+const completionSound = (() => {
+  let audio: HTMLAudioElement | null = null;
+  let context: AudioContext | null = null;
+  let unlocked = false;
+
+  const getAudio = () => {
+    audio ??= new Audio("/assets/upgrade-complete.mp3");
+    audio.preload = "auto";
+    audio.volume = 0.55;
+    return audio;
+  };
+
+  const getContext = () => {
+    context ??= new AudioContext();
+    return context;
+  };
+
+  const unlock = () => {
+    if (unlocked) return;
+    getAudio().load();
+    const ctx = getContext();
+    void ctx.resume().then(() => {
+      unlocked = true;
+    }).catch(() => {
+      // The browser may still require a later user gesture.
+    });
+  };
+
+  const playFallback = () => {
+    const ctx = getContext();
+    void ctx.resume().catch(() => undefined);
+
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    const first = ctx.createOscillator();
+    const second = ctx.createOscillator();
+
+    first.type = "sine";
+    first.frequency.setValueAtTime(880, now);
+    second.type = "sine";
+    second.frequency.setValueAtTime(1320, now);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+    first.connect(gain);
+    second.connect(gain);
+    gain.connect(ctx.destination);
+
+    first.start(now);
+    second.start(now + 0.04);
+    first.stop(now + 0.22);
+    second.stop(now + 0.22);
+  };
+
+  const play = () => {
+    const audio = getAudio();
+    audio.currentTime = 0;
+    void audio.play().catch(playFallback);
+  };
+
+  return { play, unlock };
+})();
+
+export type AgentActivity = "working" | "waiting";
+
 interface Props {
   sessionId: string;
   mode: string;
   status: string;
+  onAgentActivityChange?: (sessionId: string, activity: AgentActivity) => void;
   /**
    * When false the component stays mounted (preserving WS + scrollback) but
    * the DOM is hidden via CSS. On every transition to true we re-run fit() so
@@ -28,7 +96,7 @@ export interface TerminalHandle {
 }
 
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
-  { sessionId, mode, status, visible },
+  { sessionId, mode, status, visible, onAgentActivityChange },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +108,15 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   useEffect(() => {
     if (status === "Active") setEverActive(true);
   }, [status]);
+
+  useEffect(() => {
+    window.addEventListener("pointerdown", completionSound.unlock, { once: true });
+    window.addEventListener("keydown", completionSound.unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", completionSound.unlock);
+      window.removeEventListener("keydown", completionSound.unlock);
+    };
+  }, []);
 
   useImperativeHandle(ref, () => ({
     sendInput: (s: string) => {
@@ -66,6 +143,11 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     const fit = new FitAddon();
     fitRef.current = fit;
     term.loadAddon(fit);
+    const onBellDisp = term.onBell(() => {
+      if (!mode.startsWith("codex_")) return;
+      onAgentActivityChange?.(sessionId, "waiting");
+      completionSound.play();
+    });
     // URLs in claude's output become click-to-open. Custom provider (instead
     // of @xterm/addon-web-links) so links that wrap across terminal rows are
     // recognised as a single contiguous URL — the stock addon matches per
@@ -190,7 +272,12 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     };
     window.addEventListener("resize", onWindowResize);
     const onResizeDisp = term.onResize(({ cols, rows }) => sendResize(cols, rows));
-    const onDataDisp = term.onData((data) => sendIfOpen(data));
+    const onDataDisp = term.onData((data) => {
+      if (mode.startsWith("codex_") && (data.includes("\r") || data.includes("\n"))) {
+        onAgentActivityChange?.(sessionId, "working");
+      }
+      sendIfOpen(data);
+    });
 
     const stopPing = () => {
       if (pingTimer != null) {
@@ -264,6 +351,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       containerRef.current?.removeEventListener("wheel", onWheel, { capture: true });
       onResizeDisp.dispose();
       onDataDisp.dispose();
+      onBellDisp.dispose();
       wsRef.current?.close();
       term.dispose();
       fitRef.current = null;
