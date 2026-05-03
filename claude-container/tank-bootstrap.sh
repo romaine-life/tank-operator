@@ -219,13 +219,32 @@ if [ "${TANK_SESSION_MODE}" = "pi_config" ]; then
 Run `/login`, choose your provider, and complete the login flow. This mode is
 for manual Pi testing; Tank does not persist Pi's native auth.json.
 EOF
-  exec tmux new-session -s tank 'printf "Run /login in Pi. This sandbox does not persist Pi auth.\\n\\n"; pi; exec bash'
+  exec "${tmux_utf8[@]}" new-session -s tank 'printf "Run /login in Pi. This sandbox does not persist Pi auth.\\n\\n"; pi; exec bash'
 fi
 # Pi-subscription mode: curate all Tank-backed subscription auth into Pi's
 # native ~/.pi/agent/auth.json from existing Claude proxy and Codex credentials.
 if [ "${TANK_SESSION_MODE}" = "pi_subscription" ]; then
   mkdir -p $HOME/.pi/agent
   cp /workspace/AGENTS.md $HOME/.pi/agent/AGENTS.md 2>/dev/null || true
+  cat >> $HOME/.pi/agent/AGENTS.md <<'EOF'
+
+## Tank Pi Subscription
+
+OpenAI Codex is the default Pi provider for Tank subscription sessions.
+Anthropic is available through Tank's Claude proxy, but Pi is a third-party
+harness and Anthropic bills that path against extra usage, not Claude plan
+limits. If extra usage is exhausted, Anthropic models will fail while Codex
+models can continue working.
+EOF
+  if [ ! -f $HOME/.pi/agent/settings.json ]; then
+    cat > $HOME/.pi/agent/settings.json <<'EOF'
+{
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-5.5"
+}
+EOF
+    chmod 600 $HOME/.pi/agent/settings.json
+  fi
   printf '{}\n' > $HOME/.pi/agent/auth.json
   node <<'NODE'
 const fs = require("fs");
@@ -306,7 +325,7 @@ fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2));
 fs.chmodSync(modelsPath, 0o600);
 NODE
   chmod 600 $HOME/.pi/agent/auth.json
-  exec tmux new-session -s tank 'pi; exec bash'
+  exec "${tmux_utf8[@]}" new-session -s tank 'pi; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
 # in-cluster HTTP MCP servers via 127.0.0.1 ports declared in

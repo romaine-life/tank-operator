@@ -120,6 +120,14 @@ CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
 # Pi-config is a disposable Pi login sandbox. Pi-subscription curates
 # Tank-backed Claude/Codex subscriptions into Pi's auth.json at pod startup so
 # the launcher only needs one Pi option while Pi still sees multiple providers.
+#
+# Product note: keeping this code alive is intentional, but we have not found a
+# strong day-to-day use for Pi when the available hosted providers are only
+# Codex and Claude. Codex's own TUI is the better first-party OpenAI surface,
+# and Anthropic subscription auth inside Pi is third-party harness usage billed
+# through extra usage, not Claude plan limits. Pi's likely value is future
+# multi-provider work: Qwen/Kimi/DeepSeek, OpenRouter, Bedrock/Vertex/Azure
+# gateways, or self-hosted OpenAI-compatible endpoints.
 PI_CONFIG_MODE = "pi_config"
 PI_SUBSCRIPTION_MODE = "pi_subscription"
 # Modes that must reach the real internet directly (no platform.claude.com /
