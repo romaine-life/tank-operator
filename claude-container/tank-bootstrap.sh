@@ -43,13 +43,19 @@
 # claude runs inside a named tmux session ("tank") so reconnects re-attach
 # the same PTY/scrollback. If claude exits we fall through to bash so the
 # WS stays useful.
+#
+# Browser kubectl-exec PTYs report TERM=xterm but do not advertise the U8
+# terminfo capability, which makes tmux attach clients with client_utf8=0.
+# In that mode tmux substitutes unsupported Unicode glyphs with underscores
+# on redraw, even though the pane history itself still contains UTF-8.
+tmux_utf8=(tmux -u)
 
 # Reconnect fast-path: if the tmux session already exists this is a
 # reattach, not a fresh boot. Skip settings/credentials setup (already
 # done on first connect; rewriting is idempotent but wasteful, and in
 # subscription mode would re-hit the OAuth gateway every reconnect).
-if tmux has-session -t tank 2>/dev/null; then
-  exec tmux attach-session -t tank
+if "${tmux_utf8[@]}" has-session -t tank 2>/dev/null; then
+  exec "${tmux_utf8[@]}" attach-session -t tank
 fi
 if [ -n "${TANK_GLIMMUNG_CONTEXT_JSON:-}" ]; then
   cat > /workspace/GLIMMUNG_CONTEXT.json <<EOF
@@ -123,7 +129,7 @@ notifications = true
 notification_condition = "always"
 notification_method = "bel"
 EOF
-  exec tmux new-session -s tank 'codex login --device-auth; exec bash'
+  exec "${tmux_utf8[@]}" new-session -s tank 'codex login --device-auth; exec bash'
 fi
 # Codex-subscription mode: consume the harvested auth.json. The
 # orchestrator mounts the ESO-mirrored codex-credentials Secret read-only
@@ -197,11 +203,11 @@ EOF
     echo "spawn a 'Codex (config)' session and complete \`codex login --device-auth\` first," >&2
     echo "then click Save Credentials. Once KV has the auth.json, ESO will mirror it" >&2
     echo "into this namespace and a fresh codex_subscription pod will pick it up." >&2
-    exec tmux new-session -s tank 'exec bash'
+    exec "${tmux_utf8[@]}" new-session -s tank 'exec bash'
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
   chmod 600 $HOME/.codex/auth.json
-  exec tmux new-session -s tank 'codex --no-alt-screen; exec bash'
+  exec "${tmux_utf8[@]}" new-session -s tank 'codex --no-alt-screen; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
 # in-cluster HTTP MCP servers via 127.0.0.1 ports declared in
@@ -285,4 +291,4 @@ cat > $HOME/.claude.json <<EOF
 }
 EOF
 
-exec tmux new-session -s tank 'claude; exec bash'
+exec "${tmux_utf8[@]}" new-session -s tank 'claude; exec bash'
