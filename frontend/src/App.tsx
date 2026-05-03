@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import type {
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -326,6 +330,7 @@ const DEMO_LANDING_LINES = [
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
+const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
 const MIN_COMPLETION_SOUND_VOLUME = 0.05;
 
@@ -390,6 +395,55 @@ function writeCompletionSoundVolume(volume: number): void {
   } catch {
     // Preference persistence is best-effort.
   }
+}
+
+function sessionOrderStorageKey(user: SessionUser): string {
+  return `${SESSION_ORDER_KEY_PREFIX}.${user.sub}`;
+}
+
+function readSessionOrder(key: string): string[] {
+  try {
+    const stored = localStorage.getItem(key);
+    const parsed: unknown = stored ? JSON.parse(stored) : [];
+    if (Array.isArray(parsed)) {
+      return parsed.filter((id): id is string => typeof id === "string");
+    }
+  } catch {
+    // Ordering persistence is best-effort; server order is still usable.
+  }
+  return [];
+}
+
+function writeSessionOrder(key: string, order: string[]): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(order));
+  } catch {
+    // Ordering persistence is best-effort.
+  }
+}
+
+function orderSessions(sessions: Session[], order: string[]): Session[] {
+  if (sessions.length < 2 || order.length === 0) return sessions;
+  const rank = new Map(order.map((id, index) => [id, index]));
+  return [...sessions].sort((a, b) => {
+    const aRank = rank.get(a.id);
+    const bRank = rank.get(b.id);
+    if (aRank == null && bRank == null) return 0;
+    if (aRank == null) return 1;
+    if (bRank == null) return -1;
+    return aRank - bRank;
+  });
+}
+
+function moveSessionId(order: string[], movedId: string, targetId: string): string[] {
+  if (movedId === targetId) return order;
+  const fromIndex = order.indexOf(movedId);
+  const toIndex = order.indexOf(targetId);
+  if (fromIndex < 0 || toIndex < 0) return order;
+  const next = [...order];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
 }
 
 // Modes whose pods carry harvestable credentials — the "save" button
@@ -959,6 +1013,8 @@ export function App() {
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [draggingSessionId, setDraggingSessionId] = useState<string | null>(null);
+  const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const [completionSoundEnabled, setCompletionSoundEnabled] =
@@ -1011,7 +1067,8 @@ export function App() {
     try {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
-      setSessions(await res.json());
+      const listed: Session[] = await res.json();
+      setSessions(user ? orderSessions(listed, readSessionOrder(sessionOrderStorageKey(user))) : listed);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -1139,6 +1196,41 @@ export function App() {
       return;
     }
     activate(id);
+  }
+
+  function dragSessionStart(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    setDraggingSessionId(id);
+    setDragOverSessionId(id);
+  }
+
+  function dragSessionOver(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    if (!draggingSessionId || draggingSessionId === id) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverSessionId(id);
+  }
+
+  function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    event.preventDefault();
+    const movedId = event.dataTransfer.getData("text/plain") || draggingSessionId;
+    setDraggingSessionId(null);
+    setDragOverSessionId(null);
+    if (!movedId || movedId === id || !user) return;
+
+    setSessions((prev) => {
+      const currentOrder = prev.map((session) => session.id);
+      const next = moveSessionId(currentOrder, movedId, id);
+      if (next === currentOrder) return prev;
+      writeSessionOrder(sessionOrderStorageKey(user), next);
+      return orderSessions(prev, next);
+    });
+  }
+
+  function dragSessionEnd() {
+    setDraggingSessionId(null);
+    setDragOverSessionId(null);
   }
 
   async function createSession(mode: SessionMode = defaultSessionMode) {
@@ -1446,7 +1538,12 @@ export function App() {
               return (
                 <li
                   key={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}`}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  draggable={!isEditing && !isClosing}
+                  onDragStart={(e) => dragSessionStart(s.id, e)}
+                  onDragOver={(e) => dragSessionOver(s.id, e)}
+                  onDrop={(e) => dropSession(s.id, e)}
+                  onDragEnd={dragSessionEnd}
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
