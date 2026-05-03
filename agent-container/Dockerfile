@@ -36,6 +36,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
         | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
+RUN printf '%s\n' 'export PATH="/usr/local/go/bin:${PATH}"' > /etc/profile.d/go-path.sh
 
 # claude-code CLI + playwright npm package. The base image preinstalls
 # chromium under /ms-playwright but NOT the playwright JS package, so any
