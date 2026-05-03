@@ -159,6 +159,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     const term = new XTerm({
       cursorBlink: true,
       scrollback: 10_000,
+      macOptionClickForcesSelection: true,
       // "Symbols Nerd Font Mono" is loaded last as a fallback so private-use-area
       // glyphs (Powerline arrows, branded marks, status icons) render instead of
       // the U+FFFD replacement diamond. Latin still resolves to the earlier
