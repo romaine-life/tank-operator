@@ -60,6 +60,58 @@ module "mcp_azure" {
 }
 
 # ----------------------------------------------------------------------------
+# Per-server: azure-admin
+# ----------------------------------------------------------------------------
+# Small first-party MCP server with guarded destructive cleanup commands. Keep
+# this separate from Microsoft's broad azure-mcp image so normal Azure discovery
+# can stay read-heavy while cleanup gets an explicit, auditable tool surface.
+
+resource "azurerm_role_definition" "azure_cleanup_operator" {
+  name        = "Tank Operator Azure Cleanup Operator"
+  scope       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+  description = "Read Azure resources and delete stale cleanup targets through guarded MCP tools."
+
+  permissions {
+    actions = [
+      "*/read",
+      "*/delete",
+      "Microsoft.Resources/subscriptions/resourceGroups/delete",
+    ]
+    not_actions = [
+      "Microsoft.Authorization/*/delete",
+      "Microsoft.Authorization/*/write",
+      "Microsoft.Blueprint/blueprintAssignments/delete",
+      "Microsoft.Blueprint/blueprintAssignments/write",
+    ]
+  }
+
+  assignable_scopes = [
+    "/subscriptions/${data.azurerm_client_config.current.subscription_id}",
+  ]
+}
+
+module "mcp_azure_admin" {
+  source = "./mcp-server"
+
+  name                     = "azure-admin"
+  resource_group_name      = data.azurerm_resource_group.main.name
+  resource_group_location  = data.azurerm_resource_group.main.location
+  key_vault_id             = data.azurerm_key_vault.main.id
+  aks_oidc_issuer_url      = data.azurerm_kubernetes_cluster.main.oidc_issuer_url
+  aks_namespace            = "mcp-azure"
+  aks_service_account_name = "mcp-azure-admin"
+
+  role_assignments = {
+    "subscription-cleanup-operator" = {
+      scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+      role_definition_name = azurerm_role_definition.azure_cleanup_operator.name
+    }
+  }
+
+  depends_on = [azurerm_role_definition.azure_cleanup_operator]
+}
+
+# ----------------------------------------------------------------------------
 # mcp-azure: Cosmos data-plane reads
 # ----------------------------------------------------------------------------
 # Cosmos SQL API uses its own RBAC system (not ARM RBAC) — even Reader at
