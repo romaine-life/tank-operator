@@ -250,7 +250,7 @@ export function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   // Inline rename state. `editingId` is the session whose row is currently
   // an <input>; `editingValue` holds the in-progress name. Reset on commit
-  // or cancel. Triggered by double-click on the session-id span.
+  // or cancel. Triggered by clicking the session name.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   // One Terminal handle per session — populated by Terminal's forwardRef
@@ -538,7 +538,6 @@ export function App() {
                   key={s.id}
                   className={isActive ? "is-open" : ""}
                   onClick={isEditing ? undefined : () => activate(s.id)}
-                  onDoubleClick={isEditing ? undefined : () => startEditing(s.id, s.name)}
                 >
                   <div className="session-row-top">
                     <span
@@ -551,6 +550,7 @@ export function App() {
                         className="session-name-input"
                         value={editingValue}
                         autoFocus
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setEditingValue(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") commitEditing();
@@ -563,7 +563,11 @@ export function App() {
                     ) : (
                       <button
                         className="session-open"
-                        title={s.name ? `${s.id} — double-click to rename` : "double-click to rename"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startEditing(s.id, s.name);
+                        }}
+                        title={s.name ? `${s.id} — click to rename` : "click to rename"}
                       >
                         <span className="session-id">{s.name ?? s.id}</span>
                       </button>

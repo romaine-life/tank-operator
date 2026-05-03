@@ -526,9 +526,11 @@ button:disabled {
   min-width: 0;
   border-radius: 0;
   color: var(--text-secondary);
+  cursor: text;
 }
 
 .sessions li.is-open .session-open { color: var(--text-primary); }
+.session-open:hover:not(:disabled) { color: var(--text-primary); }
 
 .session-id {
   flex: 1;
@@ -864,7 +866,7 @@ button:disabled {
 .session-action.session-remote { background: var(--cyan-bg); color: var(--cyan); }
 .session-action.session-remote:hover:not(:disabled) { background: rgba(34, 211, 238, 0.22); color: var(--cyan-bright); }
 
-/* Inline rename input — replaces the session-id span on double-click. */
+/* Inline rename input — replaces the session-id span after clicking the name. */
 .session-name-input {
   flex: 1;
   background: transparent;
