@@ -113,11 +113,43 @@ fi
 # CODEX_SUBSCRIPTION_MODE for the full picture.
 if [ "${TANK_SESSION_MODE}" = "codex_subscription" ]; then
   mkdir -p $HOME/.codex
-  cat > $HOME/.codex/config.toml <<'EOF'
+  # Translate /workspace/.mcp.json (claude shape) to codex's
+  # [mcp_servers.X] TOML blocks. mcp-auth-proxy is transparent — the
+  # same upstream MCP services serve both clients on 127.0.0.1:999X
+  # with the SA-token Bearer injected by the sidecar; codex doesn't
+  # need to know about the auth at all.
+  #
+  # Per developers.openai.com/codex/mcp:
+  #   streamable_http servers take `url` (and optionally
+  #     `bearer_token_env_var`/`http_headers` — unused here, proxy
+  #     handles auth);
+  #   stdio servers take `command`, `args`, and an `env` table.
+  #
+  # Verified end-to-end (raw `initialize` JSON-RPC against both
+  # transports + `codex mcp list`/`get`) before this landed — see
+  # 17e24a3's follow-up investigation.
+  mcp_blocks=""
+  if [ -f /workspace/.mcp.json ]; then
+    mcp_blocks=$(jq -r '.mcpServers | to_entries[] |
+      "\n[mcp_servers.\(.key)]" +
+      (if .value.type == "http" then
+         "\nurl = \"\(.value.url)\""
+       elif .value.command then
+         "\ncommand = \"\(.value.command)\"" +
+         (if .value.args then "\nargs = " + (.value.args | tojson) else "" end)
+       else "" end) +
+      (if .value.env then
+         "\n\n[mcp_servers.\(.key).env]" +
+         (.value.env | to_entries | map("\n\(.key) = " + (.value | tojson)) | join(""))
+       else "" end)
+    ' /workspace/.mcp.json)
+  fi
+  cat > $HOME/.codex/config.toml <<EOF
 cli_auth_credentials_store = "file"
 
 [projects."/workspace"]
 trust_level = "trusted"
+${mcp_blocks}
 EOF
   if [ ! -f /etc/codex-creds/auth.json ]; then
     echo "no codex credentials found in /etc/codex-creds/auth.json" >&2
