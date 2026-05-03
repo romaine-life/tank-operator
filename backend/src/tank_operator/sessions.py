@@ -117,22 +117,22 @@ CODEX_CONFIG_MODE = "codex_config"
 # does). Determined by observing rotation behavior in a codex_config pod.
 CODEX_SUBSCRIPTION_MODE = "codex_subscription"
 CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
-# Pi-config / Pi-subscription mirror Codex's direct-file auth model. Pi stores
-# provider credentials in ~/.pi/agent/auth.json; a config session harvests that
-# file into KV, and subscription sessions mount the ESO-mirrored copy.
+# Pi-config is a disposable Pi login sandbox. Pi-subscription curates
+# Tank-backed Claude/Codex subscriptions into Pi's auth.json at pod startup so
+# the launcher only needs one Pi option while Pi still sees multiple providers.
 PI_CONFIG_MODE = "pi_config"
 PI_SUBSCRIPTION_MODE = "pi_subscription"
-PI_CREDS_SECRET = os.environ.get("PI_CREDS_SECRET", "pi-credentials")
 # Modes that must reach the real internet directly (no platform.claude.com /
 # api.anthropic.com hijack). Adding a Claude hostAlias to a config or codex
-# pod would 404 the OAuth endpoints they're trying to reach.
+# pod would 404 the OAuth endpoints they're trying to reach. pi_subscription
+# intentionally does use the api.anthropic.com proxy so Pi's Anthropic provider
+# can reuse Tank's Claude subscription token injection.
 NO_CLAUDE_HIJACK_MODES = frozenset(
     {
         CONFIG_MODE,
         CODEX_CONFIG_MODE,
         CODEX_SUBSCRIPTION_MODE,
         PI_CONFIG_MODE,
-        PI_SUBSCRIPTION_MODE,
     }
 )
 CODEX_MODES = frozenset({CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE})
@@ -374,7 +374,7 @@ class SessionManager:
         # be just irrelevant overhead).
         if mode not in NO_CLAUDE_HIJACK_MODES and (self._oauth_gateway_ip or self._api_proxy_ip):
             host_aliases: list[dict[str, Any]] = []
-            if self._oauth_gateway_ip:
+            if mode != PI_SUBSCRIPTION_MODE and self._oauth_gateway_ip:
                 host_aliases.append(
                     {"ip": self._oauth_gateway_ip, "hostnames": ["platform.claude.com"]}
                 )
@@ -432,22 +432,23 @@ class SessionManager:
                     },
                 }
             )
-        # pi_subscription pods mount the ESO-mirrored pi-credentials Secret.
-        # It is optional for the same first-config flow as Codex.
+        # pi_subscription pods mount existing Codex credentials. Bootstrap
+        # translates them into Pi auth.json and adds Tank's Claude proxy
+        # placeholder auth.
         if mode == PI_SUBSCRIPTION_MODE:
             container = next(c for c in pod_spec["containers"] if c["name"] == "claude")
             container.setdefault("volumeMounts", []).append(
                 {
-                    "name": "pi-creds",
-                    "mountPath": "/etc/pi-creds",
+                    "name": "codex-creds",
+                    "mountPath": "/etc/codex-creds",
                     "readOnly": True,
                 }
             )
             pod_spec.setdefault("volumes", []).append(
                 {
-                    "name": "pi-creds",
+                    "name": "codex-creds",
                     "secret": {
-                        "secretName": PI_CREDS_SECRET,
+                        "secretName": CODEX_CREDS_SECRET,
                         "optional": True,
                     },
                 }

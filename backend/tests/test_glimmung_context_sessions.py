@@ -59,7 +59,7 @@ def test_plain_session_has_no_glimmung_context_annotation() -> None:
     assert _claude_env(manifest)["TANK_GLIMMUNG_CONTEXT_JSON"] == ""
 
 
-def test_pi_subscription_uses_pi_image_and_mounts_credentials() -> None:
+def test_pi_subscription_uses_pi_image_and_mounts_codex_credentials() -> None:
     manifest = SessionManager()._deployment_manifest(
         "abc123",
         owner="operator@example.test",
@@ -67,15 +67,35 @@ def test_pi_subscription_uses_pi_image_and_mounts_credentials() -> None:
     )
 
     assert _claude_container(manifest)["image"].endswith("/pi-container:latest")
-    assert any(
-        mount["name"] == "pi-creds" and mount["mountPath"] == "/etc/pi-creds"
+    assert all(
+        mount["name"] != "pi-creds"
         for mount in _claude_container(manifest).get("volumeMounts", [])
     )
     assert any(
-        volume["name"] == "pi-creds"
-        and volume["secret"]["secretName"] == "pi-credentials"
+        mount["name"] == "codex-creds" and mount["mountPath"] == "/etc/codex-creds"
+        for mount in _claude_container(manifest).get("volumeMounts", [])
+    )
+    assert any(
+        volume["name"] == "codex-creds"
+        and volume["secret"]["secretName"] == "codex-credentials"
         for volume in _pod_spec(manifest).get("volumes", [])
     )
+
+
+def test_pi_subscription_only_hijacks_anthropic_api_proxy() -> None:
+    manager = SessionManager()
+    manager._oauth_gateway_ip = "10.0.0.10"
+    manager._api_proxy_ip = "10.0.0.20"
+
+    manifest = manager._deployment_manifest(
+        "abc123",
+        owner="operator@example.test",
+        mode="pi_subscription",
+    )
+
+    assert _pod_spec(manifest)["hostAliases"] == [
+        {"ip": "10.0.0.20", "hostnames": ["api.anthropic.com"]}
+    ]
 
 
 def test_pi_config_uses_pi_image_without_credential_mount() -> None:
