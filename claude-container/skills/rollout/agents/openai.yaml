@@ -1,0 +1,17 @@
+interface:
+  display_name: "Rollout"
+  short_description: "Merge changes and watch builds through ArgoCD"
+  default_prompt: "Use $rollout to land this change, follow the build, and watch ArgoCD until the new image is deployed."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "github"
+      description: "GitHub MCP server"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:9992/"
+    - type: "mcp"
+      value: "argocd"
+      description: "ArgoCD MCP server"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:9994/"

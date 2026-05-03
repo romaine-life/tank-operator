@@ -54,6 +54,13 @@
 if tmux has-session -t tank 2>/dev/null; then
   exec tmux attach-session -t tank
 fi
+sync_skills() {
+  # Pull/bundle SKILL.md files for clients that can discover them. Soft
+  # fail because a transient MCP issue should not block the session.
+  if [ -x /opt/tank/fetch-skills.py ]; then
+    python3 /opt/tank/fetch-skills.py 2>&1 | sed 's/^/[skills] /' || true
+  fi
+}
 if [ -n "${TANK_GLIMMUNG_CONTEXT_JSON:-}" ]; then
   cat > /workspace/GLIMMUNG_CONTEXT.json <<EOF
 ${TANK_GLIMMUNG_CONTEXT_JSON}
@@ -194,6 +201,7 @@ EOF
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
   chmod 600 $HOME/.codex/auth.json
+  sync_skills
   exec tmux new-session -s tank 'codex; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
@@ -277,10 +285,6 @@ cat > $HOME/.claude.json <<EOF
   }
 }
 EOF
-# Pull SKILL.md files from external repos via the github MCP. Soft fail
-# — a transient MCP error logs `[skills]` lines but does not block boot.
-if [ -x /opt/tank/fetch-skills.py ]; then
-  python3 /opt/tank/fetch-skills.py 2>&1 | sed 's/^/[skills] /' || true
-fi
+sync_skills
 
 exec tmux new-session -s tank 'claude; exec bash'

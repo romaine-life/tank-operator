@@ -18,6 +18,7 @@
 
 import json
 import os
+import shutil
 import sys
 import urllib.error
 import urllib.request
@@ -82,7 +83,7 @@ def extract_file_content(body):
     return None, "no file content in response"
 
 
-def install_skill(content, skill_name, targets):
+def install_skill_content(content, skill_name, targets):
     for target in targets:
         skills_dir = SKILL_DIRS[target]
         target_dir = os.path.join(skills_dir, skill_name)
@@ -92,14 +93,21 @@ def install_skill(content, skill_name, targets):
             f.write(content)
 
 
+def install_skill_dir(source_dir, skill_name, targets):
+    for target in targets:
+        skills_dir = SKILL_DIRS[target]
+        target_dir = os.path.join(skills_dir, skill_name)
+        shutil.copytree(source_dir, target_dir, dirs_exist_ok=True)
+
+
 def install_bundled_skills():
     installed = []
     for _, _, _, skill_name, targets in SKILLS:
-        source_path = os.path.join(BUNDLED_SKILLS_DIR, skill_name, "SKILL.md")
+        source_dir = os.path.join(BUNDLED_SKILLS_DIR, skill_name)
+        source_path = os.path.join(source_dir, "SKILL.md")
         if not os.path.exists(source_path):
             continue
-        with open(source_path) as f:
-            install_skill(f.read(), skill_name, targets)
+        install_skill_dir(source_dir, skill_name, targets)
         installed.append(f"{skill_name} ({', '.join(targets)})")
     return installed
 
@@ -152,7 +160,7 @@ def main():
             print(f"skill {skill_name}: {err}", file=sys.stderr)
             continue
 
-        install_skill(content, skill_name, targets)
+        install_skill_content(content, skill_name, targets)
         refreshed.append(f"{skill_name} ({', '.join(targets)})")
 
     if refreshed:
