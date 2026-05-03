@@ -37,16 +37,18 @@ function trimTrailingPunctuation(url: string): string {
 
 type Activator = (event: MouseEvent, uri: string) => void;
 
-/** Last non-whitespace, non-empty character on the line, or "" if none. */
-function lastVisibleChar(line: IBufferLine, cols: number): string {
+type VisibleChar = { ch: string; col: number };
+
+/** Last non-whitespace, non-empty character on the line, or undefined if none. */
+function lastVisibleChar(line: IBufferLine, cols: number): VisibleChar | undefined {
   for (let c = cols - 1; c >= 0; c--) {
     const cell = line.getCell(c);
     if (!cell) continue;
     if (cell.getWidth() === 0) continue;
     const ch = cell.getChars();
-    if (ch && ch.trim().length > 0) return ch;
+    if (ch && ch.trim().length > 0) return { ch, col: c };
   }
-  return "";
+  return undefined;
 }
 
 /** First non-whitespace, non-empty character on the line, or "" if none. */
@@ -65,13 +67,14 @@ function firstVisibleChar(line: IBufferLine, cols: number): string {
  * Decide whether `next` is a continuation of `prev` for URL-detection
  * purposes. xterm sets `isWrapped` only when IT did the wrapping (auto-wrap
  * at terminal width); URLs split by an emitter that injected an explicit
- * newline mid-URL won't have that flag. Falls back to a content heuristic:
- * line N ends with a URL-body character and line N+1 begins with one.
+ * newline at terminal width won't have that flag. Falls back to a content
+ * heuristic only when line N reaches the right edge: line N ends with a
+ * URL-body character and line N+1 begins with one.
  */
 function isContinuation(prev: IBufferLine, next: IBufferLine, cols: number): boolean {
   if (next.isWrapped) return true;
   const last = lastVisibleChar(prev, cols);
-  if (!last || !URL_BODY_CHAR.test(last)) return false;
+  if (!last || last.col !== cols - 1 || !URL_BODY_CHAR.test(last.ch)) return false;
   const first = firstVisibleChar(next, cols);
   return Boolean(first) && URL_BODY_CHAR.test(first);
 }
