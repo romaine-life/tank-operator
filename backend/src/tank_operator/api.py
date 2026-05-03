@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -21,7 +22,7 @@ from .auth import (
     verify_install_state,
 )
 from .credentials_seed import CredentialsSeedError, harvest_and_save, harvest_codex_and_save
-from .exec_proxy import bridge
+from .exec_proxy import bridge, exec_write_file
 from .profiles import ProfileStore
 from .sessions import (
     DEFAULT_SESSION_MODE,
@@ -37,6 +38,14 @@ from .sessions import (
 sessions = SessionManager()
 profiles = ProfileStore()
 log = logging.getLogger(__name__)
+
+PASTE_IMAGE_TYPES = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+MAX_PASTE_IMAGE_BYTES = int(os.environ.get("MAX_PASTE_IMAGE_BYTES", str(8 * 1024 * 1024)))
 
 
 @asynccontextmanager
@@ -378,6 +387,42 @@ async def save_credentials(
     except CredentialsSeedError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"id": session_id, "status": "saved"}
+
+
+@app.post("/api/sessions/{session_id}/paste-image")
+async def paste_image(
+    session_id: str,
+    request: Request,
+    user: User = Depends(current_user),
+) -> dict[str, str]:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    extension = PASTE_IMAGE_TYPES.get(content_type)
+    if extension is None:
+        raise HTTPException(status_code=415, detail="clipboard item is not a supported image")
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty image")
+    if len(body) > MAX_PASTE_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="image is too large")
+
+    try:
+        pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+
+    timestamp_ms = int(time.time() * 1000)
+    path = f"/workspace/.tank-pastes/{session_id}/clipboard-{timestamp_ms}.{extension}"
+    try:
+        await exec_write_file(namespace=SESSIONS_NAMESPACE, pod_name=pod_name, path=path, data=body)
+    except RuntimeError as e:
+        log.warning("failed to write pasted image for session %s: %s", session_id, e)
+        raise HTTPException(status_code=502, detail="failed to write image into session pod")
+    return {"path": path}
 
 
 @app.websocket("/api/sessions/{session_id}/exec")

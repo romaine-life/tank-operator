@@ -3,6 +3,7 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { registerWrappedLinks } from "./wrappedLinkProvider";
 import { ANSI_256_OVERRIDES, TERMINAL_THEME } from "./terminalTheme";
+import { authedFetch } from "./auth";
 import "@xterm/xterm/css/xterm.css";
 import "./fonts.css";
 
@@ -181,6 +182,17 @@ function reportTerminalDebug(
     body,
     keepalive: true,
   }).catch(() => undefined);
+}
+
+function imageFromClipboard(event: ClipboardEvent): File | null {
+  const items = event.clipboardData?.items;
+  if (!items) return null;
+  for (const item of Array.from(items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file) return file;
+  }
+  return null;
 }
 
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
@@ -395,7 +407,32 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
         direction,
       });
     };
+    const onPaste = (event: ClipboardEvent) => {
+      const image = imageFromClipboard(event);
+      if (!image) return;
+      event.preventDefault();
+      event.stopPropagation();
+      term.write("\r\n\x1b[36m[uploading pasted image...]\x1b[0m\r\n");
+      void authedFetch(`/api/sessions/${sessionId}/paste-image`, {
+        method: "POST",
+        headers: { "Content-Type": image.type || "image/png" },
+        body: image,
+      }).then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`${response.status} ${await response.text()}`);
+        }
+        return response.json() as Promise<{ path: string }>;
+      }).then(({ path }) => {
+        const insertion = ` ${path} `;
+        sendIfOpen(insertion);
+        term.write(`\x1b[36m[pasted image saved: ${path}]\x1b[0m\r\n`);
+      }).catch((error) => {
+        console.error("image paste failed", error);
+        term.write("\x1b[31m[failed to paste image]\x1b[0m\r\n");
+      });
+    };
     containerRef.current.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    containerRef.current.addEventListener("paste", onPaste, { capture: true });
     if (visible) {
       fit.fit();
       // Without this, the user has to click into the terminal before keystrokes
@@ -519,6 +556,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       window.removeEventListener("resize", onWindowResize);
       containerRef.current?.removeEventListener("keydown", onCaptureKeyDown, { capture: true });
       containerRef.current?.removeEventListener("wheel", onWheel, { capture: true });
+      containerRef.current?.removeEventListener("paste", onPaste, { capture: true });
       onResizeDisp.dispose();
       onDataDisp.dispose();
       onBellDisp.dispose();
