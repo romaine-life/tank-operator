@@ -53,6 +53,33 @@
 if tmux has-session -t tank 2>/dev/null; then
   exec tmux attach-session -t tank
 fi
+if [ -n "${TANK_GLIMMUNG_CONTEXT_JSON:-}" ]; then
+  cat > /workspace/GLIMMUNG_CONTEXT.json <<EOF
+${TANK_GLIMMUNG_CONTEXT_JSON}
+EOF
+  cat > /workspace/GLIMMUNG_CONTEXT.md <<EOF
+# Glimmung Context
+
+This session was launched from glimmung for an attended pickup.
+
+- Run id: ${TANK_GLIMMUNG_RUN_ID:-}
+- Issue id: ${TANK_GLIMMUNG_ISSUE_ID:-}
+- PR id: ${TANK_GLIMMUNG_PR_ID:-}
+- Validation URL: ${TANK_GLIMMUNG_VALIDATION_URL:-}
+
+Use the glimmung MCP server to read the canonical Issue, Run, PR, graph,
+comments, reviews, and signals before making changes. Treat GitHub as a
+syndication surface when glimmung has the richer record.
+EOF
+  cat >> /workspace/CLAUDE.md <<'EOF'
+
+## Glimmung attended pickup
+
+This pod was launched from glimmung. Read `/workspace/GLIMMUNG_CONTEXT.md`
+first, then use the glimmung MCP server to fetch the canonical Issue / Run /
+PR state before acting.
+EOF
+fi
 # Config-mode: short-circuit the regular session bootstrap. The user is
 # here to do `claude /login` once so we can capture credentials.json and
 # write it to KV. No MCP wiring, no onboarding bypass, no credentials

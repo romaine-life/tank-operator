@@ -217,6 +217,20 @@ class CreateSessionBody(BaseModel):
     mode: str = DEFAULT_SESSION_MODE
 
 
+class CreateSessionWithContextBody(BaseModel):
+    glimmung_run_id: str
+    glimmung_issue_id: str
+    glimmung_pr_id: str | None = None
+    validation_url: str | None = None
+    caller_email: str | None = None
+    mode: str = DEFAULT_SESSION_MODE
+
+
+class CreateSessionWithContextResponse(BaseModel):
+    session_url: str
+    session: SessionInfo
+
+
 @app.post("/api/sessions")
 async def create_session(
     body: CreateSessionBody | None = None,
@@ -226,6 +240,39 @@ async def create_session(
     if mode not in SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
     return await sessions.create(owner=user.email, mode=mode)
+
+
+@app.post("/api/sessions/with-context", response_model=CreateSessionWithContextResponse)
+async def create_session_with_context(
+    body: CreateSessionWithContextBody,
+    request: Request,
+    user: User = Depends(current_user),
+) -> CreateSessionWithContextResponse:
+    """Create a fresh session preloaded with canonical glimmung context.
+
+    Glimmung passes ids, not rendered text. The session pod can then use
+    mcp-glimmung to read the Issue / Run / PR details from the source of
+    truth while still booting with enough context to orient the operator.
+    """
+    if body.mode not in SESSION_MODES:
+        raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
+    if body.caller_email and body.caller_email.lower() != user.email.lower():
+        raise HTTPException(status_code=403, detail="caller_email does not match session user")
+
+    context = {
+        "glimmung_run_id": body.glimmung_run_id,
+        "glimmung_issue_id": body.glimmung_issue_id,
+        "glimmung_pr_id": body.glimmung_pr_id,
+        "validation_url": body.validation_url,
+        "caller_email": user.email,
+    }
+    created = await sessions.create(
+        owner=user.email,
+        mode=body.mode,
+        glimmung_context=context,
+    )
+    session_url = str(request.base_url).rstrip("/") + f"/?session={created.id}"
+    return CreateSessionWithContextResponse(session_url=session_url, session=created)
 
 
 @app.get("/api/sessions")
