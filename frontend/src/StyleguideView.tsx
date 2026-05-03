@@ -77,6 +77,29 @@ function IconWrench({ className }: { className?: string }) {
   );
 }
 
+function IconKey({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <circle cx="5.25" cy="8" r="2.6" />
+      <path d="M7.85 8h5.15" />
+      <path d="M11 8v2" />
+      <path d="M13 8v2.2" />
+    </svg>
+  );
+}
+
 export function StyleguideView() {
   const [dropdownOpen, setDropdownOpen] = useState(true);
 
@@ -269,7 +292,8 @@ export function StyleguideView() {
                 <li>
                   <button type="button">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <span className="dropdown-title">API key</span>
+                    <IconKey className="dropdown-key-icon" />
+                    <span className="sr-only">Claude API key</span>
                   </button>
                 </li>
                 <li>

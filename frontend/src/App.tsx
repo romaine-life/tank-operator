@@ -166,6 +166,29 @@ function IconWrench({ className }: { className?: string }) {
   );
 }
 
+function IconKey({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <circle cx="5.25" cy="8" r="2.6" />
+      <path d="M7.85 8h5.15" />
+      <path d="M11 8v2" />
+      <path d="M13 8v2.2" />
+    </svg>
+  );
+}
+
 function IconChevron() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
@@ -240,13 +263,14 @@ function ModeChip({ mode }: { mode: SessionMode }) {
 
 function ModeMenuItem({ mode }: { mode: SessionMode }) {
   const isConfig = mode === "config" || mode === "codex_config";
+  const isApiKey = mode === "api_key";
 
   return (
     <>
       <ProviderIcon provider={MODE_MENU_ICONS[mode]} className="dropdown-provider-icon" />
       {isConfig && <IconWrench className="dropdown-wrench-icon" />}
-      {mode === "api_key" && <span className="dropdown-title">API key</span>}
-      {mode !== "api_key" && <span className="sr-only">{MODE_LABELS[mode]}</span>}
+      {isApiKey && <IconKey className="dropdown-key-icon" />}
+      <span className="sr-only">{MODE_LABELS[mode]}</span>
     </>
   );
 }
