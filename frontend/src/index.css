@@ -670,6 +670,49 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.dropdown-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.setting-toggle,
+.setting-range {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-body);
+  font-size: var(--text-sm);
+}
+
+.setting-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.setting-range {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 2.25rem;
+}
+
+.setting-range input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.setting-range input:disabled {
+  opacity: 0.45;
+}
+
+.setting-value {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .dropdown-mode button {
   flex-direction: row;
   align-items: center;

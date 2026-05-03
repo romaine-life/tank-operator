@@ -33,11 +33,12 @@ const completionSound = (() => {
     });
   };
 
-  const playFallback = () => {
+  const playFallback = (volume: number) => {
     const ctx = getContext();
     void ctx.resume().catch(() => undefined);
 
     const now = ctx.currentTime;
+    const peak = Math.max(0.0001, Math.min(1, volume) * 0.145);
     const gain = ctx.createGain();
     const first = ctx.createOscillator();
     const second = ctx.createOscillator();
@@ -48,7 +49,7 @@ const completionSound = (() => {
     second.frequency.setValueAtTime(1320, now);
 
     gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.015);
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
 
     first.connect(gain);
@@ -61,10 +62,11 @@ const completionSound = (() => {
     second.stop(now + 0.22);
   };
 
-  const play = () => {
+  const play = (volume: number) => {
     const audio = getAudio();
+    audio.volume = Math.max(0, Math.min(1, volume));
     audio.currentTime = 0;
-    void audio.play().catch(playFallback);
+    void audio.play().catch(() => playFallback(volume));
   };
 
   return { play, unlock };
@@ -76,6 +78,8 @@ interface Props {
   sessionId: string;
   mode: string;
   status: string;
+  completionSoundEnabled: boolean;
+  completionSoundVolume: number;
   onAgentActivityChange?: (sessionId: string, activity: AgentActivity) => void;
   /**
    * When false the component stays mounted (preserving WS + scrollback) but
@@ -96,18 +100,41 @@ export interface TerminalHandle {
 }
 
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
-  { sessionId, mode, status, visible, onAgentActivityChange },
+  {
+    sessionId,
+    mode,
+    status,
+    visible,
+    completionSoundEnabled,
+    completionSoundVolume,
+    onAgentActivityChange,
+  },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const termRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const completionSoundEnabledRef = useRef(completionSoundEnabled);
+  const completionSoundVolumeRef = useRef(completionSoundVolume);
+  const onAgentActivityChangeRef = useRef(onAgentActivityChange);
   const [everActive, setEverActive] = useState(false);
 
   useEffect(() => {
     if (status === "Active") setEverActive(true);
   }, [status]);
+
+  useEffect(() => {
+    completionSoundEnabledRef.current = completionSoundEnabled;
+  }, [completionSoundEnabled]);
+
+  useEffect(() => {
+    completionSoundVolumeRef.current = completionSoundVolume;
+  }, [completionSoundVolume]);
+
+  useEffect(() => {
+    onAgentActivityChangeRef.current = onAgentActivityChange;
+  }, [onAgentActivityChange]);
 
   useEffect(() => {
     window.addEventListener("pointerdown", completionSound.unlock, { once: true });
@@ -145,8 +172,10 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     term.loadAddon(fit);
     const onBellDisp = term.onBell(() => {
       if (!mode.startsWith("codex_")) return;
-      onAgentActivityChange?.(sessionId, "waiting");
-      completionSound.play();
+      onAgentActivityChangeRef.current?.(sessionId, "waiting");
+      if (completionSoundEnabledRef.current) {
+        completionSound.play(completionSoundVolumeRef.current);
+      }
     });
     // URLs in claude's output become click-to-open. Custom provider (instead
     // of @xterm/addon-web-links) so links that wrap across terminal rows are
@@ -290,7 +319,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     const onResizeDisp = term.onResize(({ cols, rows }) => sendResize(cols, rows));
     const onDataDisp = term.onData((data) => {
       if (mode.startsWith("codex_") && (data.includes("\r") || data.includes("\n"))) {
-        onAgentActivityChange?.(sessionId, "working");
+        onAgentActivityChangeRef.current?.(sessionId, "working");
       }
       sendIfOpen(data);
     });
