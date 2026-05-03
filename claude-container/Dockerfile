@@ -14,6 +14,7 @@ ARG YQ_VERSION=v4.44.3
 ARG UV_VERSION=0.5.18
 ARG RUFF_VERSION=0.15.12
 ARG PYTEST_VERSION=8.4.2
+ARG TANK_AGENT=claude
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
@@ -68,7 +69,11 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
     && rm -rf /tmp/uv-x86_64-unknown-linux-musl \
     && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
 
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN case "${TANK_AGENT}" in \
+        claude) npm install -g @anthropic-ai/claude-code ;; \
+        codex) npm install -g @openai/codex ;; \
+        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude or codex" >&2; exit 1 ;; \
+    esac
 
 # Baseline Python dev tools expected by agent workflows. Install them in the
 # image, not per-repo, so both claude and codex sessions can assume the
@@ -123,12 +128,20 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 COPY claude-container/tank-bootstrap.sh /opt/tank/bootstrap.sh
 RUN chmod +x /opt/tank/bootstrap.sh
 
-# Skill-sync helper: tank-bootstrap.sh runs this on every session boot.
-# Repo-bundled skills provide a no-network fallback; the helper refreshes
-# them from GitHub via the MCP sidecar when it is reachable.
+# Repo-bundled skills are baked into the agent-specific home directory so
+# the CLI can discover them before it starts. Rebuild the image to update
+# skills; do not fetch them during session bootstrap.
 COPY claude-container/skills /opt/claude-container/skills
-COPY claude-container/fetch-skills.py /opt/tank/fetch-skills.py
-RUN chmod +x /opt/tank/fetch-skills.py
+RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills \
+    && case "${TANK_AGENT}" in \
+        claude) \
+          cp -R /opt/claude-container/skills/done /home/node/.claude/skills/done; \
+          cp -R /opt/claude-container/skills/rollout /home/node/.claude/skills/rollout; \
+          ;; \
+        codex) \
+          cp -R /opt/claude-container/skills/rollout /home/node/.codex/skills/rollout; \
+          ;; \
+    esac
 
 # Hide tmux's status bar so the claude TUI gets the full terminal height.
 # tmux is the WS-reconnect-survival wrapper for the claude session
@@ -141,7 +154,7 @@ RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\n' > /hom
 # defense-in-depth: a tool-use exploit can't escape to a privileged shell.
 # node:20-alpine already ships a `node` user at uid/gid 1000 with
 # /home/node, so reuse it (creating another user with gid 1000 collides).
-RUN chown -R node:node /workspace
+RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex
 
 WORKDIR /workspace
 USER node

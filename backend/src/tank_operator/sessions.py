@@ -16,6 +16,9 @@ log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = os.environ.get("SESSIONS_NAMESPACE", "tank-operator-sessions")
 SESSION_IMAGE = os.environ.get("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:latest")
+CODEX_SESSION_IMAGE = os.environ.get(
+    "CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:latest"
+)
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
@@ -115,6 +118,7 @@ CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
 NO_CLAUDE_HIJACK_MODES = frozenset(
     {CONFIG_MODE, CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE}
 )
+CODEX_MODES = frozenset({CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE})
 # Remote-control: there used to be a dedicated `remote_control` session mode
 # whose bootstrap auto-launched `claude '/remote-control'` to put the bridge
 # URL in the TUI on session start. That cold-start raced claude's slash
@@ -239,6 +243,7 @@ class SessionManager:
         context_json = ""
         if glimmung_context is not None:
             context_json = json.dumps(glimmung_context, sort_keys=True, separators=(",", ":"))
+        session_image = CODEX_SESSION_IMAGE if mode in CODEX_MODES else SESSION_IMAGE
         pod_spec: dict[str, Any] = {
             "serviceAccountName": SESSION_SERVICE_ACCOUNT,
             # The image's USER is claude (uid 1000). Reasserting it here
@@ -262,13 +267,13 @@ class SessionManager:
                 # call. See claude-container/mcp-auth-proxy/src/.../server.py.
                 {
                     "name": "mcp-auth-proxy",
-                    "image": SESSION_IMAGE,
+                    "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": ["mcp-auth-proxy"],
                 },
                 {
                     "name": "claude",
-                    "image": SESSION_IMAGE,
+                    "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": ["sleep", "infinity"],
                     "env": [
