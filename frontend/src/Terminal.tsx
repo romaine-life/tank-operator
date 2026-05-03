@@ -166,6 +166,23 @@ function paletteProbeLine(): string {
   ].join("");
 }
 
+function isTextEntryElement(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  const tagName = element.tagName.toLowerCase();
+  return (
+    element.isContentEditable ||
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    element.getAttribute("role") === "textbox"
+  );
+}
+
+function focusTerminalIfSafe(term: XTerm): void {
+  if (isTextEntryElement(document.activeElement)) return;
+  term.focus();
+}
+
 function reportTerminalDebug(
   event: string,
   sessionId: string,
@@ -482,7 +499,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       fit.fit();
       // Without this, the user has to click into the terminal before keystrokes
       // land — xterm doesn't auto-focus on mount.
-      term.focus();
+      focusTerminalIfSafe(term);
     }
 
     const wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/sessions/${sessionId}/exec`;
@@ -626,7 +643,8 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   useEffect(() => {
     if (visible) {
       fitRef.current?.fit();
-      termRef.current?.focus();
+      const term = termRef.current;
+      if (term) focusTerminalIfSafe(term);
     }
   }, [visible]);
 
