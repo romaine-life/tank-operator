@@ -491,6 +491,40 @@ function clearGlimmungLaunchContext(): void {
 
 const POLL_INTERVAL_MS = 1500;
 
+function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
+  if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (event.key === "ArrowUp") return -1;
+  if (event.key === "ArrowDown") return 1;
+  return null;
+}
+
+function isSessionShortcutEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.closest(".xterm")) return false;
+  if (target.closest("input, textarea, select")) return true;
+  return target.isContentEditable;
+}
+
+function adjacentSessionId(
+  sessions: Session[],
+  currentId: string | null,
+  direction: -1 | 1,
+  excludedIds = new Set<string>(),
+): string | null {
+  const selectable = sessions.filter((session) => !excludedIds.has(session.id));
+  if (selectable.length === 0) return null;
+
+  const currentIndex = currentId == null
+    ? -1
+    : selectable.findIndex((session) => session.id === currentId);
+  if (currentIndex < 0) {
+    return direction > 0 ? selectable[0].id : selectable[selectable.length - 1].id;
+  }
+
+  const nextIndex = (currentIndex + direction + selectable.length) % selectable.length;
+  return selectable[nextIndex].id;
+}
+
 function IconPlus() {
   return (
     <svg viewBox="0 0 16 16" width="16" height="16" fill="none"
@@ -718,6 +752,20 @@ function DemoLanding() {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [modeMenuOpen]);
+
+  useEffect(() => {
+    const cycleTabs = (event: KeyboardEvent) => {
+      const direction = shiftArrowSessionDirection(event);
+      if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
+      const nextId = adjacentSessionId(demoSessions, activeDemoSession, direction);
+      if (nextId == null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActiveDemoSession(nextId);
+    };
+    window.addEventListener("keydown", cycleTabs, { capture: true });
+    return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
+  }, [demoSessions, activeDemoSession]);
 
   function setDemoProvider(provider: Provider) {
     setSelectedProvider(provider);
@@ -1050,6 +1098,21 @@ export function App() {
     initialSessionId.current = null;
     clearInitialSessionId();
   }, [sessions]);
+
+  useEffect(() => {
+    const cycleTabs = (event: KeyboardEvent) => {
+      const direction = shiftArrowSessionDirection(event);
+      if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
+      const nextId = adjacentSessionId(sessions, active, direction, closingIds);
+      if (nextId == null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActive(nextId);
+      setMounted((prev) => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
+    };
+    window.addEventListener("keydown", cycleTabs, { capture: true });
+    return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
+  }, [sessions, active, closingIds]);
 
   function activate(id: string) {
     setActive(id);
