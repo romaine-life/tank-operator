@@ -272,6 +272,27 @@ function IconChevronDown({ className }: { className?: string }) {
   );
 }
 
+function IconPanelToggle({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2" />
+      <path d="M6 2.5v11" />
+      {collapsed ? <path d="M9 6 11 8 9 10" /> : <path d="M11 6 9 8l2 2" />}
+    </svg>
+  );
+}
+
 function IconKebab() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
@@ -400,6 +421,7 @@ export function App() {
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   // Inline rename state. `editingId` is the session whose row is currently
@@ -735,10 +757,19 @@ export function App() {
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
 
   return (
-    <div className="shell">
-      <aside className="sidebar">
+    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <aside className={`sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
         <div className="sidebar-brand">
           <h1>tank-operator</h1>
+          <button
+            className="sidebar-collapse"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+            aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+            aria-pressed={sidebarCollapsed}
+          >
+            <IconPanelToggle collapsed={sidebarCollapsed} />
+          </button>
         </div>
 
         <div className="sidebar-section">
@@ -824,6 +855,7 @@ export function App() {
                   key={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}`}
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
+                  title={sidebarCollapsed ? `${s.name ?? s.id} (${s.status})` : undefined}
                 >
                   <div className="session-row-top">
                     <span
