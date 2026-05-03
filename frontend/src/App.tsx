@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Terminal, playCompletionSound, type AgentActivity, type TerminalHandle } from "./Terminal";
+import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 
@@ -1082,14 +1082,6 @@ export function App() {
                   />
                   <span className="setting-value">{Math.round(completionSoundVolume * 100)}%</span>
                 </label>
-                <button
-                  className="setting-test-button"
-                  type="button"
-                  disabled={!completionSoundEnabled}
-                  onClick={() => playCompletionSound(completionSoundVolume)}
-                >
-                  Test sound
-                </button>
               </li>
               <li className="dropdown-divider" role="separator" />
               <li>
