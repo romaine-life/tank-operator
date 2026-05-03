@@ -22,6 +22,8 @@ from typing import Any
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.keyvault.secrets.aio import SecretClient
+from kubernetes_asyncio import client
+from kubernetes_asyncio.client.exceptions import ApiException
 
 from .exec_proxy import exec_capture
 from .oauth_gateway import _extract_access_token, _extract_refresh_token
@@ -35,6 +37,24 @@ class CredentialsSeedError(Exception):
     Wrapped to give the API endpoint a clean error type to catch and turn
     into a 400 with a user-readable message.
     """
+
+
+async def _upsert_secret_file(
+    namespace: str, secret_name: str, key: str, value: str
+) -> None:
+    """Create or patch an Opaque Secret containing one stringData file."""
+    core = client.CoreV1Api()
+    body = client.V1Secret(
+        metadata=client.V1ObjectMeta(name=secret_name),
+        type="Opaque",
+        string_data={key: value},
+    )
+    try:
+        await core.patch_namespaced_secret(secret_name, namespace, body)
+    except ApiException as e:
+        if e.status != 404:
+            raise
+        await core.create_namespaced_secret(namespace, body)
 
 
 def _validate(blob: dict[str, Any]) -> None:
@@ -143,7 +163,7 @@ def _validate_pi(blob: dict[str, Any]) -> None:
 
 
 async def harvest_pi_and_save(namespace: str, pod_name: str) -> None:
-    """Read ~/.pi/agent/auth.json out of a pi_config pod and write it to KV."""
+    """Read ~/.pi/agent/auth.json out of a pi_config pod and store it."""
     raw = await exec_capture(
         namespace, pod_name, ["sh", "-c", "cat $HOME/.pi/agent/auth.json"]
     )
@@ -159,11 +179,18 @@ async def harvest_pi_and_save(namespace: str, pod_name: str) -> None:
     _validate_pi(blob)
 
     kv_url = os.environ["AZURE_KEYVAULT_URL"]
+    serialized = json.dumps(blob)
     secret_name = os.environ.get("PI_CREDENTIALS_KV_KEY", "pi-credentials")
     cred = DefaultAzureCredential()
     try:
         async with SecretClient(vault_url=kv_url, credential=cred) as kv:
             log.info("seeding %s/%s with captured pi credentials", kv_url, secret_name)
-            await kv.set_secret(secret_name, json.dumps(blob))
+            await kv.set_secret(secret_name, serialized)
     finally:
         await cred.close()
+    await _upsert_secret_file(
+        namespace=namespace,
+        secret_name=os.environ.get("PI_CREDENTIALS_K8S_SECRET", "pi-credentials"),
+        key=os.environ.get("PI_CREDENTIALS_K8S_KEY", "auth.json"),
+        value=serialized,
+    )
