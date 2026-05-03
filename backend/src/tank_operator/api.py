@@ -390,6 +390,7 @@ _static_env = os.environ.get("TANK_OPERATOR_STATIC_DIR")
 _static = Path(_static_env) if _static_env else Path(__file__).resolve().parent / "static"
 if _static.exists():
     app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
+    app.mount("/fonts", StaticFiles(directory=_static / "fonts"), name="fonts")
 
     @app.get("/")
     async def index() -> FileResponse:
