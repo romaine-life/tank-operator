@@ -50,7 +50,10 @@ def register_tools(mcp: FastMCP) -> None:
         project: str | None = None,
         selector: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List ArgoCD Applications. `project` filters by AppProject;
+        """List ArgoCD Applications with sync status, health status, source, and revision.
+
+        Use to find an app before checking resource trees, diffs, events, or
+        triggering sync. `project` filters by AppProject;
         `selector` is a label selector ('app=foo,role=bar')."""
         params: dict[str, Any] = {}
         if project:
@@ -79,14 +82,18 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def get_application(name: str) -> dict[str, Any]:
-        """Return the full Application object including spec + status +
+        """Get one ArgoCD Application object including spec, status, health, sync, and operationState.
+
+        Return the full Application object including spec + status +
         operationState. Use this when list_applications doesn't have the
         detail you need (resource tree, sync result, conditions)."""
         return _get(f"/api/v1/applications/{name}")
 
     @mcp.tool()
     def get_application_resource_tree(name: str) -> dict[str, Any]:
-        """Return the live resource tree for an Application — every
+        """Get the ArgoCD live Kubernetes resource tree for an Application.
+
+        Return every
         K8s object ArgoCD is tracking, with health + sync per node. Useful
         for diagnosing why an app is Degraded without pulling each
         resource by hand."""
@@ -94,13 +101,17 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def get_application_managed_resources(name: str) -> dict[str, Any]:
-        """Return live-vs-target diffs for each managed resource. This is
+        """Get ArgoCD managed resources and live-vs-target diffs for an Application.
+
+        This is
         what the UI's "App Diff" view uses."""
         return _get(f"/api/v1/applications/{name}/managed-resources")
 
     @mcp.tool()
     def get_application_events(name: str) -> dict[str, Any]:
-        """Return events ArgoCD has recorded for the Application — sync
+        """Get ArgoCD Application events for sync operations, health changes, and hooks.
+
+        Return events ArgoCD has recorded for the Application — sync
         operations, health transitions, hook execution."""
         return _get(f"/api/v1/applications/{name}/events")
 
@@ -111,7 +122,9 @@ def register_tools(mcp: FastMCP) -> None:
         prune: bool = False,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Trigger an ArgoCD sync. revision defaults to the Application's
+        """Sync an ArgoCD Application to its target revision, optionally dry-run or prune.
+
+        Trigger an ArgoCD sync. revision defaults to the Application's
         configured targetRevision. dry_run=True returns the diff without
         applying. prune=True deletes resources removed from git — leave
         False unless you specifically want a destructive sync."""
@@ -122,7 +135,7 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def list_projects() -> list[dict[str, Any]]:
-        """List AppProjects."""
+        """List ArgoCD AppProjects with source repository and destination permissions."""
         body = _get("/api/v1/projects")
         return [
             {
@@ -136,7 +149,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def list_repositories() -> list[dict[str, Any]]:
-        """List configured repositories. Connection state included so you
+        """List Git repositories and Helm repositories configured in ArgoCD.
+
+        Connection state included so you
         can spot a repo whose creds rotted."""
         body = _get("/api/v1/repositories")
         return [
@@ -152,7 +167,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def list_clusters() -> list[dict[str, Any]]:
-        """List clusters ArgoCD knows about. In-cluster (kubernetes.default.svc)
+        """List Kubernetes clusters registered in ArgoCD.
+
+        In-cluster (kubernetes.default.svc)
         is always present; remote clusters appear here once registered."""
         body = _get("/api/v1/clusters")
         return [
@@ -167,6 +184,8 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def server_version() -> dict[str, Any]:
-        """Return ArgoCD server version info — handy when comparing API
+        """Get ArgoCD server version information.
+
+        Handy when comparing API
         behaviour across upgrades."""
         return _get("/api/version")

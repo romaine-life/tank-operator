@@ -23,7 +23,10 @@ def _repo_root() -> Path:
 def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def tofu_plan_summary(directory: str = "tofu") -> dict[str, Any]:
-        """Run `tofu plan` in <repo>/<directory> and return a structured summary.
+        """Run OpenTofu/Terraform-compatible `tofu plan` and summarize infrastructure changes.
+
+        Use for Terraform/OpenTofu IaC review before applying infrastructure
+        changes. Runs in <repo>/<directory> and returns a structured summary.
 
         Returns: { exit_code, add, change, destroy, resources: [{address, action}], stderr_tail, stdout_tail }.
         Resource addresses come from the `# X will be Y` headers tofu emits before each diff block;
