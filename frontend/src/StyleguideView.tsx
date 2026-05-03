@@ -185,15 +185,17 @@ export function StyleguideView() {
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
-            <button className="new-row-action" type="button" aria-label="start default session">
-              <span className="row-icon">+</span>
-            </button>
-            <button className="new-row-action" type="button" aria-label="start API key session">
-              <IconKey className="new-row-action-icon" />
-            </button>
-            <button className="new-row-action" type="button" aria-label="start config session">
-              <IconWrench className="new-row-action-icon" />
-            </button>
+            <div className="new-row-action-group" role="group" aria-label="session actions">
+              <button className="new-row-action" type="button" aria-label="start default session">
+                <span className="row-icon">+</span>
+              </button>
+              <button className="new-row-action" type="button" aria-label="start API key session">
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button className="new-row-action" type="button" aria-label="start config session">
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
           </div>
         </section>
 
@@ -307,15 +309,17 @@ export function StyleguideView() {
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
-            <button className="new-row-action" type="button" aria-label="start default session">
-              <span className="row-icon">+</span>
-            </button>
-            <button className="new-row-action" type="button" aria-label="start API key session">
-              <IconKey className="new-row-action-icon" />
-            </button>
-            <button className="new-row-action" type="button" aria-label="start config session">
-              <IconWrench className="new-row-action-icon" />
-            </button>
+            <div className="new-row-action-group" role="group" aria-label="session actions">
+              <button className="new-row-action" type="button" aria-label="start default session">
+                <span className="row-icon">+</span>
+              </button>
+              <button className="new-row-action" type="button" aria-label="start API key session">
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button className="new-row-action" type="button" aria-label="start config session">
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
             {dropdownOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 <li>
