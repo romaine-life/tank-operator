@@ -82,8 +82,16 @@ if [ "${TANK_SESSION_MODE}" = "codex_config" ]; then
   mkdir -p $HOME/.codex
   # cli_auth_credentials_store=file forces the file-backed store; without
   # it codex may try the OS keychain, which doesn't exist in the pod.
+  # projects./workspace.trust_level pre-accepts the per-project trust
+  # prompt symmetric to ~/.claude.json hasTrustDialogAccepted — without
+  # it the user gets "trust this directory?" the first time they run
+  # codex against /workspace (relevant here only if they `codex` after
+  # `codex login`, but cheap and keeps the two codex modes symmetric).
   cat > $HOME/.codex/config.toml <<'EOF'
 cli_auth_credentials_store = "file"
+
+[projects."/workspace"]
+trust_level = "trusted"
 EOF
   exec tmux new-session -s tank 'codex login --device-auth; exec bash'
 fi
@@ -107,6 +115,9 @@ if [ "${TANK_SESSION_MODE}" = "codex_subscription" ]; then
   mkdir -p $HOME/.codex
   cat > $HOME/.codex/config.toml <<'EOF'
 cli_auth_credentials_store = "file"
+
+[projects."/workspace"]
+trust_level = "trusted"
 EOF
   if [ ! -f /etc/codex-creds/auth.json ]; then
     echo "no codex credentials found in /etc/codex-creds/auth.json" >&2
