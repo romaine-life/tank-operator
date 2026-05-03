@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import socket
@@ -131,6 +132,7 @@ NO_CLAUDE_HIJACK_MODES = frozenset(
 # well below that for UI sanity.
 NAME_ANNOTATION = "tank-operator/display-name"
 MAX_NAME_LENGTH = 80
+GLIMMUNG_CONTEXT_ANNOTATION = "tank-operator/glimmung-context"
 
 
 @dataclass
@@ -221,13 +223,22 @@ class SessionManager:
         if self._api is not None:
             await self._api.close()
 
-    def _deployment_manifest(self, session_id: str, owner: str, mode: str) -> dict[str, Any]:
+    def _deployment_manifest(
+        self,
+        session_id: str,
+        owner: str,
+        mode: str,
+        glimmung_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         owner_label = _owner_label(owner)
         selector_labels = {"tank-operator/session-id": session_id}
         deployment_name = f"session-{session_id}"
         argocd_tracking_id = (
             f"{ARGOCD_TRACKING_APP}:apps/Deployment:{SESSIONS_NAMESPACE}/{deployment_name}"
         )
+        context_json = ""
+        if glimmung_context is not None:
+            context_json = json.dumps(glimmung_context, sort_keys=True, separators=(",", ":"))
         pod_spec: dict[str, Any] = {
             "serviceAccountName": SESSION_SERVICE_ACCOUNT,
             # The image's USER is claude (uid 1000). Reasserting it here
@@ -266,6 +277,26 @@ class SessionManager:
                         # via secret) because the value is per-pod,
                         # not a shared secret.
                         {"name": "TANK_SESSION_MODE", "value": mode},
+                        {
+                            "name": "TANK_GLIMMUNG_CONTEXT_JSON",
+                            "value": context_json,
+                        },
+                        {
+                            "name": "TANK_GLIMMUNG_RUN_ID",
+                            "value": str((glimmung_context or {}).get("glimmung_run_id") or ""),
+                        },
+                        {
+                            "name": "TANK_GLIMMUNG_ISSUE_ID",
+                            "value": str((glimmung_context or {}).get("glimmung_issue_id") or ""),
+                        },
+                        {
+                            "name": "TANK_GLIMMUNG_PR_ID",
+                            "value": str((glimmung_context or {}).get("glimmung_pr_id") or ""),
+                        },
+                        {
+                            "name": "TANK_GLIMMUNG_VALIDATION_URL",
+                            "value": str((glimmung_context or {}).get("validation_url") or ""),
+                        },
                         # Force claude (and anything else using the
                         # `supports-hyperlinks` npm lib) to emit OSC 8
                         # hyperlinks. The library's terminal-sniff list
@@ -373,6 +404,12 @@ class SessionManager:
                     },
                 }
             )
+        annotations = {
+            "tank-operator/owner-email": owner,
+            "argocd.argoproj.io/tracking-id": argocd_tracking_id,
+        }
+        if context_json:
+            annotations[GLIMMUNG_CONTEXT_ANNOTATION] = context_json
         return {
             "apiVersion": "apps/v1",
             "kind": "Deployment",
@@ -386,10 +423,7 @@ class SessionManager:
                     "tank-operator/session-id": session_id,
                     "tank-operator/mode": mode,
                 },
-                "annotations": {
-                    "tank-operator/owner-email": owner,
-                    "argocd.argoproj.io/tracking-id": argocd_tracking_id,
-                },
+                "annotations": annotations,
             },
             "spec": {
                 "replicas": 1,
@@ -412,7 +446,12 @@ class SessionManager:
             },
         }
 
-    async def create(self, owner: str, mode: str = DEFAULT_SESSION_MODE) -> SessionInfo:
+    async def create(
+        self,
+        owner: str,
+        mode: str = DEFAULT_SESSION_MODE,
+        glimmung_context: dict[str, Any] | None = None,
+    ) -> SessionInfo:
         assert self._apps is not None
         if mode not in SESSION_MODES:
             raise ValueError(f"unknown session mode: {mode!r}")
@@ -433,7 +472,7 @@ class SessionManager:
         session_id = uuid.uuid4().hex[:10]
         await self._apps.create_namespaced_deployment(
             namespace=SESSIONS_NAMESPACE,
-            body=self._deployment_manifest(session_id, owner, mode),
+            body=self._deployment_manifest(session_id, owner, mode, glimmung_context),
         )
         # Seed activity so the reaper gives the session a full
         # IDLE_TIMEOUT to receive its first WS before being eligible

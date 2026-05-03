@@ -133,6 +133,17 @@ function clearInstallError(): void {
   window.history.replaceState({}, "", url.toString());
 }
 
+function readInitialSessionId(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("session");
+}
+
+function clearInitialSessionId(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("session");
+  window.history.replaceState({}, "", url.toString());
+}
+
 const POLL_INTERVAL_MS = 1500;
 
 function IconPlus() {
@@ -350,6 +361,7 @@ export function App() {
   // callback. Used by the inline "remote control" button to inject the
   // /remote-control slash command into the live WS.
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
+  const initialSessionId = useRef<string | null>(readInitialSessionId());
 
   useEffect(() => {
     bootstrapAuth()
@@ -417,6 +429,15 @@ export function App() {
       return changed ? next : prev;
     });
   }, [sessions, active]);
+
+  useEffect(() => {
+    const target = initialSessionId.current;
+    if (!target) return;
+    if (!sessions.some((s) => s.id === target)) return;
+    activate(target);
+    initialSessionId.current = null;
+    clearInitialSessionId();
+  }, [sessions]);
 
   function activate(id: string) {
     setActive(id);
