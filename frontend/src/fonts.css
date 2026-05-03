@@ -2,7 +2,8 @@
  * Symbols-only Nerd Font, used as a fallback in the workspace terminal so
  * Powerline arrows, branded glyphs, and other private-use-area characters
  * claude's TUI emits render correctly. Latin still falls through to the
- * primary monospace fonts (ui-monospace / Cascadia Code / Consolas).
+ * primary monospace fonts (ui-monospace / Cascadia Code / Consolas /
+ * monospace).
  *
  * font-display: swap so xterm doesn't block on font load — initial render
  * shows replacement chars briefly, then re-renders with the real glyphs.
@@ -13,6 +14,13 @@
   font-weight: normal;
   font-style: normal;
   font-display: swap;
+  unicode-range:
+    U+2500-257F, /* Box Drawing */
+    U+2580-259F, /* Block Elements */
+    U+25A0-25FF, /* Geometric Shapes */
+    U+E000-F8FF, /* Private Use Area */
+    U+F0000-FFFFD,
+    U+100000-10FFFD;
 }
 
 /*
