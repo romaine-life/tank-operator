@@ -11,10 +11,15 @@ function reportsAgentActivity(mode: string): boolean {
   return mode.startsWith("codex_") || mode.startsWith("pi_");
 }
 
-function usesExtendedEnterKeybindings(mode: string): boolean {
-  return mode.startsWith("codex_") || mode.startsWith("pi_");
+function usesCodexKeybindings(mode: string): boolean {
+  return mode.startsWith("codex_");
 }
 
+function usesExtendedEnterKeybindings(mode: string): boolean {
+  return mode.startsWith("pi_");
+}
+
+const CODEX_INSERT_NEWLINE = "\n";
 const SHIFT_ENTER_CSI_U = "\x1b[13;2u";
 
 const completionSound = (() => {
@@ -441,6 +446,12 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       }
       if (event.type !== "keydown") return true;
       if (event.altKey || event.ctrlKey || event.metaKey) return true;
+
+      if (event.key === "Enter" && event.shiftKey && usesCodexKeybindings(mode)) {
+        event.preventDefault();
+        sendIfOpen(CODEX_INSERT_NEWLINE);
+        return false;
+      }
 
       if (event.key === "Enter" && event.shiftKey && usesExtendedEnterKeybindings(mode)) {
         event.preventDefault();
