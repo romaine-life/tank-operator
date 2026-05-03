@@ -1118,3 +1118,35 @@ button:disabled {
 
 .terminals {
   flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.terminal-body,
+.terminal-waiting {
+  position: absolute;
+  inset: 0;
+}
+
+.terminal-body {
+  padding: var(--space-2);
+  overflow: hidden;
+}
+
+.terminal-body .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.terminal-body .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.terminal-waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
