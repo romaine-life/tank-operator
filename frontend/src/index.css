@@ -835,15 +835,8 @@ button:disabled {
   opacity: 0.72;
 }
 
-.sessions li[draggable="true"] {
-  cursor: grab;
-}
-
-.sessions li[draggable="true"]:active {
-  cursor: grabbing;
-}
-
 .sessions li.is-dragging {
+  cursor: grabbing;
   opacity: 0.54;
 }
 
