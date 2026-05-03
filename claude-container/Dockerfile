@@ -14,10 +14,13 @@ ARG YQ_VERSION=v4.44.3
 ARG UV_VERSION=0.5.18
 ARG RUFF_VERSION=0.15.12
 ARG PYTEST_VERSION=8.4.2
+ARG GO_VERSION=1.26.2
 ARG TANK_AGENT=claude
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
+# Go is baked in so session pods can run checks for Go services instead of
+# punting those to CI or a separate agent image.
 RUN apk add --no-cache \
         bash \
         ca-certificates \
@@ -34,6 +37,10 @@ RUN apk add --no-cache \
         tmux \
         unzip \
         vim
+
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
+        | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
         -o /usr/local/bin/kubectl \
