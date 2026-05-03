@@ -209,6 +209,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
         baseY: buffer.baseY,
         viewportY: buffer.viewportY,
         cursorY: buffer.cursorY,
+        activeType: buffer.type,
         defaultPrevented: event.defaultPrevented,
         ...extra,
       });
@@ -268,12 +269,14 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       return true;
     });
     const onWheel = (event: WheelEvent) => {
+      const rawDirection = Math.sign(event.deltaY) as -1 | 0 | 1;
       logTerminalEvent("capture wheel", event, {
         deltaY: event.deltaY,
         ctrlKey: event.ctrlKey,
+        direction: rawDirection,
       });
       if (!mode.startsWith("codex_") || event.ctrlKey || event.deltaY === 0) return;
-      const direction = Math.sign(event.deltaY) as -1 | 1;
+      const direction = rawDirection as -1 | 1;
       if (!canScrollXterm(direction)) {
         logTerminalEvent("xterm cannot scroll wheel", event, { direction });
         return;
