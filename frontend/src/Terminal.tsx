@@ -186,11 +186,30 @@ function reportTerminalDebug(
 
 function imageFromClipboard(event: ClipboardEvent): File | null {
   const items = event.clipboardData?.items;
-  if (!items) return null;
-  for (const item of Array.from(items)) {
-    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
-    const file = item.getAsFile();
-    if (file) return file;
+  if (items) {
+    for (const item of Array.from(items)) {
+      if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+      const file = item.getAsFile();
+      if (file) return file;
+    }
+  }
+  const files = event.clipboardData?.files;
+  if (files) {
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith("image/")) return file;
+    }
+  }
+  return null;
+}
+
+async function imageFromNavigatorClipboard(): Promise<Blob | null> {
+  if (!navigator.clipboard?.read) return null;
+  const items = await navigator.clipboard.read();
+  for (const item of items) {
+    const imageType = item.types.find((type) => type.startsWith("image/"));
+    if (!imageType) continue;
+    const blob = await item.getType(imageType);
+    return blob;
   }
   return null;
 }
@@ -333,6 +352,29 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       const buffer = term.buffer.active;
       return direction < 0 ? buffer.viewportY > 0 : buffer.viewportY < buffer.baseY;
     };
+    const uploadPastedImage = async (image: Blob): Promise<void> => {
+      term.write("\r\n\x1b[36m[uploading pasted image...]\x1b[0m\r\n");
+      const response = await authedFetch(`/api/sessions/${sessionId}/paste-image`, {
+        method: "POST",
+        headers: { "Content-Type": image.type || "image/png" },
+        body: image,
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${await response.text()}`);
+      }
+      const { path } = await response.json() as { path: string };
+      sendIfOpen(` ${path} `);
+      term.write(`\x1b[36m[pasted image saved: ${path}]\x1b[0m\r\n`);
+    };
+    const pasteFromBrowserClipboard = async (): Promise<void> => {
+      const image = await imageFromNavigatorClipboard();
+      if (image) {
+        await uploadPastedImage(image);
+        return;
+      }
+      const text = await navigator.clipboard?.readText?.();
+      if (text) term.paste(text);
+    };
     const onCaptureKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "PageUp" && event.key !== "PageDown") return;
       logTerminalEvent("capture keydown", event, {
@@ -347,6 +389,19 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     };
     containerRef.current.addEventListener("keydown", onCaptureKeyDown, { capture: true });
     term.attachCustomKeyEventHandler((event) => {
+      if (
+        event.type === "keydown"
+        && event.key.toLowerCase() === "v"
+        && (event.ctrlKey || event.metaKey)
+        && !event.altKey
+      ) {
+        event.preventDefault();
+        void pasteFromBrowserClipboard().catch((error) => {
+          console.error("browser clipboard paste failed", error);
+          term.write("\r\n\x1b[31m[failed to read browser clipboard]\x1b[0m\r\n");
+        });
+        return false;
+      }
       if (event.key === "PageUp" || event.key === "PageDown") {
         logTerminalEvent("xterm custom key", event, {
           key: event.key,
@@ -412,21 +467,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       if (!image) return;
       event.preventDefault();
       event.stopPropagation();
-      term.write("\r\n\x1b[36m[uploading pasted image...]\x1b[0m\r\n");
-      void authedFetch(`/api/sessions/${sessionId}/paste-image`, {
-        method: "POST",
-        headers: { "Content-Type": image.type || "image/png" },
-        body: image,
-      }).then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`${response.status} ${await response.text()}`);
-        }
-        return response.json() as Promise<{ path: string }>;
-      }).then(({ path }) => {
-        const insertion = ` ${path} `;
-        sendIfOpen(insertion);
-        term.write(`\x1b[36m[pasted image saved: ${path}]\x1b[0m\r\n`);
-      }).catch((error) => {
+      void uploadPastedImage(image).catch((error) => {
         console.error("image paste failed", error);
         term.write("\x1b[31m[failed to paste image]\x1b[0m\r\n");
       });
