@@ -124,7 +124,9 @@ function writeCompletionSoundEnabled(enabled: boolean): void {
 
 function readCompletionSoundVolume(): number {
   try {
-    const stored = Number(localStorage.getItem(COMPLETION_SOUND_VOLUME_KEY));
+    const storedValue = localStorage.getItem(COMPLETION_SOUND_VOLUME_KEY);
+    if (storedValue == null || storedValue === "") return 0.55;
+    const stored = Number(storedValue);
     if (Number.isFinite(stored)) return Math.max(0, Math.min(1, stored));
   } catch {
     // Fall through to the default.
