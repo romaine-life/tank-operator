@@ -170,9 +170,10 @@ externalSecret:
     # so this name has to be `auth.json`.
     secretKey: auth.json
     kvKey: codex-credentials
-  # Pi subscription credentials. Same consume model as Codex: a config
-  # session harvests ~/.pi/agent/auth.json into KV; subscription pods mount
-  # the ESO-mirrored file and copy it into Pi's writable config directory.
+  # Pi subscription credentials. A config session harvests
+  # ~/.pi/agent/auth.json into KV and also upserts this Secret in the
+  # sessions namespace. There is no always-on ExternalSecret for Pi because
+  # first install should stay healthy before anyone has completed /login.
   piCredentials:
     secretName: pi-credentials
     secretKey: auth.json
