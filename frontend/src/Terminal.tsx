@@ -89,7 +89,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     const logTerminalEvent = (label: string, event: KeyboardEvent | WheelEvent, extra: Record<string, unknown> = {}) => {
       if (!isDebugEnabled()) return;
       const buffer = term.buffer.active;
-      console.debug("[tank-terminal]", label, {
+      console.info("[tank-terminal]", label, {
         mode,
         baseY: buffer.baseY,
         viewportY: buffer.viewportY,
