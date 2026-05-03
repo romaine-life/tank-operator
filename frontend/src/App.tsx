@@ -646,18 +646,43 @@ function DemoLanding() {
   const [demoSessions, setDemoSessions] = useState<Session[]>(DEMO_BASE_SESSIONS);
   const [activeDemoSession, setActiveDemoSession] = useState(DEMO_BASE_SESSIONS[0].id);
   const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
   const selectedMode = PROVIDER_DEFAULT_MODES[selectedProvider];
   const terminalLines = selected ? demoTerminalLines(selected) : DEMO_LANDING_LINES;
 
-  function toggleDemoProvider() {
-    setSelectedProvider((provider) => provider === "anthropic" ? "openai" : "anthropic");
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const root = target?.closest("[data-menu]") as HTMLElement | null;
+      if (root?.dataset.menu === "mode") return;
+      setModeMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [modeMenuOpen]);
+
+  function setDemoProvider(provider: Provider) {
+    setSelectedProvider(provider);
+    setModeMenuOpen(false);
   }
 
   function createPreviewSession() {
-    const next = createDemoSession(selectedMode, demoSessions.length + 1);
+    const nextOrdinal = demoSessionOrdinal + 1;
+    const next = createDemoSession(selectedMode, nextOrdinal);
+    setDemoSessionOrdinal(nextOrdinal);
     setDemoSessions((prev) => [...prev, next]);
     setActiveDemoSession(next.id);
+  }
+
+  function deletePreviewSession(id: string) {
+    const next = demoSessions.filter((session) => session.id !== id);
+    setDemoSessions(next);
+    if (activeDemoSession === id) {
+      setActiveDemoSession(next[0]?.id ?? "");
+    }
   }
 
   return (
@@ -668,11 +693,12 @@ function DemoLanding() {
         </div>
 
         <div className="sidebar-section">
-          <div className="new-row new-row-launcher">
+          <div className="new-row new-row-launcher" data-menu="mode">
             <button
-              className="new-row-provider-toggle"
-              onClick={toggleDemoProvider}
-              aria-label="toggle preview provider"
+              className={`new-row-provider-toggle${modeMenuOpen ? " is-open" : ""}`}
+              onClick={() => setModeMenuOpen((v) => !v)}
+              aria-label="choose provider"
+              aria-expanded={modeMenuOpen}
               title={`preview provider: ${MODE_LABELS[selectedMode]}`}
             >
               <span className="new-row-provider-slot">
@@ -706,6 +732,26 @@ function DemoLanding() {
                 <IconWrench className="new-row-action-icon" />
               </button>
             </div>
+            {modeMenuOpen && (
+              <ul className="dropdown dropdown-provider" role="menu">
+                {(["anthropic", "openai"] as Provider[]).map((provider) => {
+                  const mode = PROVIDER_DEFAULT_MODES[provider];
+                  return (
+                    <li key={provider}>
+                      <button
+                        onClick={() => setDemoProvider(provider)}
+                        aria-label={MODE_LABELS[mode]}
+                      >
+                        <ProviderIcon
+                          provider={provider}
+                          className="dropdown-provider-icon"
+                        />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
 
@@ -731,6 +777,17 @@ function DemoLanding() {
                     />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{s.name ?? s.id}</span>
+                    </button>
+                    <button
+                      className="session-delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deletePreviewSession(s.id);
+                      }}
+                      title="delete session"
+                      aria-label="delete session"
+                    >
+                      <IconClose />
                     </button>
                   </div>
                   <div className="session-row-bottom">
