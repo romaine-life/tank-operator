@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { registerWrappedLinks } from "./wrappedLinkProvider";
-import { TERMINAL_THEME } from "./terminalTheme";
+import { ANSI_256_OVERRIDES, TERMINAL_THEME } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 import "./fonts.css";
 
@@ -100,6 +100,67 @@ export interface TerminalHandle {
   sendInput: (s: string) => void;
 }
 
+type DebugWindow = Window & {
+  __tankTerminalDebug?: Record<string, unknown>;
+};
+
+type XTermWithInternals = XTerm & {
+  _core?: {
+    _themeService?: {
+      colors?: {
+        ansi?: Array<{ css?: string; rgba?: number }>;
+      };
+    };
+  };
+};
+
+function terminalDebugEnabled(flag?: string): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (flag && params.has(flag)) return true;
+    if (params.has("terminalDebug")) return true;
+    if (window.localStorage.getItem("tankTerminalDebug") === "1") return true;
+    return flag ? window.localStorage.getItem(`tank${flag}`) === "1" : false;
+  } catch {
+    return false;
+  }
+}
+
+function readXtermAnsiColor(term: XTerm, code: number): string | undefined {
+  return (term as XTermWithInternals)._core?._themeService?.colors?.ansi?.[code]?.css;
+}
+
+function decodeTerminalPayload(data: string | ArrayBuffer): string {
+  if (typeof data === "string") return data;
+  return new TextDecoder().decode(new Uint8Array(data));
+}
+
+function ansiColorCodes(text: string): string[] {
+  const codes = new Set<string>();
+  const re = /\x1b\[([0-9;]*)m/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text)) != null) {
+    const parts = match[1].split(";");
+    for (let i = 0; i < parts.length; i += 1) {
+      if ((parts[i] === "38" || parts[i] === "48") && parts[i + 1] === "5" && parts[i + 2]) {
+        codes.add(`${parts[i]};5;${parts[i + 2]}`);
+        i += 2;
+      }
+    }
+  }
+  return [...codes];
+}
+
+function paletteProbeLine(): string {
+  return [
+    "\r\n[tank-terminal palette probe] ",
+    "\x1b[38;5;174mfg174\x1b[39m ",
+    "\x1b[38;5;211mfg211\x1b[39m ",
+    "\x1b[38;5;220mfg220\x1b[39m ",
+    "\x1b[38;5;153mfg153\x1b[39m\r\n",
+  ].join("");
+}
+
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   {
     sessionId,
@@ -189,15 +250,37 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     });
     term.open(containerRef.current);
     termRef.current = term;
+    if (terminalDebugEnabled()) {
+      const palette = Object.fromEntries(
+        Object.keys(ANSI_256_OVERRIDES).map((code) => [
+          code,
+          {
+            expected: ANSI_256_OVERRIDES[Number(code)],
+            actual: readXtermAnsiColor(term, Number(code)),
+          },
+        ]),
+      );
+      console.info("[tank-terminal] palette audit", {
+        sessionId,
+        mode,
+        theme: TERMINAL_THEME,
+        palette,
+      });
+      const debugWindow = window as DebugWindow;
+      debugWindow.__tankTerminalDebug ??= {};
+      debugWindow.__tankTerminalDebug[sessionId] = {
+        term,
+        palette: () => Object.fromEntries(
+          [153, 174, 211, 220].map((code) => [code, readXtermAnsiColor(term, code)]),
+        ),
+        writePaletteProbe: () => term.write(paletteProbeLine()),
+      };
+    }
+    if (terminalDebugEnabled("terminalPaletteProbe")) {
+      term.write(paletteProbeLine());
+    }
     const isDebugEnabled = () => {
-      try {
-        return (
-          window.localStorage.getItem("tankTerminalDebug") === "1" ||
-          new URLSearchParams(window.location.search).has("terminalDebug")
-        );
-      } catch {
-        return false;
-      }
+      return terminalDebugEnabled();
     };
     const logTerminalEvent = (label: string, event: KeyboardEvent | WheelEvent, extra: Record<string, unknown> = {}) => {
       if (!isDebugEnabled()) return;
@@ -341,6 +424,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
       ws.binaryType = "arraybuffer";
+      let debugPayloadLogs = 0;
 
       ws.onopen = () => {
         if (everConnected) {
@@ -359,6 +443,19 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       };
 
       ws.onmessage = (e) => {
+        if (terminalDebugEnabled() && debugPayloadLogs < 8) {
+          const text = decodeTerminalPayload(e.data);
+          const colors = ansiColorCodes(text);
+          if (colors.length > 0) {
+            debugPayloadLogs += 1;
+            console.info("[tank-terminal] incoming ansi colors", {
+              sessionId,
+              mode,
+              colors,
+              sample: text.slice(0, 500),
+            });
+          }
+        }
         if (typeof e.data === "string") {
           term.write(e.data);
         } else {
@@ -404,6 +501,10 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       onBellDisp.dispose();
       wsRef.current?.close();
       term.dispose();
+      const debugWindow = window as DebugWindow;
+      if (debugWindow.__tankTerminalDebug) {
+        delete debugWindow.__tankTerminalDebug[sessionId];
+      }
       fitRef.current = null;
       termRef.current = null;
       wsRef.current = null;
