@@ -727,6 +727,7 @@ export function App() {
                     else terminalRefs.current.delete(s.id);
                   }}
                   sessionId={s.id}
+                  mode={s.mode}
                   status={s.status}
                   visible={active === s.id}
                 />
