@@ -44,7 +44,7 @@
   --bg-elevated: var(--gray-850);
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-hover-soft: rgba(255, 255, 255, 0.05);
-  --bg-launch-menu: var(--gray-850);
+  --bg-launch-menu: #1f1f1f;
   --bg-active: var(--bg-hover);
 
   /* Borders */

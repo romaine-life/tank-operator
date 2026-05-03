@@ -60,19 +60,19 @@ function IconWrench({ className }: { className?: string }) {
   return (
     <svg
       className={className}
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       width="16"
       height="16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.7"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       focusable="false"
       aria-hidden="true"
     >
-      <path d="M10.5 2.4a3.2 3.2 0 0 0 3.1 4L7 13a2 2 0 0 1-2.8-2.8l6.6-6.6a3.2 3.2 0 0 0-.3-1.2Z" />
-      <path d="M4.6 10.9 5.1 11.4" />
+      <path d="M14.7 6.3a4 4 0 0 0 5 5L10.5 20.5a2.1 2.1 0 0 1-3-3L16.7 8.3a4 4 0 0 0-2-2Z" />
+      <path d="M7.5 17.5 6 16" />
     </svg>
   );
 }
