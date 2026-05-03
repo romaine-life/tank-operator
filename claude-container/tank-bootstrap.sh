@@ -117,6 +117,11 @@ cli_auth_credentials_store = "file"
 
 [projects."/workspace"]
 trust_level = "trusted"
+
+[tui]
+notifications = true
+notification_condition = "always"
+notification_method = "bel"
 EOF
   exec tmux new-session -s tank 'codex login --device-auth; exec bash'
 fi
@@ -180,6 +185,11 @@ sandbox_mode = "danger-full-access"
 
 [projects."/workspace"]
 trust_level = "trusted"
+
+[tui]
+notifications = true
+notification_condition = "always"
+notification_method = "bel"
 ${mcp_blocks}
 EOF
   if [ ! -f /etc/codex-creds/auth.json ]; then

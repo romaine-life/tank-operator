@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Terminal, type TerminalHandle } from "./Terminal";
+import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 
@@ -108,6 +108,7 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
+const CODEX_MODES = new Set<SessionMode>(["codex_subscription", "codex_config"]);
 
 interface SessionUser {
   sub: string;
@@ -414,6 +415,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
+  const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
   // Sessions whose Terminal stays mounted (so the WS keeps draining and
   // scrollback survives switching). A session is mounted the first time it
   // becomes active and unmounts only on deletion. Sessions you haven't
@@ -548,6 +550,13 @@ export function App() {
       });
       return changed ? next : prev;
     });
+    setAgentActivityBySession((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => existing.has(id))
+      ) as Record<string, AgentActivity>;
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
   }, [sessions, active, closingIds]);
 
   useEffect(() => {
@@ -562,6 +571,12 @@ export function App() {
   function activate(id: string) {
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
+
+  function setAgentActivity(sessionId: string, activity: AgentActivity) {
+    setAgentActivityBySession((prev) =>
+      prev[sessionId] === activity ? prev : { ...prev, [sessionId]: activity }
+    );
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
@@ -850,18 +865,27 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
+              const codexActivity = isLive && CODEX_MODES.has(s.mode)
+                ? agentActivityBySession[s.id] ?? "waiting"
+                : null;
+              const statusDotClass = codexActivity
+                ? `status-dot status-codex-${codexActivity}`
+                : `status-dot status-${s.status.toLowerCase()}`;
+              const statusLabel = codexActivity
+                ? `Codex ${codexActivity}`
+                : s.status;
               return (
                 <li
                   key={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}`}
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
-                  title={sidebarCollapsed ? `${s.name ?? s.id} (${s.status})` : undefined}
+                  title={sidebarCollapsed ? `${s.name ?? s.id} (${statusLabel})` : undefined}
                 >
                   <div className="session-row-top">
                     <span
-                      className={`status-dot status-${s.status.toLowerCase()}`}
-                      title={s.status}
-                      aria-label={`status: ${s.status}`}
+                      className={statusDotClass}
+                      title={statusLabel}
+                      aria-label={`status: ${statusLabel}`}
                     />
                     {isEditing ? (
                       <input
@@ -1016,6 +1040,7 @@ export function App() {
                   mode={s.mode}
                   status={s.status}
                   visible={active === s.id}
+                  onAgentActivityChange={setAgentActivity}
                 />
               ))}
           </div>
