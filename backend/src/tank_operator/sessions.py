@@ -172,6 +172,9 @@ class SessionInfo:
     owner: str
     status: str
     mode: str
+    # ISO timestamp from the Deployment's creation time. The frontend uses
+    # this to show a small "running for" indicator on session rows.
+    created_at: str | None = None
     # User-provided friendly name. None when unset; the frontend falls back
     # to the session id slug. The slug stays canonical in URLs and the
     # Deployment/pod name — this is purely a display label.
@@ -527,7 +530,7 @@ class SessionManager:
         # and injects the real one, refreshing against platform.claude.com
         # behind the scenes when it observes a 401.
         session_id = uuid.uuid4().hex[:10]
-        await self._apps.create_namespaced_deployment(
+        created = await self._apps.create_namespaced_deployment(
             namespace=SESSIONS_NAMESPACE,
             body=self._deployment_manifest(session_id, owner, mode, glimmung_context),
         )
@@ -536,7 +539,17 @@ class SessionManager:
         # for deletion.
         self._activity[session_id] = time.monotonic()
         self._ws_count[session_id] = 0
-        return SessionInfo(id=session_id, pod_name=None, owner=owner, status="Pending", mode=mode)
+        created_at = None
+        if created.metadata and created.metadata.creation_timestamp:
+            created_at = created.metadata.creation_timestamp.isoformat()
+        return SessionInfo(
+            id=session_id,
+            pod_name=None,
+            owner=owner,
+            status="Pending",
+            mode=mode,
+            created_at=created_at,
+        )
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._apps is not None
@@ -554,6 +567,7 @@ class SessionManager:
                 owner=owner,
                 status=_deployment_status(d),
                 mode=d.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
+                created_at=_deployment_created_at(d),
                 name=(d.metadata.annotations or {}).get(NAME_ANNOTATION),
             )
             for d in deployments.items
@@ -587,6 +601,7 @@ class SessionManager:
             owner=owner,
             status=_deployment_status(deployment),
             mode=mode,
+            created_at=_deployment_created_at(deployment),
             name=(deployment.metadata.annotations or {}).get(NAME_ANNOTATION),
         )
 
@@ -630,6 +645,7 @@ class SessionManager:
             owner=owner,
             status=_deployment_status(deployment),
             mode=mode,
+            created_at=_deployment_created_at(deployment),
             name=annotation_value,
         )
 
@@ -765,6 +781,12 @@ def _deployment_status(deployment: Any) -> str:
             if c.type == "Progressing" and c.status == "False":
                 return "Failed"
     return "Pending"
+
+
+def _deployment_created_at(deployment: Any) -> str | None:
+    if not deployment.metadata or not deployment.metadata.creation_timestamp:
+        return None
+    return deployment.metadata.creation_timestamp.isoformat()
 
 
 def _pod_ready(pod: Any) -> bool:

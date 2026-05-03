@@ -251,9 +251,9 @@ export function StyleguideView() {
           <h2 style={headStyle}>session row</h2>
           <p style={captionStyle}>
             One row per session in the sidebar list. Top: status dot + session
-            name + delete affordance. Bottom: mode chip + optional inline
-            actions (remote-control, save-credentials). Active row gets the
-            <code>is-open</code> class; not styled here for brevity.
+            name + compact runtime + delete affordance. Bottom: mode chip +
+            optional inline actions (remote-control, save-credentials). Active
+            row gets the <code>is-open</code> class; not styled here for brevity.
           </p>
           <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
             <li>
@@ -262,6 +262,7 @@ export function StyleguideView() {
                 <button className="session-open" type="button">
                   <span className="session-id">my-session</span>
                 </button>
+                <span className="session-runtime" title="running 12m">12m</span>
                 <button className="session-delete" aria-label="delete session" type="button">
                   ×
                 </button>
@@ -279,6 +280,7 @@ export function StyleguideView() {
                 <button className="session-open" type="button">
                   <span className="session-id">starting…</span>
                 </button>
+                <span className="session-runtime" title="running less than 1m">&lt;1m</span>
                 <button className="session-delete" aria-label="delete session" type="button">
                   ×
                 </button>
