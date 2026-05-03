@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Terminal, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import { ProviderIcon } from "./providerIcons";
 
 type SessionMode =
   | "api_key"
@@ -35,6 +36,11 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_subscription: "codex",
   codex_config: "codex-cfg",
+};
+
+const MODE_CHIP_ICONS: Partial<Record<SessionMode, "anthropic" | "openai">> = {
+  subscription: "anthropic",
+  codex_subscription: "openai",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -153,6 +159,28 @@ function IconReload() {
       <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
       <polyline points="13.5 2.5 13.5 5 11 5" />
     </svg>
+  );
+}
+
+function ModeChip({ mode }: { mode: SessionMode }) {
+  const icon = MODE_CHIP_ICONS[mode];
+  const label = MODE_CHIP_LABELS[mode] ?? mode;
+
+  return (
+    <span
+      className={`mode mode-${mode}${icon ? " mode-icon-only" : ""}`}
+      title={MODE_LABELS[mode]}
+      aria-label={MODE_LABELS[mode]}
+    >
+      {icon ? (
+        <>
+          <ProviderIcon provider={icon} className="mode-provider-icon" />
+          <span className="sr-only">{label}</span>
+        </>
+      ) : (
+        label
+      )}
+    </span>
   );
 }
 
@@ -550,7 +578,7 @@ export function App() {
                     </button>
                   </div>
                   <div className="session-row-bottom">
-                    <span className={`mode mode-${s.mode}`}>{MODE_CHIP_LABELS[s.mode] ?? s.mode}</span>
+                    <ModeChip mode={s.mode} />
                     {s.mode === "subscription" && isLive && (
                       <button
                         className="session-action session-remote is-icon"
