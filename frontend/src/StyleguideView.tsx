@@ -108,6 +108,25 @@ export function StyleguideView() {
           </div>
         </section>
 
+        {/* === new session row === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>new session row</h2>
+          <p style={captionStyle}>
+            The saved default provider is visible beside the action label, with
+            the chevron reserved for choosing a different launch mode.
+          </p>
+          <div className="new-row" data-menu="mode" style={{ maxWidth: 280 }}>
+            <button className="new-row-main" type="button">
+              <span className="row-icon">+</span>
+              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+              <span className="row-label">New session</span>
+            </button>
+            <button className="new-row-toggle" type="button" aria-label="choose auth mode">
+              ▾
+            </button>
+          </div>
+        </section>
+
         {/* === status dots === */}
         <section style={sectionStyle}>
           <h2 style={headStyle}>status dot</h2>
