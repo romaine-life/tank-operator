@@ -99,6 +99,26 @@ function IconKey({ className }: { className?: string }) {
   );
 }
 
+function IconChevronDown({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <polyline points="4,6 8,10 12,6" />
+    </svg>
+  );
+}
+
 export function StyleguideView() {
   const [dropdownOpen, setDropdownOpen] = useState(true);
 
@@ -160,7 +180,10 @@ export function StyleguideView() {
           </p>
           <div className="new-row new-row-launcher" data-menu="mode">
             <button className="new-row-provider-toggle" type="button" aria-label="choose provider">
-              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+              <span className="new-row-provider-slot">
+                <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
             </button>
             <button className="new-row-action" type="button" aria-label="start default session">
               <span className="row-icon">+</span>
@@ -279,7 +302,10 @@ export function StyleguideView() {
               aria-label="choose provider"
               onClick={() => setDropdownOpen((v) => !v)}
             >
-              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+              <span className="new-row-provider-slot">
+                <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
             </button>
             <button className="new-row-action" type="button" aria-label="start default session">
               <span className="row-icon">+</span>

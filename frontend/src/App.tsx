@@ -252,6 +252,26 @@ function IconKey({ className }: { className?: string }) {
   );
 }
 
+function IconChevronDown({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <polyline points="4,6 8,10 12,6" />
+    </svg>
+  );
+}
+
 function IconKebab() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
@@ -730,10 +750,13 @@ export function App() {
               aria-label="choose provider"
               aria-expanded={modeMenuOpen}
             >
-              <ProviderIcon
-                provider={selectedProvider}
-                className="new-row-provider-icon"
-              />
+              <span className="new-row-provider-slot">
+                <ProviderIcon
+                  provider={selectedProvider}
+                  className="new-row-provider-icon"
+                />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
             </button>
             <button
               className="new-row-action"
