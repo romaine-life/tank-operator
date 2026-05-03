@@ -1,0 +1,89 @@
+name: Build mcp-azure-admin image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mcp-servers/azure-admin/**'
+      - '.github/workflows/mcp-azure-admin-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: mcp-azure-admin-build
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.ARM_CLIENT_ID }}
+          tenant-id: ${{ vars.ARM_TENANT_ID }}
+          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: az acr login --name romainecr
+
+      - name: Compute tag
+        id: tag
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build + push
+        working-directory: mcp-servers/azure-admin
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          docker build \
+            -t romainecr.azurecr.io/mcp-azure-admin:$TAG .
+          docker push romainecr.azurecr.io/mcp-azure-admin:$TAG
+          echo "### Pushed romainecr.azurecr.io/mcp-azure-admin:$TAG" >> $GITHUB_STEP_SUMMARY
+
+      - name: Bump mcp-azure-admin chart
+        run: |
+          export TAG="${{ steps.tag.outputs.tag }}"
+          python - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("k8s-mcp-azure/values.yaml")
+          tag = os.environ["TAG"]
+          lines = path.read_text().splitlines()
+          in_admin_image = False
+          for i, line in enumerate(lines):
+              if line == "adminImage:":
+                  in_admin_image = True
+                  continue
+              if in_admin_image and line and not line.startswith("  "):
+                  in_admin_image = False
+              if in_admin_image and line.startswith("  tag: "):
+                  lines[i] = f'  tag: "{tag}"'
+                  break
+          else:
+              raise SystemExit("adminImage.tag not found")
+          path.write_text("\n".join(lines) + "\n")
+          PY
+
+          if git diff --quiet k8s-mcp-azure/values.yaml; then
+            echo "no tag change"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s-mcp-azure/values.yaml
+          git commit -m "chart: bump mcp-azure-admin image to ${TAG} [skip ci]"
+          for i in 1 2 3; do
+            if git push; then exit 0; fi
+            git pull --rebase origin main
+          done
+          git push
