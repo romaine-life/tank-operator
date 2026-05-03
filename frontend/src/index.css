@@ -44,8 +44,10 @@
   --bg-elevated: var(--gray-850);
   --bg-hover: rgba(255, 255, 255, 0.06);
   --bg-hover-soft: rgba(255, 255, 255, 0.05);
+  --bg-row-rest: rgba(255, 255, 255, 0.025);
   --bg-launch-menu: #1f1f1f;
   --bg-active: transparent;
+  --row-rest-ring: rgba(255, 255, 255, 0.045);
 
   /* Borders */
   --border-subtle: rgba(38, 38, 38, 0.3);
@@ -662,18 +664,20 @@ button:disabled {
 }
 
 /* Chat-row geometry from ChatItem.svelte:448 — px-[11px] py-[6px], rounded-xl.
-   Hover owns the row fill; the open session is marked by text contrast and the
-   left selected marker so selected and hovered states stay visually separate. */
+   Inactive rows get a quiet baseline surface so sessions read as separate
+   tabs; hover owns the stronger fill, while the open session is marked by
+   text contrast and the left selected marker. */
 .sessions li {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: 2px;
-  background: transparent;
+  background: var(--bg-row-rest);
   border-radius: var(--radius-lg);
   padding: 6px 11px;
   min-height: 32px;
   cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--row-rest-ring);
   transition: background 120ms ease, box-shadow 120ms ease;
 }
 
