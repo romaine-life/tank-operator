@@ -12,6 +12,8 @@ ARG TOFU_VERSION=1.9.0
 ARG HELM_VERSION=v3.16.3
 ARG YQ_VERSION=v4.44.3
 ARG UV_VERSION=0.5.18
+ARG RUFF_VERSION=0.15.12
+ARG PYTEST_VERSION=8.4.2
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
@@ -67,6 +69,13 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
     && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
 
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+# Baseline Python dev tools expected by agent workflows. Install them in the
+# image, not per-repo, so both claude and codex sessions can assume the
+# commands exist on PATH.
+RUN pip install --no-cache-dir --break-system-packages \
+        "pytest==${PYTEST_VERSION}" \
+        "ruff==${RUFF_VERSION}"
 
 COPY claude-container/platform-mcp /opt/platform-mcp
 RUN pip install --no-cache-dir --break-system-packages /opt/platform-mcp
