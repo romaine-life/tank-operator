@@ -1,7 +1,7 @@
 [project]
 name = "tank-operator"
 version = "0.1.0"
-description = "Web frontend over a K8s orchestrator that spawns ephemeral Claude agent pods."
+description = "Web frontend over a K8s orchestrator that spawns ephemeral agent pods."
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",

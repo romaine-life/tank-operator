@@ -48,12 +48,17 @@ jobs:
           docker build -f claude-container/Dockerfile \
             --build-arg TANK_AGENT=codex \
             -t romainecr.azurecr.io/codex-container:$TAG .
+          docker build -f claude-container/Dockerfile \
+            --build-arg TANK_AGENT=pi \
+            -t romainecr.azurecr.io/pi-container:$TAG .
           docker push romainecr.azurecr.io/claude-container:$TAG
           docker push romainecr.azurecr.io/codex-container:$TAG
+          docker push romainecr.azurecr.io/pi-container:$TAG
           {
             echo "### Pushed session images"
             echo "- romainecr.azurecr.io/claude-container:$TAG"
             echo "- romainecr.azurecr.io/codex-container:$TAG"
+            echo "- romainecr.azurecr.io/pi-container:$TAG"
           } >> $GITHUB_STEP_SUMMARY
 
       - name: Bump session images in tank-operator chart
@@ -62,6 +67,7 @@ jobs:
           # session.image / session.codexImage are repo:tag strings; rewrite them.
           sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${tag}|" k8s/values.yaml
           sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${tag}|" k8s/values.yaml
+          sed -i -E "s|^(  piImage: ).*$|\1romainecr.azurecr.io/pi-container:${tag}|" k8s/values.yaml
 
           if git diff --quiet k8s/values.yaml; then
             echo "no tag change"

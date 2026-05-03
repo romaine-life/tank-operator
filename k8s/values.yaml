@@ -22,6 +22,7 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:422c0cc
   codexImage: romainecr.azurecr.io/codex-container:422c0cc
+  piImage: romainecr.azurecr.io/pi-container:422c0cc
   serviceAccount: claude-session
   # Idle reaper: a session with no open WebSocket connections for this many
   # seconds is deleted by the orchestrator's background sweep. 7 days is
@@ -169,6 +170,13 @@ externalSecret:
     # so this name has to be `auth.json`.
     secretKey: auth.json
     kvKey: codex-credentials
+  # Pi subscription credentials. Same consume model as Codex: a config
+  # session harvests ~/.pi/agent/auth.json into KV; subscription pods mount
+  # the ESO-mirrored file and copy it into Pi's writable config directory.
+  piCredentials:
+    secretName: pi-credentials
+    secretKey: auth.json
+    kvKey: pi-credentials
   # Auth secrets for the orchestrator's MSAL → backend JWT flow. ENTRA_CLIENT_ID
   # is the audience for verifying Entra ID tokens; JWT_SECRET signs the backend's
   # own session tokens; ALLOWED_EMAILS (comma-separated) gates which signed-in

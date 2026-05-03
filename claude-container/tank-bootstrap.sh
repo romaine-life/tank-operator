@@ -209,6 +209,38 @@ EOF
   chmod 600 $HOME/.codex/auth.json
   exec "${tmux_utf8[@]}" new-session -s tank 'codex --no-alt-screen; exec bash'
 fi
+# Pi-config mode: first-time login for the Pi Coding Agent. Pi manages
+# provider credentials with `/login` and stores them in ~/.pi/agent/auth.json.
+# We launch the TUI and print a short prompt so the user can choose whichever
+# Pi provider/auth path they want, then the frontend Save button harvests the
+# resulting auth.json into KV.
+if [ "${TANK_SESSION_MODE}" = "pi_config" ]; then
+  mkdir -p $HOME/.pi/agent
+  cat > $HOME/.pi/agent/AGENTS.md <<'EOF'
+# Tank Pi Config Session
+
+Run `/login`, choose your provider, and complete the login flow. When Pi has
+written `~/.pi/agent/auth.json`, click Save Credentials in tank-operator.
+EOF
+  exec tmux new-session -s tank 'printf "Run /login in Pi, then click Save Credentials in tank-operator.\\n\\n"; pi; exec bash'
+fi
+# Pi-subscription mode: consume the harvested ~/.pi/agent/auth.json. Pi can
+# update this file in place, so copy the Secret-mounted auth file into its
+# writable config directory rather than running directly from /etc/pi-creds.
+if [ "${TANK_SESSION_MODE}" = "pi_subscription" ]; then
+  mkdir -p $HOME/.pi/agent
+  cp /workspace/AGENTS.md $HOME/.pi/agent/AGENTS.md 2>/dev/null || true
+  if [ ! -f /etc/pi-creds/auth.json ]; then
+    echo "no Pi credentials found in /etc/pi-creds/auth.json" >&2
+    echo "spawn a 'Pi config' session, run \`/login\`, then click Save Credentials." >&2
+    echo "Once KV has auth.json, ESO will mirror it into this namespace and a" >&2
+    echo "fresh pi_subscription pod will pick it up." >&2
+    exec tmux new-session -s tank 'exec bash'
+  fi
+  cp /etc/pi-creds/auth.json $HOME/.pi/agent/auth.json
+  chmod 600 $HOME/.pi/agent/auth.json
+  exec tmux new-session -s tank 'pi; exec bash'
+fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
 # in-cluster HTTP MCP servers via 127.0.0.1 ports declared in
 # /workspace/.mcp.json, and the sidecar reads the projected SA token

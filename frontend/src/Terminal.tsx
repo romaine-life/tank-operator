@@ -7,6 +7,10 @@ import { authedFetch } from "./auth";
 import "@xterm/xterm/css/xterm.css";
 import "./fonts.css";
 
+function reportsAgentActivity(mode: string): boolean {
+  return mode.startsWith("codex_") || mode.startsWith("pi_");
+}
+
 const completionSound = (() => {
   let audio: HTMLAudioElement | null = null;
   let context: AudioContext | null = null;
@@ -286,7 +290,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     fitRef.current = fit;
     term.loadAddon(fit);
     const onBellDisp = term.onBell(() => {
-      if (!mode.startsWith("codex_")) return;
+      if (!reportsAgentActivity(mode)) return;
       onAgentActivityChangeRef.current?.(sessionId, "waiting");
       if (completionSoundEnabledRef.current) {
         completionSound.play(completionSoundVolumeRef.current);
@@ -506,7 +510,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     window.addEventListener("resize", onWindowResize);
     const onResizeDisp = term.onResize(({ cols, rows }) => sendResize(cols, rows));
     const onDataDisp = term.onData((data) => {
-      if (mode.startsWith("codex_") && (data.includes("\r") || data.includes("\n"))) {
+      if (reportsAgentActivity(mode) && (data.includes("\r") || data.includes("\n"))) {
         onAgentActivityChangeRef.current?.(sessionId, "working");
       }
       sendIfOpen(data);
