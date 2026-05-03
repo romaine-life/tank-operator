@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { Terminal, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -149,6 +150,14 @@ function clearInitialSessionId(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("session");
   window.history.replaceState({}, "", url.toString());
+}
+
+function sessionUrl(id: string): string {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("session", id);
+  return url.toString();
 }
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
@@ -514,6 +523,14 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function openSession(id: string, e: ReactMouseEvent) {
+    if (e.ctrlKey || e.metaKey) {
+      window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
+      return;
+    }
+    activate(id);
+  }
+
   async function createSession(mode: SessionMode = defaultSessionMode) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
@@ -731,7 +748,7 @@ export function App() {
                 <li
                   key={s.id}
                   className={isActive ? "is-open" : ""}
-                  onClick={isEditing ? undefined : () => activate(s.id)}
+                  onClick={isEditing ? undefined : (e) => openSession(s.id, e)}
                 >
                   <div className="session-row-top">
                     <span
