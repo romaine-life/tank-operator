@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
+import { ANSI_256_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
   | "api_key"
@@ -169,6 +170,17 @@ function ansiColorClass(code: number | undefined, prefix: "fg" | "bg"): string |
   return `ansi-${prefix}-${code}`;
 }
 
+function ansiStyle(style: AnsiStyle): CSSProperties | undefined {
+  const css: CSSProperties = {};
+  if (style.fg != null && ANSI_256_OVERRIDES[style.fg]) {
+    css.color = ANSI_256_OVERRIDES[style.fg];
+  }
+  if (style.bg != null && ANSI_256_OVERRIDES[style.bg]) {
+    css.backgroundColor = ANSI_256_OVERRIDES[style.bg];
+  }
+  return Object.keys(css).length > 0 ? css : undefined;
+}
+
 function applyAnsiCodes(style: AnsiStyle, rawCodes: string): AnsiStyle {
   const codes = rawCodes === "" ? [0] : rawCodes.split(";").map((code) => Number(code || "0"));
   let next = { ...style };
@@ -226,7 +238,7 @@ function AnsiLine({ line }: { line: string }) {
           ansiColorClass(segment.style.bg, "bg") ?? "",
         ].filter(Boolean).join(" ");
         return (
-          <span key={index} className={classes || undefined}>
+          <span key={index} className={classes || undefined} style={ansiStyle(segment.style)}>
             {segment.text}
           </span>
         );
