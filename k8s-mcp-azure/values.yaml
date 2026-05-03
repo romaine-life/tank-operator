@@ -18,7 +18,7 @@ adminImage:
   # SHA-pinned. mcp-azure-admin-build.yml rewrites this tag on every push to main
   # via a `[skip ci]` follow-up commit. Quoted so all-digit short-SHAs don't
   # become floats.
-  tag: "1c32fb1"
+  tag: "1103e7b"
   pullPolicy: IfNotPresent
 
 # Loopback-only port azure-mcp listens on. Sidecar fronts it.
