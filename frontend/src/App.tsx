@@ -463,6 +463,14 @@ function sessionUrl(id: string): string {
   return url.toString();
 }
 
+function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
+  return (session.pod_name ?? session.id).replace(/^session-/, "").slice(0, 8);
+}
+
+function sessionDisplayName(session: Session): string {
+  return session.name ?? defaultSessionName(session);
+}
+
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   const params = new URLSearchParams(window.location.search);
   const runId = params.get("glimmung_run_id");
@@ -774,7 +782,7 @@ function DemoLanding() {
 
   function createPreviewSession() {
     const nextOrdinal = demoSessionOrdinal + 1;
-    const next = createDemoSession(selectedMode, nextOrdinal);
+    const next = { ...createDemoSession(selectedMode, nextOrdinal), name: null };
     setDemoSessionOrdinal(nextOrdinal);
     setDemoSessions((prev) => [...prev, next]);
     setActiveDemoSession(next.id);
@@ -879,7 +887,7 @@ function DemoLanding() {
                       aria-label={`status: ${s.status}`}
                     />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
-                      <span className="session-id">{s.name ?? s.id}</span>
+                      <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
                     <button
                       className="session-delete"
@@ -1140,6 +1148,7 @@ export function App() {
     }
     setBusy(true);
     setModeMenuOpen(false);
+    setSidebarCollapsed(false);
     setError(null);
     try {
       const res = await authedFetch("/api/sessions", {
@@ -1151,6 +1160,7 @@ export function App() {
       const created: Session = await res.json();
       await refresh();
       activate(created.id);
+      startEditing(created.id, created.name);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1205,7 +1215,9 @@ export function App() {
   function commitEditing() {
     if (editingId) {
       const trimmed = editingValue.trim();
-      void renameSession(editingId, trimmed === "" ? null : trimmed);
+      const session = sessions.find((s) => s.id === editingId);
+      const nextName = trimmed === "" && session ? defaultSessionName(session) : trimmed;
+      void renameSession(editingId, nextName === "" ? null : nextName);
     }
     setEditingId(null);
     setEditingValue("");
@@ -1436,7 +1448,7 @@ export function App() {
                   key={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}`}
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
-                  title={sidebarCollapsed ? `${s.name ?? s.id} (${statusLabel})` : undefined}
+                  title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
                   <div className="session-row-top">
                     <span
@@ -1456,7 +1468,7 @@ export function App() {
                           else if (e.key === "Escape") cancelEditing();
                         }}
                         onBlur={commitEditing}
-                        placeholder={s.id}
+                        placeholder={defaultSessionName(s)}
                         maxLength={80}
                       />
                     ) : (
@@ -1472,11 +1484,11 @@ export function App() {
                           isClosing
                             ? "session is closing"
                             : s.name
-                              ? `${s.id} — click to rename`
+                              ? `${defaultSessionName(s)} — click to rename`
                               : "click to rename"
                         }
                       >
-                        <span className="session-id">{s.name ?? s.id}</span>
+                        <span className="session-id">{sessionDisplayName(s)}</span>
                       </button>
                     )}
                     <button
