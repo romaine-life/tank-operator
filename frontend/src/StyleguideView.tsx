@@ -11,12 +11,24 @@
 // not "the styleguide drifted from the live UI."
 
 import { useState } from "react";
+import { ProviderIcon } from "./providerIcons";
 
-const MODES = ["subscription", "api_key", "config"] as const;
+const MODES = ["subscription", "api_key", "config", "codex_subscription"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   subscription: "sub",
   api_key: "api",
   config: "config",
+  codex_subscription: "codex",
+};
+const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
+  subscription: "Subscription",
+  api_key: "API key",
+  config: "Config sub",
+  codex_subscription: "Codex sub",
+};
+const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">> = {
+  subscription: "anthropic",
+  codex_subscription: "openai",
 };
 const STATUSES = ["active", "pending", "error"] as const;
 
@@ -124,7 +136,21 @@ export function StyleguideView() {
           </p>
           <div style={rowStyle}>
             {MODES.map((m) => (
-              <span key={m} className={`mode mode-${m}`}>{MODE_LABELS[m]}</span>
+              <span
+                key={m}
+                className={`mode mode-${m}${MODE_ICONS[m] ? " mode-icon-only" : ""}`}
+                title={MODE_FULL_LABELS[m]}
+                aria-label={MODE_FULL_LABELS[m]}
+              >
+                {MODE_ICONS[m] ? (
+                  <>
+                    <ProviderIcon provider={MODE_ICONS[m]} className="mode-provider-icon" />
+                    <span className="sr-only">{MODE_LABELS[m]}</span>
+                  </>
+                ) : (
+                  MODE_LABELS[m]
+                )}
+              </span>
             ))}
           </div>
         </section>
@@ -150,7 +176,10 @@ export function StyleguideView() {
                 </button>
               </div>
               <div className="session-row-bottom">
-                <span className="mode mode-subscription">sub</span>
+                <span className="mode mode-subscription mode-icon-only" title="Subscription" aria-label="Subscription">
+                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
+                  <span className="sr-only">sub</span>
+                </span>
               </div>
             </li>
             <li>
