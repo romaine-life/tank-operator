@@ -76,24 +76,75 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     });
     term.open(containerRef.current);
     termRef.current = term;
+    const isDebugEnabled = () => {
+      try {
+        return (
+          window.localStorage.getItem("tankTerminalDebug") === "1" ||
+          new URLSearchParams(window.location.search).has("terminalDebug")
+        );
+      } catch {
+        return false;
+      }
+    };
+    const logTerminalEvent = (label: string, event: KeyboardEvent | WheelEvent, extra: Record<string, unknown> = {}) => {
+      if (!isDebugEnabled()) return;
+      const buffer = term.buffer.active;
+      console.debug("[tank-terminal]", label, {
+        mode,
+        baseY: buffer.baseY,
+        viewportY: buffer.viewportY,
+        cursorY: buffer.cursorY,
+        defaultPrevented: event.defaultPrevented,
+        ...extra,
+      });
+    };
+    const onCaptureKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "PageUp" && event.key !== "PageDown") return;
+      logTerminalEvent("capture keydown", event, {
+        key: event.key,
+        code: event.code,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        activeElement: document.activeElement?.tagName,
+      });
+    };
+    containerRef.current.addEventListener("keydown", onCaptureKeyDown, { capture: true });
     term.attachCustomKeyEventHandler((event) => {
+      if (event.key === "PageUp" || event.key === "PageDown") {
+        logTerminalEvent("xterm custom key", event, {
+          key: event.key,
+          code: event.code,
+          altKey: event.altKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+        });
+      }
       if (!mode.startsWith("codex_") || event.type !== "keydown") return true;
       if (event.altKey || event.ctrlKey || event.metaKey) return true;
 
       if (event.key === "PageUp") {
         event.preventDefault();
         term.scrollPages(-1);
+        logTerminalEvent("xterm scroll page", event, { direction: -1 });
         return false;
       }
       if (event.key === "PageDown") {
         event.preventDefault();
         term.scrollPages(1);
+        logTerminalEvent("xterm scroll page", event, { direction: 1 });
         return false;
       }
 
       return true;
     });
     const onWheel = (event: WheelEvent) => {
+      logTerminalEvent("capture wheel", event, {
+        deltaY: event.deltaY,
+        ctrlKey: event.ctrlKey,
+      });
       if (!mode.startsWith("codex_") || event.ctrlKey || event.deltaY === 0) return;
       // Codex's TUI enables mouse reporting, which makes xterm forward wheel
       // events into the process instead of scrolling the browser terminal
@@ -103,6 +154,9 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       event.preventDefault();
       event.stopPropagation();
       term.scrollLines(Math.sign(event.deltaY) * Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30)));
+      logTerminalEvent("wheel scroll lines", event, {
+        direction: Math.sign(event.deltaY),
+      });
     };
     containerRef.current.addEventListener("wheel", onWheel, { capture: true, passive: false });
     if (visible) {
@@ -206,6 +260,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       stopPing();
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWindowResize);
+      containerRef.current?.removeEventListener("keydown", onCaptureKeyDown, { capture: true });
       containerRef.current?.removeEventListener("wheel", onWheel, { capture: true });
       onResizeDisp.dispose();
       onDataDisp.dispose();
