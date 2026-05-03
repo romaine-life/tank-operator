@@ -424,17 +424,29 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.dropdown-mode button {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dropdown-provider-icon {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.dropdown button:hover:not(:disabled) .dropdown-provider-icon {
+  color: var(--text-primary);
+}
+
 .dropdown-title {
   font-weight: 500;
   color: var(--text-secondary);
 }
 
 .dropdown button:hover:not(:disabled) .dropdown-title { color: var(--text-primary); }
-
-.dropdown-hint {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
 
 .dropdown-meta {
   display: flex;

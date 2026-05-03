@@ -15,16 +15,16 @@ import { ProviderIcon } from "./providerIcons";
 
 const MODES = ["subscription", "api_key", "config", "codex_subscription"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
-  subscription: "sub",
+  subscription: "claude",
   api_key: "api",
   config: "config",
   codex_subscription: "codex",
 };
 const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
-  subscription: "Subscription",
-  api_key: "API key",
-  config: "Config sub",
-  codex_subscription: "Codex sub",
+  subscription: "Claude",
+  api_key: "Claude API key",
+  config: "Claude config",
+  codex_subscription: "Codex",
 };
 const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">> = {
   subscription: "anthropic",
@@ -130,7 +130,7 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>mode chip</h2>
           <p style={captionStyle}>
-            Surfaces the auth mode (subscription / api / config) on the
+            Surfaces the auth mode (Claude / API / config) on the
             session row. Each rides its own tinted background — not bordered
             pills — so the row is calm at rest but legible at a glance.
           </p>
@@ -176,9 +176,9 @@ export function StyleguideView() {
                 </button>
               </div>
               <div className="session-row-bottom">
-                <span className="mode mode-subscription mode-icon-only" title="Subscription" aria-label="Subscription">
+                <span className="mode mode-subscription mode-icon-only" title="Claude" aria-label="Claude">
                   <ProviderIcon provider="anthropic" className="mode-provider-icon" />
-                  <span className="sr-only">sub</span>
+                  <span className="sr-only">claude</span>
                 </span>
               </div>
             </li>
@@ -203,10 +203,8 @@ export function StyleguideView() {
         <section style={sectionStyle}>
           <h2 style={headStyle}>mode dropdown</h2>
           <p style={captionStyle}>
-            Appears under the "New session" CTA when the chevron toggles. Each
-            entry pairs a title with a one-line hint that frames the
-            tradeoff — auth mode is the only setting on session creation, so
-            the dropdown carries the explanation.
+            Appears under the "New session" CTA when the chevron toggles.
+            Entries stay compact: provider mark plus mode name.
           </p>
           <div style={{ position: "relative", maxWidth: 280 }}>
             <button
@@ -221,20 +219,32 @@ export function StyleguideView() {
               <ul className="dropdown dropdown-mode" role="menu" style={{ position: "static", marginTop: 8 }}>
                 <li>
                   <button type="button">
-                    <span className="dropdown-title">Subscription</span>
-                    <span className="dropdown-hint">Default — uses claude.ai login</span>
+                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
+                    <span className="dropdown-title">Claude</span>
                   </button>
                 </li>
                 <li>
                   <button type="button">
-                    <span className="dropdown-title">API key</span>
-                    <span className="dropdown-hint">Billed via API</span>
+                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
+                    <span className="dropdown-title">Claude API key</span>
                   </button>
                 </li>
                 <li>
                   <button type="button">
-                    <span className="dropdown-title">Config sub</span>
-                    <span className="dropdown-hint">Log in once · seeds KV for future sessions</span>
+                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
+                    <span className="dropdown-title">Claude config</span>
+                  </button>
+                </li>
+                <li>
+                  <button type="button">
+                    <ProviderIcon provider="openai" className="dropdown-provider-icon" />
+                    <span className="dropdown-title">Codex</span>
+                  </button>
+                </li>
+                <li>
+                  <button type="button">
+                    <ProviderIcon provider="openai" className="dropdown-provider-icon" />
+                    <span className="dropdown-title">Codex config</span>
                   </button>
                 </li>
               </ul>
