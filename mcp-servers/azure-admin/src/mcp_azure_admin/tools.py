@@ -97,9 +97,11 @@ def register_tools(mcp: FastMCP) -> None:
         confirm_name: str,
         subscription: str | None = None,
     ) -> dict[str, Any]:
-        """Delete one Azure Static Web App.
+        """Delete an Azure Static Web App resource by resource group and name.
 
-        Destructive guard: confirm_name must exactly match name.
+        Destructive Azure cleanup tool. Use for removing disposable Static Web
+        Apps when the regular Azure MCP cannot perform deletion. Destructive
+        guard: confirm_name must exactly match name.
         """
         _require_confirmation(name, confirm_name, "static web app name")
         sub = _subscription(subscription)
@@ -125,9 +127,10 @@ def register_tools(mcp: FastMCP) -> None:
         confirm_resource_group: str,
         subscription: str | None = None,
     ) -> dict[str, Any]:
-        """Delete an Azure resource group and everything in it.
+        """Delete an Azure resource group and every resource contained in it.
 
-        Destructive guard: confirm_resource_group must exactly match
+        Highly destructive Azure cleanup tool. Use only after listing/verifying
+        the group is disposable. Destructive guard: confirm_resource_group must exactly match
         resource_group. Use only after verifying the group is disposable.
         """
         _require_confirmation(resource_group, confirm_resource_group, "resource group")

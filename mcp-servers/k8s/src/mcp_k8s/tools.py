@@ -56,7 +56,11 @@ def _run(cmd: list[str], *, parse_json: bool = False) -> Any:
 def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def list_namespaces() -> list[dict[str, Any]]:
-        """List all namespaces in the cluster."""
+        """List Kubernetes namespaces in the cluster.
+
+        Use to discover namespace names before listing pods, services,
+        deployments, events, Helm releases, or other namespaced resources.
+        """
         body = _run(["kubectl", "get", "namespaces", "-o", "json"], parse_json=True)
         return [
             {
@@ -74,7 +78,10 @@ def register_tools(mcp: FastMCP) -> None:
         all_namespaces: bool = False,
         label_selector: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List resources of a given kind. Cluster-scoped kinds (Node, Namespace,
+        """List Kubernetes resources by kind, namespace, and optional label selector.
+
+        Use as `kubectl get` for pods, deployments, services, jobs, CRDs, nodes,
+        namespaces, and custom resources. Cluster-scoped kinds (Node, Namespace,
         ClusterRole, etc.) ignore namespace. Use all_namespaces=True for namespaced
         kinds across the cluster. label_selector is a standard '-l' string
         ('app=foo,role=bar')."""
@@ -103,7 +110,11 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def get_resource(kind: str, name: str, namespace: str | None = None) -> dict[str, Any]:
-        """Return the full JSON for a single resource."""
+        """Get one Kubernetes resource as full JSON.
+
+        Use as `kubectl get KIND NAME -o json` when you need spec, status,
+        labels, annotations, owner references, or controller fields.
+        """
         cmd = ["kubectl", "get", kind, name, "-o", "json"]
         if namespace:
             cmd += ["-n", namespace]
@@ -111,7 +122,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def describe_resource(kind: str, name: str, namespace: str | None = None) -> str:
-        """Run `kubectl describe`. Useful when you want events + computed fields
+        """Describe one Kubernetes resource with `kubectl describe`.
+
+        Useful when you want events + computed fields
         rather than the raw spec — e.g. to see why a pod is Pending."""
         cmd = ["kubectl", "describe", kind, name]
         if namespace:
@@ -126,7 +139,10 @@ def register_tools(mcp: FastMCP) -> None:
         tail_lines: int = 200,
         previous: bool = False,
     ) -> str:
-        """Read pod logs. previous=True reads the previous container instance
+        """Read Kubernetes pod logs from a container.
+
+        Use as `kubectl logs` for debugging running, failed, or crash-looping
+        pods. previous=True reads the previous container instance
         (useful when the current one is in CrashLoopBackOff). tail_lines caps
         output to keep responses tractable."""
         cmd = [
@@ -149,7 +165,12 @@ def register_tools(mcp: FastMCP) -> None:
         all_namespaces: bool = False,
         field_selector: str | None = None,
     ) -> list[dict[str, Any]]:
-        """List recent events. field_selector example: 'involvedObject.name=session-foo'."""
+        """List recent Kubernetes events, optionally filtered by namespace or involved object.
+
+        Use to diagnose Pending pods, failed scheduling, image pull errors,
+        failed mounts, unhealthy controllers, or rollout problems.
+        `field_selector` example: `involvedObject.name=session-foo`.
+        """
         cmd = ["kubectl", "get", "events", "-o", "json", "--sort-by=.lastTimestamp"]
         if all_namespaces:
             cmd.append("--all-namespaces")
@@ -176,7 +197,11 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def top_pods(namespace: str | None = None, all_namespaces: bool = False) -> str:
-        """`kubectl top pods` — CPU/memory by pod. Requires metrics-server."""
+        """Show Kubernetes pod CPU and memory usage with `kubectl top pods`.
+
+        Use to investigate resource pressure, evictions, high memory, or hot
+        workloads. Requires metrics-server.
+        """
         cmd = ["kubectl", "top", "pods"]
         if all_namespaces:
             cmd.append("--all-namespaces")
@@ -186,12 +211,19 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def top_nodes() -> str:
-        """`kubectl top nodes` — CPU/memory by node. Requires metrics-server."""
+        """Show Kubernetes node CPU and memory usage with `kubectl top nodes`.
+
+        Use to investigate cluster capacity, node pressure, and scheduling
+        issues. Requires metrics-server.
+        """
         return _run(["kubectl", "top", "nodes"])
 
     @mcp.tool()
     def helm_list(namespace: str | None = None, all_namespaces: bool = True) -> list[dict[str, Any]]:
-        """List Helm releases. Defaults to all namespaces — narrow with namespace
+        """List Helm releases in one namespace or all namespaces.
+
+        Use to discover release names before helm_status, helm_get_values,
+        helm_get_manifest, or helm_history. Defaults to all namespaces — narrow with namespace
         when looking for one specific release."""
         cmd = ["helm", "list", "-o", "json"]
         if all_namespaces and not namespace:
@@ -202,7 +234,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def helm_get_values(release: str, namespace: str, all_values: bool = True) -> dict[str, Any]:
-        """Return a release's values. all_values=True merges chart defaults with
+        """Get Helm release values for a release in a namespace.
+
+        Use to inspect chart configuration and overrides. all_values=True merges chart defaults with
         user overrides; False returns only the user overrides."""
         cmd = ["helm", "get", "values", release, "-n", namespace, "-o", "json"]
         if all_values:
@@ -211,12 +245,16 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def helm_get_manifest(release: str, namespace: str) -> str:
-        """Return the rendered manifest YAML for a release. Big — use sparingly."""
+        """Get rendered Kubernetes manifest YAML for a Helm release.
+
+        Use to inspect what Helm deployed when debugging chart rendering,
+        selectors, env vars, image tags, RBAC, or hooks. Big — use sparingly.
+        """
         return _run(["helm", "get", "manifest", release, "-n", namespace])
 
     @mcp.tool()
     def helm_status(release: str, namespace: str) -> dict[str, Any]:
-        """Return release status (revision, deployed time, last action)."""
+        """Get Helm release status including revision, deployed time, and last action."""
         return _run(
             ["helm", "status", release, "-n", namespace, "-o", "json"],
             parse_json=True,
@@ -224,7 +262,7 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def helm_history(release: str, namespace: str) -> list[dict[str, Any]]:
-        """Return release revision history."""
+        """Get Helm release revision history for rollback and deployment timeline analysis."""
         return _run(
             ["helm", "history", release, "-n", namespace, "-o", "json"],
             parse_json=True,
@@ -232,7 +270,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def delete_pod(name: str, namespace: str, grace_period_seconds: int | None = None) -> str:
-        """Delete a Pod. Useful when a controller pod is wedged but its parent
+        """Delete a Kubernetes Pod so its controller can recreate it.
+
+        Destructive but usually recoverable. Useful when a controller pod is wedged but its parent
         StatefulSet/Deployment/DaemonSet is healthy — the parent will recreate
         the pod. grace_period_seconds=0 forces immediate delete (skips
         terminationGracePeriod)."""
@@ -243,7 +283,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def rollout_restart(kind: str, name: str, namespace: str) -> str:
-        """Trigger a rolling restart of a Deployment, StatefulSet, or DaemonSet.
+        """Restart a Kubernetes workload by triggering a rolling restart.
+
+        Use for Deployment, StatefulSet, or DaemonSet restarts.
         Equivalent to `kubectl rollout restart`: patches the pod template's
         `kubectl.kubernetes.io/restartedAt` annotation so the controller
         schedules new pods. kind must be one of: deployment, statefulset,
@@ -256,7 +298,9 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def api_resources() -> list[dict[str, Any]]:
-        """List API resources known to the cluster — useful for discovering CRDs
+        """List Kubernetes API resources and CRDs known to the cluster.
+
+        Use to discover available kinds, short names, namespaced scope, and verbs — useful for discovering CRDs
         like applications.argoproj.io or httproutes.gateway.networking.k8s.io."""
         # `kubectl api-resources` doesn't have a -o json mode; parse the
         # default columnar output. Skip the header row.

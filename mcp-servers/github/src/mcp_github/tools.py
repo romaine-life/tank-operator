@@ -13,7 +13,11 @@ def _is_404(exc: Exception) -> bool:
 def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
     @mcp.tool()
     def list_installation_repos() -> list[dict[str, Any]]:
-        """List all repositories the GitHub App is installed on."""
+        """List GitHub repositories available to this GitHub App installation.
+
+        Use to discover which owner/repo slugs can be read or written before
+        cloning, opening issues, creating pull requests, or checking workflows.
+        """
         body = gh.get("/installation/repositories", params={"per_page": 100})
         return [
             {"full_name": r["full_name"], "private": r["private"], "default_branch": r["default_branch"]}
@@ -92,7 +96,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def get_repo(owner: str, name: str) -> dict[str, Any]:
-        """Return metadata for a single repo."""
+        """Get GitHub repository metadata for one owner/name repo.
+
+        Use to confirm default branch, language, description, and repository
+        existence before creating branches, commits, issues, or pull requests.
+        """
         r = gh.get(f"/repos/{owner}/{name}")
         return {k: r.get(k) for k in ("full_name", "description", "default_branch", "language", "stargazers_count", "open_issues_count", "updated_at")}
 
@@ -138,7 +146,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def get_file_contents(owner: str, name: str, path: str, ref: str | None = None) -> dict[str, Any]:
-        """Fetch a file's contents from a repo. Base64-decoded; binary files are returned as-is."""
+        """Read or fetch a file from a GitHub repository at an optional branch, tag, or SHA ref.
+
+        Use when you need source text without cloning the repo. Base64 content
+        is decoded for text files; binary files are returned as a byte summary.
+        """
         params = {"ref": ref} if ref else None
         r = gh.get(f"/repos/{owner}/{name}/contents/{path}", params=params)
         if isinstance(r, list):
@@ -154,13 +166,20 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_issues(owner: str, name: str, state: str = "open") -> list[dict[str, Any]]:
-        """List issues on a repo. state: open|closed|all."""
+        """List GitHub issues in a repository, excluding pull requests.
+
+        Use for issue triage and to find issue numbers. `state` is one of
+        open, closed, or all.
+        """
         body = gh.get(f"/repos/{owner}/{name}/issues", params={"state": state, "per_page": 50})
         return [{"number": i["number"], "title": i["title"], "state": i["state"], "user": i["user"]["login"]} for i in body if "pull_request" not in i]
 
     @mcp.tool()
     def get_issue(owner: str, name: str, number: int) -> dict[str, Any]:
-        """Return issue details including body and labels."""
+        """Get GitHub issue details including title, body, state, author, and labels.
+
+        Use after list_issues or when a user references a specific issue number.
+        """
         r = gh.get(f"/repos/{owner}/{name}/issues/{number}")
         return {
             "number": r["number"],
@@ -173,13 +192,21 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_pull_requests(owner: str, name: str, state: str = "open") -> list[dict[str, Any]]:
-        """List PRs on a repo. state: open|closed|all."""
+        """List GitHub pull requests (PRs) in a repository.
+
+        Use to find open, closed, or all pull requests before reviewing,
+        merging, commenting, labeling, or checking a branch's existing PR.
+        """
         body = gh.get(f"/repos/{owner}/{name}/pulls", params={"state": state, "per_page": 50})
         return [{"number": p["number"], "title": p["title"], "state": p["state"], "user": p["user"]["login"], "head": p["head"]["ref"]} for p in body]
 
     @mcp.tool()
     def get_pull_request(owner: str, name: str, number: int) -> dict[str, Any]:
-        """Return PR details including body and head/base."""
+        """Get GitHub pull request (PR) details including body, head branch, base branch, and merge state.
+
+        Use when you need PR metadata before merge, review, status checks, or
+        follow-up comments.
+        """
         r = gh.get(f"/repos/{owner}/{name}/pulls/{number}")
         return {
             "number": r["number"],
@@ -194,13 +221,21 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def search_code(query: str) -> list[dict[str, Any]]:
-        """Search code across repos the App has access to. Returns top 30."""
+        """Search GitHub code across repositories this App installation can access.
+
+        Use for cross-repo source discovery when you do not know which repo or
+        file contains a symbol, setting, workflow, or configuration.
+        """
         body = gh.get("/search/code", params={"q": query, "per_page": 30})
         return [{"path": i["path"], "repo": i["repository"]["full_name"], "html_url": i["html_url"]} for i in body.get("items", [])]
 
     @mcp.tool()
     def list_commits(owner: str, name: str, sha: str | None = None) -> list[dict[str, Any]]:
-        """List recent commits on a repo."""
+        """List recent GitHub commits on a repository or branch SHA/ref.
+
+        Use to inspect recent history, find image tag source commits, or verify
+        what landed on a branch.
+        """
         params: dict[str, Any] = {"per_page": 30}
         if sha:
             params["sha"] = sha
@@ -209,7 +244,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def create_issue(owner: str, name: str, title: str, body: str | None = None, labels: list[str] | None = None) -> dict[str, Any]:
-        """Open a new issue. Returns the created issue's number and URL."""
+        """Create or open a new GitHub issue in a repository.
+
+        Use to file bugs, follow-up work, rollout notes, or operational tasks.
+        Returns the created issue number, URL, and state.
+        """
         payload: dict[str, Any] = {"title": title}
         if body is not None:
             payload["body"] = body
@@ -220,7 +259,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def update_issue(owner: str, name: str, number: int, title: str | None = None, body: str | None = None, state: str | None = None, labels: list[str] | None = None) -> dict[str, Any]:
-        """Edit an issue. Pass state='closed' to close, 'open' to reopen. Works on PRs too."""
+        """Update a GitHub issue or pull request (PR) title, body, state, or labels.
+
+        Use to close or reopen issues/PRs with `state`, or to replace labels.
+        Pass only fields you intend to change.
+        """
         payload: dict[str, Any] = {}
         if title is not None:
             payload["title"] = title
@@ -235,19 +278,31 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def comment_on_issue(owner: str, name: str, number: int, body: str) -> dict[str, Any]:
-        """Add a comment to an issue or PR (same endpoint for both)."""
+        """Comment on a GitHub issue or pull request (PR).
+
+        Use to leave rollout updates, review notes, status summaries, or user
+        feedback on either issue numbers or PR numbers.
+        """
         r = gh.post(f"/repos/{owner}/{name}/issues/{number}/comments", json={"body": body})
         return {"id": r["id"], "html_url": r["html_url"]}
 
     @mcp.tool()
     def add_labels(owner: str, name: str, number: int, labels: list[str]) -> list[str]:
-        """Add labels to an issue or PR. Returns the full label set after the add."""
+        """Add GitHub labels to an issue or pull request (PR).
+
+        Use for triage, workflow triggers, ownership markers, or status labels.
+        Returns the full label set after the add.
+        """
         r = gh.post(f"/repos/{owner}/{name}/issues/{number}/labels", json={"labels": labels})
         return [l["name"] for l in r]
 
     @mcp.tool()
     def remove_label(owner: str, name: str, number: int, label: str) -> list[str]:
-        """Remove a single label from an issue or PR. Returns remaining labels."""
+        """Remove one GitHub label from an issue or pull request (PR).
+
+        Use to clear triage, trigger, blocked, or status labels. Returns the
+        remaining labels.
+        """
         r = gh.delete(f"/repos/{owner}/{name}/issues/{number}/labels/{label}")
         return [l["name"] for l in r] if isinstance(r, list) else []
 
@@ -291,7 +346,12 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def create_pull_request(owner: str, name: str, title: str, head: str, base: str, body: str | None = None, draft: bool = False) -> dict[str, Any]:
-        """Open a PR. head='branch' or 'fork-owner:branch'. base is the target branch."""
+        """Create or open a GitHub pull request (PR) from a head branch into a base branch.
+
+        Use after commit_to_branch or git push when you need a reviewable PR.
+        `head` is `branch` for the same repo or `fork-owner:branch` for a fork.
+        Returns the PR number, URL, and state.
+        """
         payload: dict[str, Any] = {"title": title, "head": head, "base": base, "draft": draft}
         if body is not None:
             payload["body"] = body
@@ -300,7 +360,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def merge_pull_request(owner: str, name: str, number: int, merge_method: str = "merge", commit_title: str | None = None, commit_message: str | None = None) -> dict[str, Any]:
-        """Merge a PR. merge_method: merge|squash|rebase."""
+        """Merge a GitHub pull request (PR) using merge, squash, or rebase.
+
+        Use after checking review and CI status. `merge_method` is merge,
+        squash, or rebase; optional title/message customize the merge commit.
+        """
         payload: dict[str, Any] = {"merge_method": merge_method}
         if commit_title is not None:
             payload["commit_title"] = commit_title
@@ -311,7 +375,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def request_review(owner: str, name: str, number: int, reviewers: list[str] | None = None, team_reviewers: list[str] | None = None) -> dict[str, Any]:
-        """Request reviewers on a PR. Pass user logins in reviewers, team slugs in team_reviewers."""
+        """Request GitHub pull request (PR) reviews from users or teams.
+
+        Use to ask for review on an open PR. Pass user logins in `reviewers`
+        and GitHub team slugs in `team_reviewers`.
+        """
         payload: dict[str, Any] = {}
         if reviewers:
             payload["reviewers"] = reviewers
@@ -325,7 +393,9 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def create_or_update_file(owner: str, name: str, path: str, content: str, message: str, branch: str | None = None) -> dict[str, Any]:
-        """Create a file or update one. Commits directly to `branch` (default branch
+        """Create or update a single text file in a GitHub repository and commit it.
+
+        Commits directly to `branch` (default branch
         if omitted). content is plain text; encoded to base64 for the API.
 
         The current blob sha is resolved server-side immediately before the write,
@@ -360,7 +430,9 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def delete_file(owner: str, name: str, path: str, message: str, branch: str | None = None) -> dict[str, Any]:
-        """Delete a file. The current blob sha is resolved server-side immediately
+        """Delete a file from a GitHub repository and commit the deletion.
+
+        The current blob sha is resolved server-side immediately
         before the delete; the call fails if the file does not exist on `branch`
         (default branch if omitted)."""
         params = {"ref": branch} if branch else None
@@ -375,7 +447,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def create_branch(owner: str, name: str, branch: str, base: str = "main") -> dict[str, Any]:
-        """Create a new branch pointing at the current HEAD of `base` (default 'main').
+        """Create a new GitHub branch from the current HEAD of a base branch.
+
+        Use before commit_to_branch or create_pull_request when you need a
+        review branch. `base` defaults to main.
+
         The base sha is resolved server-side at call time — there is intentionally
         no `from_sha` parameter, because a caller-cached sha is exactly the
         affordance that lets a subsequent commit revert previous work by being
@@ -387,7 +463,9 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def delete_branch(owner: str, name: str, branch: str) -> dict[str, Any]:
-        """Delete a branch ref via DELETE /repos/{owner}/{name}/git/refs/heads/{branch}.
+        """Delete a GitHub branch ref by branch name.
+
+        Calls DELETE /repos/{owner}/{name}/git/refs/heads/{branch}.
 
         Use for cleaning up stale branches — e.g. a working branch left behind
         when its work landed on main via direct push (so PR-merge auto-delete
@@ -412,7 +490,13 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         author_name: str | None = None,
         author_email: str | None = None,
     ) -> dict[str, Any]:
-        """Land a single commit covering one or more file changes (and optional
+        """Create a single Git commit with one or more file changes on a GitHub branch.
+
+        Use this preferred write path for MCP-driven code changes before
+        opening a pull request (PR) with create_pull_request. It can create the
+        branch from `base` or append to an existing branch.
+
+        Land a single commit covering one or more file changes (and optional
         deletes) on `branch`. If `branch` doesn't exist on the remote, it is
         created from the current HEAD of `base` (default 'main') and the commit
         is the new branch's first commit. If `branch` exists, the commit is
@@ -509,7 +593,12 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_workflow_runs(owner: str, name: str, workflow: str, branch: str | None = None, status: str | None = None, per_page: int = 10) -> list[dict[str, Any]]:
-        """List recent workflow runs. workflow is the file name ('tofu.yml') or numeric ID. status: queued|in_progress|completed|success|failure|... Useful for checking whether a CI job actually ran on a given commit."""
+        """List recent GitHub Actions workflow runs for a workflow file or workflow ID.
+
+        Use to monitor CI, builds, deployments, and rollout jobs. `workflow` is
+        a file name like `build.yml` or a numeric workflow ID; `status` can be
+        queued, in_progress, completed, success, failure, or similar.
+        """
         params: dict[str, Any] = {"per_page": per_page}
         if branch:
             params["branch"] = branch
@@ -533,7 +622,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def get_workflow_run(owner: str, name: str, run_id: int) -> dict[str, Any]:
-        """Return a single workflow run's status, conclusion, and metadata."""
+        """Get one GitHub Actions workflow run's status, conclusion, commit, branch, and URL.
+
+        Use after list_workflow_runs when tracking a specific CI/build/deploy
+        run to completion.
+        """
         r = gh.get(f"/repos/{owner}/{name}/actions/runs/{run_id}")
         return {
             "id": r["id"],
@@ -550,7 +643,9 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_workflow_run_jobs(owner: str, name: str, run_id: int) -> list[dict[str, Any]]:
-        """List the jobs (and per-step results) of a workflow run. Pair with
+        """List GitHub Actions jobs and per-step results for one workflow run.
+
+        Use to identify which CI/build/deploy job is running or failed. Pair with
         get_workflow_job_logs to look up a job_id then download its log text."""
         body = gh.get(f"/repos/{owner}/{name}/actions/runs/{run_id}/jobs", params={"per_page": 50})
         return [
@@ -579,7 +674,10 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def get_workflow_job_logs(owner: str, name: str, job_id: int, max_chars: int = 200_000) -> dict[str, Any]:
-        """Fetch the log text for a single workflow run job. The Actions logs
+        """Fetch GitHub Actions logs for a single workflow job.
+
+        Use to diagnose failed CI/build/deploy steps after list_workflow_run_jobs.
+        The Actions logs
         endpoint 302s to a presigned blob URL; get_text follows the redirect
         and returns plain text. Truncated to the LAST `max_chars` characters
         because failures surface near the end of the log; if you need earlier
@@ -601,7 +699,10 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_workflow_run_artifacts(owner: str, name: str, run_id: int) -> list[dict[str, Any]]:
-        """List the artifacts produced by a workflow run. Pair with
+        """List GitHub Actions artifacts produced by one workflow run.
+
+        Use to find uploaded logs, reports, test results, screenshots, or build
+        artifacts. Pair with
         get_workflow_run_artifact_files to download and inspect one."""
         body = gh.get(f"/repos/{owner}/{name}/actions/runs/{run_id}/artifacts", params={"per_page": 100})
         return [
@@ -624,7 +725,11 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         path_glob: str = "*",
         max_total_chars: int = 200_000,
     ) -> dict[str, Any]:
-        """Download a workflow run artifact (a zip), extract it, and return
+        """Download and inspect files inside a GitHub Actions workflow artifact ZIP.
+
+        Use after list_workflow_run_artifacts to read uploaded logs, reports,
+        jsonl traces, screenshots metadata, or test outputs without leaving chat.
+        Download a workflow run artifact (a zip), extract it, and return
         matching file contents. Files matching path_glob are decoded as UTF-8
         when valid (encoding='text'), else returned as base64
         (encoding='base64'). Files are returned in name-sorted order; once the
@@ -681,7 +786,10 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def list_repo_variables(owner: str, name: str) -> list[dict[str, Any]]:
-        """List repository-level GitHub Actions variables. Requires the App to
+        """List repository-level GitHub Actions variables for a repo.
+
+        Use to inspect CI/CD configuration values such as Azure IDs or build
+        settings. Requires the App to
         have 'variables: read' permission on its installation; without it this
         returns 403."""
         body = gh.get(f"/repos/{owner}/{name}/actions/variables", params={"per_page": 100})
@@ -692,7 +800,9 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
 
     @mcp.tool()
     def get_repo_variable(owner: str, name: str, variable_name: str) -> dict[str, Any]:
-        """Get a single repository Actions variable by name. Requires the App to
+        """Get one repository-level GitHub Actions variable by name.
+
+        Use to verify CI/CD configuration for a specific variable. Requires the App to
         have 'variables: read' permission. Raises on 404 if the variable is
         unset, which is a clean way to verify whether tofu wrote it."""
         v = gh.get(f"/repos/{owner}/{name}/actions/variables/{variable_name}")
