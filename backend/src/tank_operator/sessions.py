@@ -432,9 +432,8 @@ class SessionManager:
                     },
                 }
             )
-        # pi_subscription pods mount the Secret written by pi_config's
-        # save-credentials path. It is optional so Pi can still surface a
-        # terminal-side auth error before the first successful /login save.
+        # pi_subscription pods mount the ESO-mirrored pi-credentials Secret.
+        # It is optional for the same first-config flow as Codex.
         if mode == PI_SUBSCRIPTION_MODE:
             container = next(c for c in pod_spec["containers"] if c["name"] == "claude")
             container.setdefault("volumeMounts", []).append(
