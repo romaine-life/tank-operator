@@ -62,33 +62,10 @@ module "mcp_azure" {
 # ----------------------------------------------------------------------------
 # Per-server: azure-admin
 # ----------------------------------------------------------------------------
-# Small first-party MCP server with guarded destructive cleanup commands. Keep
-# this separate from Microsoft's broad azure-mcp image so normal Azure discovery
-# can stay read-heavy while cleanup gets an explicit, auditable tool surface.
-
-resource "azurerm_role_definition" "azure_cleanup_operator" {
-  name        = "Tank Operator Azure Cleanup Operator"
-  scope       = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
-  description = "Read Azure resources and delete stale cleanup targets through guarded MCP tools."
-
-  permissions {
-    actions = [
-      "*/read",
-      "*/delete",
-      "Microsoft.Resources/subscriptions/resourceGroups/delete",
-    ]
-    not_actions = [
-      "Microsoft.Authorization/*/delete",
-      "Microsoft.Authorization/*/write",
-      "Microsoft.Blueprint/blueprintAssignments/delete",
-      "Microsoft.Blueprint/blueprintAssignments/write",
-    ]
-  }
-
-  assignable_scopes = [
-    "/subscriptions/${data.azurerm_client_config.current.subscription_id}",
-  ]
-}
+# Small first-party MCP server with guarded destructive cleanup commands. The
+# CI principal can assign built-in roles but cannot define custom roles, so the
+# permission boundary is a separate UAMI plus exact-name confirmation in the
+# tool implementation.
 
 module "mcp_azure_admin" {
   source = "./mcp-server"
@@ -104,11 +81,9 @@ module "mcp_azure_admin" {
   role_assignments = {
     "subscription-cleanup-operator" = {
       scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
-      role_definition_name = azurerm_role_definition.azure_cleanup_operator.name
+      role_definition_name = "Contributor"
     }
   }
-
-  depends_on = [azurerm_role_definition.azure_cleanup_operator]
 }
 
 # ----------------------------------------------------------------------------
