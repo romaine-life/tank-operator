@@ -34,9 +34,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 
 # Go — projects whose dev-loop builds a Go server (ambience).
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
-        | tar -C /usr/local -xz \
-    && ln -s /usr/local/go/bin/go /usr/local/bin/go \
-    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+        | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # claude-code CLI + playwright npm package. The base image preinstalls

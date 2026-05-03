@@ -29,7 +29,9 @@ log = logging.getLogger(__name__)
 # but the kube-apiserver URL-encodes every byte of the exec command into
 # ?command=... and rejects oversized request lines with HTTP 400; the
 # script grew past that limit and broke reconnects.
-EXEC_COMMAND = ["bash", "-l", "/opt/tank/bootstrap.sh"]
+# Do not use a login shell here: Alpine's /etc/profile resets PATH to the
+# distro default and masks tool paths exported by the image, including Go.
+EXEC_COMMAND = ["bash", "/opt/tank/bootstrap.sh"]
 
 # Session pods have two containers (mcp-auth-proxy sidecar + claude). The
 # apiserver requires container= when more than one is present, otherwise
