@@ -123,8 +123,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 COPY claude-container/tank-bootstrap.sh /opt/tank/bootstrap.sh
 RUN chmod +x /opt/tank/bootstrap.sh
 
-# Skill-sync helper: tank-bootstrap.sh runs this on every session boot
-# to pull SKILL.md files from external repos via the github MCP.
+# Skill-sync helper: tank-bootstrap.sh runs this on every session boot.
+# Repo-bundled skills provide a no-network fallback; the helper refreshes
+# them from GitHub via the MCP sidecar when it is reachable.
+COPY claude-container/skills /opt/claude-container/skills
 COPY claude-container/fetch-skills.py /opt/tank/fetch-skills.py
 RUN chmod +x /opt/tank/fetch-skills.py
 
