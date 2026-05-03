@@ -158,6 +158,10 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 1ms !important;
@@ -555,6 +559,11 @@ button:disabled {
   transition: background 120ms ease, box-shadow 120ms ease;
 }
 
+.sessions li.is-closing {
+  cursor: default;
+  opacity: 0.72;
+}
+
 .session-row-top {
   display: flex;
   align-items: center;
@@ -597,6 +606,7 @@ button:disabled {
 
 .sessions li.is-open .session-open { color: var(--text-primary); }
 .session-open:hover:not(:disabled) { color: var(--text-primary); }
+.session-open:disabled { cursor: default; color: var(--text-faint); }
 
 .session-id {
   flex: 1;
@@ -618,6 +628,20 @@ button:disabled {
 .session-delete:hover:not(:disabled) {
   background: var(--gray-850);
   color: var(--text-primary);
+}
+
+.session-delete:disabled {
+  cursor: default;
+  color: var(--text-muted);
+}
+
+.session-delete-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
 }
 
 .sessions-empty {
@@ -676,6 +700,20 @@ button:disabled {
   width: 12px;
   height: 12px;
   display: block;
+}
+
+.session-closing-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  padding: 0.05rem var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--status-pending-bg);
+  color: var(--status-pending-fg);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
 }
 
 .mode-subscription        { background: var(--mode-subscription-bg); color: var(--mode-subscription-fg); }

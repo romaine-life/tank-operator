@@ -384,6 +384,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+  const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   // Sessions whose Terminal stays mounted (so the WS keeps draining and
   // scrollback survives switching). A session is mounted the first time it
   // becomes active and unmounts only on deletion. Sessions you haven't
@@ -486,27 +487,38 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    const hasPending = sessions.some((s) => s.status !== "Active");
+    const hasPending = sessions.some((s) => s.status !== "Active") || closingIds.size > 0;
     if (!hasPending) return;
     const t = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(t);
-  }, [sessions, user]);
+  }, [sessions, user, closingIds]);
 
   useEffect(() => {
-    if (active && !sessions.some((s) => s.id === active)) {
-      setActive(sessions[sessions.length - 1]?.id ?? null);
+    if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
+      const selectable = sessions.filter((s) => !closingIds.has(s.id));
+      setActive(selectable[selectable.length - 1]?.id ?? null);
     }
-    // Drop any mounted ids that no longer exist in the sessions list.
+    // Drop any mounted ids that no longer exist or are being deleted.
     setMounted((prev) => {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((id) => {
-        if (sessions.some((s) => s.id === id)) next.add(id);
+        if (sessions.some((s) => s.id === id) && !closingIds.has(id)) next.add(id);
         else changed = true;
       });
       return changed ? next : prev;
     });
-  }, [sessions, active]);
+    setClosingIds((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (existing.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [sessions, active, closingIds]);
 
   useEffect(() => {
     const target = initialSessionId.current;
@@ -592,17 +604,36 @@ export function App() {
   }
 
   async function deleteSession(id: string) {
+    if (closingIds.has(id)) return;
+    setError(null);
+    setClosingIds((prev) => new Set(prev).add(id));
+    setMounted((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    terminalRefs.current.delete(id);
+    setEditingId((prev) => (prev === id ? null : prev));
+    setActive((prev) => {
+      if (prev !== id) return prev;
+      const idx = sessions.findIndex((s) => s.id === id);
+      const selectable = sessions.filter((s) => s.id !== id && !closingIds.has(s.id));
+      if (selectable.length === 0) return null;
+      return sessions[idx + 1]?.id && !closingIds.has(sessions[idx + 1].id)
+        ? sessions[idx + 1].id
+        : selectable[selectable.length - 1].id;
+    });
     try {
       const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-      if (active === id) {
-        setActive((prev) => {
-          const remaining = sessions.filter((s) => s.id !== id);
-          return prev === id ? (remaining[remaining.length - 1]?.id ?? null) : prev;
-        });
-      }
       await refresh();
     } catch (e) {
+      setClosingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       setError(String(e));
     }
   }
@@ -743,11 +774,12 @@ export function App() {
               const isActive = active === s.id;
               const isEditing = editingId === s.id;
               const isLive = s.status === "Active";
+              const isClosing = closingIds.has(s.id);
               return (
                 <li
                   key={s.id}
-                  className={isActive ? "is-open" : ""}
-                  onClick={isEditing ? undefined : (e) => openSession(s.id, e)}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}`}
+                  onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
                 >
                   <div className="session-row-top">
                     <span
@@ -775,9 +807,17 @@ export function App() {
                         className="session-open"
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (isClosing) return;
                           startEditing(s.id, s.name);
                         }}
-                        title={s.name ? `${s.id} — click to rename` : "click to rename"}
+                        disabled={isClosing}
+                        title={
+                          isClosing
+                            ? "session is closing"
+                            : s.name
+                              ? `${s.id} — click to rename`
+                              : "click to rename"
+                        }
                       >
                         <span className="session-id">{s.name ?? s.id}</span>
                       </button>
@@ -785,18 +825,21 @@ export function App() {
                     <button
                       className="session-delete"
                       onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                      title="delete session"
-                      aria-label="delete session"
+                      disabled={isClosing}
+                      title={isClosing ? "closing session" : "delete session"}
+                      aria-label={isClosing ? "closing session" : "delete session"}
                     >
-                      <IconClose />
+                      {isClosing ? <span className="session-delete-spinner" /> : <IconClose />}
                     </button>
                   </div>
                   <div className="session-row-bottom">
                     <ModeChip mode={s.mode} />
+                    {isClosing && <span className="session-closing-chip">closing</span>}
                     {s.mode === "subscription" && isLive && (
                       <button
                         className="session-action session-remote is-icon"
                         onClick={(e) => { e.stopPropagation(); startRemoteControl(s.id); }}
+                        disabled={isClosing}
                         title="type /remote-control into this session — claude will print a https://claude.ai/code/session_… URL you can open"
                         aria-label="open remote control link"
                       >
@@ -807,7 +850,7 @@ export function App() {
                       <button
                         className="session-action"
                         onClick={(e) => { e.stopPropagation(); saveCredentials(s.id); }}
-                        disabled={busy || !isLive}
+                        disabled={busy || !isLive || isClosing}
                         title={
                           s.mode === "codex_config"
                             ? "capture ~/.codex/auth.json from this pod and write it to KV"
@@ -820,7 +863,7 @@ export function App() {
                     <button
                       className="session-action is-icon"
                       onClick={(e) => { e.stopPropagation(); clearSession(s.id); }}
-                      disabled={busy}
+                      disabled={busy || isClosing}
                       title="delete this pod and replace it with a fresh one"
                       aria-label="refresh session pod"
                     >
