@@ -144,8 +144,14 @@ if [ "${TANK_SESSION_MODE}" = "codex_subscription" ]; then
        else "" end)
     ' /workspace/.mcp.json)
   fi
+  # approval_policy=never + sandbox_mode=danger-full-access mirrors the
+  # bypassPermissions+skipDangerousModePermissionPrompt we set for claude:
+  # the pod is the sandbox, so codex itself doesn't need one. Symmetric
+  # rationale to ~/.claude/settings.json's defaultMode=bypassPermissions.
   cat > $HOME/.codex/config.toml <<EOF
 cli_auth_credentials_store = "file"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 
 [projects."/workspace"]
 trust_level = "trusted"
