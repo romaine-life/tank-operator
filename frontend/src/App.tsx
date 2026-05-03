@@ -80,6 +80,66 @@ const MODE_ORDER: SessionMode[] = [
   "codex_config",
 ];
 
+const DEMO_SESSIONS: Session[] = [
+  {
+    id: "repo-triage",
+    pod_name: "tank-demo-repo-triage",
+    owner: "preview",
+    status: "Active",
+    mode: "codex_subscription",
+    name: "repo triage",
+  },
+  {
+    id: "infra-check",
+    pod_name: "tank-demo-infra-check",
+    owner: "preview",
+    status: "Active",
+    mode: "subscription",
+    name: "infra check",
+  },
+  {
+    id: "credential-setup",
+    pod_name: "tank-demo-credential-setup",
+    owner: "preview",
+    status: "Pending",
+    mode: "codex_config",
+    name: "credential setup",
+  },
+];
+
+const DEMO_TERMINAL_LINES: Record<string, string[]> = {
+  "repo-triage": [
+    "$ tank-operator preview",
+    "Welcome. This is the app shell you get after signing in.",
+    "",
+    "Sessions run in short-lived pods with your selected agent and repo context.",
+    "Use the left rail to switch sessions, rename them, refresh pods, or open remote control.",
+    "",
+    "Preview data:",
+    "  - repo triage: active Codex session",
+    "  - infra check: active Claude session",
+    "  - credential setup: config pod waiting for auth",
+    "",
+    "When you sign in, tank-operator will load your real sessions here.",
+  ],
+  "infra-check": [
+    "$ kubectl get pods -n tank-operator",
+    "NAME                                  READY   STATUS",
+    "tank-demo-infra-check                 1/1     Running",
+    "tank-demo-repo-triage                  1/1     Running",
+    "tank-demo-credential-setup             0/1     Pending",
+    "",
+    "This preview is static, but the real terminal streams from the selected pod.",
+  ],
+  "credential-setup": [
+    "$ codex login --device-auth",
+    "Waiting for device authorization...",
+    "",
+    "Config sessions are used to seed credentials for future agent sessions.",
+    "After sign-in, the save action writes harvested credentials to the backend KV.",
+  ],
+};
+
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
@@ -447,6 +507,128 @@ function OnboardingWall({
           </button>
         </p>
       </div>
+    </div>
+  );
+}
+
+function DemoLanding() {
+  const [activeDemoSession, setActiveDemoSession] = useState(DEMO_SESSIONS[0].id);
+  const selected = DEMO_SESSIONS.find((s) => s.id === activeDemoSession) ?? DEMO_SESSIONS[0];
+  const terminalLines = DEMO_TERMINAL_LINES[selected.id] ?? DEMO_TERMINAL_LINES[DEMO_SESSIONS[0].id];
+
+  return (
+    <div className="shell shell-demo">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <h1>tank-operator</h1>
+        </div>
+
+        <div className="sidebar-section">
+          <div className="new-row new-row-launcher">
+            <button
+              className="new-row-provider-toggle"
+              onClick={() => { startLogin(); }}
+              aria-label="choose provider"
+              title="sign in to choose a provider"
+            >
+              <span className="new-row-provider-slot">
+                <ProviderIcon provider="openai" className="new-row-provider-icon" />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
+            </button>
+            <div className="new-row-action-group" role="group" aria-label="preview session actions">
+              <button
+                className="new-row-action"
+                onClick={() => { startLogin(); }}
+                aria-label="Start session"
+                title="sign in to start a real session"
+              >
+                <span className="row-icon"><IconPlus /></span>
+              </button>
+              <button
+                className="new-row-action"
+                onClick={() => { startLogin(); }}
+                aria-label="Start API key session"
+                title="sign in to start a real session"
+              >
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button
+                className="new-row-action"
+                onClick={() => { startLogin(); }}
+                aria-label="Start config session"
+                title="sign in to start a real session"
+              >
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="sidebar-list">
+          <div className="sidebar-section-label">Preview sessions</div>
+          <ul className="sessions">
+            {DEMO_SESSIONS.map((s) => {
+              const isActive = s.id === selected.id;
+              const statusDotClass = s.mode.startsWith("codex")
+                ? "status-dot status-codex-waiting"
+                : `status-dot status-${s.status.toLowerCase()}`;
+              return (
+                <li
+                  key={s.id}
+                  className={isActive ? "is-open" : ""}
+                  onClick={() => setActiveDemoSession(s.id)}
+                >
+                  <div className="session-row-top">
+                    <span
+                      className={statusDotClass}
+                      title={s.status}
+                      aria-label={`status: ${s.status}`}
+                    />
+                    <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
+                      <span className="session-id">{s.name ?? s.id}</span>
+                    </button>
+                  </div>
+                  <div className="session-row-bottom">
+                    <ModeChip mode={s.mode} />
+                    {s.mode === "subscription" && (
+                      <span className="session-action session-remote is-icon" title="remote control">
+                        <IconExternal />
+                      </span>
+                    )}
+                    {CONFIG_MODES.has(s.mode) && (
+                      <span className="session-action">save</span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        <div className="sidebar-footer">
+          <button className="profile demo-profile" onClick={() => { startLogin(); }}>
+            <span className="avatar" aria-hidden="true">TO</span>
+            <span className="profile-text">
+              <span className="profile-name">Preview mode</span>
+              <span className="demo-profile-sub">sign in for real pods</span>
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      <main className="workspace demo-workspace">
+        <div className="demo-terminal" role="img" aria-label="tank-operator terminal preview">
+          <div className="demo-terminal-titlebar">
+            <span>{selected.name ?? selected.id}</span>
+            <ModeChip mode={selected.mode} />
+          </div>
+          <pre className="demo-terminal-screen">
+            {terminalLines.join("\n")}
+            <span className="demo-cursor" aria-hidden="true"> </span>
+          </pre>
+        </div>
+      </main>
     </div>
   );
 }
@@ -821,11 +1003,7 @@ export function App() {
   }
 
   if (!user) {
-    return (
-      <div className="boot-state">
-        <button className="btn-primary" onClick={() => { startLogin(); }}>Sign in</button>
-      </div>
-    );
+    return <DemoLanding />;
   }
 
   if (user.installation_id == null) {

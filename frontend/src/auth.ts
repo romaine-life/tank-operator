@@ -67,9 +67,26 @@ export function clearStoredToken(): void {
  *  for that. Auto-redirecting on boot would silently re-SSO users who just clicked
  *  sign out (their Microsoft account session outlives our local logout). */
 export async function bootstrapAuth(): Promise<SessionUser | null> {
-  const client = await getMsal();
+  // 1. Do we already have a backend session?
+  const existing = getStoredToken();
+  if (existing) {
+    const res = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${existing}` },
+    });
+    if (res.ok) return res.json();
+    clearStoredToken();
+  }
 
-  // 1. Did we just come back from Entra?
+  // 2. Did we just come back from Entra? If config is unavailable in a
+  // frontend-only dev server, still let the unauthenticated preview render.
+  let client: PublicClientApplication;
+  try {
+    client = await getMsal();
+  } catch (e) {
+    console.info("auth config unavailable; rendering unauthenticated preview", e);
+    return null;
+  }
+
   let redirectResult: AuthenticationResult | null = null;
   try {
     redirectResult = await client.handleRedirectPromise();
@@ -78,16 +95,6 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
   }
   if (redirectResult?.idToken) {
     return exchange(redirectResult.idToken);
-  }
-
-  // 2. Do we already have a backend session?
-  const existing = getStoredToken();
-  if (existing) {
-    const res = await fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${existing}` },
-    });
-    if (res.ok) return res.json();
-    clearStoredToken();
   }
 
   // 3. Not signed in. Wait for an explicit click to call startLogin().
