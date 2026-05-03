@@ -22,18 +22,18 @@ interface Session {
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
-  api_key: "API key",
-  subscription: "Subscription",
-  config: "Config sub",
-  codex_subscription: "Codex sub",
+  api_key: "Claude API key",
+  subscription: "Claude",
+  config: "Claude config",
+  codex_subscription: "Codex",
   codex_config: "Codex config",
 };
 
-// Compact labels for the inline session-row chip — "Subscription" is too wide
-// to coexist with the action pills. Falls back to MODE_LABELS elsewhere.
+// Compact labels for the inline session-row chip. Falls back to MODE_LABELS
+// elsewhere.
 const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   api_key: "api",
-  subscription: "sub",
+  subscription: "claude",
   config: "config",
   codex_subscription: "codex",
   codex_config: "codex-cfg",
@@ -44,12 +44,20 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, "anthropic" | "openai">> = {
   codex_subscription: "openai",
 };
 
+const MODE_MENU_ICONS: Record<SessionMode, "anthropic" | "openai"> = {
+  api_key: "anthropic",
+  subscription: "anthropic",
+  config: "anthropic",
+  codex_subscription: "openai",
+  codex_config: "openai",
+};
+
 const MODE_HINTS: Record<SessionMode, string> = {
-  subscription: "Default — uses claude.ai login",
-  api_key: "Billed via API",
+  subscription: "Uses claude.ai login",
+  api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
-  codex_subscription: "Codex CLI · uses ChatGPT login from KV",
-  codex_config: "codex login --device-auth · seeds KV for codex sub",
+  codex_subscription: "Uses ChatGPT login from KV",
+  codex_config: "codex login --device-auth · seeds KV for Codex",
 };
 
 const MODE_ORDER: SessionMode[] = [
@@ -544,8 +552,8 @@ export function App() {
                 {MODE_ORDER.map((m) => (
                   <li key={m}>
                     <button onClick={() => createSession(m)} disabled={busy}>
+                      <ProviderIcon provider={MODE_MENU_ICONS[m]} className="dropdown-provider-icon" />
                       <span className="dropdown-title">{MODE_LABELS[m]}</span>
-                      <span className="dropdown-hint">{MODE_HINTS[m]}</span>
                     </button>
                   </li>
                 ))}
