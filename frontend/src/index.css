@@ -1415,6 +1415,7 @@ button:disabled {
   outline: none;
 }
 .session-name-input:focus { border-color: var(--accent); }
+.session-name-input::placeholder { color: var(--text-faint); opacity: 1; }
 
 .terminals {
   flex: 1;
