@@ -245,17 +245,21 @@ export function StyleguideView() {
             Appears under the launch row when the chevron toggles. Default
             modes are provider-only; setup modes add the wrench.
           </p>
-          <div style={{ position: "relative", maxWidth: 280 }}>
+          <div className={`new-row${dropdownOpen ? " is-open" : ""}`} data-menu="mode" style={{ maxWidth: 280 }}>
+            <button className="new-row-main" type="button" aria-label="start default session">
+              <span className="row-icon">+</span>
+              <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
+            </button>
             <button
-              className="btn-secondary"
+              className="new-row-toggle"
               type="button"
+              aria-label="choose auth mode"
               onClick={() => setDropdownOpen((v) => !v)}
-              style={{ width: "100%", justifyContent: "flex-start" }}
             >
-              + <ProviderIcon provider="anthropic" className="new-row-provider-icon" /> ▾
+              ▾
             </button>
             {dropdownOpen && (
-              <ul className="dropdown dropdown-mode" role="menu" style={{ position: "static", marginTop: 8 }}>
+              <ul className="dropdown dropdown-mode" role="menu">
                 <li>
                   <button type="button" aria-label="Claude">
                     <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />

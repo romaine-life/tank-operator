@@ -562,7 +562,7 @@ export function App() {
         </div>
 
         <div className="sidebar-section">
-          <div className="new-row" data-menu="mode">
+          <div className={`new-row${modeMenuOpen ? " is-open" : ""}`} data-menu="mode">
             <button
               className="new-row-main"
               onClick={() => createSession()}
