@@ -835,6 +835,23 @@ button:disabled {
   opacity: 0.72;
 }
 
+.sessions li[draggable="true"] {
+  cursor: grab;
+}
+
+.sessions li[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.sessions li.is-dragging {
+  opacity: 0.54;
+}
+
+.sessions li.is-drag-over:not(.is-closing) {
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--accent-fg), inset 3px 0 0 var(--accent-fg);
+}
+
 .session-row-top {
   display: flex;
   align-items: center;
