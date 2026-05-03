@@ -11,6 +11,7 @@ type SessionMode =
   | "codex_subscription"
   | "codex_config";
 type DefaultSessionMode = Extract<SessionMode, "subscription" | "codex_subscription">;
+type Provider = "anthropic" | "openai";
 
 interface Session {
   id: string;
@@ -45,12 +46,22 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, "anthropic" | "openai">> = {
   codex_subscription: "openai",
 };
 
-const MODE_MENU_ICONS: Record<SessionMode, "anthropic" | "openai"> = {
+const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   api_key: "anthropic",
   subscription: "anthropic",
   config: "anthropic",
   codex_subscription: "openai",
   codex_config: "openai",
+};
+
+const PROVIDER_DEFAULT_MODES: Record<Provider, DefaultSessionMode> = {
+  anthropic: "subscription",
+  openai: "codex_subscription",
+};
+
+const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
+  anthropic: "config",
+  openai: "codex_config",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -241,15 +252,6 @@ function IconKey({ className }: { className?: string }) {
   );
 }
 
-function IconChevron() {
-  return (
-    <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="4,6 8,10 12,6" />
-    </svg>
-  );
-}
-
 function IconKebab() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
@@ -310,20 +312,6 @@ function ModeChip({ mode }: { mode: SessionMode }) {
         label
       )}
     </span>
-  );
-}
-
-function ModeMenuItem({ mode }: { mode: SessionMode }) {
-  const isConfig = mode === "config" || mode === "codex_config";
-  const isApiKey = mode === "api_key";
-
-  return (
-    <>
-      <ProviderIcon provider={MODE_MENU_ICONS[mode]} className="dropdown-provider-icon" />
-      {isConfig && <IconWrench className="dropdown-wrench-icon" />}
-      {isApiKey && <IconKey className="dropdown-key-icon" />}
-      <span className="sr-only">{MODE_LABELS[mode]}</span>
-    </>
   );
 }
 
@@ -567,6 +555,13 @@ export function App() {
     }
   }
 
+  function setDefaultProvider(provider: Provider) {
+    const mode = PROVIDER_DEFAULT_MODES[provider];
+    setDefaultSessionMode(mode);
+    writeDefaultSessionMode(mode);
+    setModeMenuOpen(false);
+  }
+
   async function renameSession(id: string, nextName: string | null) {
     try {
       const res = await authedFetch(`/api/sessions/${id}`, {
@@ -716,6 +711,9 @@ export function App() {
     return <OnboardingWall user={user} onLogout={logout} />;
   }
 
+  const selectedProvider = MODE_MENU_ICONS[defaultSessionMode];
+  const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
+
   return (
     <div className="shell">
       <aside className="sidebar">
@@ -724,41 +722,62 @@ export function App() {
         </div>
 
         <div className="sidebar-section">
-          <div className={`new-row${modeMenuOpen ? " is-open" : ""}`} data-menu="mode">
+          <div className="new-row new-row-launcher" data-menu="mode">
             <button
-              className="new-row-main"
-              onClick={() => createSession()}
+              className={`new-row-provider-toggle${modeMenuOpen ? " is-open" : ""}`}
+              onClick={() => setModeMenuOpen((v) => !v)}
               disabled={busy}
-              aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
+              aria-label="choose provider"
+              aria-expanded={modeMenuOpen}
             >
-              <span className="row-icon"><IconPlus /></span>
               <ProviderIcon
-                provider={MODE_MENU_ICONS[defaultSessionMode]}
+                provider={selectedProvider}
                 className="new-row-provider-icon"
               />
             </button>
             <button
-              className="new-row-toggle"
-              onClick={() => setModeMenuOpen((v) => !v)}
+              className="new-row-action"
+              onClick={() => createSession(defaultSessionMode)}
               disabled={busy}
-              aria-label="choose auth mode"
-              aria-expanded={modeMenuOpen}
+              aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
             >
-              <IconChevron />
+              <span className="row-icon"><IconPlus /></span>
+            </button>
+            <button
+              className="new-row-action"
+              onClick={() => createSession("api_key")}
+              disabled={busy}
+              aria-label="Start API key session"
+            >
+              <IconKey className="new-row-action-icon" />
+            </button>
+            <button
+              className="new-row-action"
+              onClick={() => createSession(configMode)}
+              disabled={busy}
+              aria-label={`Start ${MODE_LABELS[configMode]} session`}
+            >
+              <IconWrench className="new-row-action-icon" />
             </button>
             {modeMenuOpen && (
-              <ul className="dropdown dropdown-mode" role="menu">
-                {MODE_ORDER.map((m) => (
-                  <li key={m}>
+              <ul className="dropdown dropdown-provider" role="menu">
+                {(["anthropic", "openai"] as Provider[]).map((provider) => {
+                  const mode = PROVIDER_DEFAULT_MODES[provider];
+                  return (
+                    <li key={provider}>
                     <button
-                      onClick={() => createSession(m)}
+                      onClick={() => setDefaultProvider(provider)}
                       disabled={busy}
-                      aria-label={MODE_LABELS[m]}
+                      aria-label={MODE_LABELS[mode]}
                     >
-                      <ModeMenuItem mode={m} />
+                      <ProviderIcon
+                        provider={provider}
+                        className="dropdown-provider-icon"
+                      />
                     </button>
                   </li>
-                ))}
+                  );
+                })}
               </ul>
             )}
           </div>
