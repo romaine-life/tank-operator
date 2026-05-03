@@ -99,43 +99,57 @@ const DEMO_BASE_SESSIONS: Session[] = [
   },
 ];
 
+type AnsiStyle = {
+  bold?: boolean;
+  dim?: boolean;
+  inverse?: boolean;
+  fg?: number;
+  bg?: number;
+};
+
+type AnsiSegment = {
+  text: string;
+  style: AnsiStyle;
+};
+
 const DEMO_CLAUDE_LINES = [
-  " ▐▛███▜▌   Claude Code v2.1.126",
-  "▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max",
-  "  ▘▘ ▝▝    /workspace",
+  "\x1b[38;5;174m ▐\x1b[48;5;16m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mClaude Code\x1b[0m \x1b[38;5;246mv2.1.126\x1b[39m",
+  "\x1b[38;5;174m▝▜\x1b[48;5;16m█████\x1b[49m▛▘\x1b[39m  \x1b[38;5;246mOpus 4.7 (1M context) · Claude Max\x1b[39m",
+  "\x1b[38;5;174m  ▘▘ ▝▝  \x1b[39m  \x1b[38;5;246m/workspace\x1b[39m",
   "",
-  "  Welcome to Opus 4.7 xhigh! · /effort to tune speed vs. intelligence",
+  "  \x1b[1m\x1b[38;5;174mWelcome to Opus 4.7 xhigh!\x1b[0m\x1b[38;5;246m · /effort to tune speed vs. intelligence\x1b[39m",
   "",
   "",
   "",
-  "────────────────────────────────────────────────────────────────────────────────────────────────────",
-  "❯ ",
-  "────────────────────────────────────────────────────────────────────────────────────────────────────",
-  "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+  "                                                                                  \x1b[38;5;246m◉ xhigh · /effort\x1b[39m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "❯\u00a0\x1b[7m \x1b[0m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "  \x1b[38;5;211m⏵⏵ bypass permissions on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m",
 ];
 
 const DEMO_CODEX_LINES = [
-  "› Implement {feature}",
+  "\x1b[1m›\x1b[0m \x1b[2mSummarize recent commits\x1b[0m",
   "",
-  "  gpt-5.5 default · /workspace",
+  "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
   "",
-  "╭─────────────────────────────────────────╮",
-  "│ >_ OpenAI Codex (v0.128.0)              │",
-  "│                                         │",
-  "│ model:       gpt-5.5   /model to change │",
-  "│ directory:   /workspace                 │",
-  "│ permissions: YOLO mode                  │",
-  "╰─────────────────────────────────────────╯",
+  "\x1b[2m╭─────────────────────────────────────────╮\x1b[0m",
+  "\x1b[2m│ >_ \x1b[0;1mOpenAI Codex\x1b[0;2m (v0.128.0)              │\x1b[0m",
+  "\x1b[2m│                                         │\x1b[0m",
+  "\x1b[2m│ model:       \x1b[0mgpt-5.5\x1b[2m   \x1b[0m\x1b[38;5;6m/model\x1b[2m\x1b[39m to change │\x1b[0m",
+  "\x1b[2m│ directory:   \x1b[0m/workspace\x1b[2m                 │\x1b[0m",
+  "\x1b[2m│ permissions: \x1b[0;1m\x1b[38;5;5mYOLO mode\x1b[0;2m                  │\x1b[0m",
+  "\x1b[2m╰─────────────────────────────────────────╯\x1b[0m",
   "",
-  "  Tip: GPT-5.5 is now available in Codex. It's our strongest agentic coding model yet, built to reason",
+  "  \x1b[1mTip:\x1b[0m GPT-5.5 is now available in Codex. It's our strongest agentic coding model yet, built to reason",
   "  through large codebases, check assumptions with tools, and keep going until the work is done.",
   "",
   "  Learn more: https://openai.com/index/introducing-gpt-5-5/",
   "",
   "",
-  "› Implement {feature}",
+  "\x1b[1m›\x1b[0m \x1b[2mSummarize recent commits\x1b[0m",
   "",
-  "  gpt-5.5 default · /workspace",
+  "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
 ];
 
 function demoTerminalLines(session: Session): string[] {
@@ -148,6 +162,77 @@ function demoTerminalLines(session: Session): string[] {
     "",
     "Preview session only. The real app creates a Kubernetes pod here.",
   ];
+}
+
+function ansiColorClass(code: number | undefined, prefix: "fg" | "bg"): string | null {
+  if (code == null) return null;
+  return `ansi-${prefix}-${code}`;
+}
+
+function applyAnsiCodes(style: AnsiStyle, rawCodes: string): AnsiStyle {
+  const codes = rawCodes === "" ? [0] : rawCodes.split(";").map((code) => Number(code || "0"));
+  let next = { ...style };
+  for (let i = 0; i < codes.length; i += 1) {
+    const code = codes[i];
+    if (code === 0) next = {};
+    else if (code === 1) next.bold = true;
+    else if (code === 2) next.dim = true;
+    else if (code === 7) next.inverse = true;
+    else if (code === 22) {
+      next.bold = false;
+      next.dim = false;
+    } else if (code === 27) next.inverse = false;
+    else if (code === 39) delete next.fg;
+    else if (code === 49) delete next.bg;
+    else if (code === 38 && codes[i + 1] === 5) {
+      next.fg = codes[i + 2];
+      i += 2;
+    } else if (code === 48 && codes[i + 1] === 5) {
+      next.bg = codes[i + 2];
+      i += 2;
+    }
+  }
+  return next;
+}
+
+function ansiSegments(line: string): AnsiSegment[] {
+  const segments: AnsiSegment[] = [];
+  const re = /\x1b\[([0-9;]*)m/g;
+  let style: AnsiStyle = {};
+  let pos = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line)) != null) {
+    if (match.index > pos) {
+      segments.push({ text: line.slice(pos, match.index), style: { ...style } });
+    }
+    style = applyAnsiCodes(style, match[1]);
+    pos = re.lastIndex;
+  }
+  if (pos < line.length) {
+    segments.push({ text: line.slice(pos), style: { ...style } });
+  }
+  return segments.length > 0 ? segments : [{ text: "\u00a0", style }];
+}
+
+function AnsiLine({ line }: { line: string }) {
+  return (
+    <div className="demo-terminal-line">
+      {ansiSegments(line).map((segment, index) => {
+        const classes = [
+          segment.style.bold ? "ansi-bold" : "",
+          segment.style.dim ? "ansi-dim" : "",
+          segment.style.inverse ? "ansi-inverse" : "",
+          ansiColorClass(segment.style.fg, "fg") ?? "",
+          ansiColorClass(segment.style.bg, "bg") ?? "",
+        ].filter(Boolean).join(" ");
+        return (
+          <span key={index} className={classes || undefined}>
+            {segment.text}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
@@ -660,15 +745,16 @@ function DemoLanding() {
       </aside>
 
       <main className="workspace demo-workspace">
-        <div className="demo-terminal" role="img" aria-label="tank-operator terminal preview">
-          <div className="demo-terminal-titlebar">
-            <span>{selected?.name ?? "tank-operator"}</span>
-            {selected && <ModeChip mode={selected.mode} />}
+        <div
+          className={`demo-terminal${selected?.mode === "codex_subscription" ? " is-codex" : " is-claude"}`}
+          role="img"
+          aria-label="tank-operator terminal preview"
+        >
+          <div className="demo-terminal-screen">
+            {terminalLines.map((line, index) => (
+              <AnsiLine key={index} line={line} />
+            ))}
           </div>
-          <pre className="demo-terminal-screen">
-            {terminalLines.join("\n")}
-            <span className="demo-cursor" aria-hidden="true"> </span>
-          </pre>
         </div>
       </main>
     </div>
