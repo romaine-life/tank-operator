@@ -713,6 +713,18 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.setting-test-button {
+  justify-content: center;
+  border: 1px solid var(--gray-700) !important;
+  background: var(--bg-sidebar-hover) !important;
+  color: var(--text-primary) !important;
+  padding: var(--space-2) var(--space-3) !important;
+}
+
+.setting-test-button:disabled {
+  opacity: 0.45;
+}
+
 .dropdown-mode button {
   flex-direction: row;
   align-items: center;

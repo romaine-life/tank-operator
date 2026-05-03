@@ -72,6 +72,10 @@ const completionSound = (() => {
   return { play, unlock };
 })();
 
+export function playCompletionSound(volume: number): void {
+  completionSound.play(volume);
+}
+
 export type AgentActivity = "working" | "waiting";
 
 interface Props {
