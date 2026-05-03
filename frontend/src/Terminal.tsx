@@ -161,6 +161,28 @@ function paletteProbeLine(): string {
   ].join("");
 }
 
+function reportTerminalDebug(
+  event: string,
+  sessionId: string,
+  mode: string,
+  payload: Record<string, unknown>,
+): void {
+  const body = JSON.stringify({
+    event,
+    session_id: sessionId,
+    mode,
+    payload,
+  });
+  const blob = new Blob([body], { type: "application/json" });
+  if (navigator.sendBeacon?.("/api/debug/terminal", blob)) return;
+  void fetch("/api/debug/terminal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   {
     sessionId,
@@ -250,16 +272,17 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     });
     term.open(containerRef.current);
     termRef.current = term;
+    const palette = Object.fromEntries(
+      Object.keys(ANSI_256_OVERRIDES).map((code) => [
+        code,
+        {
+          expected: ANSI_256_OVERRIDES[Number(code)],
+          actual: readXtermAnsiColor(term, Number(code)),
+        },
+      ]),
+    );
+    reportTerminalDebug("palette-audit", sessionId, mode, { palette });
     if (terminalDebugEnabled()) {
-      const palette = Object.fromEntries(
-        Object.keys(ANSI_256_OVERRIDES).map((code) => [
-          code,
-          {
-            expected: ANSI_256_OVERRIDES[Number(code)],
-            actual: readXtermAnsiColor(term, Number(code)),
-          },
-        ]),
-      );
       console.info("[tank-terminal] palette audit", {
         sessionId,
         mode,
@@ -448,6 +471,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
           const colors = ansiColorCodes(text);
           if (colors.length > 0) {
             debugPayloadLogs += 1;
+            reportTerminalDebug("incoming-ansi-colors", sessionId, mode, { colors });
             console.info("[tank-terminal] incoming ansi colors", {
               sessionId,
               mode,

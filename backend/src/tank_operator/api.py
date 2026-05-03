@@ -1,7 +1,8 @@
 import os
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -35,6 +36,7 @@ from .sessions import (
 
 sessions = SessionManager()
 profiles = ProfileStore()
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -58,6 +60,13 @@ class LoginBody(BaseModel):
 class LoginResponse(BaseModel):
     token: str
     user: dict[str, str]
+
+
+class TerminalDebugBody(BaseModel):
+    event: str
+    session_id: str | None = None
+    mode: str | None = None
+    payload: dict[str, Any] = {}
 
 
 @app.get("/healthz")
@@ -130,6 +139,22 @@ async def me(user: User = Depends(current_user)) -> dict:
         "github_login": profile.github_login,
         "installation_id": profile.installation_id,
     }
+
+
+@app.post("/api/debug/terminal")
+async def terminal_debug(
+    body: TerminalDebugBody,
+    user: User = Depends(current_user),
+) -> dict[str, str]:
+    log.info(
+        "terminal debug event=%s user=%s session=%s mode=%s payload=%s",
+        body.event,
+        user.email,
+        body.session_id,
+        body.mode,
+        body.payload,
+    )
+    return {"status": "ok"}
 
 
 # ----------------------------------------------------------------------------
