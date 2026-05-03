@@ -758,30 +758,32 @@ export function App() {
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
-            <button
-              className="new-row-action"
-              onClick={() => createSession(defaultSessionMode)}
-              disabled={busy}
-              aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
-            >
-              <span className="row-icon"><IconPlus /></span>
-            </button>
-            <button
-              className="new-row-action"
-              onClick={() => createSession("api_key")}
-              disabled={busy}
-              aria-label="Start API key session"
-            >
-              <IconKey className="new-row-action-icon" />
-            </button>
-            <button
-              className="new-row-action"
-              onClick={() => createSession(configMode)}
-              disabled={busy}
-              aria-label={`Start ${MODE_LABELS[configMode]} session`}
-            >
-              <IconWrench className="new-row-action-icon" />
-            </button>
+            <div className="new-row-action-group" role="group" aria-label="session actions">
+              <button
+                className="new-row-action"
+                onClick={() => createSession(defaultSessionMode)}
+                disabled={busy}
+                aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
+              >
+                <span className="row-icon"><IconPlus /></span>
+              </button>
+              <button
+                className="new-row-action"
+                onClick={() => createSession("api_key")}
+                disabled={busy}
+                aria-label="Start API key session"
+              >
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button
+                className="new-row-action"
+                onClick={() => createSession(configMode)}
+                disabled={busy}
+                aria-label={`Start ${MODE_LABELS[configMode]} session`}
+              >
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {(["anthropic", "openai"] as Provider[]).map((provider) => {
