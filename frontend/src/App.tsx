@@ -213,8 +213,7 @@ function IconWrench({ className }: { className?: string }) {
       focusable="false"
       aria-hidden="true"
     >
-      <path d="M14.7 6.3a4 4 0 0 0 5 5L10.5 20.5a2.1 2.1 0 0 1-3-3L16.7 8.3a4 4 0 0 0-2-2Z" />
-      <path d="M7.5 17.5 6 16" />
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9l-3.8 3.8Z" />
     </svg>
   );
 }
