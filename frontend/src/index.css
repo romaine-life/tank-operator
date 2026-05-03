@@ -795,17 +795,17 @@ button:disabled {
   padding-left: calc(6px + var(--space-2));
 }
 
-.sessions li:hover {
+.sessions li:not(.is-closing):hover {
   background: var(--bg-hover);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
 }
 
-.sessions li.is-open {
+.sessions li.is-open:not(.is-closing) {
   background: var(--bg-active);
   box-shadow: inset 2px 0 0 var(--accent-fg);
 }
 
-.sessions li.is-open:hover {
+.sessions li.is-open:not(.is-closing):hover {
   background: var(--bg-hover);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09), inset 2px 0 0 var(--accent-fg);
 }
@@ -825,7 +825,7 @@ button:disabled {
   cursor: text;
 }
 
-.sessions li.is-open .session-open { color: var(--text-primary); }
+.sessions li.is-open:not(.is-closing) .session-open { color: var(--text-primary); }
 .session-open:hover:not(:disabled) { color: var(--text-primary); }
 .session-open:disabled { cursor: default; color: var(--text-faint); }
 

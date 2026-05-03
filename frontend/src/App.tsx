@@ -846,10 +846,10 @@ export function App() {
           <ul className="sessions">
             {sessions.length === 0 && <li className="sessions-empty">no sessions</li>}
             {sessions.map((s) => {
-              const isActive = active === s.id;
               const isEditing = editingId === s.id;
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
+              const isActive = active === s.id && !isClosing;
               return (
                 <li
                   key={s.id}
