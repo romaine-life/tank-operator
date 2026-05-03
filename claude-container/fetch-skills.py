@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # fetch-skills.py — pull SKILL.md files from GitHub via the local
-# github MCP and lay them down in ~/.claude/skills/. Runs from
-# tank-bootstrap.sh on every session boot so skill updates land
+# github MCP and lay them down in the local agent skill directories.
+# Runs from tank-bootstrap.sh on every session boot so skill updates land
 # without rebuilding this image.
 #
 # Why MCP rather than `git clone`? The session pod has no GitHub auth
@@ -21,13 +21,23 @@ import urllib.error
 import urllib.request
 
 GITHUB_MCP_URL = "http://127.0.0.1:9992/"
-SKILLS_DIR = os.path.expanduser("~/.claude/skills")
+SKILL_DIRS = {
+    "claude": os.path.expanduser("~/.claude/skills"),
+    "codex": os.path.expanduser("~/.codex/skills"),
+}
 
-# Each entry: (owner, repo, path-in-repo, dest-skill-name).
-# The dest-skill-name is the directory under ~/.claude/skills/; claude
-# Code discovers SKILL.md inside it.
+# Each entry: (owner, repo, path-in-repo, dest-skill-name, targets).
+# The dest-skill-name is the directory under each target agent's skills
+# dir; the CLIs discover SKILL.md inside it.
 SKILLS = [
-    ("nelsong6", "tank-operator", "claude-container/skills/done/SKILL.md", "done"),
+    ("nelsong6", "tank-operator", "claude-container/skills/done/SKILL.md", "done", ("claude",)),
+    (
+        "nelsong6",
+        "tank-operator",
+        "claude-container/skills/rollout/SKILL.md",
+        "rollout",
+        ("claude", "codex"),
+    ),
 ]
 
 
@@ -86,11 +96,12 @@ def main():
         print(f"github MCP unreachable, skipping skill sync: {exc}", file=sys.stderr)
         return 0
 
-    os.makedirs(SKILLS_DIR, exist_ok=True)
+    for skills_dir in SKILL_DIRS.values():
+        os.makedirs(skills_dir, exist_ok=True)
 
     req_id = 2
     installed = []
-    for owner, name, path, skill_name in SKILLS:
+    for owner, name, path, skill_name, targets in SKILLS:
         try:
             _, body = post({
                 "jsonrpc": "2.0",
@@ -112,12 +123,14 @@ def main():
             print(f"skill {skill_name}: {err}", file=sys.stderr)
             continue
 
-        target_dir = os.path.join(SKILLS_DIR, skill_name)
-        os.makedirs(target_dir, exist_ok=True)
-        target_path = os.path.join(target_dir, "SKILL.md")
-        with open(target_path, "w") as f:
-            f.write(content)
-        installed.append(skill_name)
+        for target in targets:
+            skills_dir = SKILL_DIRS[target]
+            target_dir = os.path.join(skills_dir, skill_name)
+            os.makedirs(target_dir, exist_ok=True)
+            target_path = os.path.join(target_dir, "SKILL.md")
+            with open(target_path, "w") as f:
+                f.write(content)
+        installed.append(f"{skill_name} ({', '.join(targets)})")
 
     if installed:
         print(f"installed {len(installed)} skill(s): {', '.join(installed)}")

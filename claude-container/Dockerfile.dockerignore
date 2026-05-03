@@ -41,4 +41,5 @@ scripts
 .gitattributes
 .gitignore
 CLAUDE.md
+AGENTS.md
 README.md

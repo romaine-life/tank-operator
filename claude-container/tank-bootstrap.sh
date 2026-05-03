@@ -37,10 +37,11 @@
 #                                   fails so a transient MCP error does
 #                                   not block boot).
 #
-# The pod-environment primer (/workspace/CLAUDE.md) is baked into the
-# image at build time alongside /workspace/.mcp.json — see Dockerfile.
-# It loads as project-scope context for any cwd under /workspace,
-# including cloned repos.
+# Pod-environment primers are baked into the image at build time
+# alongside /workspace/.mcp.json — see Dockerfile. Claude Code reads
+# /workspace/CLAUDE.md; Codex reads /workspace/AGENTS.md. They load as
+# project-scope context for any cwd under /workspace, including cloned
+# repos.
 #
 # claude runs inside a named tmux session ("tank") so reconnects re-attach
 # the same PTY/scrollback. If claude exits we fall through to bash so the
