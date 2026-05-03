@@ -76,12 +76,30 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     });
     term.open(containerRef.current);
     termRef.current = term;
+    term.attachCustomKeyEventHandler((event) => {
+      if (!mode.startsWith("codex_") || event.type !== "keydown") return true;
+      if (event.altKey || event.ctrlKey || event.metaKey) return true;
+
+      if (event.key === "PageUp") {
+        event.preventDefault();
+        term.scrollPages(-1);
+        return false;
+      }
+      if (event.key === "PageDown") {
+        event.preventDefault();
+        term.scrollPages(1);
+        return false;
+      }
+
+      return true;
+    });
     const onWheel = (event: WheelEvent) => {
       if (!mode.startsWith("codex_") || event.ctrlKey || event.deltaY === 0) return;
       // Codex's TUI enables mouse reporting, which makes xterm forward wheel
       // events into the process instead of scrolling the browser terminal
-      // viewport. Treat ordinary wheel gestures as scrollback navigation in
-      // Codex sessions; keep ctrl+wheel available for browser zoom.
+      // viewport. Treat ordinary wheel and PageUp/PageDown gestures as
+      // scrollback navigation in Codex sessions; keep ctrl+wheel available
+      // for browser zoom.
       event.preventDefault();
       event.stopPropagation();
       term.scrollLines(Math.sign(event.deltaY) * Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30)));
