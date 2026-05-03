@@ -81,6 +81,8 @@ const MODE_ORDER: SessionMode[] = [
 ];
 
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
+const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
+const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
   return value === "subscription" || value === "codex_subscription";
@@ -101,6 +103,40 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
     localStorage.setItem(DEFAULT_SESSION_MODE_KEY, mode);
   } catch {
     // Preference persistence is best-effort; session creation should continue.
+  }
+}
+
+function readCompletionSoundEnabled(): boolean {
+  try {
+    return localStorage.getItem(COMPLETION_SOUND_ENABLED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function writeCompletionSoundEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(COMPLETION_SOUND_ENABLED_KEY, enabled ? "1" : "0");
+  } catch {
+    // Preference persistence is best-effort.
+  }
+}
+
+function readCompletionSoundVolume(): number {
+  try {
+    const stored = Number(localStorage.getItem(COMPLETION_SOUND_VOLUME_KEY));
+    if (Number.isFinite(stored)) return Math.max(0, Math.min(1, stored));
+  } catch {
+    // Fall through to the default.
+  }
+  return 0.55;
+}
+
+function writeCompletionSoundVolume(volume: number): void {
+  try {
+    localStorage.setItem(COMPLETION_SOUND_VOLUME_KEY, String(Math.max(0, Math.min(1, volume))));
+  } catch {
+    // Preference persistence is best-effort.
   }
 }
 
@@ -426,6 +462,10 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  const [completionSoundEnabled, setCompletionSoundEnabled] =
+    useState(readCompletionSoundEnabled);
+  const [completionSoundVolume, setCompletionSoundVolume] =
+    useState(readCompletionSoundVolume);
   // Inline rename state. `editingId` is the session whose row is currently
   // an <input>; `editingValue` holds the in-progress name. Reset on commit
   // or cancel. Triggered by clicking the session name.
@@ -617,6 +657,17 @@ export function App() {
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
     setModeMenuOpen(false);
+  }
+
+  function updateCompletionSoundEnabled(enabled: boolean) {
+    setCompletionSoundEnabled(enabled);
+    writeCompletionSoundEnabled(enabled);
+  }
+
+  function updateCompletionSoundVolume(volume: number) {
+    const nextVolume = Math.max(0, Math.min(1, volume));
+    setCompletionSoundVolume(nextVolume);
+    writeCompletionSoundVolume(nextVolume);
   }
 
   async function renameSession(id: string, nextName: string | null) {
@@ -995,6 +1046,31 @@ export function App() {
                 <span className="dropdown-meta-value">{user.email}</span>
               </li>
               <li className="dropdown-divider" role="separator" />
+              <li className="dropdown-settings" role="none">
+                <label className="setting-toggle">
+                  <input
+                    type="checkbox"
+                    checked={completionSoundEnabled}
+                    onChange={(e) => updateCompletionSoundEnabled(e.target.checked)}
+                  />
+                  <span>Completion sound</span>
+                </label>
+                <label className="setting-range">
+                  <span>Volume</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={completionSoundVolume}
+                    disabled={!completionSoundEnabled}
+                    onChange={(e) => updateCompletionSoundVolume(Number(e.target.value))}
+                    aria-label="Completion sound volume"
+                  />
+                  <span className="setting-value">{Math.round(completionSoundVolume * 100)}%</span>
+                </label>
+              </li>
+              <li className="dropdown-divider" role="separator" />
               <li>
                 <button onClick={logout}>Sign out</button>
               </li>
@@ -1039,6 +1115,8 @@ export function App() {
                   sessionId={s.id}
                   mode={s.mode}
                   status={s.status}
+                  completionSoundEnabled={completionSoundEnabled}
+                  completionSoundVolume={completionSoundVolume}
                   visible={active === s.id}
                   onAgentActivityChange={setAgentActivity}
                 />
