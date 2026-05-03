@@ -85,8 +85,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   config: "Log in once · seeds KV for future sessions",
   codex_subscription: "Uses ChatGPT login from KV",
   codex_config: "codex login --device-auth · seeds KV for Codex",
-  pi_subscription: "Uses Pi auth from KV",
-  pi_config: "Pi /login · seeds KV for Pi",
+  pi_subscription: "Uses Tank Claude/Codex subscriptions",
+  pi_config: "Pi /login sandbox",
 };
 
 const MODE_ORDER: SessionMode[] = [
@@ -395,7 +395,7 @@ function writeCompletionSoundVolume(volume: number): void {
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "pi_config"]);
+const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const CODEX_MODES = new Set<SessionMode>(["codex_subscription", "codex_config"]);
 const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
@@ -1448,9 +1448,7 @@ export function App() {
                         title={
                           s.mode === "codex_config"
                             ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                            : s.mode === "pi_config"
-                              ? "capture ~/.pi/agent/auth.json from this pod and write it to KV"
-                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                            : "capture ~/.claude/.credentials.json from this pod and write it to KV"
                         }
                       >
                         save

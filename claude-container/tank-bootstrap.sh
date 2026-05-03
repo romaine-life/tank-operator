@@ -209,35 +209,102 @@ EOF
   chmod 600 $HOME/.codex/auth.json
   exec "${tmux_utf8[@]}" new-session -s tank 'codex --no-alt-screen; exec bash'
 fi
-# Pi-config mode: first-time login for the Pi Coding Agent. Pi manages
+# Pi-config mode: disposable login sandbox for the Pi Coding Agent. Pi manages
 # provider credentials with `/login` and stores them in ~/.pi/agent/auth.json.
-# We launch the TUI and print a short prompt so the user can choose whichever
-# Pi provider/auth path they want, then the frontend Save button harvests the
-# resulting auth.json into KV.
 if [ "${TANK_SESSION_MODE}" = "pi_config" ]; then
   mkdir -p $HOME/.pi/agent
   cat > $HOME/.pi/agent/AGENTS.md <<'EOF'
 # Tank Pi Config Session
 
-Run `/login`, choose your provider, and complete the login flow. When Pi has
-written `~/.pi/agent/auth.json`, click Save Credentials in tank-operator.
+Run `/login`, choose your provider, and complete the login flow. This mode is
+for manual Pi testing; Tank does not persist Pi's native auth.json.
 EOF
-  exec tmux new-session -s tank 'printf "Run /login in Pi, then click Save Credentials in tank-operator.\\n\\n"; pi; exec bash'
+  exec tmux new-session -s tank 'printf "Run /login in Pi. This sandbox does not persist Pi auth.\\n\\n"; pi; exec bash'
 fi
-# Pi-subscription mode: consume the harvested ~/.pi/agent/auth.json. Pi can
-# update this file in place, so copy the Secret-mounted auth file into its
-# writable config directory rather than running directly from /etc/pi-creds.
+# Pi-subscription mode: curate all Tank-backed subscription auth into Pi's
+# native ~/.pi/agent/auth.json from existing Claude proxy and Codex credentials.
 if [ "${TANK_SESSION_MODE}" = "pi_subscription" ]; then
   mkdir -p $HOME/.pi/agent
   cp /workspace/AGENTS.md $HOME/.pi/agent/AGENTS.md 2>/dev/null || true
-  if [ ! -f /etc/pi-creds/auth.json ]; then
-    echo "no Pi credentials found in /etc/pi-creds/auth.json" >&2
-    echo "spawn a 'Pi config' session, run \`/login\`, then click Save Credentials." >&2
-    echo "Once KV has auth.json, ESO will mirror it into this namespace and a" >&2
-    echo "fresh pi_subscription pod will pick it up." >&2
-    exec tmux new-session -s tank 'exec bash'
-  fi
-  cp /etc/pi-creds/auth.json $HOME/.pi/agent/auth.json
+  printf '{}\n' > $HOME/.pi/agent/auth.json
+  node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const agentDir = path.join(process.env.HOME || "/home/node", ".pi", "agent");
+const authPath = path.join(agentDir, "auth.json");
+let auth = {};
+try {
+  auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+} catch {
+  auth = {};
+}
+
+// Pi decides Anthropic OAuth-vs-API-key behavior from the token shape before
+// request headers are applied. Keep an OAuth-looking value in auth.json, then
+// force the outbound Authorization header to Tank's proxy placeholder below.
+if (!auth.anthropic) {
+  auth.anthropic = {
+    type: "oauth",
+    access: "sk-ant-oat01-tank-placeholder",
+    refresh: "tank-placeholder",
+    expires: 4102444800000
+  };
+}
+
+const codexPath = "/etc/codex-creds/auth.json";
+if (!auth["openai-codex"] && fs.existsSync(codexPath)) {
+  try {
+    const codex = JSON.parse(fs.readFileSync(codexPath, "utf8"));
+    const tokens = codex.tokens || {};
+    const access = tokens.access_token;
+    const refresh = tokens.refresh_token;
+    if (access && refresh) {
+      let payload = {};
+      try {
+        const body = String(access).split(".")[1] || "";
+        payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+      } catch {}
+      const accountId =
+        tokens.account_id ||
+        payload?.["https://api.openai.com/auth"]?.chatgpt_account_id ||
+        payload?.chatgpt_account_id;
+      const expires =
+        typeof payload.exp === "number" ? payload.exp * 1000 : Date.now() + 30 * 60 * 1000;
+      auth["openai-codex"] = {
+        type: "oauth",
+        access,
+        refresh,
+        expires,
+        ...(accountId ? { accountId } : {})
+      };
+    }
+  } catch (error) {
+    console.error(`could not translate Codex credentials for Pi: ${error.message}`);
+  }
+}
+
+fs.writeFileSync(authPath, JSON.stringify(auth, null, 2));
+fs.chmodSync(authPath, 0o600);
+
+const modelsPath = path.join(agentDir, "models.json");
+let models = {};
+try {
+  models = JSON.parse(fs.readFileSync(modelsPath, "utf8"));
+} catch {
+  models = {};
+}
+models.providers = models.providers || {};
+models.providers.anthropic = {
+  ...(models.providers.anthropic || {}),
+  headers: {
+    ...((models.providers.anthropic || {}).headers || {}),
+    Authorization: "Bearer managed-by-tank-operator"
+  }
+};
+fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2));
+fs.chmodSync(modelsPath, 0o600);
+NODE
   chmod 600 $HOME/.pi/agent/auth.json
   exec tmux new-session -s tank 'pi; exec bash'
 fi
