@@ -29,6 +29,7 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
+  created_at: string | null;
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
 }
@@ -110,6 +111,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "subscription",
+    created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     name: "Claude Code",
   },
   {
@@ -118,6 +120,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "codex_subscription",
+    created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     name: "Codex",
   },
   {
@@ -126,6 +129,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "pi_subscription",
+    created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     name: "Pi",
   },
 ];
@@ -312,6 +316,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     owner: "preview",
     status: "Active",
     mode,
+    created_at: new Date().toISOString(),
     name: `${label} ${index}`,
   };
 }
@@ -525,6 +530,29 @@ function sessionDisplayName(session: Session): string {
   return session.name ?? defaultSessionName(session);
 }
 
+function formatRuntime(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000));
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
+  if (!session.created_at) return null;
+  const startedMs = Date.parse(session.created_at);
+  if (!Number.isFinite(startedMs)) return null;
+  return formatRuntime(nowMs - startedMs);
+}
+
+function sessionRuntimeTitle(session: Session, nowMs: number): string {
+  const startedMs = session.created_at ? Date.parse(session.created_at) : NaN;
+  const runtime = Number.isFinite(startedMs) ? formatRuntime(nowMs - startedMs) : "unknown";
+  return `running ${runtime}`;
+}
+
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   const params = new URLSearchParams(window.location.search);
   const runId = params.get("glimmung_run_id");
@@ -552,6 +580,7 @@ function clearGlimmungLaunchContext(): void {
 }
 
 const POLL_INTERVAL_MS = 1500;
+const SESSION_RUNTIME_TICK_MS = 30_000;
 
 function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
   if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return null;
@@ -928,6 +957,7 @@ function DemoLanding() {
               const statusDotClass = s.mode.startsWith("codex")
                 ? "status-dot status-codex-waiting"
                 : `status-dot status-${s.status.toLowerCase()}`;
+              const runtimeLabel = sessionRuntimeLabel(s, Date.now());
               return (
                 <li
                   key={s.id}
@@ -943,6 +973,11 @@ function DemoLanding() {
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
+                    {runtimeLabel && (
+                      <span className="session-runtime" title={sessionRuntimeTitle(s, Date.now())}>
+                        {runtimeLabel}
+                      </span>
+                    )}
                     <button
                       className="session-delete"
                       onClick={(e) => {
@@ -1000,6 +1035,7 @@ export function App() {
   const [booted, setBooted] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -1077,6 +1113,12 @@ export function App() {
 
   useEffect(() => {
     if (user) void refresh();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const t = setInterval(() => setNowMs(Date.now()), SESSION_RUNTIME_TICK_MS);
+    return () => clearInterval(t);
   }, [user]);
 
   useEffect(() => {
@@ -1535,6 +1577,7 @@ export function App() {
               const statusLabel = agentActivity
                 ? `${MODE_LABELS[s.mode]} ${agentActivity}`
                 : s.status;
+              const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               return (
                 <li
                   key={s.id}
@@ -1587,6 +1630,15 @@ export function App() {
                       >
                         <span className="session-id">{sessionDisplayName(s)}</span>
                       </button>
+                    )}
+                    {runtimeLabel && (
+                      <span
+                        className="session-runtime"
+                        title={sessionRuntimeTitle(s, nowMs)}
+                        aria-label={sessionRuntimeTitle(s, nowMs)}
+                      >
+                        {runtimeLabel}
+                      </span>
                     )}
                     <button
                       className="session-delete"
