@@ -1215,14 +1215,21 @@ button:disabled {
   background: #e4e4e4;
 }
 
+.ansi-fg-1 { color: #d77757; }
 .ansi-fg-5 { color: #800080; }
 .ansi-fg-6 { color: #008080; }
+.ansi-fg-7 { color: #d3d7cf; }
+.ansi-fg-9 { color: #d77757; }
+.ansi-fg-13 { color: #f9b18f; }
 .ansi-fg-174 { color: #d77757; }
 .ansi-fg-211 { color: #f9b18f; }
 .ansi-fg-244 { color: #808080; }
 .ansi-fg-246 { color: #949494; }
+.ansi-bg-0 { background: #2e3436; }
 .ansi-bg-16 { background: #000000; }
 
+.ansi-bg-0.ansi-fg-1,
+.ansi-bg-0 .ansi-fg-1,
 .ansi-bg-16.ansi-fg-174,
 .ansi-bg-16 .ansi-fg-174 {
   color: #d77757;

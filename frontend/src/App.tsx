@@ -3,7 +3,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
-import { ANSI_256_OVERRIDES } from "./terminalTheme";
+import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
   | "api_key"
@@ -114,19 +114,19 @@ type AnsiSegment = {
 };
 
 const DEMO_CLAUDE_LINES = [
-  "\x1b[38;5;174m ▐\x1b[48;5;16m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mClaude Code\x1b[0m \x1b[38;5;246mv2.1.126\x1b[39m",
-  "\x1b[38;5;174m▝▜\x1b[48;5;16m█████\x1b[49m▛▘\x1b[39m  \x1b[38;5;246mOpus 4.7 (1M context) · Claude Max\x1b[39m",
-  "\x1b[38;5;174m  ▘▘ ▝▝  \x1b[39m  \x1b[38;5;246m/workspace\x1b[39m",
+  "\x1b[31m ▐\x1b[40m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mClaude Code\x1b[22m \x1b[37mv2.1.126\x1b[39m",
+  "\x1b[31m▝▜\x1b[40m█████\x1b[49m▛▘\x1b[39m  \x1b[37mOpus 4.7 (1M context) · Claude Max\x1b[39m",
+  "\x1b[31m  ▘▘ ▝▝  \x1b[39m  \x1b[37m/workspace\x1b[39m",
   "",
-  "  \x1b[1m\x1b[38;5;174mWelcome to Opus 4.7 xhigh!\x1b[0m\x1b[38;5;246m · /effort to tune speed vs. intelligence\x1b[39m",
+  "  \x1b[1m\x1b[91mWelcome to Opus 4.7 xhigh!\x1b[22m\x1b[37m · /effort to tune speed vs. intelligence\x1b[39m",
   "",
   "",
   "",
-  "                                                                                  \x1b[38;5;246m◉ xhigh · /effort\x1b[39m",
+  "                                                                                  \x1b[37m◉ xhigh · /effort\x1b[39m",
   "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
-  "❯\u00a0\x1b[7m \x1b[0m",
+  "❯\u00a0\x1b[7m \x1b[27m",
   "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
-  "  \x1b[38;5;211m⏵⏵ bypass permissions on\x1b[38;5;246m (shift+tab to cycle)\x1b[39m",
+  "  \x1b[95m⏵⏵ bypass permissions on\x1b[37m (shift+tab to cycle)\x1b[39m",
 ];
 
 const DEMO_CODEX_LINES = [
@@ -172,10 +172,14 @@ function ansiColorClass(code: number | undefined, prefix: "fg" | "bg"): string |
 
 function ansiStyle(style: AnsiStyle): CSSProperties | undefined {
   const css: CSSProperties = {};
-  if (style.fg != null && ANSI_256_OVERRIDES[style.fg]) {
+  if (style.fg != null && ANSI_STANDARD_OVERRIDES[style.fg]) {
+    css.color = ANSI_STANDARD_OVERRIDES[style.fg];
+  } else if (style.fg != null && ANSI_256_OVERRIDES[style.fg]) {
     css.color = ANSI_256_OVERRIDES[style.fg];
   }
-  if (style.bg != null && ANSI_256_OVERRIDES[style.bg]) {
+  if (style.bg != null && ANSI_STANDARD_OVERRIDES[style.bg]) {
+    css.backgroundColor = ANSI_STANDARD_OVERRIDES[style.bg];
+  } else if (style.bg != null && ANSI_256_OVERRIDES[style.bg]) {
     css.backgroundColor = ANSI_256_OVERRIDES[style.bg];
   }
   return Object.keys(css).length > 0 ? css : undefined;
@@ -196,6 +200,10 @@ function applyAnsiCodes(style: AnsiStyle, rawCodes: string): AnsiStyle {
     } else if (code === 27) next.inverse = false;
     else if (code === 39) delete next.fg;
     else if (code === 49) delete next.bg;
+    else if (code >= 30 && code <= 37) next.fg = code - 30;
+    else if (code >= 40 && code <= 47) next.bg = code - 40;
+    else if (code >= 90 && code <= 97) next.fg = code - 90 + 8;
+    else if (code >= 100 && code <= 107) next.bg = code - 100 + 8;
     else if (code === 38 && codes[i + 1] === 5) {
       next.fg = codes[i + 2];
       i += 2;
