@@ -201,9 +201,6 @@ EOF
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
   chmod 600 $HOME/.codex/auth.json
-  if [ "${TANK_CODEX_NO_ALT_SCREEN:-}" = "1" ]; then
-    exec tmux new-session -s tank 'codex --no-alt-screen; exec bash'
-  fi
   exec tmux new-session -s tank 'codex; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches

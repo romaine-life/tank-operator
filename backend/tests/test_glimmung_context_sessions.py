@@ -49,14 +49,3 @@ def test_plain_session_has_no_glimmung_context_annotation() -> None:
 
     assert GLIMMUNG_CONTEXT_ANNOTATION not in manifest["metadata"]["annotations"]
     assert _claude_env(manifest)["TANK_GLIMMUNG_CONTEXT_JSON"] == ""
-
-
-def test_codex_no_alt_screen_flag_is_stamped_on_session_env() -> None:
-    manifest = SessionManager()._deployment_manifest(
-        "abc123",
-        owner="operator@example.test",
-        mode="codex_subscription",
-        codex_no_alt_screen=True,
-    )
-
-    assert _claude_env(manifest)["TANK_CODEX_NO_ALT_SCREEN"] == "1"
