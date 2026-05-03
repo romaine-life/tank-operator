@@ -7,6 +7,7 @@ import "./fonts.css";
 
 interface Props {
   sessionId: string;
+  mode: string;
   status: string;
   /**
    * When false the component stays mounted (preserving WS + scrollback) but
@@ -27,7 +28,7 @@ export interface TerminalHandle {
 }
 
 export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
-  { sessionId, status, visible },
+  { sessionId, mode, status, visible },
   ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,6 +54,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
 
     const term = new XTerm({
       cursorBlink: true,
+      scrollback: 10_000,
       // "Symbols Nerd Font Mono" is loaded last as a fallback so private-use-area
       // glyphs (Powerline arrows, branded marks, status icons) render instead of
       // the U+FFFD replacement diamond. Latin still resolves to the earlier
@@ -74,6 +76,17 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     });
     term.open(containerRef.current);
     termRef.current = term;
+    const onWheel = (event: WheelEvent) => {
+      if (!mode.startsWith("codex_") || event.ctrlKey || event.deltaY === 0) return;
+      // Codex's TUI enables mouse reporting, which makes xterm forward wheel
+      // events into the process instead of scrolling the browser terminal
+      // viewport. Treat ordinary wheel gestures as scrollback navigation in
+      // Codex sessions; keep ctrl+wheel available for browser zoom.
+      event.preventDefault();
+      event.stopPropagation();
+      term.scrollLines(Math.sign(event.deltaY) * Math.max(1, Math.ceil(Math.abs(event.deltaY) / 30)));
+    };
+    containerRef.current.addEventListener("wheel", onWheel, { capture: true, passive: false });
     if (visible) {
       fit.fit();
       // Without this, the user has to click into the terminal before keystrokes
@@ -175,6 +188,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       stopPing();
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
       window.removeEventListener("resize", onWindowResize);
+      containerRef.current?.removeEventListener("wheel", onWheel, { capture: true });
       onResizeDisp.dispose();
       onDataDisp.dispose();
       wsRef.current?.close();
@@ -185,7 +199,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     };
     // visible intentionally omitted — we don't tear down on hide.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, everActive]);
+  }, [sessionId, mode, everActive]);
 
   // Re-fit and re-focus whenever this tab becomes visible. xterm computes
   // rows/cols from the container's offsetWidth (0 while display:none), and
