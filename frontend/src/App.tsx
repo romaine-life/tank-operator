@@ -9,6 +9,7 @@ type SessionMode =
   | "config"
   | "codex_subscription"
   | "codex_config";
+type DefaultSessionMode = Extract<SessionMode, "subscription" | "codex_subscription">;
 
 interface Session {
   id: string;
@@ -58,6 +59,30 @@ const MODE_ORDER: SessionMode[] = [
   "codex_subscription",
   "codex_config",
 ];
+
+const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
+
+function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
+  return value === "subscription" || value === "codex_subscription";
+}
+
+function readDefaultSessionMode(): DefaultSessionMode {
+  try {
+    const stored = localStorage.getItem(DEFAULT_SESSION_MODE_KEY);
+    if (isDefaultSessionMode(stored)) return stored;
+  } catch {
+    // localStorage can be unavailable in hardened/private browser contexts.
+  }
+  return "subscription";
+}
+
+function writeDefaultSessionMode(mode: DefaultSessionMode): void {
+  try {
+    localStorage.setItem(DEFAULT_SESSION_MODE_KEY, mode);
+  } catch {
+    // Preference persistence is best-effort; session creation should continue.
+  }
+}
 
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
@@ -248,6 +273,8 @@ export function App() {
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [defaultSessionMode, setDefaultSessionMode] =
+    useState<DefaultSessionMode>(readDefaultSessionMode);
   // Inline rename state. `editingId` is the session whose row is currently
   // an <input>; `editingValue` holds the in-progress name. Reset on commit
   // or cancel. Triggered by clicking the session name.
@@ -330,7 +357,11 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  async function createSession(mode: SessionMode = "subscription") {
+  async function createSession(mode: SessionMode = defaultSessionMode) {
+    if (isDefaultSessionMode(mode)) {
+      setDefaultSessionMode(mode);
+      writeDefaultSessionMode(mode);
+    }
     setBusy(true);
     setModeMenuOpen(false);
     setError(null);
@@ -492,9 +523,9 @@ export function App() {
           <div className="new-row" data-menu="mode">
             <button
               className="new-row-main"
-              onClick={() => createSession("subscription")}
+              onClick={() => createSession()}
               disabled={busy}
-              title="new session (subscription)"
+              title={`new session (${MODE_LABELS[defaultSessionMode]})`}
             >
               <span className="row-icon"><IconPlus /></span>
               <span className="row-label">New session</span>
