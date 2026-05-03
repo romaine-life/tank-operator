@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { registerWrappedLinks } from "./wrappedLinkProvider";
+import { TERMINAL_THEME } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 import "./fonts.css";
 
@@ -166,7 +167,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       // monospace fonts via per-glyph CSS font fallback.
       fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", "Symbols Nerd Font Mono", monospace',
       fontSize: 13,
-      theme: { background: "#171717", foreground: "#e4e4e4" },
+      theme: TERMINAL_THEME,
     });
     const fit = new FitAddon();
     fitRef.current = fit;

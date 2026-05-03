@@ -1217,15 +1217,15 @@ button:disabled {
 
 .ansi-fg-5 { color: #800080; }
 .ansi-fg-6 { color: #008080; }
-.ansi-fg-174 { color: #d787af; }
-.ansi-fg-211 { color: #ff87af; }
+.ansi-fg-174 { color: #d77757; }
+.ansi-fg-211 { color: #f9b18f; }
 .ansi-fg-244 { color: #808080; }
 .ansi-fg-246 { color: #949494; }
 .ansi-bg-16 { background: #000000; }
 
 .ansi-bg-16.ansi-fg-174,
 .ansi-bg-16 .ansi-fg-174 {
-  color: #d787af;
+  color: #d77757;
 }
 
 /* Welcome state — OWUI Placeholder.svelte:77 (centered, font-primary) */
