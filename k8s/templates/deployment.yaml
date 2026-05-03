@@ -33,6 +33,8 @@ spec:
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
+            - name: PI_SESSION_IMAGE
+              value: {{ .Values.session.piImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ .Values.session.serviceAccount | quote }}
             - name: GITHUB_APP_SECRET

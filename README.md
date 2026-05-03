@@ -5,12 +5,13 @@ demand. "+ button → fresh agent shell, terminal opens in a browser tab, killed
 closes." See [issue #1](https://github.com/nelsong6/tank-operator/issues/1) for the full
 design and rationale.
 
-The Claude and Codex session images are both built from `claude-container/`
+The Claude, Codex, and Pi session images are built from `claude-container/`
 in this repo (`Dockerfile`, `mcp.json`, `entrypoint.sh`, bundled skills, plus
 a bundled `platform-mcp/` MCP server). [claude-container-build.yml](.github/workflows/claude-container-build.yml)
 pushes SHA-pinned `romainecr.azurecr.io/claude-container:<sha>` and
-`romainecr.azurecr.io/codex-container:<sha>` images, then rewrites the Helm
-chart to point each session mode at the right image.
+`romainecr.azurecr.io/codex-container:<sha>` /
+`romainecr.azurecr.io/pi-container:<sha>` images, then rewrites the Helm chart
+to point each session mode at the right image.
 
 The HTTP MCP servers it talks to also live here:
 

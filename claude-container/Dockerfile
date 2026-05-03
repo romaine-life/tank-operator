@@ -80,7 +80,8 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
 RUN case "${TANK_AGENT}" in \
         claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" ;; \
         codex) npm install -g @openai/codex "vite@${VITE_VERSION}" ;; \
-        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude or codex" >&2; exit 1 ;; \
+        pi) npm install -g @mariozechner/pi-coding-agent "vite@${VITE_VERSION}" ;; \
+        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude, codex, or pi" >&2; exit 1 ;; \
     esac
 
 # Baseline Python dev tools expected by agent workflows. Install them in the
@@ -109,7 +110,7 @@ RUN mkdir -p /workspace && cp /opt/claude-container/mcp.json /workspace/.mcp.jso
 
 # Default project-scope primers. They land in /workspace so each CLI
 # auto-loads its native instruction file for any cwd under /workspace
-# (including cloned repos): Claude Code reads CLAUDE.md; Codex reads
+# (including cloned repos): Claude Code reads CLAUDE.md; Codex and Pi read
 # AGENTS.md. The files describe the pod environment without conflating
 # with user-scope config, which is left free for genuine user prefs. They
 # are also kept under /opt/claude-container/ for users who mount their own
@@ -149,7 +150,17 @@ RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills \
         codex) \
           cp -R /opt/claude-container/skills/rollout /home/node/.codex/skills/rollout; \
           ;; \
+        pi) \
+          mkdir -p /home/node/.pi/agent; \
+          ;; \
     esac
+
+# Pi keeps MCP support in installable packages rather than core. Install the
+# adapter into the baked Pi image so session startup can stay offline and Pi
+# can consume the same /workspace/.mcp.json that Claude and Codex use.
+RUN if [ "${TANK_AGENT}" = "pi" ]; then \
+      HOME=/home/node pi install npm:pi-mcp-adapter; \
+    fi
 
 # Hide tmux's status bar so the TUI gets the full terminal height.
 # tmux is the WS-reconnect-survival wrapper for agent sessions
@@ -163,7 +174,7 @@ RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g m
 # defense-in-depth: a tool-use exploit can't escape to a privileged shell.
 # node:20-alpine already ships a `node` user at uid/gid 1000 with
 # /home/node, so reuse it (creating another user with gid 1000 collides).
-RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex
+RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.pi
 
 WORKDIR /workspace
 USER node

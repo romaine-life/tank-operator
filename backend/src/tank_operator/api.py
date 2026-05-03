@@ -21,7 +21,12 @@ from .auth import (
     mint_install_state,
     verify_install_state,
 )
-from .credentials_seed import CredentialsSeedError, harvest_and_save, harvest_codex_and_save
+from .credentials_seed import (
+    CredentialsSeedError,
+    harvest_and_save,
+    harvest_codex_and_save,
+    harvest_pi_and_save,
+)
 from .exec_proxy import bridge, exec_write_file
 from .profiles import ProfileStore
 from .sessions import (
@@ -356,6 +361,7 @@ async def save_credentials(
     Mode dispatch:
       - `config`        → ~/.claude/.credentials.json → KV `claude-code-credentials`
       - `codex_config`  → ~/.codex/auth.json          → KV `codex-credentials`
+      - `pi_config`     → ~/.pi/agent/auth.json       → KV `pi-credentials`
 
     Both paths only valid for their respective config modes — both as a
     UX guard (the button only shows on those tabs) and as defense-in-depth
@@ -368,10 +374,10 @@ async def save_credentials(
         raise HTTPException(status_code=403, detail="session not owned by caller")
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")
-    if session.mode not in ("config", "codex_config"):
+    if session.mode not in ("config", "codex_config", "pi_config"):
         raise HTTPException(
             status_code=400,
-            detail="save-credentials is only valid for config / codex_config sessions",
+            detail="save-credentials is only valid for config / codex_config / pi_config sessions",
         )
     try:
         pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
@@ -380,10 +386,12 @@ async def save_credentials(
     try:
         if session.mode == "config":
             await harvest_and_save(namespace=SESSIONS_NAMESPACE, pod_name=pod_name)
-        else:
+        elif session.mode == "codex_config":
             await harvest_codex_and_save(
                 namespace=SESSIONS_NAMESPACE, pod_name=pod_name
             )
+        else:
+            await harvest_pi_and_save(namespace=SESSIONS_NAMESPACE, pod_name=pod_name)
     except CredentialsSeedError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"id": session_id, "status": "saved"}

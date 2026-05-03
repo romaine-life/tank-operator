@@ -19,6 +19,9 @@ SESSION_IMAGE = os.environ.get("SESSION_IMAGE", "romainecr.azurecr.io/claude-con
 CODEX_SESSION_IMAGE = os.environ.get(
     "CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:latest"
 )
+PI_SESSION_IMAGE = os.environ.get(
+    "PI_SESSION_IMAGE", "romainecr.azurecr.io/pi-container:latest"
+)
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
@@ -72,6 +75,8 @@ SESSION_MODES = (
     "config",
     "codex_config",
     "codex_subscription",
+    "pi_config",
+    "pi_subscription",
 )
 DEFAULT_SESSION_MODE = "subscription"
 # Config mode: a one-shot pod the user logs into via `claude /login` to seed
@@ -112,13 +117,26 @@ CODEX_CONFIG_MODE = "codex_config"
 # does). Determined by observing rotation behavior in a codex_config pod.
 CODEX_SUBSCRIPTION_MODE = "codex_subscription"
 CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
+# Pi-config / Pi-subscription mirror Codex's direct-file auth model. Pi stores
+# provider credentials in ~/.pi/agent/auth.json; a config session harvests that
+# file into KV, and subscription sessions mount the ESO-mirrored copy.
+PI_CONFIG_MODE = "pi_config"
+PI_SUBSCRIPTION_MODE = "pi_subscription"
+PI_CREDS_SECRET = os.environ.get("PI_CREDS_SECRET", "pi-credentials")
 # Modes that must reach the real internet directly (no platform.claude.com /
 # api.anthropic.com hijack). Adding a Claude hostAlias to a config or codex
 # pod would 404 the OAuth endpoints they're trying to reach.
 NO_CLAUDE_HIJACK_MODES = frozenset(
-    {CONFIG_MODE, CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE}
+    {
+        CONFIG_MODE,
+        CODEX_CONFIG_MODE,
+        CODEX_SUBSCRIPTION_MODE,
+        PI_CONFIG_MODE,
+        PI_SUBSCRIPTION_MODE,
+    }
 )
 CODEX_MODES = frozenset({CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE})
+PI_MODES = frozenset({PI_CONFIG_MODE, PI_SUBSCRIPTION_MODE})
 # Remote-control: there used to be a dedicated `remote_control` session mode
 # whose bootstrap auto-launched `claude '/remote-control'` to put the bridge
 # URL in the TUI on session start. That cold-start raced claude's slash
@@ -243,7 +261,12 @@ class SessionManager:
         context_json = ""
         if glimmung_context is not None:
             context_json = json.dumps(glimmung_context, sort_keys=True, separators=(",", ":"))
-        session_image = CODEX_SESSION_IMAGE if mode in CODEX_MODES else SESSION_IMAGE
+        if mode in CODEX_MODES:
+            session_image = CODEX_SESSION_IMAGE
+        elif mode in PI_MODES:
+            session_image = PI_SESSION_IMAGE
+        else:
+            session_image = SESSION_IMAGE
         pod_spec: dict[str, Any] = {
             "serviceAccountName": SESSION_SERVICE_ACCOUNT,
             # The image's USER is claude (uid 1000). Reasserting it here
@@ -405,6 +428,24 @@ class SessionManager:
                     "name": "codex-creds",
                     "secret": {
                         "secretName": CODEX_CREDS_SECRET,
+                        "optional": True,
+                    },
+                }
+            )
+        if mode == PI_SUBSCRIPTION_MODE:
+            container = next(c for c in pod_spec["containers"] if c["name"] == "claude")
+            container.setdefault("volumeMounts", []).append(
+                {
+                    "name": "pi-creds",
+                    "mountPath": "/etc/pi-creds",
+                    "readOnly": True,
+                }
+            )
+            pod_spec.setdefault("volumes", []).append(
+                {
+                    "name": "pi-creds",
+                    "secret": {
+                        "secretName": PI_CREDS_SECRET,
                         "optional": True,
                     },
                 }

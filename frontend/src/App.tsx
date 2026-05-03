@@ -10,9 +10,14 @@ type SessionMode =
   | "subscription"
   | "config"
   | "codex_subscription"
-  | "codex_config";
-type DefaultSessionMode = Extract<SessionMode, "subscription" | "codex_subscription">;
-type Provider = "anthropic" | "openai";
+  | "codex_config"
+  | "pi_subscription"
+  | "pi_config";
+type DefaultSessionMode = Extract<
+  SessionMode,
+  "subscription" | "codex_subscription" | "pi_subscription"
+>;
+type Provider = "anthropic" | "openai" | "pi";
 
 interface Session {
   id: string;
@@ -30,6 +35,8 @@ const MODE_LABELS: Record<SessionMode, string> = {
   config: "Claude config",
   codex_subscription: "Codex",
   codex_config: "Codex config",
+  pi_subscription: "Pi",
+  pi_config: "Pi config",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -40,11 +47,14 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_subscription: "codex",
   codex_config: "codex-cfg",
+  pi_subscription: "pi",
+  pi_config: "pi-cfg",
 };
 
-const MODE_CHIP_ICONS: Partial<Record<SessionMode, "anthropic" | "openai">> = {
+const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   subscription: "anthropic",
   codex_subscription: "openai",
+  pi_subscription: "pi",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -53,16 +63,20 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   config: "anthropic",
   codex_subscription: "openai",
   codex_config: "openai",
+  pi_subscription: "pi",
+  pi_config: "pi",
 };
 
 const PROVIDER_DEFAULT_MODES: Record<Provider, DefaultSessionMode> = {
   anthropic: "subscription",
   openai: "codex_subscription",
+  pi: "pi_subscription",
 };
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
   openai: "codex_config",
+  pi: "pi_config",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -71,6 +85,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   config: "Log in once · seeds KV for future sessions",
   codex_subscription: "Uses ChatGPT login from KV",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  pi_subscription: "Uses Pi auth from KV",
+  pi_config: "Pi /login · seeds KV for Pi",
 };
 
 const MODE_ORDER: SessionMode[] = [
@@ -79,6 +95,8 @@ const MODE_ORDER: SessionMode[] = [
   "config",
   "codex_subscription",
   "codex_config",
+  "pi_subscription",
+  "pi_config",
 ];
 
 const DEMO_BASE_SESSIONS: Session[] = [
@@ -97,6 +115,14 @@ const DEMO_BASE_SESSIONS: Session[] = [
     status: "Active",
     mode: "codex_subscription",
     name: "Codex",
+  },
+  {
+    id: "pi-agent",
+    pod_name: "tank-demo-pi-agent",
+    owner: "preview",
+    status: "Active",
+    mode: "pi_subscription",
+    name: "Pi",
   },
 ];
 
@@ -153,10 +179,24 @@ const DEMO_CODEX_LINES = [
   "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
 ];
 
+const DEMO_PI_LINES = [
+  "Pi Coding Agent",
+  "",
+  "  working directory: /workspace",
+  "  context files: AGENTS.md, CLAUDE.md",
+  "  tools: read, write, edit, bash",
+  "",
+  "Type /login to manage providers, /model to switch models, or enter a task.",
+  "",
+  "> Summarize this repo and run the checks.",
+];
+
 function demoTerminalLines(session: Session): string[] {
   const template = session.mode === "codex_subscription"
     ? DEMO_CODEX_LINES
-    : DEMO_CLAUDE_LINES;
+    : session.mode === "pi_subscription"
+      ? DEMO_PI_LINES
+      : DEMO_CLAUDE_LINES;
   if (!session.id.includes("-preview-")) return template;
   return [
     ...template,
@@ -257,7 +297,11 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_subscription" ? "Codex" : "Claude Code";
+  const label = mode === "codex_subscription"
+    ? "Codex"
+    : mode === "pi_subscription"
+      ? "Pi"
+      : "Claude Code";
   return {
     id: `${provider}-preview-${index}`,
     pod_name: `tank-demo-${provider}-${index}`,
@@ -272,7 +316,7 @@ const DEMO_LANDING_LINES = [
   "$ tank-operator preview",
   "Welcome. This is the real app shell with demo sessions.",
   "",
-  "Click the provider icon to switch between Claude and Codex.",
+  "Click the provider icon to switch between Claude, Codex, and Pi.",
   "Click + to add a local preview session.",
   "The key and wrench buttons are present but disabled in preview mode.",
   "",
@@ -286,7 +330,7 @@ const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
 const MIN_COMPLETION_SOUND_VOLUME = 0.05;
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
-  return value === "subscription" || value === "codex_subscription";
+  return value === "subscription" || value === "codex_subscription" || value === "pi_subscription";
 }
 
 function readDefaultSessionMode(): DefaultSessionMode {
@@ -351,8 +395,11 @@ function writeCompletionSoundVolume(volume: number): void {
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
+const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "pi_config"]);
 const CODEX_MODES = new Set<SessionMode>(["codex_subscription", "codex_config"]);
+const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
+const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
+const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
 interface SessionUser {
   sub: string;
@@ -742,7 +789,7 @@ function DemoLanding() {
             </div>
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
-                {(["anthropic", "openai"] as Provider[]).map((provider) => {
+                {PROVIDERS.map((provider) => {
                   const mode = PROVIDER_DEFAULT_MODES[provider];
                   return (
                     <li key={provider}>
@@ -823,7 +870,7 @@ function DemoLanding() {
 
       <main className="workspace demo-workspace">
         <div
-          className={`demo-terminal${selected?.mode === "codex_subscription" ? " is-codex" : " is-claude"}`}
+          className={`demo-terminal${selected?.mode === "subscription" ? " is-claude" : " is-codex"}`}
           role="img"
           aria-label="tank-operator terminal preview"
         >
@@ -1279,7 +1326,7 @@ export function App() {
             </div>
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
-                {(["anthropic", "openai"] as Provider[]).map((provider) => {
+                {PROVIDERS.map((provider) => {
                   const mode = PROVIDER_DEFAULT_MODES[provider];
                   return (
                     <li key={provider}>
@@ -1312,14 +1359,14 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const codexActivity = isLive && CODEX_MODES.has(s.mode)
+              const agentActivity = isLive && AGENT_ACTIVITY_MODES.has(s.mode)
                 ? agentActivityBySession[s.id] ?? "waiting"
                 : null;
-              const statusDotClass = codexActivity
-                ? `status-dot status-codex-${codexActivity}`
+              const statusDotClass = agentActivity
+                ? `status-dot status-codex-${agentActivity}`
                 : `status-dot status-${s.status.toLowerCase()}`;
-              const statusLabel = codexActivity
-                ? `Codex ${codexActivity}`
+              const statusLabel = agentActivity
+                ? `${MODE_LABELS[s.mode]} ${agentActivity}`
                 : s.status;
               return (
                 <li
@@ -1401,7 +1448,9 @@ export function App() {
                         title={
                           s.mode === "codex_config"
                             ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                            : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                            : s.mode === "pi_config"
+                              ? "capture ~/.pi/agent/auth.json from this pod and write it to KV"
+                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
                         }
                       >
                         save
@@ -1480,7 +1529,7 @@ export function App() {
           <div className="welcome">
             <div className="welcome-inner">
               <h2 className="welcome-title">tank-operator</h2>
-              <p className="welcome-sub">Spin up a Claude Code session</p>
+              <p className="welcome-sub">Spin up an agent session</p>
               <div className="welcome-cards" role="list">
                 {MODE_ORDER.map((m) => (
                   <button
