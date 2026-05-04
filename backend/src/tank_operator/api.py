@@ -466,6 +466,13 @@ if _static.exists():
     app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
     app.mount("/fonts", StaticFiles(directory=_static / "fonts"), name="fonts")
 
+    @app.get("/manifest.webmanifest")
+    async def web_app_manifest() -> FileResponse:
+        return FileResponse(
+            _static / "manifest.webmanifest",
+            media_type="application/manifest+json",
+        )
+
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(_static / "index.html")
