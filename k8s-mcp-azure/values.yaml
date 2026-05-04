@@ -24,7 +24,7 @@ adminImage:
 # Loopback-only port azure-mcp listens on. Sidecar fronts it.
 upstreamPort: 8080
 
-subscriptionId: aee0cbd2-8074-4001-b610-0f8edb4eaa3c
+subscriptionId: 606a1ca1-5833-4d21-8937-d0fcd97cd0a0
 
 # kube-rbac-proxy sidecar — terminates client connections, calls the K8s
 # API's TokenReview to validate incoming bearer SA tokens, then forwards to
