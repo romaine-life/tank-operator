@@ -255,7 +255,7 @@ export function StyleguideView() {
           <h2 style={headStyle}>session row</h2>
           <p style={captionStyle}>
             One row per session in the sidebar list. Top: status dot + session
-            name + compact runtime + delete affordance. Bottom: mode chip +
+            name + compact boot/runtime stats + delete affordance. Bottom: mode chip +
             optional inline actions (remote-control, rollout, save-credentials). Active
             row gets the <code>is-open</code> class; not styled here for brevity.
           </p>
@@ -266,7 +266,16 @@ export function StyleguideView() {
                 <button className="session-open" type="button">
                   <span className="session-id">my-session</span>
                 </button>
-                <span className="session-runtime" title="running 12m">12m</span>
+                <span className="session-stats">
+                  <span className="session-stat" title="ready 32s after request">
+                    <span aria-hidden="true">↓</span>
+                    <span>32s</span>
+                  </span>
+                  <span className="session-stat" title="running 12m">
+                    <span aria-hidden="true">↑</span>
+                    <span>12m</span>
+                  </span>
+                </span>
                 <button className="session-delete" aria-label="delete session" type="button">
                   ×
                 </button>
@@ -290,7 +299,16 @@ export function StyleguideView() {
                 <button className="session-open" type="button">
                   <span className="session-id">starting…</span>
                 </button>
-                <span className="session-runtime" title="running less than 1m">&lt;1m</span>
+                <span className="session-stats">
+                  <span className="session-stat" title="starting for 18s since request">
+                    <span aria-hidden="true">↓</span>
+                    <span>18s</span>
+                  </span>
+                  <span className="session-stat" title="running less than 1m">
+                    <span aria-hidden="true">↑</span>
+                    <span>&lt;1m</span>
+                  </span>
+                </span>
                 <button className="session-delete" aria-label="delete session" type="button">
                   ×
                 </button>

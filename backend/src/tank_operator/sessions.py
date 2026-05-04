@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import datetime
 import hashlib
 import json
 import logging
@@ -211,9 +212,15 @@ class SessionInfo:
     owner: str
     status: str
     mode: str
+    # ISO timestamp captured by the backend when it begins handling the
+    # session create request. This is the user's perceived startup clock.
+    requested_at: str | None = None
     # ISO timestamp from the Pod's creation time. The frontend uses
     # this to show a small "running for" indicator on session rows.
     created_at: str | None = None
+    # ISO timestamp from the Pod Ready condition. The frontend derives a
+    # compact startup indicator from requested_at to this point.
+    ready_at: str | None = None
     # User-provided friendly name. None when unset; the frontend falls back
     # to the session id slug. The slug stays canonical in URLs and the
     # Pod name — this is purely a display label.
@@ -221,6 +228,10 @@ class SessionInfo:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
 def _owner_label(email: str) -> str:
@@ -600,10 +611,12 @@ class SessionManager:
         owner: str,
         mode: str = DEFAULT_SESSION_MODE,
         glimmung_context: dict[str, Any] | None = None,
+        requested_at: str | None = None,
     ) -> SessionInfo:
         assert self._core is not None
         if mode not in SESSION_MODES:
             raise ValueError(f"unknown session mode: {mode!r}")
+        request_started_at = requested_at or _now_iso()
         # Lazy retry of in-cluster Service resolution — handles the
         # chart-install race where the orchestrator pod starts before its
         # sibling Services exist. After first success the IP is cached;
@@ -639,7 +652,9 @@ class SessionManager:
             owner=owner,
             status="Pending",
             mode=mode,
+            requested_at=request_started_at,
             created_at=created_at,
+            ready_at=_pod_ready_at(created),
         )
         if self._registry is not None:
             await self._registry.upsert(
@@ -647,6 +662,7 @@ class SessionManager:
                 session_id=session_id,
                 mode=mode,
                 pod_name=info.pod_name,
+                requested_at=request_started_at,
                 created_at=created_at,
             )
         return info
@@ -679,6 +695,7 @@ class SessionManager:
                 ),
                 pod_name=pod.metadata.name,
                 name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
+                requested_at=_pod_created_at(pod),
                 created_at=_pod_created_at(pod),
             )
 
@@ -705,7 +722,9 @@ class SessionManager:
             owner=owner,
             status=_pod_status(pod),
             mode=mode,
+            requested_at=_pod_created_at(pod),
             created_at=_pod_created_at(pod),
+            ready_at=_pod_ready_at(pod),
             name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
         )
 
@@ -724,6 +743,11 @@ class SessionManager:
         """
         assert self._core is not None
         pod = await self._read_owned_pod(owner, session_id)
+        record = (
+            await self._registry.get(owner, session_id)
+            if self._registry is not None
+            else None
+        )
         normalized = name.strip() if name else ""
         annotation_value: str | None = (
             normalized[:MAX_NAME_LENGTH] if normalized else None
@@ -740,7 +764,10 @@ class SessionManager:
             owner=owner,
             status=_pod_status(patched),
             mode=mode,
+            requested_at=(record.requested_at if record else None)
+            or _pod_created_at(patched),
             created_at=_pod_created_at(patched),
+            ready_at=_pod_ready_at(patched),
             name=annotation_value,
         )
         if self._registry is not None:
@@ -750,6 +777,7 @@ class SessionManager:
                 mode=mode,
                 pod_name=patched.metadata.name,
                 name=annotation_value,
+                requested_at=info.requested_at,
                 created_at=info.created_at,
             )
         return info
@@ -930,6 +958,19 @@ def _pod_created_at(pod: Any) -> str | None:
     return pod.metadata.creation_timestamp.isoformat()
 
 
+def _pod_ready_at(pod: Any) -> str | None:
+    status_obj = getattr(pod, "status", None)
+    conditions = getattr(status_obj, "conditions", None) or []
+    for condition in conditions:
+        if (
+            getattr(condition, "type", None) == "Ready"
+            and getattr(condition, "status", None) == "True"
+            and getattr(condition, "last_transition_time", None)
+        ):
+            return condition.last_transition_time.isoformat()
+    return None
+
+
 def _session_id_from_pod(pod: Any) -> str:
     return pod.metadata.labels.get(
         "tank-operator/session-id", pod.metadata.name.removeprefix("session-")
@@ -943,7 +984,9 @@ def _session_info_from_pod(owner: str, pod: Any) -> SessionInfo:
         owner=owner,
         status=_pod_status(pod),
         mode=pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
+        requested_at=_pod_created_at(pod),
         created_at=_pod_created_at(pod),
+        ready_at=_pod_ready_at(pod),
         name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
     )
 
@@ -958,7 +1001,11 @@ def _session_info_from_record(
             owner=owner,
             status=_pod_status(pod),
             mode=record.mode,
+            requested_at=record.requested_at
+            or record.created_at
+            or _pod_created_at(pod),
             created_at=record.created_at or _pod_created_at(pod),
+            ready_at=_pod_ready_at(pod),
             name=record.name,
         )
     return SessionInfo(
@@ -967,7 +1014,9 @@ def _session_info_from_record(
         owner=owner,
         status="Failed",
         mode=record.mode,
+        requested_at=record.requested_at or record.created_at,
         created_at=record.created_at,
+        ready_at=None,
         name=record.name,
     )
 
