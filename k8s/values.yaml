@@ -20,9 +20,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:7584e69
-  codexImage: romainecr.azurecr.io/codex-container:7584e69
-  piImage: romainecr.azurecr.io/pi-container:7584e69
+  image: romainecr.azurecr.io/claude-container:095d37a
+  codexImage: romainecr.azurecr.io/codex-container:095d37a
+  piImage: romainecr.azurecr.io/pi-container:095d37a
   configMap: tank-session-config
   serviceAccount: claude-session
   # Idle reaper: a session with no open WebSocket connections for this many
