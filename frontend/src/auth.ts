@@ -105,7 +105,7 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
 /** User-initiated sign-in. Navigates away to Entra. */
 export async function startLogin(): Promise<void> {
   const client = await getMsal();
-  await client.loginRedirect({ scopes: SCOPES });
+  await client.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
 }
 
 export async function logout(): Promise<void> {
