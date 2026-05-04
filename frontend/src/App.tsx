@@ -958,8 +958,10 @@ function DemoLanding() {
   }
 
   function handleDemoTerminalKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key !== "Enter" || !selected) return;
-    event.preventDefault();
+    if (!selected) return;
+    if (event.key !== "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      event.preventDefault();
+    }
     setDemoPromptMessages((prev) => ({ ...prev, [selected.id]: DEMO_LOGIN_MESSAGE }));
   }
 
