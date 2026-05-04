@@ -807,3 +807,36 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         unset, which is a clean way to verify whether tofu wrote it."""
         v = gh.get(f"/repos/{owner}/{name}/actions/variables/{variable_name}")
         return {"name": v["name"], "value": v["value"], "created_at": v.get("created_at"), "updated_at": v.get("updated_at")}
+
+    @mcp.tool()
+    def create_or_update_repo_variable(owner: str, name: str, variable_name: str, value: str) -> dict[str, Any]:
+        """Create or update one repository-level GitHub Actions variable.
+
+        Use for non-secret CI/CD configuration values such as Azure subscription
+        IDs, resource names, image tags, or workflow knobs. Requires the App to
+        have repository variables write permission. Existing values are replaced.
+        Do not use for secrets; store those in GitHub Actions secrets or Key
+        Vault instead."""
+        path = f"/repos/{owner}/{name}/actions/variables/{variable_name}"
+        try:
+            gh.get(path)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            gh.post(
+                f"/repos/{owner}/{name}/actions/variables",
+                json={"name": variable_name, "value": value},
+            )
+            action = "created"
+        else:
+            gh.patch(path, json={"name": variable_name, "value": value})
+            action = "updated"
+
+        v = gh.get(path)
+        return {
+            "action": action,
+            "name": v["name"],
+            "value": v["value"],
+            "created_at": v.get("created_at"),
+            "updated_at": v.get("updated_at"),
+        }
