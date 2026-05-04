@@ -1,6 +1,8 @@
+import asyncio
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -19,6 +21,39 @@ def _claude_env(manifest: dict) -> dict[str, str]:
 
 def _claude_container(manifest: dict) -> dict:
     return next(c for c in _pod_spec(manifest)["containers"] if c["name"] == "claude")
+
+
+def _session_pod(session_id: str, containers: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name=f"session-{session_id}",
+            labels={
+                "app.kubernetes.io/managed-by": "tank-operator",
+                "tank-operator/session-id": session_id,
+            },
+        ),
+        spec=SimpleNamespace(
+            containers=[SimpleNamespace(name=name) for name in containers]
+        ),
+    )
+
+
+class _FakeCore:
+    def __init__(self, pods: list[SimpleNamespace]) -> None:
+        self._pods = pods
+
+    async def list_namespaced_pod(self, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(items=self._pods)
+
+
+class _ReaperSessionManager(SessionManager):
+    def __init__(self, pods: list[SimpleNamespace]) -> None:
+        super().__init__()
+        self._core = _FakeCore(pods)
+        self.deleted: list[str] = []
+
+    async def _delete_session_runtime(self, pod: SimpleNamespace) -> None:
+        self.deleted.append(pod.metadata.name)
 
 
 def test_session_config_is_mounted_from_configmap() -> None:
@@ -68,6 +103,21 @@ def test_session_config_is_mounted_from_configmap() -> None:
         volume["name"] == "terminal-proxy-config"
         for volume in _pod_spec(manifest)["volumes"]
     )
+
+
+def test_idle_reaper_leaves_legacy_session_pods() -> None:
+    manager = _ReaperSessionManager(
+        [
+            _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
+            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+        ]
+    )
+    manager._activity = {"legacy": -10_000, "terminald": -10_000}
+
+    asyncio.run(manager._reap_idle())
+
+    assert manager.deleted == ["session-terminald"]
+    assert "legacy" in manager._activity
 
 
 def test_glimmung_context_is_stamped_on_session_pod() -> None:
