@@ -23,6 +23,7 @@ PI_SESSION_IMAGE = os.environ.get(
     "PI_SESSION_IMAGE", "romainecr.azurecr.io/pi-container:latest"
 )
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
+SESSION_CONFIGMAP = os.environ.get("SESSION_CONFIGMAP", "tank-session-config")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
 # Session pods reach it via a hostAlias mapping platform.claude.com to this
@@ -165,6 +166,24 @@ MAX_NAME_LENGTH = 80
 GLIMMUNG_CONTEXT_ANNOTATION = "tank-operator/glimmung-context"
 
 
+SESSION_CONFIG_MOUNTS = (
+    ("mcp.json", "/workspace/.mcp.json"),
+    ("default-claude.md", "/workspace/CLAUDE.md"),
+    ("default-claude.md", "/workspace/AGENTS.md"),
+    ("skills.done.SKILL.md", "/home/node/.claude/skills/done/SKILL.md"),
+    ("skills.rollout.SKILL.md", "/home/node/.claude/skills/rollout/SKILL.md"),
+    (
+        "skills.rollout.agents.openai.yaml",
+        "/home/node/.claude/skills/rollout/agents/openai.yaml",
+    ),
+    ("skills.rollout.SKILL.md", "/home/node/.codex/skills/rollout/SKILL.md"),
+    (
+        "skills.rollout.agents.openai.yaml",
+        "/home/node/.codex/skills/rollout/agents/openai.yaml",
+    ),
+)
+
+
 @dataclass
 class SessionInfo:
     id: str
@@ -188,6 +207,22 @@ def _owner_label(email: str) -> str:
     # K8s label values must match [a-z0-9A-Z._-]{0,63}; email addresses contain `@`.
     digest = hashlib.sha256(email.encode()).hexdigest()[:16]
     return f"u-{digest}"
+
+
+def _session_config_mounts() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "session-config",
+            "mountPath": mount_path,
+            "subPath": key,
+            "readOnly": True,
+        }
+        for key, mount_path in SESSION_CONFIG_MOUNTS
+    ]
+
+
+def _session_config_volume() -> dict[str, Any]:
+    return {"name": "session-config", "configMap": {"name": SESSION_CONFIGMAP}}
 
 
 class SessionManager:
@@ -295,10 +330,9 @@ class SessionManager:
                 # bearer auth into outbound HTTP MCP calls. Same image as the
                 # main container, different command. Required because the
                 # projected SA token rotates in-place on disk every ~50min,
-                # but env vars set from it at pod start go stale — this proxy
-                # reads the file per request so .mcp.json's localhost URLs
-                # (see claude-container/mcp.json) get a fresh Bearer every
-                # call. See claude-container/mcp-auth-proxy/src/.../server.py.
+                # but env vars set from it at pod start go stale. The session
+                # ConfigMap mounts .mcp.json with localhost URLs, and this
+                # proxy reads the current bearer file per request.
                 {
                     "name": "mcp-auth-proxy",
                     "image": session_image,
@@ -364,8 +398,10 @@ class SessionManager:
                     ],
                     "stdin": True,
                     "tty": True,
+                    "volumeMounts": _session_config_mounts(),
                 }
             ],
+            "volumes": [_session_config_volume()],
         }
         # OAuth gateway plumbing: add a hostAlias so platform.claude.com
         # resolves to the in-cluster gateway Service, mount the gateway's
@@ -404,19 +440,19 @@ class SessionManager:
             container["env"].append(
                 {"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"}
             )
-            container["volumeMounts"] = [
+            container.setdefault("volumeMounts", []).append(
                 {
                     "name": "oauth-gateway-ca",
                     "mountPath": "/etc/oauth-gateway-ca",
                     "readOnly": True,
                 }
-            ]
-            pod_spec["volumes"] = [
+            )
+            pod_spec.setdefault("volumes", []).append(
                 {
                     "name": "oauth-gateway-ca",
                     "configMap": {"name": OAUTH_GATEWAY_CA_CONFIGMAP},
                 }
-            ]
+            )
         # codex_subscription pods mount the ESO-mirrored codex-credentials
         # Secret as a read-only file at /etc/codex-creds/auth.json. The
         # bootstrap copies it into ~/.codex/auth.json (writable, mode 600)
