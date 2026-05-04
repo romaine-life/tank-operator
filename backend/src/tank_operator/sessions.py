@@ -170,6 +170,7 @@ SESSION_CONFIG_MOUNTS = (
     ("mcp.json", "/workspace/.mcp.json"),
     ("default-claude.md", "/workspace/CLAUDE.md"),
     ("default-claude.md", "/workspace/AGENTS.md"),
+    ("tank-bootstrap.sh", "/opt/tank/bootstrap.sh"),
     ("skills.done.SKILL.md", "/home/node/.claude/skills/done/SKILL.md"),
     ("skills.rollout.SKILL.md", "/home/node/.claude/skills/rollout/SKILL.md"),
     (
@@ -338,6 +339,7 @@ class SessionManager:
                     "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": ["mcp-auth-proxy"],
+                    "volumeMounts": _session_config_mounts(),
                 },
                 {
                     "name": "claude",

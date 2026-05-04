@@ -9,11 +9,11 @@ Authorization: Bearer <fresh>.
 The bug this exists to fix: kubelet rotates the SA token file in-place
 (eager renewal at ~50 min, well inside the default 1h TTL), but env
 vars set from that file at pod start go stale. The previous wiring
-exported MCP_*_BEARER once in entrypoint.sh and again in the bootstrap
-shell, then substituted them into .mcp.json's Authorization headers at
-harness startup — so any MCP call past the 1h boundary 401'd until the
-session was recreated. This proxy reads the file fresh on every
-request, so token rotation is invisible to claude.
+exported MCP_*_BEARER in the session startup scripts, then substituted
+them into .mcp.json's Authorization headers at harness startup — so any
+MCP call past the 1h boundary 401'd until the session was recreated.
+This proxy reads the file fresh on every request, so token rotation is
+invisible to claude.
 
 Same shape as api-proxy (the in-cluster header-injecting proxy for
 api.anthropic.com), just localized to the pod because the SA token is

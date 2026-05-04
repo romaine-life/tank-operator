@@ -41,8 +41,15 @@ def test_session_config_is_mounted_from_configmap() -> None:
     assert ("/workspace/.mcp.json", "mcp.json") in mounts
     assert ("/workspace/CLAUDE.md", "default-claude.md") in mounts
     assert ("/workspace/AGENTS.md", "default-claude.md") in mounts
+    assert ("/opt/tank/bootstrap.sh", "tank-bootstrap.sh") in mounts
     assert ("/home/node/.claude/skills/done/SKILL.md", "skills.done.SKILL.md") in mounts
     assert ("/home/node/.codex/skills/rollout/SKILL.md", "skills.rollout.SKILL.md") in mounts
+
+    proxy = next(c for c in _pod_spec(manifest)["containers"] if c["name"] == "mcp-auth-proxy")
+    assert any(
+        mount["name"] == "session-config" and mount["mountPath"] == "/workspace/.mcp.json"
+        for mount in proxy["volumeMounts"]
+    )
 
 
 def test_glimmung_context_is_stamped_on_session_deployment() -> None:

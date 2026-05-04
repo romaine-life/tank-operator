@@ -104,28 +104,17 @@ RUN pip install --no-cache-dir --break-system-packages /opt/platform-mcp
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
-# Session-facing MCP wiring, AGENTS/CLAUDE primers, and bundled skill docs are
-# mounted from the chart-managed tank-session-config ConfigMap. Keep the parent
-# directories in the image so the orchestrator can mount individual files with
-# subPath without rebuilding the image for docs/config changes.
+# Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
+# bootstrap script are mounted from the chart-managed tank-session-config
+# ConfigMap. Keep the parent directories in the image so the orchestrator can
+# mount individual files with subPath without rebuilding the image for
+# docs/config/script changes.
 RUN mkdir -p /workspace \
+        /opt/tank \
         /home/node/.claude/skills/done \
         /home/node/.claude/skills/rollout/agents \
         /home/node/.codex/skills/rollout/agents \
         /home/node/.pi/agent
-
-# Thin passthrough entrypoint kept for direct `docker run` / `kubectl
-# exec` consumers. The orchestrator's bridge bypasses ENTRYPOINT (sets
-# command: ["sleep", "infinity"]) and runs its own bootstrap shell.
-# In-cluster MCP auth is handled by the mcp-auth-proxy sidecar above.
-COPY claude-container/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Bootstrap script the orchestrator exec's on every WS connect. Lives
-# in the image so the kubectl-exec request URL stays small — the
-# kube-apiserver rejects oversized exec command lines with HTTP 400.
-COPY claude-container/tank-bootstrap.sh /opt/tank/bootstrap.sh
-RUN chmod +x /opt/tank/bootstrap.sh
 
 # Pi keeps MCP support in installable packages rather than core. Install the
 # adapter into the baked Pi image so session startup can stay offline and Pi
@@ -151,5 +140,4 @@ RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/nod
 WORKDIR /workspace
 USER node
 
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["bash"]

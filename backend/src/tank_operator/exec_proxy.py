@@ -25,11 +25,10 @@ from kubernetes_asyncio.stream import WsApiClient
 
 log = logging.getLogger(__name__)
 
-# Bootstrap is baked into the session image at /opt/tank/bootstrap.sh
-# (see claude-container/tank-bootstrap.sh). Inlining it here is tempting
-# but the kube-apiserver URL-encodes every byte of the exec command into
-# ?command=... and rejects oversized request lines with HTTP 400; the
-# script grew past that limit and broke reconnects.
+# Bootstrap is mounted from the session ConfigMap at /opt/tank/bootstrap.sh.
+# Inlining it here is tempting but the kube-apiserver URL-encodes every byte of
+# the exec command into ?command=... and rejects oversized request lines with
+# HTTP 400; the script grew past that limit and broke reconnects.
 # Do not use a login shell here: Alpine's /etc/profile resets PATH to the
 # distro default and masks tool paths exported by the image, including Go.
 EXEC_COMMAND = ["bash", "/opt/tank/bootstrap.sh"]
