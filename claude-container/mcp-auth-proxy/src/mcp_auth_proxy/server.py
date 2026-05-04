@@ -18,7 +18,7 @@ request, so token rotation is invisible to claude.
 Same shape as api-proxy (the in-cluster header-injecting proxy for
 api.anthropic.com), just localized to the pod because the SA token is
 per-pod identity. Hardcoded LISTENERS map mirrors the entries in
-claude-container/mcp.json — keep them in sync; both sides describe the
+k8s/session-config/mcp.json — keep them in sync; both sides describe the
 same set of MCPs from opposite ends.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 
 TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 
-# (port, upstream URL). Mirrors claude-container/mcp.json. Adding an
+# (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
 # Port allocation (next free: 9996):

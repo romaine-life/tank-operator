@@ -34,11 +34,10 @@
 #   ~/.claude/skills/<name>/      — SKILL.md files baked into the
 #                                   agent-specific image at build time.
 #
-# Pod-environment primers are baked into the image at build time
-# alongside /workspace/.mcp.json — see Dockerfile. Claude Code reads
-# /workspace/CLAUDE.md; Codex reads /workspace/AGENTS.md. They load as
-# project-scope context for any cwd under /workspace, including cloned
-# repos.
+# Pod-environment primers and /workspace/.mcp.json are mounted from the
+# chart-managed session ConfigMap. Claude Code reads /workspace/CLAUDE.md;
+# Codex reads /workspace/AGENTS.md. They load as project-scope context for
+# any cwd under /workspace, including cloned repos.
 #
 # claude runs inside a named tmux session ("tank") so reconnects re-attach
 # the same PTY/scrollback. If claude exits we fall through to bash so the

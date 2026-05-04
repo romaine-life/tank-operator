@@ -21,6 +21,30 @@ def _claude_container(manifest: dict) -> dict:
     return next(c for c in _pod_spec(manifest)["containers"] if c["name"] == "claude")
 
 
+def test_session_config_is_mounted_from_configmap() -> None:
+    manifest = SessionManager()._deployment_manifest(
+        "abc123",
+        owner="operator@example.test",
+        mode="subscription",
+    )
+
+    assert any(
+        volume["name"] == "session-config"
+        and volume["configMap"]["name"] == "tank-session-config"
+        for volume in _pod_spec(manifest)["volumes"]
+    )
+    mounts = {
+        (mount["mountPath"], mount["subPath"])
+        for mount in _claude_container(manifest)["volumeMounts"]
+        if mount["name"] == "session-config"
+    }
+    assert ("/workspace/.mcp.json", "mcp.json") in mounts
+    assert ("/workspace/CLAUDE.md", "default-claude.md") in mounts
+    assert ("/workspace/AGENTS.md", "default-claude.md") in mounts
+    assert ("/home/node/.claude/skills/done/SKILL.md", "skills.done.SKILL.md") in mounts
+    assert ("/home/node/.codex/skills/rollout/SKILL.md", "skills.rollout.SKILL.md") in mounts
+
+
 def test_glimmung_context_is_stamped_on_session_deployment() -> None:
     context = {
         "glimmung_run_id": "run-1",
@@ -96,6 +120,9 @@ def test_pi_subscription_only_hijacks_anthropic_api_proxy() -> None:
     assert _pod_spec(manifest)["hostAliases"] == [
         {"ip": "10.0.0.20", "hostnames": ["api.anthropic.com"]}
     ]
+    mount_names = {mount["name"] for mount in _claude_container(manifest)["volumeMounts"]}
+    assert "session-config" in mount_names
+    assert "oauth-gateway-ca" in mount_names
 
 
 def test_pi_config_uses_pi_image_without_credential_mount() -> None:

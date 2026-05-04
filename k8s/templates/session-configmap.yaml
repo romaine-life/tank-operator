@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.session.configMap }}
+  namespace: {{ .Values.namespaces.sessions }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+data:
+  mcp.json: |
+{{ .Files.Get "session-config/mcp.json" | indent 4 }}
+  default-claude.md: |
+{{ .Files.Get "session-config/default-claude.md" | indent 4 }}
+  skills.done.SKILL.md: |
+{{ .Files.Get "session-config/skills/done/SKILL.md" | indent 4 }}
+  skills.rollout.SKILL.md: |
+{{ .Files.Get "session-config/skills/rollout/SKILL.md" | indent 4 }}
+  skills.rollout.agents.openai.yaml: |
+{{ .Files.Get "session-config/skills/rollout/agents/openai.yaml" | indent 4 }}
