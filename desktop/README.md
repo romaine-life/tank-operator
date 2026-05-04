@@ -42,6 +42,24 @@ Desktop shortcut, and launches Tank after setup completes.
 The Windows executable is post-processed with `rcedit` so Start Menu and
 taskbar pins use the Tank icon instead of Electron's default icon.
 
+For unattended installs, use any of:
+
+```powershell
+.\dist\Tank-Operator-Setup-0.1.3.exe /unattended
+.\dist\Tank-Operator-Setup-0.1.3.exe /quiet
+.\dist\Tank-Operator-Setup-0.1.3.exe /S
+```
+
+`/unattended`, `/quiet`, `/silent`, `--unattended`, `--quiet`, and `--silent`
+are aliases for NSIS silent mode. `/currentuser` and `/allusers` still work
+for install scope when needed.
+
+For unattended uninstall:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\Tank Operator\Uninstall Tank Operator.exe" /unattended
+```
+
 For a quick unpacked app without installing:
 
 ```powershell

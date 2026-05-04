@@ -1,7 +1,7 @@
 {
   "name": "tank-operator-desktop",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Desktop shell for Tank Operator.",
   "author": "tank-operator",
   "license": "UNLICENSED",
@@ -51,6 +51,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Tank Operator",
+      "include": "build/installer.nsh",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "installerIcon": "assets/app-icon.ico",
