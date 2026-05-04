@@ -63,16 +63,6 @@ function createWindow(initialUrl = tankUrl) {
     backgroundColor: "#171717",
     autoHideMenuBar: true,
     icon: path.join(__dirname, "..", "assets", "app-icon-512.png"),
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
-    ...(process.platform !== "darwin"
-      ? {
-          titleBarOverlay: {
-            color: "#171717",
-            symbolColor: "#e4e4e4",
-            height: 36,
-          },
-        }
-      : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

@@ -1,7 +1,7 @@
 {
   "name": "tank-operator-desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop shell for Tank Operator.",
   "author": "tank-operator",
   "license": "UNLICENSED",
