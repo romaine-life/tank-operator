@@ -10,6 +10,8 @@ data:
 {{ .Files.Get "session-config/mcp.json" | indent 4 }}
   default-claude.md: |
 {{ .Files.Get "session-config/default-claude.md" | indent 4 }}
+  write-glimmung-context.sh: |
+{{ .Files.Get "session-config/write-glimmung-context.sh" | indent 4 }}
   tank-bootstrap.sh: |
 {{ .Files.Get "session-config/tank-bootstrap.sh" | indent 4 }}
   skills.done.SKILL.md: |

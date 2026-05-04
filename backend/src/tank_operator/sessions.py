@@ -170,6 +170,7 @@ SESSION_CONFIG_MOUNTS = (
     ("mcp.json", "/workspace/.mcp.json"),
     ("default-claude.md", "/workspace/CLAUDE.md"),
     ("default-claude.md", "/workspace/AGENTS.md"),
+    ("write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"),
     ("tank-bootstrap.sh", "/opt/tank/bootstrap.sh"),
     ("skills.done.SKILL.md", "/home/node/.claude/skills/done/SKILL.md"),
     ("skills.rollout.SKILL.md", "/home/node/.claude/skills/rollout/SKILL.md"),
@@ -345,7 +346,11 @@ class SessionManager:
                     "name": "claude",
                     "image": session_image,
                     "imagePullPolicy": "Always",
-                    "command": ["sleep", "infinity"],
+                    "command": [
+                        "bash",
+                        "-lc",
+                        "bash /opt/tank/write-glimmung-context.sh; exec sleep infinity",
+                    ],
                     "env": [
                         # Read by exec_proxy's bootstrap to pick the
                         # auth path. Sourced at the env level (not
