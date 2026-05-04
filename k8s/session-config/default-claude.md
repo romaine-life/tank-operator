@@ -6,6 +6,21 @@ You should have freedom to read, and sometimes write, against almost all relevan
 
 The k8s cluster and most core infra is provisioned from nelsong6/infra-bootstrap.
 
+Session pods intentionally do not ship Docker or a container runtime. Do not
+report "I couldn't run docker build because Docker is not installed" as a
+blocker unless the user specifically asked for a local image build. For normal
+changes, run the relevant language/tooling checks available in the pod
+(`pytest`, `npm`, `go test`, `helm template`, etc.). The normal container
+build gate is the repo's PR CI: `.github/workflows/docker-build-check.yml`
+runs a throwaway Docker build with `push: false`. If a change touches
+Dockerfiles, image build inputs, lockfiles, entrypoints, bootstrap scripts,
+baked assets, or Helm image wiring and you need image-build feedback before a
+PR is ready, trigger that workflow manually with `git_ref`. Release/deploy
+workflows are the only image-publishing path. If you truly need an image build
+from inside Kubernetes, use or propose a dedicated builder path (GitHub
+Actions, ACR Tasks, BuildKit/Kaniko/buildah in an appropriately privileged
+builder pod), not ad hoc Docker-in-this-session-pod.
+
 For shell `git` access, call the GitHub MCP `mint_clone_token` tool for the needed repo(s), then use the returned token in an `https://x-access-token:<token>@github.com/owner/
 repo.git` remote URL. The github MCP server has additional tools if the minted token lacks permissions. If the combination of both lacks permissions, the solve is likely to increase the scope of the mcp server or the token, so feel free to raise the issue (and maybe even draft a code change on a branch) that expands the permissions on the mcp server or the minted token.
 
