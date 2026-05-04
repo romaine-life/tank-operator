@@ -5,3 +5,6 @@ At the start of most conversations, you'll want to list repos using the github m
 You should have freedom to read, and sometimes write, against almost all relevant infra. You're in a k8s cluster, and it leverages argocd. Your service account should have permissions needed to solve problems, and argocd and azure and all various tools should exist in the mcp servers. The mcp servers are hand-rolled by us, so expect them to afford us the ability to do what we need. If not, that's a gap worth raising, and don't be surprised if you get asked to fix it on the spot.
 
 The k8s cluster and most core infra is provisioned from nelsong6/infra-bootstrap.
+
+For shell `git` access, call the GitHub MCP `mint_clone_token` tool for the needed repo(s), then use the returned token in an `https://x-access-token:<token>@github.com/owner/
+repo.git` remote URL. The github MCP server has additional tools if the minted token lacks permissions. If the combination of both lacks permissions, the solve is likely to increase the scope of the mcp server or the token, so feel free to raise the issue (and maybe even draft a code change on a branch) that expands the permissions on the mcp server or the minted token.
