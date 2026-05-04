@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from tank_operator.profiles import SessionRegistryStore
 from tank_operator.sessions import GLIMMUNG_CONTEXT_ANNOTATION, SessionManager
 
 
@@ -30,11 +31,15 @@ def _session_pod(session_id: str, containers: list[str]) -> SimpleNamespace:
             labels={
                 "app.kubernetes.io/managed-by": "tank-operator",
                 "tank-operator/session-id": session_id,
+                "tank-operator/mode": "subscription",
             },
+            annotations={},
+            creation_timestamp=None,
         ),
         spec=SimpleNamespace(
             containers=[SimpleNamespace(name=name) for name in containers]
         ),
+        status=SimpleNamespace(phase="Pending", container_statuses=[]),
     )
 
 
@@ -47,13 +52,24 @@ class _FakeCore:
 
 
 class _ReaperSessionManager(SessionManager):
-    def __init__(self, pods: list[SimpleNamespace]) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        pods: list[SimpleNamespace],
+        registry: SessionRegistryStore | None = None,
+    ) -> None:
+        super().__init__(registry=registry)
         self._core = _FakeCore(pods)
         self.deleted: list[str] = []
 
     async def _delete_session_runtime(self, pod: SimpleNamespace) -> None:
         self.deleted.append(pod.metadata.name)
+
+
+class _MissingPodSessionManager(_ReaperSessionManager):
+    async def _read_owned_pod(self, owner: str, session_id: str) -> SimpleNamespace:
+        from tank_operator.sessions import SessionNotFound
+
+        raise SessionNotFound(session_id)
 
 
 def test_session_config_is_mounted_from_configmap() -> None:
@@ -118,6 +134,40 @@ def test_idle_reaper_leaves_legacy_session_pods() -> None:
 
     assert manager.deleted == ["session-terminald"]
     assert "legacy" in manager._activity
+
+
+def test_session_list_uses_registry_and_adopts_only_terminald_pods() -> None:
+    registry = SessionRegistryStore()
+    manager = _ReaperSessionManager(
+        [
+            _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
+            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+        ],
+        registry=registry,
+    )
+
+    listed = asyncio.run(manager.list(owner="operator@example.test"))
+
+    assert [session.id for session in listed] == ["terminald"]
+    assert asyncio.run(registry.get("operator@example.test", "legacy")) is None
+    assert asyncio.run(registry.get("operator@example.test", "terminald")) is not None
+
+
+def test_delete_hides_registry_session_when_runtime_pod_is_gone() -> None:
+    registry = SessionRegistryStore()
+    asyncio.run(
+        registry.upsert(
+            email="operator@example.test",
+            session_id="missing",
+            mode="subscription",
+            pod_name="session-missing",
+        )
+    )
+    manager = _MissingPodSessionManager([], registry=registry)
+
+    asyncio.run(manager.delete(owner="operator@example.test", session_id="missing"))
+
+    assert asyncio.run(registry.list("operator@example.test")) == []
 
 
 def test_glimmung_context_is_stamped_on_session_pod() -> None:

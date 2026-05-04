@@ -12,6 +12,8 @@ from typing import Any, AsyncIterator
 
 from kubernetes_asyncio import client, config
 
+from .profiles import SessionRecord, SessionRegistryStore
+
 log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = os.environ.get("SESSIONS_NAMESPACE", "tank-operator-sessions")
@@ -251,10 +253,11 @@ class SessionManager:
     rather than silently recreated as a new empty runtime.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, registry: SessionRegistryStore | None = None) -> None:
         self._api: client.ApiClient | None = None
         self._apps: client.AppsV1Api | None = None
         self._core: client.CoreV1Api | None = None
+        self._registry = registry
         # In-memory connection tracking for the idle reaper. Single replica
         # only (values.yaml pins replicas: 1) — stateful, restart-tolerant
         # via the "adopt with now" branch in _reap_idle.
@@ -267,6 +270,9 @@ class SessionManager:
         self._oauth_gateway_ip: str | None = None
         # Same idea for the api.anthropic.com proxy — see API_PROXY_HOST.
         self._api_proxy_ip: str | None = None
+
+    def set_registry(self, registry: SessionRegistryStore) -> None:
+        self._registry = registry
 
     async def startup(self) -> None:
         try:
@@ -627,7 +633,7 @@ class SessionManager:
         created_at = None
         if created.metadata and created.metadata.creation_timestamp:
             created_at = created.metadata.creation_timestamp.isoformat()
-        return SessionInfo(
+        info = SessionInfo(
             id=session_id,
             pod_name=created.metadata.name if created.metadata else None,
             owner=owner,
@@ -635,6 +641,15 @@ class SessionManager:
             mode=mode,
             created_at=created_at,
         )
+        if self._registry is not None:
+            await self._registry.upsert(
+                email=owner,
+                session_id=session_id,
+                mode=mode,
+                pod_name=info.pod_name,
+                created_at=created_at,
+            )
+        return info
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._core is not None
@@ -643,19 +658,34 @@ class SessionManager:
             namespace=SESSIONS_NAMESPACE,
             label_selector=f"tank-operator/owner={owner_label}",
         )
-        return [
-            SessionInfo(
-                id=p.metadata.labels.get(
-                    "tank-operator/session-id", p.metadata.name.removeprefix("session-")
+        pods_by_id = {_session_id_from_pod(p): p for p in pods.items}
+        if self._registry is None:
+            return [
+                _session_info_from_pod(owner, p)
+                for p in pods.items
+                if _pod_has_container(p, "terminal-proxy")
+            ]
+
+        for session_id, pod in pods_by_id.items():
+            if not _pod_has_container(pod, "terminal-proxy"):
+                continue
+            if await self._registry.get(owner, session_id) is not None:
+                continue
+            await self._registry.upsert(
+                email=owner,
+                session_id=session_id,
+                mode=pod.metadata.labels.get(
+                    "tank-operator/mode", DEFAULT_SESSION_MODE
                 ),
-                pod_name=p.metadata.name,
-                owner=owner,
-                status=_pod_status(p),
-                mode=p.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
-                created_at=_pod_created_at(p),
-                name=(p.metadata.annotations or {}).get(NAME_ANNOTATION),
+                pod_name=pod.metadata.name,
+                name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
+                created_at=_pod_created_at(pod),
             )
-            for p in pods.items
+
+        records = await self._registry.list(owner)
+        return [
+            _session_info_from_record(owner, record, pods_by_id.get(record.id))
+            for record in records
         ]
 
     async def get_session(self, owner: str, session_id: str) -> SessionInfo:
@@ -704,7 +734,7 @@ class SessionManager:
             body={"metadata": {"annotations": {NAME_ANNOTATION: annotation_value}}},
         )
         mode = patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
-        return SessionInfo(
+        info = SessionInfo(
             id=session_id,
             pod_name=patched.metadata.name,
             owner=owner,
@@ -713,6 +743,16 @@ class SessionManager:
             created_at=_pod_created_at(patched),
             name=annotation_value,
         )
+        if self._registry is not None:
+            await self._registry.upsert(
+                email=owner,
+                session_id=session_id,
+                mode=mode,
+                pod_name=patched.metadata.name,
+                name=annotation_value,
+                created_at=info.created_at,
+            )
+        return info
 
     async def get_pod_name(
         self, owner: str, session_id: str, timeout: float = 90.0
@@ -742,8 +782,20 @@ class SessionManager:
 
     async def delete(self, owner: str, session_id: str) -> None:
         assert self._core is not None
-        pod = await self._read_owned_pod(owner, session_id)
+        try:
+            pod = await self._read_owned_pod(owner, session_id)
+        except SessionNotFound:
+            if self._registry is not None:
+                record = await self._registry.get(owner, session_id)
+                if record is not None:
+                    await self._registry.mark_deleted(owner, session_id)
+                    self._ws_count.pop(session_id, None)
+                    self._activity.pop(session_id, None)
+                    return
+            raise
         await self._delete_session_runtime(pod)
+        if self._registry is not None:
+            await self._registry.mark_deleted(owner, session_id)
         self._ws_count.pop(session_id, None)
         self._activity.pop(session_id, None)
 
@@ -876,6 +928,48 @@ def _pod_created_at(pod: Any) -> str | None:
     if not pod.metadata or not pod.metadata.creation_timestamp:
         return None
     return pod.metadata.creation_timestamp.isoformat()
+
+
+def _session_id_from_pod(pod: Any) -> str:
+    return pod.metadata.labels.get(
+        "tank-operator/session-id", pod.metadata.name.removeprefix("session-")
+    )
+
+
+def _session_info_from_pod(owner: str, pod: Any) -> SessionInfo:
+    return SessionInfo(
+        id=_session_id_from_pod(pod),
+        pod_name=pod.metadata.name,
+        owner=owner,
+        status=_pod_status(pod),
+        mode=pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
+        created_at=_pod_created_at(pod),
+        name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
+    )
+
+
+def _session_info_from_record(
+    owner: str, record: SessionRecord, pod: Any | None
+) -> SessionInfo:
+    if pod is not None:
+        return SessionInfo(
+            id=record.id,
+            pod_name=pod.metadata.name,
+            owner=owner,
+            status=_pod_status(pod),
+            mode=record.mode,
+            created_at=record.created_at or _pod_created_at(pod),
+            name=record.name,
+        )
+    return SessionInfo(
+        id=record.id,
+        pod_name=record.pod_name,
+        owner=owner,
+        status="Failed",
+        mode=record.mode,
+        created_at=record.created_at,
+        name=record.name,
+    )
 
 
 def _legacy_deployment_owner(pod: Any) -> str | None:
