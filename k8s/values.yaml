@@ -23,6 +23,7 @@ session:
   image: romainecr.azurecr.io/claude-container:1103e7b
   codexImage: romainecr.azurecr.io/codex-container:1103e7b
   piImage: romainecr.azurecr.io/pi-container:1103e7b
+  configMap: tank-session-config
   serviceAccount: claude-session
   # Idle reaper: a session with no open WebSocket connections for this many
   # seconds is deleted by the orchestrator's background sweep. 7 days is
@@ -115,10 +116,10 @@ externalSecret:
   storeKind: ClusterSecretStore
   refreshInterval: 1h
   # Env vars the session container needs at startup. Session pods envFrom this
-  # Secret. The set of MCP servers wired into the session pod is defined by
-  # claude-container/mcp.json (baked into the image); those MCP servers run
-  # in-cluster (k8s-mcp-azure/, k8s-mcp-github/) and read their own credentials
-  # from KV via per-server ExternalSecrets, NOT from this Secret.
+  # Secret. The MCP server list is mounted from the session.configMap
+  # ConfigMap. Those MCP servers run in-cluster (k8s-mcp-azure/,
+  # k8s-mcp-github/) and read their own credentials from KV via per-server
+  # ExternalSecrets, NOT from this Secret.
   #
   # Both auth paths are bundled in every pod; the orchestrator stamps
   # TANK_SESSION_MODE on each Deployment to pick which one the bootstrap uses:

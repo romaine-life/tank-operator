@@ -37,6 +37,8 @@ spec:
               value: {{ .Values.session.piImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ .Values.session.serviceAccount | quote }}
+            - name: SESSION_CONFIGMAP
+              value: {{ .Values.session.configMap | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ .Values.externalSecret.githubApp.secretName | quote }}
             - name: IDLE_TIMEOUT_SECONDS

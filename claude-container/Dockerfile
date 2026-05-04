@@ -104,27 +104,15 @@ RUN pip install --no-cache-dir --break-system-packages /opt/platform-mcp
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
-# Default MCP wiring for the in-container agent. Lives in /workspace so
-# Claude Code picks it up as project-scope config; also kept at
-# /opt/claude-container/mcp.json for users who mount their own /workspace.
-COPY claude-container/mcp.json /opt/claude-container/mcp.json
-RUN mkdir -p /workspace && cp /opt/claude-container/mcp.json /workspace/.mcp.json
-
-# Default project-scope primers. They land in /workspace so each CLI
-# auto-loads its native instruction file for any cwd under /workspace
-# (including cloned repos): Claude Code reads CLAUDE.md; Codex and Pi read
-# AGENTS.md. The files describe the pod environment without conflating
-# with user-scope config, which is left free for genuine user prefs. They
-# are also kept under /opt/claude-container/ for users who mount their own
-# /workspace.
-#
-# Source filename intentionally avoids CLAUDE.md/AGENTS.md so agents
-# working inside claude-container/ in this repo do not auto-load the seed
-# as project docs.
-COPY claude-container/default-claude.md /opt/claude-container/CLAUDE.md
-RUN cp /opt/claude-container/CLAUDE.md /workspace/CLAUDE.md \
-    && cp /opt/claude-container/CLAUDE.md /opt/claude-container/AGENTS.md \
-    && cp /opt/claude-container/AGENTS.md /workspace/AGENTS.md
+# Session-facing MCP wiring, AGENTS/CLAUDE primers, and bundled skill docs are
+# mounted from the chart-managed tank-session-config ConfigMap. Keep the parent
+# directories in the image so the orchestrator can mount individual files with
+# subPath without rebuilding the image for docs/config changes.
+RUN mkdir -p /workspace \
+        /home/node/.claude/skills/done \
+        /home/node/.claude/skills/rollout/agents \
+        /home/node/.codex/skills/rollout/agents \
+        /home/node/.pi/agent
 
 # Thin passthrough entrypoint kept for direct `docker run` / `kubectl
 # exec` consumers. The orchestrator's bridge bypasses ENTRYPOINT (sets
@@ -138,23 +126,6 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # kube-apiserver rejects oversized exec command lines with HTTP 400.
 COPY claude-container/tank-bootstrap.sh /opt/tank/bootstrap.sh
 RUN chmod +x /opt/tank/bootstrap.sh
-
-# Repo-bundled skills are baked into the agent-specific home directory so
-# the CLI can discover them before it starts. Rebuild the image to update
-# skills; do not fetch them during session bootstrap.
-COPY claude-container/skills /opt/claude-container/skills
-RUN mkdir -p /home/node/.claude/skills /home/node/.codex/skills /home/node/.pi/agent \
-    && case "${TANK_AGENT}" in \
-        claude) \
-          cp -R /opt/claude-container/skills/done /home/node/.claude/skills/done; \
-          cp -R /opt/claude-container/skills/rollout /home/node/.claude/skills/rollout; \
-          ;; \
-        codex) \
-          cp -R /opt/claude-container/skills/rollout /home/node/.codex/skills/rollout; \
-          ;; \
-        pi) \
-          ;; \
-    esac
 
 # Pi keeps MCP support in installable packages rather than core. Install the
 # adapter into the baked Pi image so session startup can stay offline and Pi
