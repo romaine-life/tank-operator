@@ -825,6 +825,12 @@ class SessionManager:
             session_id = pod.metadata.labels.get("tank-operator/session-id")
             if not session_id:
                 continue
+            if not _pod_has_container(pod, "terminal-proxy"):
+                # Pre-terminald sessions cannot prove liveness through the
+                # browser websocket anymore. Leave them for explicit deletion
+                # so kubectl-attached users are not disconnected by the reaper.
+                self._activity[session_id] = now
+                continue
             if self._ws_count.get(session_id, 0) > 0:
                 # Live connection — keep the activity clock current.
                 self._activity[session_id] = now
