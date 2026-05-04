@@ -1136,6 +1136,18 @@ button:disabled {
   box-shadow: var(--shadow-avatar-inset);
 }
 
+.avatar-image {
+  overflow: hidden;
+  background: var(--bg-elevated);
+}
+
+.avatar-image img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
 .profile-text {
   flex: 1;
   min-width: 0;

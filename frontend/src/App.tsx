@@ -471,6 +471,7 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
+  avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
   // wall — null means show the install CTA, non-null means full app.
@@ -790,6 +791,18 @@ function initials(user: SessionUser): string {
   const first = parts[0]?.[0] ?? source[0];
   const second = parts[1]?.[0] ?? "";
   return (first + second).toUpperCase().slice(0, 2);
+}
+
+function Avatar({ user }: { user: SessionUser }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !user.avatar_url) {
+    return <span className="avatar" aria-hidden="true">{initials(user)}</span>;
+  }
+  return (
+    <span className="avatar avatar-image" aria-hidden="true">
+      <img src={user.avatar_url} alt="" onError={() => setFailed(true)} />
+    </span>
+  );
 }
 
 function OnboardingWall({
@@ -1755,7 +1768,7 @@ export function App() {
             onClick={() => setProfileMenuOpen((v) => !v)}
             title={user.email}
           >
-            <span className="avatar" aria-hidden="true">{initials(user)}</span>
+            <Avatar user={user} />
             <span className="profile-text">
               <span className="profile-name">{user.name || user.email}</span>
             </span>

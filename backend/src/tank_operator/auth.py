@@ -16,6 +16,7 @@ gets 403.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -97,6 +98,12 @@ class User:
     sub: str
     email: str
     name: str
+
+
+def gravatar_url(email: str, size: int = 64) -> str:
+    normalized = email.strip().lower().encode("utf-8")
+    digest = hashlib.md5(normalized, usedforsecurity=False).hexdigest()
+    return f"https://www.gravatar.com/avatar/{digest}?s={size}&d=mp"
 
 
 def _verify_entra_id_token(id_token: str) -> dict[str, Any]:
