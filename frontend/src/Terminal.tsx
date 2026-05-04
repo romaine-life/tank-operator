@@ -114,6 +114,7 @@ interface Props {
  */
 export interface TerminalHandle {
   sendInput: (s: string) => void;
+  focus: () => boolean;
 }
 
 type DebugWindow = Window & {
@@ -296,6 +297,13 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     sendInput: (s: string) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(s);
+    },
+    focus: () => {
+      const term = termRef.current;
+      if (!term) return false;
+      fitRef.current?.fit();
+      term.focus();
+      return true;
     },
   }), []);
 
