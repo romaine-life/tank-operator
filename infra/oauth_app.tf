@@ -17,6 +17,9 @@ resource "azuread_application" "oauth" {
   # rejected by the consumer auth flow with `unauthorized_client`. Sign-in is
   # still gated by the backend's ALLOWED_EMAILS allowlist.
   sign_in_audience = "AzureADandPersonalMicrosoftAccount"
+  # The Electron shell uses a native public-client auth-code flow through the
+  # system browser, then receives the result on tank-operator://auth.
+  fallback_public_client_enabled = true
 
   owners = [data.azuread_client_config.current.object_id]
 
@@ -30,6 +33,12 @@ resource "azuread_application" "oauth" {
   single_page_application {
     redirect_uris = [
       "https://${var.hostname}/",
+    ]
+  }
+
+  public_client {
+    redirect_uris = [
+      "tank-operator://auth",
     ]
   }
 

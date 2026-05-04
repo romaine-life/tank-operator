@@ -1,15 +1,22 @@
-const { app, BrowserWindow, Menu, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, screen, shell } = require("electron");
+const { CryptoProvider, PublicClientApplication } = require("@azure/msal-node");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 
 const DEFAULT_TANK_URL = "https://tank.romaine.life";
 const tankUrl = normalizeUrl(process.env.TANK_OPERATOR_URL || DEFAULT_TANK_URL);
 const tankOrigin = new URL(tankUrl).origin;
+const DESKTOP_AUTH_PROTOCOL = "tank-operator";
+const DESKTOP_AUTH_REDIRECT_URI = `${DESKTOP_AUTH_PROTOCOL}://auth`;
+const DESKTOP_AUTH_SCOPES = ["User.Read", "openid", "profile", "email"];
+const DESKTOP_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const MIN_ZOOM_FACTOR = 0.5;
 const MAX_ZOOM_FACTOR = 2.0;
 const ZOOM_STEP = 0.1;
 const WINDOW_TITLE = "Tank";
 
 let mainWindow = null;
+let pendingDesktopAuth = null;
 
 function normalizeUrl(value) {
   const parsed = new URL(value);
@@ -71,6 +78,7 @@ function createWindow(initialUrl = tankUrl) {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -110,10 +118,37 @@ app.setName("Tank Operator");
 if (process.platform === "win32") {
   app.setAppUserModelId("life.romaine.tank-operator");
 }
+registerProtocolClient();
 Menu.setApplicationMenu(null);
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    handleProtocolCallback(argv.find((arg) => arg.startsWith(`${DESKTOP_AUTH_PROTOCOL}://`)));
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  handleProtocolCallback(url);
+});
+
+ipcMain.handle("desktop-auth:microsoft-login", async (event) => {
+  assertTrustedSender(event);
+  return startDesktopMicrosoftLogin();
+});
 
 app.whenReady().then(() => {
   mainWindow = createWindow();
+  handleProtocolCallback(
+    process.argv.find((arg) => arg.startsWith(`${DESKTOP_AUTH_PROTOCOL}://`)),
+  );
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -125,6 +160,136 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+function registerProtocolClient() {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(DESKTOP_AUTH_PROTOCOL, process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+    return;
+  }
+  app.setAsDefaultProtocolClient(DESKTOP_AUTH_PROTOCOL);
+}
+
+function assertTrustedSender(event) {
+  const senderUrl = event.senderFrame?.url || "";
+  if (!isTankUrl(senderUrl)) {
+    throw new Error("desktop auth is only available to the Tank Operator app");
+  }
+}
+
+async function fetchAuthConfig() {
+  const res = await fetch(new URL("/api/config", tankOrigin));
+  if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
+  const config = await res.json();
+  if (!config.entra_client_id) throw new Error("backend has no ENTRA_CLIENT_ID");
+  return config;
+}
+
+async function startDesktopMicrosoftLogin() {
+  if (pendingDesktopAuth) {
+    pendingDesktopAuth.reject(new Error("replaced by a newer desktop auth request"));
+    clearPendingDesktopAuth();
+  }
+
+  const config = await fetchAuthConfig();
+  const client = new PublicClientApplication({
+    auth: {
+      clientId: config.entra_client_id,
+      authority: config.entra_authority,
+    },
+  });
+  const cryptoProvider = new CryptoProvider();
+  const pkce = await cryptoProvider.generatePkceCodes();
+  const state = randomUUID();
+
+  const authUrl = await client.getAuthCodeUrl({
+    scopes: DESKTOP_AUTH_SCOPES,
+    redirectUri: DESKTOP_AUTH_REDIRECT_URI,
+    codeChallenge: pkce.challenge,
+    codeChallengeMethod: "S256",
+    prompt: "select_account",
+    state,
+  });
+
+  const result = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("Microsoft sign-in timed out"));
+      clearPendingDesktopAuth();
+    }, DESKTOP_AUTH_TIMEOUT_MS);
+    pendingDesktopAuth = {
+      client,
+      codeVerifier: pkce.verifier,
+      reject,
+      resolve,
+      state,
+      timeout,
+    };
+  });
+
+  await shell.openExternal(authUrl);
+  return result;
+}
+
+async function handleProtocolCallback(url) {
+  if (!url || !pendingDesktopAuth) return false;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== `${DESKTOP_AUTH_PROTOCOL}:` || parsed.hostname !== "auth") {
+    return false;
+  }
+
+  const pending = pendingDesktopAuth;
+  if (parsed.searchParams.get("state") !== pending.state) {
+    pending.reject(new Error("desktop auth state mismatch"));
+    clearPendingDesktopAuth();
+    return true;
+  }
+
+  const error = parsed.searchParams.get("error");
+  if (error) {
+    const description = parsed.searchParams.get("error_description") || error;
+    pending.reject(new Error(description));
+    clearPendingDesktopAuth();
+    return true;
+  }
+
+  const code = parsed.searchParams.get("code");
+  if (!code) {
+    pending.reject(new Error("Microsoft did not return an authorization code"));
+    clearPendingDesktopAuth();
+    return true;
+  }
+
+  try {
+    const token = await pending.client.acquireTokenByCode({
+      code,
+      codeVerifier: pending.codeVerifier,
+      redirectUri: DESKTOP_AUTH_REDIRECT_URI,
+      scopes: DESKTOP_AUTH_SCOPES,
+    });
+    if (!token?.idToken) throw new Error("Microsoft did not return an ID token");
+    pending.resolve({ idToken: token.idToken });
+  } catch (e) {
+    pending.reject(e);
+  } finally {
+    clearPendingDesktopAuth();
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  }
+  return true;
+}
+
+function clearPendingDesktopAuth() {
+  if (pendingDesktopAuth?.timeout) clearTimeout(pendingDesktopAuth.timeout);
+  pendingDesktopAuth = null;
+}
 
 function registerWindowShortcuts(win) {
   win.webContents.on("before-input-event", (event, input) => {

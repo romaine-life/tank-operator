@@ -21,6 +21,14 @@ const TOKEN_KEY = "tank-operator-jwt";
 
 let msal: PublicClientApplication | null = null;
 
+declare global {
+  interface Window {
+    tankOperatorDesktop?: {
+      microsoftLogin: () => Promise<{ idToken: string }>;
+    };
+  }
+}
+
 async function fetchConfig(): Promise<AppConfig> {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
@@ -104,6 +112,12 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
 
 /** User-initiated sign-in. Navigates away to Entra. */
 export async function startLogin(): Promise<void> {
+  if (window.tankOperatorDesktop) {
+    const result = await window.tankOperatorDesktop.microsoftLogin();
+    await exchange(result.idToken);
+    window.location.assign("/");
+    return;
+  }
   const client = await getMsal();
   await client.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
 }
