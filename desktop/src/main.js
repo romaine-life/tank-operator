@@ -7,6 +7,7 @@ const tankOrigin = new URL(tankUrl).origin;
 const MIN_ZOOM_FACTOR = 0.5;
 const MAX_ZOOM_FACTOR = 2.0;
 const ZOOM_STEP = 0.1;
+const WINDOW_TITLE = " ";
 
 let mainWindow = null;
 
@@ -59,7 +60,8 @@ function createWindow(initialUrl = tankUrl) {
     minWidth: Math.min(960, workArea.width),
     minHeight: Math.min(640, workArea.height),
     show: false,
-    title: "",
+    title: WINDOW_TITLE,
+    skipTaskbar: false,
     backgroundColor: "#171717",
     autoHideMenuBar: true,
     icon: path.join(__dirname, "..", "assets", "app-icon-512.png"),
@@ -79,7 +81,7 @@ function createWindow(initialUrl = tankUrl) {
 
   win.on("page-title-updated", (event) => {
     event.preventDefault();
-    win.setTitle("");
+    win.setTitle(WINDOW_TITLE);
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
