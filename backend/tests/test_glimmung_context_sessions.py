@@ -41,6 +41,7 @@ def test_session_config_is_mounted_from_configmap() -> None:
     assert ("/workspace/.mcp.json", "mcp.json") in mounts
     assert ("/workspace/CLAUDE.md", "default-claude.md") in mounts
     assert ("/workspace/AGENTS.md", "default-claude.md") in mounts
+    assert ("/opt/tank/write-glimmung-context.sh", "write-glimmung-context.sh") in mounts
     assert ("/opt/tank/bootstrap.sh", "tank-bootstrap.sh") in mounts
     assert ("/home/node/.claude/skills/done/SKILL.md", "skills.done.SKILL.md") in mounts
     assert ("/home/node/.codex/skills/rollout/SKILL.md", "skills.rollout.SKILL.md") in mounts
@@ -77,6 +78,11 @@ def test_glimmung_context_is_stamped_on_session_deployment() -> None:
     assert env["TANK_GLIMMUNG_ISSUE_ID"] == "issue-1"
     assert env["TANK_GLIMMUNG_PR_ID"] == "pr-1"
     assert env["TANK_GLIMMUNG_VALIDATION_URL"] == "https://preview.example.test"
+    assert _claude_container(manifest)["command"] == [
+        "bash",
+        "-lc",
+        "bash /opt/tank/write-glimmung-context.sh; exec sleep infinity",
+    ]
 
 
 def test_plain_session_has_no_glimmung_context_annotation() -> None:
