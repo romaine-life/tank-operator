@@ -30,6 +30,7 @@ import datetime
 import logging
 import os
 from dataclasses import asdict, dataclass
+from typing import Any
 
 from azure.cosmos.aio import CosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
@@ -54,6 +55,21 @@ class Profile:
         return asdict(self)
 
 
+@dataclass
+class SessionRecord:
+    id: str
+    email: str
+    mode: str
+    pod_name: str | None = None
+    name: str | None = None
+    visible: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -63,6 +79,19 @@ def _profile_from_doc(doc: dict) -> Profile:
         email=doc["email"],
         github_login=doc.get("github_login"),
         installation_id=doc.get("installation_id"),
+        created_at=doc.get("created_at", ""),
+        updated_at=doc.get("updated_at", ""),
+    )
+
+
+def _session_from_doc(doc: dict) -> SessionRecord:
+    return SessionRecord(
+        id=doc["id"].removeprefix("session:"),
+        email=doc["email"],
+        mode=doc.get("mode", "subscription"),
+        pod_name=doc.get("pod_name"),
+        name=doc.get("name"),
+        visible=doc.get("visible", True),
         created_at=doc.get("created_at", ""),
         updated_at=doc.get("updated_at", ""),
     )
@@ -172,3 +201,142 @@ class ProfileStore:
         doc["updated_at"] = now
         await self._container.upsert_item(body=doc)
         return _profile_from_doc(doc)
+
+
+class SessionRegistryStore:
+    """User-facing session registry backed by the Cosmos profiles container.
+
+    Kubernetes remains the runtime source of truth, but this store owns product
+    visibility: only registered, visible sessions appear in the UI. We reuse the
+    existing `/email`-partitioned profiles container so this can roll out before
+    any new infrastructure container exists.
+    """
+
+    def __init__(self) -> None:
+        self._credential: DefaultAzureCredential | None = None
+        self._client: CosmosClient | None = None
+        self._container = None
+        self._enabled = bool(COSMOS_ENDPOINT)
+        self._memory: dict[str, dict[str, SessionRecord]] = {}
+
+    async def startup(self) -> None:
+        if not self._enabled:
+            log.warning(
+                "COSMOS_ENDPOINT unset; session registry using in-memory storage"
+            )
+            return
+        self._credential = DefaultAzureCredential()
+        self._client = CosmosClient(COSMOS_ENDPOINT, credential=self._credential)
+        database = self._client.get_database_client(COSMOS_DATABASE)
+        self._container = database.get_container_client(COSMOS_PROFILES_CONTAINER)
+
+    async def shutdown(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+        if self._credential is not None:
+            await self._credential.close()
+
+    async def upsert(
+        self,
+        *,
+        email: str,
+        session_id: str,
+        mode: str,
+        pod_name: str | None,
+        name: str | None = None,
+        created_at: str | None = None,
+        visible: bool = True,
+    ) -> SessionRecord:
+        normalized = email.lower()
+        now = _now_iso()
+        existing = await self.get(normalized, session_id)
+        record = SessionRecord(
+            id=session_id,
+            email=normalized,
+            mode=mode,
+            pod_name=pod_name,
+            name=name if name is not None else (existing.name if existing else None),
+            visible=visible,
+            created_at=created_at or (existing.created_at if existing else now),
+            updated_at=now,
+        )
+        if not self._enabled or self._container is None:
+            self._memory.setdefault(normalized, {})[session_id] = record
+            return record
+        await self._container.upsert_item(body=_session_doc(record))
+        return record
+
+    async def get(self, email: str, session_id: str) -> SessionRecord | None:
+        normalized = email.lower()
+        if not self._enabled or self._container is None:
+            return self._memory.get(normalized, {}).get(session_id)
+        try:
+            doc = await self._container.read_item(
+                item=f"session:{session_id}", partition_key=normalized
+            )
+        except CosmosResourceNotFoundError:
+            return None
+        if doc.get("type") != "session":
+            return None
+        return _session_from_doc(doc)
+
+    async def list(self, email: str) -> list[SessionRecord]:
+        normalized = email.lower()
+        if not self._enabled or self._container is None:
+            return [r for r in self._memory.get(normalized, {}).values() if r.visible]
+        query = (
+            "SELECT * FROM c WHERE c.email = @email "
+            "AND c.type = 'session' AND c.visible = true"
+        )
+        params = [{"name": "@email", "value": normalized}]
+        items = self._container.query_items(
+            query=query,
+            parameters=params,
+            partition_key=normalized,
+        )
+        records = [_session_from_doc(item) async for item in items]
+        records.sort(key=lambda r: r.created_at)
+        return records
+
+    async def set_name(
+        self, email: str, session_id: str, name: str | None
+    ) -> SessionRecord | None:
+        record = await self.get(email, session_id)
+        if record is None:
+            return None
+        return await self.upsert(
+            email=email,
+            session_id=session_id,
+            mode=record.mode,
+            pod_name=record.pod_name,
+            name=name,
+            created_at=record.created_at,
+            visible=record.visible,
+        )
+
+    async def mark_deleted(self, email: str, session_id: str) -> None:
+        normalized = email.lower()
+        record = await self.get(normalized, session_id)
+        if record is None:
+            return
+        record.visible = False
+        record.updated_at = _now_iso()
+        if not self._enabled or self._container is None:
+            self._memory.setdefault(normalized, {})[session_id] = record
+            return
+        await self._container.upsert_item(body=_session_doc(record))
+
+
+def _session_doc(record: SessionRecord) -> dict[str, Any]:
+    return {
+        "id": f"session:{record.id}",
+        "type": "session",
+        "email": record.email,
+        "session_id": record.id,
+        "mode": record.mode,
+        "pod_name": record.pod_name,
+        "name": record.name,
+        "visible": record.visible,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }

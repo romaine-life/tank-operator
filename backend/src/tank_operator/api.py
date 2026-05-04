@@ -37,7 +37,7 @@ from .credentials_seed import (
     harvest_codex_and_save,
 )
 from .exec_proxy import bridge, exec_write_file
-from .profiles import ProfileStore
+from .profiles import ProfileStore, SessionRegistryStore
 from .sessions import (
     DEFAULT_SESSION_MODE,
     SESSION_MODES,
@@ -50,7 +50,8 @@ from .sessions import (
     SessionTerminalUnavailable,
 )
 
-sessions = SessionManager()
+session_registry = SessionRegistryStore()
+sessions = SessionManager(registry=session_registry)
 profiles = ProfileStore()
 log = logging.getLogger(__name__)
 
@@ -68,11 +69,13 @@ MAX_PASTE_IMAGE_BYTES = int(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await profiles.startup()
+    await session_registry.startup()
     await sessions.startup()
     try:
         yield
     finally:
         await sessions.shutdown()
+        await session_registry.shutdown()
         await profiles.shutdown()
 
 
