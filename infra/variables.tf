@@ -46,5 +46,6 @@ variable "allowed_emails" {
     "nelson@romaine.life",
     "Brenden.owens39@gmail.com",
     "gantonski@gmail.com",
+    "menacewwo@gmail.com",
   ]
 }
