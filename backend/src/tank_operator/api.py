@@ -18,6 +18,7 @@ from .auth import (
     current_user,
     current_user_ws,
     exchange_microsoft_token,
+    gravatar_url,
     mint_install_state,
     verify_install_state,
 )
@@ -112,6 +113,7 @@ async def microsoft_login(body: LoginBody, request: Request) -> JSONResponse:
                 "sub": user.sub,
                 "email": user.email,
                 "name": user.name,
+                "avatar_url": gravatar_url(user.email),
                 "github_login": profile.github_login,
                 "installation_id": profile.installation_id,
             },
@@ -149,6 +151,7 @@ async def me(user: User = Depends(current_user)) -> dict:
         "sub": user.sub,
         "email": user.email,
         "name": user.name,
+        "avatar_url": gravatar_url(user.email),
         "github_login": profile.github_login,
         "installation_id": profile.installation_id,
     }

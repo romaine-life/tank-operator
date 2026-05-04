@@ -9,6 +9,7 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
+  avatar_url: string;
   // Profile fields surfaced from /api/auth/me. Null until the user
   // completes the GitHub App install (#57 stage 2).
   github_login: string | null;
