@@ -45,8 +45,6 @@ spec:
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
               value: {{ .Values.session.reaperIntervalSeconds | quote }}
-            - name: SESSION_SHARED_OWNER_EMAILS
-              value: {{ join "," .Values.session.sharedOwnerEmails | quote }}
             - name: TANK_OPERATOR_STATIC_DIR
               value: /app/static
             - name: CLAUDE_CREDENTIALS_FILE

@@ -32,11 +32,6 @@ session:
   # running over a long weekend.
   idleTimeoutSeconds: 604800
   reaperIntervalSeconds: 60
-  # Temporary migration pool: either signed-in account can see and operate
-  # sessions owned by any email in this list.
-  sharedOwnerEmails:
-    - nelson-devops-project@outlook.com
-    - nelson@romaine.life
 
 ingress:
   hostname: tank.romaine.life

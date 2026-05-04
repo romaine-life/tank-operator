@@ -56,7 +56,6 @@ ARGOCD_TRACKING_APP = os.environ.get("ARGOCD_TRACKING_APP", "tank-operator-sessi
 # README's "killed when the tab closes" promise.
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
 REAPER_INTERVAL_SECONDS = int(os.environ.get("REAPER_INTERVAL_SECONDS", "60"))
-SESSION_SHARED_OWNER_EMAILS_ENV = "SESSION_SHARED_OWNER_EMAILS"
 
 
 class SessionNotFound(Exception):
@@ -208,37 +207,8 @@ class SessionInfo:
 
 def _owner_label(email: str) -> str:
     # K8s label values must match [a-z0-9A-Z._-]{0,63}; email addresses contain `@`.
-    digest = hashlib.sha256(email.lower().encode()).hexdigest()[:16]
+    digest = hashlib.sha256(email.encode()).hexdigest()[:16]
     return f"u-{digest}"
-
-
-def _shared_owner_emails() -> tuple[str, ...]:
-    raw = os.environ.get(SESSION_SHARED_OWNER_EMAILS_ENV, "")
-    return tuple(
-        dict.fromkeys(email.strip().lower() for email in raw.split(",") if email.strip())
-    )
-
-
-def _owner_emails_for(email: str) -> tuple[str, ...]:
-    normalized = email.lower()
-    shared = _shared_owner_emails()
-    if normalized in shared:
-        return shared
-    return (normalized,)
-
-
-def _owner_labels_for(email: str) -> set[str]:
-    return {_owner_label(owner) for owner in _owner_emails_for(email)}
-
-
-def _deployment_owner_email(deployment: Any, fallback: str) -> str:
-    annotations = deployment.metadata.annotations or {}
-    return annotations.get("tank-operator/owner-email") or fallback.lower()
-
-
-def _deployment_accessible_by(deployment: Any, owner: str) -> bool:
-    labels = deployment.metadata.labels or {}
-    return labels.get("tank-operator/owner") in _owner_labels_for(owner)
 
 
 def _session_config_mounts() -> list[dict[str, Any]]:
@@ -626,36 +596,24 @@ class SessionManager:
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._apps is not None
-        owner_labels = _owner_labels_for(owner)
-        if len(owner_labels) == 1:
-            deployments = await self._apps.list_namespaced_deployment(
-                namespace=SESSIONS_NAMESPACE,
-                label_selector=f"tank-operator/owner={next(iter(owner_labels))}",
-            )
-            items = deployments.items
-        else:
-            deployments = await self._apps.list_namespaced_deployment(
-                namespace=SESSIONS_NAMESPACE,
-                label_selector="app.kubernetes.io/managed-by=tank-operator",
-            )
-            items = [
-                d
-                for d in deployments.items
-                if (d.metadata.labels or {}).get("tank-operator/owner") in owner_labels
-            ]
+        owner_label = _owner_label(owner)
+        deployments = await self._apps.list_namespaced_deployment(
+            namespace=SESSIONS_NAMESPACE,
+            label_selector=f"tank-operator/owner={owner_label}",
+        )
         return [
             SessionInfo(
                 id=d.metadata.labels.get(
                     "tank-operator/session-id", d.metadata.name
                 ),
                 pod_name=None,
-                owner=_deployment_owner_email(d, owner),
+                owner=owner,
                 status=_deployment_status(d),
                 mode=d.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
                 created_at=_deployment_created_at(d),
                 name=(d.metadata.annotations or {}).get(NAME_ANNOTATION),
             )
-            for d in items
+            for d in deployments.items
         ]
 
     async def get_session(self, owner: str, session_id: str) -> SessionInfo:
@@ -668,6 +626,7 @@ class SessionManager:
         pod.
         """
         assert self._apps is not None
+        owner_label = _owner_label(owner)
         try:
             deployment = await self._apps.read_namespaced_deployment(
                 name=f"session-{session_id}", namespace=SESSIONS_NAMESPACE
@@ -676,13 +635,13 @@ class SessionManager:
             if e.status == 404:
                 raise SessionNotFound(session_id) from e
             raise
-        if not _deployment_accessible_by(deployment, owner):
+        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
             raise SessionNotOwned(session_id)
         mode = deployment.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
         return SessionInfo(
             id=session_id,
             pod_name=None,
-            owner=_deployment_owner_email(deployment, owner),
+            owner=owner,
             status=_deployment_status(deployment),
             mode=mode,
             created_at=_deployment_created_at(deployment),
@@ -696,13 +655,14 @@ class SessionManager:
 
         Stored as an annotation on the Deployment, so it survives
         orchestrator restarts and is visible to anyone who can read the
-        Deployment (the owner, or members of the configured shared owner set).
+        Deployment (the owner, via the existing label-scoped list).
         Pass `None` (or empty string after trim) to clear.
 
         Strategic-merge-patch semantics: a `None` annotation value tells
         the apiserver to remove the key.
         """
         assert self._apps is not None
+        owner_label = _owner_label(owner)
         deployment_name = f"session-{session_id}"
         try:
             deployment = await self._apps.read_namespaced_deployment(
@@ -712,7 +672,7 @@ class SessionManager:
             if e.status == 404:
                 raise SessionNotFound(session_id) from e
             raise
-        if not _deployment_accessible_by(deployment, owner):
+        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
             raise SessionNotOwned(session_id)
         normalized = name.strip() if name else ""
         annotation_value: str | None = normalized[:MAX_NAME_LENGTH] if normalized else None
@@ -725,7 +685,7 @@ class SessionManager:
         return SessionInfo(
             id=session_id,
             pod_name=None,
-            owner=_deployment_owner_email(deployment, owner),
+            owner=owner,
             status=_deployment_status(deployment),
             mode=mode,
             created_at=_deployment_created_at(deployment),
@@ -735,6 +695,7 @@ class SessionManager:
     async def get_pod_name(self, owner: str, session_id: str, timeout: float = 90.0) -> str:
         """Look up the pod backing a session, waiting up to `timeout` seconds for it to be Ready."""
         assert self._apps is not None and self._core is not None
+        owner_label = _owner_label(owner)
         name = f"session-{session_id}"
         try:
             deployment = await self._apps.read_namespaced_deployment(
@@ -744,7 +705,7 @@ class SessionManager:
             if e.status == 404:
                 raise SessionNotFound(session_id) from e
             raise
-        if not _deployment_accessible_by(deployment, owner):
+        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
             raise SessionNotOwned(session_id)
 
         deadline = asyncio.get_event_loop().time() + timeout
@@ -761,6 +722,7 @@ class SessionManager:
 
     async def delete(self, owner: str, session_id: str) -> None:
         assert self._apps is not None
+        owner_label = _owner_label(owner)
         name = f"session-{session_id}"
         try:
             deployment = await self._apps.read_namespaced_deployment(
@@ -770,7 +732,7 @@ class SessionManager:
             if e.status == 404:
                 raise SessionNotFound(session_id) from e
             raise
-        if not _deployment_accessible_by(deployment, owner):
+        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
             raise SessionNotOwned(session_id)
         await self._apps.delete_namespaced_deployment(
             name=name,

@@ -1,16 +1,10 @@
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tank_operator.sessions import (
-    GLIMMUNG_CONTEXT_ANNOTATION,
-    SessionManager,
-    _deployment_accessible_by,
-    _owner_label,
-)
+from tank_operator.sessions import GLIMMUNG_CONTEXT_ANNOTATION, SessionManager
 
 
 def _pod_spec(manifest: dict) -> dict:
@@ -25,32 +19,6 @@ def _claude_env(manifest: dict) -> dict[str, str]:
 
 def _claude_container(manifest: dict) -> dict:
     return next(c for c in _pod_spec(manifest)["containers"] if c["name"] == "claude")
-
-
-def _deployment_with_owner(owner: str) -> SimpleNamespace:
-    return SimpleNamespace(metadata=SimpleNamespace(labels={"tank-operator/owner": _owner_label(owner)}))
-
-
-def test_shared_owner_email_pool_grants_cross_account_access(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "SESSION_SHARED_OWNER_EMAILS",
-        "nelson-devops-project@outlook.com,nelson@romaine.life",
-    )
-
-    deployment = _deployment_with_owner("nelson-devops-project@outlook.com")
-
-    assert _deployment_accessible_by(deployment, "nelson@romaine.life")
-
-
-def test_unshared_owner_email_stays_private(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "SESSION_SHARED_OWNER_EMAILS",
-        "nelson-devops-project@outlook.com,nelson@romaine.life",
-    )
-
-    deployment = _deployment_with_owner("someone@example.test")
-
-    assert not _deployment_accessible_by(deployment, "nelson@romaine.life")
 
 
 def test_session_config_is_mounted_from_configmap() -> None:
