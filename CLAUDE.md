@@ -14,6 +14,17 @@ Web frontend over a thin K8s orchestrator that spawns ephemeral session pods on 
 
 FastAPI + kubernetes-asyncio backend, Vite + React + xterm.js frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Deployments).
 
+## Container build verification
+
+Session pods intentionally do not ship Docker or a container runtime. Do not
+report missing local Docker as a blocker. Run available repo checks first
+(`pytest`, `npm`, `go test`, `helm template`, etc.). The normal container
+build gate is PR CI: `.github/workflows/docker-build-check.yml` performs
+throwaway Docker builds for every repo-owned image with `push: false`. If an
+image-packaging change needs feedback before a PR is ready, manually dispatch
+that workflow with `git_ref`. Release/deploy workflows are the only path that
+publishes images.
+
 **Per-user profile store: Cosmos DB (SQL API), serverless** — `infra/cosmos.tf` provisions one account, one database, one `profiles` container partitioned on `/email`. Backend at `backend/src/tank_operator/profiles.py`. Auth is workload identity (the same `claude-credentials-refresher-identity` UAMI that already writes KV); `local_authentication_disabled = true` on the account so there's no key-based parallel surface to rotate. A profile row is auto-created on `/api/auth/microsoft/login` and exposed at `/api/auth/me`. The store boots in degraded "stub" mode if `COSMOS_ENDPOINT` is unset (first-install ordering before tofu has applied) — login still works, profile fields are null.
 
 ## Terminal
