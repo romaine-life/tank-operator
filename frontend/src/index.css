@@ -1430,6 +1430,15 @@ button:disabled {
 .session-action.session-remote { background: var(--cyan-bg); color: var(--cyan); }
 .session-action.session-remote:hover:not(:disabled) { background: rgba(34, 211, 238, 0.22); color: var(--cyan-bright); }
 
+.session-action.session-rollout { background: rgba(120, 200, 180, 0.12); }
+.session-action.session-rollout:hover:not(:disabled) { background: rgba(120, 200, 180, 0.22); }
+
+.session-action-tank-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
 /* Inline rename input — replaces the session-id span after clicking the name. */
 .session-name-input {
   flex: 1;

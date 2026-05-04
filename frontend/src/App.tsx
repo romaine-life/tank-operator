@@ -457,6 +457,12 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const CODEX_MODES = new Set<SessionMode>(["codex_subscription", "codex_config"]);
 const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
+const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
+const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
+const ROLLOUT_MODES = new Set<SessionMode>([
+  ...CLAUDE_ROLLOUT_MODES,
+  ...CODEX_ROLLOUT_MODES,
+]);
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
@@ -773,6 +779,10 @@ function ModeChip({ mode }: { mode: SessionMode }) {
   );
 }
 
+function TankIcon({ className }: { className?: string }) {
+  return <img className={className} src="/assets/mark.svg" alt="" aria-hidden="true" />;
+}
+
 function initials(user: SessionUser): string {
   const source = (user.name || user.email || "?").trim();
   const parts = source.split(/[\s@._-]+/).filter(Boolean);
@@ -995,6 +1005,14 @@ function DemoLanding() {
                     {s.mode === "subscription" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
+                      </span>
+                    )}
+                    {ROLLOUT_MODES.has(s.mode) && (
+                      <span
+                        className="session-action session-rollout is-icon"
+                        title={CODEX_ROLLOUT_MODES.has(s.mode) ? "type $rollout into this Codex session" : "type /rollout into this Claude session"}
+                      >
+                        <TankIcon className="session-action-tank-icon" />
                       </span>
                     )}
                   </div>
@@ -1431,6 +1449,11 @@ export function App() {
     terminalRefs.current.get(id)?.sendInput("/remote-control\r");
   }
 
+  function startRollout(id: string, mode: SessionMode) {
+    const command = CODEX_ROLLOUT_MODES.has(mode) ? "$rollout\r" : "/rollout\r";
+    terminalRefs.current.get(id)?.sendInput(command);
+  }
+
   async function saveCredentials(id: string) {
     setBusy(true);
     setError(null);
@@ -1662,6 +1685,21 @@ export function App() {
                         aria-label="open remote control link"
                       >
                         <IconExternal />
+                      </button>
+                    )}
+                    {ROLLOUT_MODES.has(s.mode) && isLive && (
+                      <button
+                        className="session-action session-rollout is-icon"
+                        onClick={(e) => { e.stopPropagation(); startRollout(s.id, s.mode); }}
+                        disabled={isClosing}
+                        title={
+                          CODEX_ROLLOUT_MODES.has(s.mode)
+                            ? "type $rollout into this Codex session"
+                            : "type /rollout into this Claude session"
+                        }
+                        aria-label="start rollout"
+                      >
+                        <TankIcon className="session-action-tank-icon" />
                       </button>
                     )}
                     {CONFIG_MODES.has(s.mode) && (
