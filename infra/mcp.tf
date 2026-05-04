@@ -22,13 +22,21 @@ resource "azurerm_key_vault_secret" "mcp_tenant_id" {
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
+locals {
+  mcp_azure_extra_reader_subscription_ids = setsubtract(toset([
+    for id in split(",", var.mcp_azure_extra_reader_subscription_ids) :
+    trimspace(id)
+    if trimspace(id) != ""
+  ]), [data.azurerm_client_config.current.subscription_id])
+}
+
 # ----------------------------------------------------------------------------
 # Per-server: azure
 # ----------------------------------------------------------------------------
-# Hosts Microsoft's azure-mcp. The UAMI gets Reader at subscription scope —
-# read-only across the sub gives every read tool azure-mcp ships, with no
-# write paths. Promote to a tighter scope or a different role as the
-# surface narrows.
+# Hosts Microsoft's azure-mcp. The UAMI gets Reader at subscription scope for
+# the primary infra subscription plus any explicit extra subscriptions. That
+# keeps the MCP surface read-only; real infrastructure deployment still goes
+# through repo Tofu workflows using their own CI identity.
 
 module "mcp_azure" {
   source = "./mcp-server"
@@ -41,22 +49,33 @@ module "mcp_azure" {
   aks_namespace            = "mcp-azure"
   aks_service_account_name = "mcp-azure"
 
-  role_assignments = {
-    "subscription-reader" = {
-      scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
-      role_definition_name = "Reader"
-    }
-    # KV data-plane access. Reader at the control plane gives us the
-    # vault's metadata but NOT secret/cert reads — those need this
-    # data-plane role. Without it any caller-driven KV operation through
-    # azure-mcp comes back as auth failure (the SDK rolls 403 on
-    # getSecret into the same ChainedTokenCredential error path it uses
-    # for missing tokens).
-    "kv-secrets-user" = {
-      scope                = data.azurerm_key_vault.main.id
-      role_definition_name = "Key Vault Secrets User"
-    }
-  }
+  role_assignments = merge(
+    {
+      "subscription-reader" = {
+        scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
+        role_definition_name = "Reader"
+      }
+    },
+    {
+      for subscription_id in local.mcp_azure_extra_reader_subscription_ids :
+      "extra-subscription-reader-${subscription_id}" => {
+        scope                = "/subscriptions/${subscription_id}"
+        role_definition_name = "Reader"
+      }
+    },
+    {
+      # KV data-plane access. Reader at the control plane gives us the
+      # vault's metadata but NOT secret/cert reads — those need this
+      # data-plane role. Without it any caller-driven KV operation through
+      # azure-mcp comes back as auth failure (the SDK rolls 403 on
+      # getSecret into the same ChainedTokenCredential error path it uses
+      # for missing tokens).
+      "kv-secrets-user" = {
+        scope                = data.azurerm_key_vault.main.id
+        role_definition_name = "Key Vault Secrets User"
+      }
+    },
+  )
 }
 
 # ----------------------------------------------------------------------------
