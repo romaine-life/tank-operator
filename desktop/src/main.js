@@ -7,7 +7,7 @@ const tankOrigin = new URL(tankUrl).origin;
 const MIN_ZOOM_FACTOR = 0.5;
 const MAX_ZOOM_FACTOR = 2.0;
 const ZOOM_STEP = 0.1;
-const WINDOW_TITLE = " ";
+const WINDOW_TITLE = "Tank";
 
 let mainWindow = null;
 
@@ -85,7 +85,9 @@ function createWindow(initialUrl = tankUrl) {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (isTankUrl(url) || isAuthNavigation(url)) {
+    if (isAuthNavigation(url)) {
+      void win.loadURL(url);
+    } else if (isTankUrl(url)) {
       createWindow(url);
     } else {
       void shell.openExternal(url);
