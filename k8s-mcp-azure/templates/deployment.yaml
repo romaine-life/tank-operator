@@ -73,6 +73,8 @@ spec:
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST
               value: https://login.microsoftonline.com/
+            - name: AZURE_SUBSCRIPTION_ID
+              value: "{{ .Values.subscriptionId }}"
             # azure-mcp's --outgoing-auth-strategy UseHostingEnvironmentIdentity
             # docs imply DefaultAzureCredential, but the HTTP transport actually
             # walks the stdio/local chain (Environment → VS → VSCode → CLI →
