@@ -32,6 +32,10 @@ const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">
 };
 const STATUSES = ["active", "pending", "error"] as const;
 
+function TankIcon({ className }: { className?: string }) {
+  return <img className={className} src="/assets/mark.svg" alt="" aria-hidden="true" />;
+}
+
 const sectionStyle: React.CSSProperties = {
   padding: "32px 0 24px",
   borderTop: "1px solid var(--border-subtle)",
@@ -252,7 +256,7 @@ export function StyleguideView() {
           <p style={captionStyle}>
             One row per session in the sidebar list. Top: status dot + session
             name + compact runtime + delete affordance. Bottom: mode chip +
-            optional inline actions (remote-control, save-credentials). Active
+            optional inline actions (remote-control, rollout, save-credentials). Active
             row gets the <code>is-open</code> class; not styled here for brevity.
           </p>
           <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
@@ -272,6 +276,12 @@ export function StyleguideView() {
                   <ProviderIcon provider="anthropic" className="mode-provider-icon" />
                   <span className="sr-only">claude</span>
                 </span>
+                <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
+                  <span>↗</span>
+                </button>
+                <button className="session-action session-rollout is-icon" type="button" aria-label="start rollout">
+                  <TankIcon className="session-action-tank-icon" />
+                </button>
               </div>
             </li>
             <li>
