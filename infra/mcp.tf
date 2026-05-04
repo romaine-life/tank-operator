@@ -65,14 +65,12 @@ module "mcp_azure" {
     },
     {
       # KV data-plane access. Reader at the control plane gives us the
-      # vault's metadata but NOT secret/cert reads — those need this
-      # data-plane role. Without it any caller-driven KV operation through
-      # azure-mcp comes back as auth failure (the SDK rolls 403 on
-      # getSecret into the same ChainedTokenCredential error path it uses
-      # for missing tokens).
-      "kv-secrets-user" = {
+      # vault's metadata but NOT secret reads/writes — those need a data-plane
+      # role. mcp-azure exposes both read and set-secret operations, so grant
+      # secret management without broadening to keys/certs or RBAC admin.
+      "kv-secrets-officer" = {
         scope                = data.azurerm_key_vault.main.id
-        role_definition_name = "Key Vault Secrets User"
+        role_definition_name = "Key Vault Secrets Officer"
       }
     },
   )
