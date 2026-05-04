@@ -59,7 +59,7 @@ function createWindow(initialUrl = tankUrl) {
     minWidth: Math.min(960, workArea.width),
     minHeight: Math.min(640, workArea.height),
     show: false,
-    title: "Tank Operator",
+    title: "",
     backgroundColor: "#171717",
     autoHideMenuBar: true,
     icon: path.join(__dirname, "..", "assets", "app-icon-512.png"),
@@ -75,6 +75,11 @@ function createWindow(initialUrl = tankUrl) {
   win.once("ready-to-show", () => {
     win.maximize();
     win.show();
+  });
+
+  win.on("page-title-updated", (event) => {
+    event.preventDefault();
+    win.setTitle("");
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
