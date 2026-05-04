@@ -30,11 +30,15 @@ def _session_pod(session_id: str, containers: list[str]) -> SimpleNamespace:
             labels={
                 "app.kubernetes.io/managed-by": "tank-operator",
                 "tank-operator/session-id": session_id,
+                "tank-operator/mode": "subscription",
             },
+            annotations={},
+            creation_timestamp=None,
         ),
         spec=SimpleNamespace(
             containers=[SimpleNamespace(name=name) for name in containers]
         ),
+        status=SimpleNamespace(phase="Pending", container_statuses=[]),
     )
 
 
@@ -118,6 +122,19 @@ def test_idle_reaper_leaves_legacy_session_pods() -> None:
 
     assert manager.deleted == ["session-terminald"]
     assert "legacy" in manager._activity
+
+
+def test_session_list_hides_legacy_session_pods() -> None:
+    manager = _ReaperSessionManager(
+        [
+            _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
+            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+        ]
+    )
+
+    listed = asyncio.run(manager.list(owner="operator@example.test"))
+
+    assert [session.id for session in listed] == ["terminald"]
 
 
 def test_glimmung_context_is_stamped_on_session_pod() -> None:

@@ -656,6 +656,7 @@ class SessionManager:
                 name=(p.metadata.annotations or {}).get(NAME_ANNOTATION),
             )
             for p in pods.items
+            if _pod_has_container(p, "terminal-proxy")
         ]
 
     async def get_session(self, owner: str, session_id: str) -> SessionInfo:
