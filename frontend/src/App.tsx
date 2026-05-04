@@ -463,6 +463,7 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
+const CODEX_ENTER_CSI_U = "\x1b[13u";
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
@@ -1460,7 +1461,7 @@ export function App() {
   }
 
   function startRollout(id: string, mode: SessionMode) {
-    const command = CODEX_ROLLOUT_MODES.has(mode) ? "$rollout\r" : "/rollout\r";
+    const command = CODEX_ROLLOUT_MODES.has(mode) ? `$rollout${CODEX_ENTER_CSI_U}` : "/rollout\r";
     terminalRefs.current.get(id)?.sendInput(command);
   }
 
