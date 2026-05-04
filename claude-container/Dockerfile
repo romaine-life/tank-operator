@@ -104,6 +104,12 @@ RUN pip install --no-cache-dir --break-system-packages /opt/platform-mcp
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
+# Pod-local terminal WebSocket fanout. The orchestrator no longer keeps a
+# Kubernetes pods/exec stream open for the browser terminal; it proxies to this
+# process through kube-rbac-proxy instead.
+COPY claude-container/terminald /opt/terminald
+RUN pip install --no-cache-dir --break-system-packages /opt/terminald
+
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
 # bootstrap script are mounted from the chart-managed tank-session-config
 # ConfigMap. Keep the parent directories in the image so the orchestrator can
