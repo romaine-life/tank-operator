@@ -6,10 +6,10 @@ closes." See [issue #1](https://github.com/nelsong6/tank-operator/issues/1) for 
 design and rationale.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
-in this repo (`Dockerfile`, `entrypoint.sh`, `tank-bootstrap.sh`, plus a bundled
-`platform-mcp/` MCP server). Session-facing MCP config, AGENTS/CLAUDE primers,
-and bundled skill docs live in `k8s/session-config/` and are mounted through the
-chart's `tank-session-config` ConfigMap. [claude-container-build.yml](.github/workflows/claude-container-build.yml)
+in this repo (`Dockerfile`, plus bundled `platform-mcp/` and `mcp-auth-proxy`
+Python packages). Session-facing MCP config, AGENTS/CLAUDE primers, the
+bootstrap shell script, and bundled skill docs live in `k8s/session-config/` and are mounted
+through the chart's `tank-session-config` ConfigMap. [claude-container-build.yml](.github/workflows/claude-container-build.yml)
 pushes SHA-pinned `romainecr.azurecr.io/claude-container:<sha>` and
 `romainecr.azurecr.io/codex-container:<sha>` /
 `romainecr.azurecr.io/pi-container:<sha>` images, then rewrites the Helm chart
