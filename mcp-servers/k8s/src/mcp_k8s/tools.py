@@ -29,6 +29,12 @@ from mcp.server.fastmcp import FastMCP
 _TIMEOUT_SECONDS = 30
 
 
+def _clamp_limit(limit: int | None, *, default: int | None = None, maximum: int = 500) -> int | None:
+    if limit is None:
+        return default
+    return max(1, min(int(limit), maximum))
+
+
 def _run(cmd: list[str], *, parse_json: bool = False) -> Any:
     """Run a binary, return stdout. Surfaces stderr to the caller on failure."""
     try:
@@ -55,21 +61,42 @@ def _run(cmd: list[str], *, parse_json: bool = False) -> Any:
 
 def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
-    def list_namespaces() -> list[dict[str, Any]]:
-        """List Kubernetes namespaces in the cluster.
+    def list_namespaces(
+        label_selector: str | None = None,
+        field_selector: str | None = None,
+        name_contains: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        """List Kubernetes namespaces in the cluster, optionally filtered.
 
         Use to discover namespace names before listing pods, services,
         deployments, events, Helm releases, or other namespaced resources.
+        `label_selector` and `field_selector` map to kubectl selectors,
+        `name_contains` filters client-side, and `limit` caps returned rows.
         """
-        body = _run(["kubectl", "get", "namespaces", "-o", "json"], parse_json=True)
-        return [
-            {
-                "name": item["metadata"]["name"],
-                "phase": item.get("status", {}).get("phase"),
-                "created": item["metadata"].get("creationTimestamp"),
-            }
-            for item in body.get("items", [])
-        ]
+        cmd = ["kubectl", "get", "namespaces", "-o", "json"]
+        if label_selector:
+            cmd += ["-l", label_selector]
+        if field_selector:
+            cmd += ["--field-selector", field_selector]
+        body = _run(cmd, parse_json=True)
+        needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
+        rows: list[dict[str, Any]] = []
+        for item in body.get("items", []):
+            name = item["metadata"]["name"]
+            if needle and needle not in name.lower():
+                continue
+            rows.append(
+                {
+                    "name": name,
+                    "phase": item.get("status", {}).get("phase"),
+                    "created": item["metadata"].get("creationTimestamp"),
+                }
+            )
+            if cap is not None and len(rows) >= cap:
+                break
+        return rows
 
     @mcp.tool()
     def list_resources(
@@ -77,6 +104,9 @@ def register_tools(mcp: FastMCP) -> None:
         namespace: str | None = None,
         all_namespaces: bool = False,
         label_selector: str | None = None,
+        field_selector: str | None = None,
+        name_contains: str | None = None,
+        limit: int | None = 100,
     ) -> list[dict[str, Any]]:
         """List Kubernetes resources by kind, namespace, and optional label selector.
 
@@ -84,7 +114,8 @@ def register_tools(mcp: FastMCP) -> None:
         namespaces, and custom resources. Cluster-scoped kinds (Node, Namespace,
         ClusterRole, etc.) ignore namespace. Use all_namespaces=True for namespaced
         kinds across the cluster. label_selector is a standard '-l' string
-        ('app=foo,role=bar')."""
+        ('app=foo,role=bar'). `field_selector`, `name_contains`, and `limit`
+        further narrow large result sets."""
         cmd = ["kubectl", "get", kind, "-o", "json"]
         if all_namespaces:
             cmd.append("--all-namespaces")
@@ -92,13 +123,20 @@ def register_tools(mcp: FastMCP) -> None:
             cmd += ["-n", namespace]
         if label_selector:
             cmd += ["-l", label_selector]
+        if field_selector:
+            cmd += ["--field-selector", field_selector]
         body = _run(cmd, parse_json=True)
         out: list[dict[str, Any]] = []
+        needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
         for item in body.get("items", []):
             md = item.get("metadata", {})
+            name = md.get("name")
+            if needle and (not name or needle not in name.lower()):
+                continue
             out.append(
                 {
-                    "name": md.get("name"),
+                    "name": name,
                     "namespace": md.get("namespace"),
                     "kind": item.get("kind"),
                     "apiVersion": item.get("apiVersion"),
@@ -106,6 +144,8 @@ def register_tools(mcp: FastMCP) -> None:
                     "created": md.get("creationTimestamp"),
                 }
             )
+            if cap is not None and len(out) >= cap:
+                break
         return out
 
     @mcp.tool()
@@ -164,12 +204,14 @@ def register_tools(mcp: FastMCP) -> None:
         namespace: str | None = None,
         all_namespaces: bool = False,
         field_selector: str | None = None,
+        limit: int | None = 100,
     ) -> list[dict[str, Any]]:
         """List recent Kubernetes events, optionally filtered by namespace or involved object.
 
         Use to diagnose Pending pods, failed scheduling, image pull errors,
         failed mounts, unhealthy controllers, or rollout problems.
         `field_selector` example: `involvedObject.name=session-foo`.
+        `limit` caps returned rows after timestamp sorting.
         """
         cmd = ["kubectl", "get", "events", "-o", "json", "--sort-by=.lastTimestamp"]
         if all_namespaces:
@@ -179,6 +221,7 @@ def register_tools(mcp: FastMCP) -> None:
         if field_selector:
             cmd += ["--field-selector", field_selector]
         body = _run(cmd, parse_json=True)
+        cap = _clamp_limit(limit, default=100)
         return [
             {
                 "namespace": e.get("metadata", {}).get("namespace"),
@@ -192,22 +235,40 @@ def register_tools(mcp: FastMCP) -> None:
                 "count": e.get("count"),
                 "lastTimestamp": e.get("lastTimestamp"),
             }
-            for e in body.get("items", [])
+            for e in body.get("items", [])[:cap]
         ]
 
     @mcp.tool()
-    def top_pods(namespace: str | None = None, all_namespaces: bool = False) -> str:
+    def top_pods(
+        namespace: str | None = None,
+        all_namespaces: bool = False,
+        label_selector: str | None = None,
+        sort_by: str | None = None,
+        limit: int | None = 50,
+    ) -> str:
         """Show Kubernetes pod CPU and memory usage with `kubectl top pods`.
 
         Use to investigate resource pressure, evictions, high memory, or hot
-        workloads. Requires metrics-server.
+        workloads. Requires metrics-server. `label_selector` narrows pods,
+        `sort_by` is cpu or memory, and `limit` caps output rows.
         """
         cmd = ["kubectl", "top", "pods"]
         if all_namespaces:
             cmd.append("--all-namespaces")
         elif namespace:
             cmd += ["-n", namespace]
-        return _run(cmd)
+        if label_selector:
+            cmd += ["-l", label_selector]
+        if sort_by:
+            cmd += [f"--sort-by={sort_by}"]
+        out = _run(cmd)
+        cap = _clamp_limit(limit, default=50)
+        if cap is None:
+            return out
+        lines = out.splitlines()
+        if len(lines) <= cap + 1:
+            return out
+        return "\n".join(lines[: cap + 1]) + "\n"
 
     @mcp.tool()
     def top_nodes() -> str:
@@ -219,18 +280,35 @@ def register_tools(mcp: FastMCP) -> None:
         return _run(["kubectl", "top", "nodes"])
 
     @mcp.tool()
-    def helm_list(namespace: str | None = None, all_namespaces: bool = True) -> list[dict[str, Any]]:
+    def helm_list(
+        namespace: str | None = None,
+        all_namespaces: bool = True,
+        filter: str | None = None,
+        selector: str | None = None,
+        status: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
         """List Helm releases in one namespace or all namespaces.
 
         Use to discover release names before helm_status, helm_get_values,
         helm_get_manifest, or helm_history. Defaults to all namespaces — narrow with namespace
-        when looking for one specific release."""
+        when looking for one specific release. `filter` is Helm's release-name
+        regex, `selector` filters labels where supported, `status` narrows
+        release state, and `limit` caps returned rows."""
         cmd = ["helm", "list", "-o", "json"]
         if all_namespaces and not namespace:
             cmd.append("-A")
         elif namespace:
             cmd += ["-n", namespace]
-        return _run(cmd, parse_json=True)
+        if filter:
+            cmd += ["--filter", filter]
+        if selector:
+            cmd += ["--selector", selector]
+        if status:
+            cmd.append(f"--{status}")
+        rows = _run(cmd, parse_json=True)
+        cap = _clamp_limit(limit, default=100)
+        return rows if cap is None else rows[:cap]
 
     @mcp.tool()
     def helm_get_values(release: str, namespace: str, all_values: bool = True) -> dict[str, Any]:
@@ -297,11 +375,21 @@ def register_tools(mcp: FastMCP) -> None:
         return _run(["kubectl", "rollout", "restart", canonical, name, "-n", namespace])
 
     @mcp.tool()
-    def api_resources() -> list[dict[str, Any]]:
-        """List Kubernetes API resources and CRDs known to the cluster.
+    def api_resources(
+        api_group: str | None = None,
+        api_version: str | None = None,
+        kind_contains: str | None = None,
+        name_contains: str | None = None,
+        namespaced: bool | None = None,
+        verb: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        """List Kubernetes API resources and CRDs known to the cluster, optionally filtered.
 
         Use to discover available kinds, short names, namespaced scope, and verbs — useful for discovering CRDs
-        like applications.argoproj.io or httproutes.gateway.networking.k8s.io."""
+        like applications.argoproj.io or httproutes.gateway.networking.k8s.io.
+        `api_group`, `api_version`, kind/name contains filters, `namespaced`,
+        `verb`, and `limit` keep discovery responses small."""
         # `kubectl api-resources` doesn't have a -o json mode; parse the
         # default columnar output. Skip the header row.
         out = _run(
@@ -337,4 +425,26 @@ def register_tools(mcp: FastMCP) -> None:
                     "verbs": verbs_field.split(","),
                 }
             )
-        return rows
+        kind_needle = kind_contains.lower() if kind_contains else None
+        name_needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            version = row["apiVersion"]
+            group = version.split("/", 1)[0] if "/" in version else ""
+            if api_group is not None and group != api_group:
+                continue
+            if api_version is not None and version != api_version:
+                continue
+            if kind_needle and kind_needle not in row["kind"].lower():
+                continue
+            if name_needle and name_needle not in row["name"].lower():
+                continue
+            if namespaced is not None and row["namespaced"] is not namespaced:
+                continue
+            if verb and verb not in row["verbs"]:
+                continue
+            filtered.append(row)
+            if cap is not None and len(filtered) >= cap:
+                break
+        return filtered
