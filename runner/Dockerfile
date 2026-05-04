@@ -18,7 +18,6 @@ RUN apt-get update \
         ca-certificates \
         curl \
         gettext-base \
-        git \
         jq \
     && rm -rf /var/lib/apt/lists/*
 
