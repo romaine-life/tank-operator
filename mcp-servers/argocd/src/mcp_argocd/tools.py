@@ -20,6 +20,12 @@ from .dex import ARGOCD_SERVER_URL, get_bearer
 _TIMEOUT_SECONDS = 30
 
 
+def _clamp_limit(limit: int | None, *, default: int, maximum: int = 500) -> int:
+    if limit is None:
+        return default
+    return max(1, min(int(limit), maximum))
+
+
 def _client() -> httpx.Client:
     return httpx.Client(
         base_url=ARGOCD_SERVER_URL,
@@ -49,12 +55,17 @@ def register_tools(mcp: FastMCP) -> None:
     def list_applications(
         project: str | None = None,
         selector: str | None = None,
+        name_contains: str | None = None,
+        health_status: str | None = None,
+        sync_status: str | None = None,
+        limit: int | None = 100,
     ) -> list[dict[str, Any]]:
         """List ArgoCD Applications with sync status, health status, source, and revision.
 
         Use to find an app before checking resource trees, diffs, events, or
         triggering sync. `project` filters by AppProject;
-        `selector` is a label selector ('app=foo,role=bar')."""
+        `selector` is a label selector ('app=foo,role=bar'). `name_contains`,
+        `health_status`, `sync_status`, and `limit` further narrow output."""
         params: dict[str, Any] = {}
         if project:
             params["projects"] = project
@@ -62,22 +73,35 @@ def register_tools(mcp: FastMCP) -> None:
             params["selector"] = selector
         body = _get("/api/v1/applications", params=params)
         out = []
+        needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
         for app in body.get("items") or []:
             md = app.get("metadata", {})
             sp = app.get("spec", {})
             st = app.get("status", {})
+            name = md.get("name")
+            app_sync_status = st.get("sync", {}).get("status")
+            app_health_status = st.get("health", {}).get("status")
+            if needle and (not name or needle not in name.lower()):
+                continue
+            if health_status and app_health_status != health_status:
+                continue
+            if sync_status and app_sync_status != sync_status:
+                continue
             out.append(
                 {
-                    "name": md.get("name"),
+                    "name": name,
                     "namespace": md.get("namespace"),
                     "project": sp.get("project"),
                     "destination": sp.get("destination"),
                     "source": sp.get("source"),
-                    "syncStatus": st.get("sync", {}).get("status"),
-                    "healthStatus": st.get("health", {}).get("status"),
+                    "syncStatus": app_sync_status,
+                    "healthStatus": app_health_status,
                     "revision": st.get("sync", {}).get("revision"),
                 }
             )
+            if len(out) >= cap:
+                break
         return out
 
     @mcp.tool()
@@ -134,53 +158,114 @@ def register_tools(mcp: FastMCP) -> None:
         return _post(f"/api/v1/applications/{name}/sync", json_body=body)
 
     @mcp.tool()
-    def list_projects() -> list[dict[str, Any]]:
-        """List ArgoCD AppProjects with source repository and destination permissions."""
+    def list_projects(name_contains: str | None = None, limit: int | None = 100) -> list[dict[str, Any]]:
+        """List ArgoCD AppProjects with source repository and destination permissions.
+
+        `name_contains` filters project names client-side and `limit` caps
+        returned rows.
+        """
         body = _get("/api/v1/projects")
-        return [
-            {
-                "name": p.get("metadata", {}).get("name"),
-                "description": p.get("spec", {}).get("description"),
-                "sourceRepos": p.get("spec", {}).get("sourceRepos"),
-                "destinations": p.get("spec", {}).get("destinations"),
-            }
-            for p in (body.get("items") or [])
-        ]
+        rows: list[dict[str, Any]] = []
+        needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
+        for p in body.get("items") or []:
+            name = p.get("metadata", {}).get("name")
+            if needle and (not name or needle not in name.lower()):
+                continue
+            rows.append(
+                {
+                    "name": name,
+                    "description": p.get("spec", {}).get("description"),
+                    "sourceRepos": p.get("spec", {}).get("sourceRepos"),
+                    "destinations": p.get("spec", {}).get("destinations"),
+                }
+            )
+            if len(rows) >= cap:
+                break
+        return rows
 
     @mcp.tool()
-    def list_repositories() -> list[dict[str, Any]]:
-        """List Git repositories and Helm repositories configured in ArgoCD.
+    def list_repositories(
+        repo_contains: str | None = None,
+        name_contains: str | None = None,
+        type: str | None = None,
+        connection_status: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        """List Git repositories and Helm repositories configured in ArgoCD, optionally filtered.
 
         Connection state included so you
-        can spot a repo whose creds rotted."""
+        can spot a repo whose creds rotted. `repo_contains`, `name_contains`,
+        `type`, `connection_status`, and `limit` narrow large installations."""
         body = _get("/api/v1/repositories")
-        return [
-            {
-                "repo": r.get("repo"),
-                "type": r.get("type"),
-                "name": r.get("name"),
-                "connectionState": r.get("connectionState", {}).get("status"),
-                "connectionMessage": r.get("connectionState", {}).get("message"),
-            }
-            for r in (body.get("items") or [])
-        ]
+        rows: list[dict[str, Any]] = []
+        repo_needle = repo_contains.lower() if repo_contains else None
+        name_needle = name_contains.lower() if name_contains else None
+        cap = _clamp_limit(limit, default=100)
+        for r in body.get("items") or []:
+            repo = r.get("repo")
+            name = r.get("name")
+            status = r.get("connectionState", {}).get("status")
+            if repo_needle and (not repo or repo_needle not in repo.lower()):
+                continue
+            if name_needle and (not name or name_needle not in name.lower()):
+                continue
+            if type and r.get("type") != type:
+                continue
+            if connection_status and status != connection_status:
+                continue
+            rows.append(
+                {
+                    "repo": repo,
+                    "type": r.get("type"),
+                    "name": name,
+                    "connectionState": status,
+                    "connectionMessage": r.get("connectionState", {}).get("message"),
+                }
+            )
+            if len(rows) >= cap:
+                break
+        return rows
 
     @mcp.tool()
-    def list_clusters() -> list[dict[str, Any]]:
-        """List Kubernetes clusters registered in ArgoCD.
+    def list_clusters(
+        name_contains: str | None = None,
+        server_contains: str | None = None,
+        connection_status: str | None = None,
+        limit: int | None = 100,
+    ) -> list[dict[str, Any]]:
+        """List Kubernetes clusters registered in ArgoCD, optionally filtered.
 
         In-cluster (kubernetes.default.svc)
-        is always present; remote clusters appear here once registered."""
+        is always present; remote clusters appear here once registered.
+        `name_contains`, `server_contains`, `connection_status`, and `limit`
+        narrow large cluster lists."""
         body = _get("/api/v1/clusters")
-        return [
-            {
-                "name": c.get("name"),
-                "server": c.get("server"),
-                "connectionState": c.get("connectionState", {}).get("status"),
-                "serverVersion": c.get("serverVersion"),
-            }
-            for c in (body.get("items") or [])
-        ]
+        rows: list[dict[str, Any]] = []
+        name_needle = name_contains.lower() if name_contains else None
+        server_needle = server_contains.lower() if server_contains else None
+        cap = _clamp_limit(limit, default=100)
+        for c in body.get("items") or []:
+            name = c.get("name")
+            server = c.get("server")
+            status = c.get("connectionState", {}).get("status")
+            if name_needle and (not name or name_needle not in name.lower()):
+                continue
+            if server_needle and (not server or server_needle not in server.lower()):
+                continue
+            if connection_status and status != connection_status:
+                continue
+            rows.append(
+                {
+                    "name": name,
+                    "server": server,
+                    "connectionState": status,
+                    "serverVersion": c.get("serverVersion"),
+                }
+            )
+            if len(rows) >= cap:
+                break
+        return rows
 
     @mcp.tool()
     def server_version() -> dict[str, Any]:

@@ -6,23 +6,70 @@ from mcp.server.fastmcp import FastMCP
 from .github_client import GitHubClient
 
 
+def _clean_params(params: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in params.items() if v is not None}
+
+
+def _clamp_limit(limit: int | None, *, default: int, maximum: int = 100) -> int:
+    if limit is None:
+        return default
+    return max(1, min(int(limit), maximum))
+
+
 def _is_404(exc: Exception) -> bool:
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404
 
 
 def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
     @mcp.tool()
-    def list_installation_repos() -> list[dict[str, Any]]:
-        """List GitHub repositories available to this GitHub App installation.
+    def list_installation_repos(
+        owner: str | None = None,
+        name_contains: str | None = None,
+        visibility: str | None = None,
+        limit: int | None = 50,
+    ) -> list[dict[str, Any]]:
+        """List GitHub repositories available to this GitHub App installation, optionally filtered.
 
         Use to discover which owner/repo slugs can be read or written before
         cloning, opening issues, creating pull requests, or checking workflows.
+        `owner` filters by org/user, `name_contains` matches repo names or
+        full_name case-insensitively, `visibility` is public or private, and
+        `limit` caps returned rows.
         """
-        body = gh.get("/installation/repositories", params={"per_page": 100})
-        return [
-            {"full_name": r["full_name"], "private": r["private"], "default_branch": r["default_branch"]}
-            for r in body.get("repositories", [])
-        ]
+        cap = _clamp_limit(limit, default=50)
+        rows: list[dict[str, Any]] = []
+        page = 1
+        needle = name_contains.lower() if name_contains else None
+        visibility_filter = visibility.lower() if visibility else None
+        while len(rows) < cap:
+            body = gh.get("/installation/repositories", params={"per_page": 100, "page": page})
+            repos = body.get("repositories", [])
+            if not repos:
+                break
+            for r in repos:
+                full_name = r["full_name"]
+                repo_owner, repo_name = full_name.split("/", 1)
+                if owner and repo_owner.lower() != owner.lower():
+                    continue
+                if visibility_filter == "private" and not r["private"]:
+                    continue
+                if visibility_filter == "public" and r["private"]:
+                    continue
+                if needle and needle not in full_name.lower() and needle not in repo_name.lower():
+                    continue
+                rows.append(
+                    {
+                        "full_name": full_name,
+                        "private": r["private"],
+                        "default_branch": r["default_branch"],
+                    }
+                )
+                if len(rows) >= cap:
+                    break
+            if len(repos) < 100:
+                break
+            page += 1
+        return rows
 
     @mcp.tool()
     def mint_clone_token(
@@ -165,14 +212,47 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         return {"kind": "file", "path": r["path"], "size": r.get("size"), "content": r.get("content", "")}
 
     @mcp.tool()
-    def list_issues(owner: str, name: str, state: str = "open") -> list[dict[str, Any]]:
-        """List GitHub issues in a repository, excluding pull requests.
+    def list_issues(
+        owner: str,
+        name: str,
+        state: str = "open",
+        labels: list[str] | None = None,
+        assignee: str | None = None,
+        creator: str | None = None,
+        mentioned: str | None = None,
+        since: str | None = None,
+        sort: str | None = None,
+        direction: str | None = None,
+        limit: int | None = 30,
+    ) -> list[dict[str, Any]]:
+        """List GitHub issues in a repository, excluding pull requests, optionally filtered.
 
         Use for issue triage and to find issue numbers. `state` is one of
-        open, closed, or all.
+        open, closed, or all. `labels` is an AND filter, `assignee`,
+        `creator`, `mentioned`, and `since` map to GitHub issue filters,
+        and `limit` caps returned rows.
         """
-        body = gh.get(f"/repos/{owner}/{name}/issues", params={"state": state, "per_page": 50})
-        return [{"number": i["number"], "title": i["title"], "state": i["state"], "user": i["user"]["login"]} for i in body if "pull_request" not in i]
+        cap = _clamp_limit(limit, default=30)
+        params = _clean_params(
+            {
+                "state": state,
+                "labels": ",".join(labels) if labels else None,
+                "assignee": assignee,
+                "creator": creator,
+                "mentioned": mentioned,
+                "since": since,
+                "sort": sort,
+                "direction": direction,
+                "per_page": min(cap, 100),
+            }
+        )
+        body = gh.get(f"/repos/{owner}/{name}/issues", params=params)
+        rows = [
+            {"number": i["number"], "title": i["title"], "state": i["state"], "user": i["user"]["login"]}
+            for i in body
+            if "pull_request" not in i
+        ]
+        return rows[:cap]
 
     @mcp.tool()
     def get_issue(owner: str, name: str, number: int) -> dict[str, Any]:
@@ -191,13 +271,34 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         }
 
     @mcp.tool()
-    def list_pull_requests(owner: str, name: str, state: str = "open") -> list[dict[str, Any]]:
-        """List GitHub pull requests (PRs) in a repository.
+    def list_pull_requests(
+        owner: str,
+        name: str,
+        state: str = "open",
+        base: str | None = None,
+        head: str | None = None,
+        sort: str | None = None,
+        direction: str | None = None,
+        limit: int | None = 30,
+    ) -> list[dict[str, Any]]:
+        """List GitHub pull requests (PRs) in a repository, optionally filtered.
 
         Use to find open, closed, or all pull requests before reviewing,
         merging, commenting, labeling, or checking a branch's existing PR.
+        `base` and `head` narrow by branch, and `limit` caps returned rows.
         """
-        body = gh.get(f"/repos/{owner}/{name}/pulls", params={"state": state, "per_page": 50})
+        cap = _clamp_limit(limit, default=30)
+        params = _clean_params(
+            {
+                "state": state,
+                "base": base,
+                "head": head,
+                "sort": sort,
+                "direction": direction,
+                "per_page": min(cap, 100),
+            }
+        )
+        body = gh.get(f"/repos/{owner}/{name}/pulls", params=params)
         return [{"number": p["number"], "title": p["title"], "state": p["state"], "user": p["user"]["login"], "head": p["head"]["ref"]} for p in body]
 
     @mcp.tool()
@@ -230,17 +331,43 @@ def register_tools(mcp: FastMCP, gh: GitHubClient) -> None:
         return [{"path": i["path"], "repo": i["repository"]["full_name"], "html_url": i["html_url"]} for i in body.get("items", [])]
 
     @mcp.tool()
-    def list_commits(owner: str, name: str, sha: str | None = None) -> list[dict[str, Any]]:
+    def list_commits(
+        owner: str,
+        name: str,
+        sha: str | None = None,
+        path: str | None = None,
+        author: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int | None = 30,
+    ) -> list[dict[str, Any]]:
         """List recent GitHub commits on a repository or branch SHA/ref.
 
         Use to inspect recent history, find image tag source commits, or verify
-        what landed on a branch.
+        what landed on a branch. `path`, `author`, `since`, and `until`
+        map to GitHub commit filters, and `limit` caps returned rows.
         """
-        params: dict[str, Any] = {"per_page": 30}
-        if sha:
-            params["sha"] = sha
+        cap = _clamp_limit(limit, default=30)
+        params = _clean_params(
+            {
+                "sha": sha,
+                "path": path,
+                "author": author,
+                "since": since,
+                "until": until,
+                "per_page": min(cap, 100),
+            }
+        )
         body = gh.get(f"/repos/{owner}/{name}/commits", params=params)
-        return [{"sha": c["sha"], "message": c["commit"]["message"].splitlines()[0], "author": c["commit"]["author"]["name"], "date": c["commit"]["author"]["date"]} for c in body]
+        return [
+            {
+                "sha": c["sha"],
+                "message": c["commit"]["message"].splitlines()[0],
+                "author": c["commit"]["author"]["name"],
+                "date": c["commit"]["author"]["date"],
+            }
+            for c in body[:cap]
+        ]
 
     @mcp.tool()
     def create_issue(owner: str, name: str, title: str, body: str | None = None, labels: list[str] | None = None) -> dict[str, Any]:
