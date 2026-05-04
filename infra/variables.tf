@@ -37,6 +37,7 @@ variable "allowed_emails" {
   type        = list(string)
   default = [
     "nelson-devops-project@outlook.com",
+    "nelson@romaine.life",
     "Brenden.owens39@gmail.com",
     "gantonski@gmail.com",
   ]
