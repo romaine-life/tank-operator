@@ -33,6 +33,12 @@ session:
   idleTimeoutSeconds: 604800
   reaperIntervalSeconds: 60
 
+terminalProxy:
+  configMap: tank-terminal-proxy
+  image: quay.io/brancz/kube-rbac-proxy:v0.22.0
+  terminaldPort: 7680
+  proxyPort: 7681
+
 ingress:
   hostname: tank.romaine.life
   gatewayName: main
@@ -122,7 +128,7 @@ externalSecret:
   # ExternalSecrets, NOT from this Secret.
   #
   # Both auth paths are bundled in every pod; the orchestrator stamps
-  # TANK_SESSION_MODE on each Deployment to pick which one the bootstrap uses:
+  # TANK_SESSION_MODE on each Pod to pick which one the bootstrap uses:
   #   - api_key:      ANTHROPIC_API_KEY → console.anthropic.com billing.
   #                   Populate via scripts/setup-anthropic-key.ps1 (or .sh).
   #   - subscription: CLAUDE_CODE_CREDENTIALS_JSON → snapshot of an

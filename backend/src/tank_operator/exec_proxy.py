@@ -1,16 +1,16 @@
-"""Bridges a FastAPI WebSocket to a K8s pods/exec WebSocket.
+"""Terminal bridge helpers.
 
-The k8s pods/exec endpoint speaks the `v4.channel.k8s.io` protocol: binary
-frames whose first byte is the channel (0=stdin, 1=stdout, 2=stderr,
-3=error, 4=resize) followed by the payload. kubernetes_asyncio 35 exposes
-the raw aiohttp WebSocket — we do the channel framing ourselves.
+One-shot file/capture helpers still use Kubernetes pods/exec. The interactive
+browser terminal does not: it proxies to the pod-local terminald WebSocket
+through kube-rbac-proxy, avoiding a long-lived apiserver exec stream.
 
 Frontend protocol (kept deliberately small):
 - Text frames are stdin (utf-8 keystrokes from xterm.js).
 - A text frame parsing as JSON `{"resize": [cols, rows]}` is a terminal
   resize control message instead of stdin.
-- Server emits raw stdout/stderr bytes from the pod as text frames.
+- Server emits raw terminal bytes from the pod.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,6 +37,7 @@ EXEC_COMMAND = ["bash", "/opt/tank/bootstrap.sh"]
 # apiserver requires container= when more than one is present, otherwise
 # pods/exec returns 400 "a container name must be specified".
 SESSION_CONTAINER = "claude"
+SERVICE_ACCOUNT_TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 STDIN_CHANNEL = 0
 STDOUT_CHANNEL = 1
@@ -93,7 +94,10 @@ async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> byt
                         try:
                             error_status = json.loads(payload)
                         except ValueError:
-                            error_status = {"status": "Failure", "message": payload.decode(errors="replace")}
+                            error_status = {
+                                "status": "Failure",
+                                "message": payload.decode(errors="replace"),
+                            }
                 elif wsmsg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -114,7 +118,9 @@ async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> byt
     return b"".join(stdout_chunks)
 
 
-async def exec_write_file(namespace: str, pod_name: str, path: str, data: bytes) -> None:
+async def exec_write_file(
+    namespace: str, pod_name: str, path: str, data: bytes
+) -> None:
     """Write `data` to `path` inside the session container.
 
     The command reads an exact byte count, so we do not need a channel-specific
@@ -146,7 +152,9 @@ async def exec_write_file(namespace: str, pod_name: str, path: str, data: bytes)
         error_status: dict[str, str] | None = None
         async with cm as k8s_ws:
             for offset in range(0, len(data), 64 * 1024):
-                await k8s_ws.send_bytes(bytes([STDIN_CHANNEL]) + data[offset:offset + 64 * 1024])
+                await k8s_ws.send_bytes(
+                    bytes([STDIN_CHANNEL]) + data[offset : offset + 64 * 1024]
+                )
             async for wsmsg in k8s_ws:
                 if wsmsg.type == aiohttp.WSMsgType.BINARY:
                     if not wsmsg.data:
@@ -184,36 +192,35 @@ async def exec_write_file(namespace: str, pod_name: str, path: str, data: bytes)
         raise RuntimeError(f"exec write {path} failed: {error_status}")
 
 
-async def bridge(browser: WebSocket, namespace: str, pod_name: str) -> None:
-    ws_client = WsApiClient()
-    core = client.CoreV1Api(api_client=ws_client)
+async def bridge(browser: WebSocket, pod_ip: str, terminal_port: int) -> None:
+    token = _service_account_token()
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    url = f"ws://{pod_ip}:{terminal_port}/session"
+    async with aiohttp.ClientSession() as session:
+        async with session.ws_connect(
+            url, headers=headers, heartbeat=30
+        ) as terminal_ws:
+            await _pump(browser, terminal_ws)
 
-    # _preload_content=False makes WsApiClient return the aiohttp
-    # ws_connect() context manager directly; await + async-with to get the
-    # ClientWebSocketResponse.
-    cm = await core.connect_get_namespaced_pod_exec(
-        name=pod_name,
-        namespace=namespace,
-        container=SESSION_CONTAINER,
-        command=EXEC_COMMAND,
-        stdin=True,
-        stdout=True,
-        stderr=True,
-        tty=True,
-        _preload_content=False,
-    )
 
+def _service_account_token() -> str | None:
     try:
-        async with cm as k8s_ws:
-            await _pump(browser, k8s_ws)
-    finally:
-        await ws_client.close()
+        with open(SERVICE_ACCOUNT_TOKEN, encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        # Local dev without in-cluster auth; kube-rbac-proxy will reject if
+        # the target actually requires Kubernetes auth.
+        return None
 
 
-async def _pump(browser: WebSocket, k8s_ws: aiohttp.ClientWebSocketResponse) -> None:
-    async def send_channel(channel: int, payload: bytes | str) -> None:
-        data = payload.encode("utf-8") if isinstance(payload, str) else payload
-        await k8s_ws.send_bytes(bytes([channel]) + data)
+async def _pump(
+    browser: WebSocket, terminal_ws: aiohttp.ClientWebSocketResponse
+) -> None:
+    async def send_terminal(payload: bytes | str) -> None:
+        if isinstance(payload, str):
+            await terminal_ws.send_str(payload)
+        else:
+            await terminal_ws.send_bytes(payload)
 
     async def browser_to_pod() -> None:
         try:
@@ -241,37 +248,30 @@ async def _pump(browser: WebSocket, k8s_ws: aiohttp.ClientWebSocketResponse) -> 
                         if isinstance(ctrl, dict):
                             if "resize" in ctrl:
                                 cols, rows = ctrl["resize"]
-                                await send_channel(
-                                    RESIZE_CHANNEL,
-                                    json.dumps({"Width": int(cols), "Height": int(rows)}),
+                                await send_terminal(
+                                    json.dumps({"resize": [int(cols), int(rows)]})
                                 )
                                 continue
                             if "ping" in ctrl:
+                                await send_terminal(text)
                                 continue
-                    await send_channel(STDIN_CHANNEL, text)
+                    await send_terminal(text)
                 else:
                     data = msg.get("bytes")
                     if data:
-                        await send_channel(STDIN_CHANNEL, data)
+                        await send_terminal(data)
         except WebSocketDisconnect:
             return
         except Exception:
-            log.exception("browser → pod loop crashed")
+            log.exception("browser → terminal loop crashed")
 
-    async def pod_to_browser() -> None:
+    async def terminal_to_browser() -> None:
         try:
-            async for wsmsg in k8s_ws:
+            async for wsmsg in terminal_ws:
                 if wsmsg.type == aiohttp.WSMsgType.BINARY:
-                    if not wsmsg.data:
-                        continue
-                    channel = wsmsg.data[0]
-                    payload = wsmsg.data[1:]
-                    if not payload:
-                        continue
-                    if channel in (STDOUT_CHANNEL, STDERR_CHANNEL):
-                        await browser.send_text(payload.decode("utf-8", errors="replace"))
-                    elif channel == ERROR_CHANNEL:
-                        log.warning("k8s exec error frame: %s", payload)
+                    await browser.send_bytes(wsmsg.data)
+                elif wsmsg.type == aiohttp.WSMsgType.TEXT:
+                    await browser.send_text(wsmsg.data)
                 elif wsmsg.type in (
                     aiohttp.WSMsgType.CLOSE,
                     aiohttp.WSMsgType.CLOSED,
@@ -279,6 +279,15 @@ async def _pump(browser: WebSocket, k8s_ws: aiohttp.ClientWebSocketResponse) -> 
                 ):
                     return
         except Exception:
-            log.exception("pod → browser loop crashed")
+            log.exception("terminal → browser loop crashed")
 
-    await asyncio.gather(browser_to_pod(), pod_to_browser())
+    tasks = {
+        asyncio.create_task(browser_to_pod()),
+        asyncio.create_task(terminal_to_browser()),
+    }
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    for task in done:
+        task.result()

@@ -1,19 +1,16 @@
-# Orchestrator (running as the `tank-operator` SA in the tank-operator ns) needs to manage
-# Deployments and pods/exec in the sessions namespace. (Was Jobs; switched so ArgoCD's
-# resource tree shows session pods richly and the workload semantics are correct —
-# long-running until killed, not batch.)
+# Orchestrator (running as the `tank-operator` SA in the tank-operator ns)
+# owns ephemeral session Pods in the sessions namespace. A Pod is the session
+# runtime; if it dies, the session is failed rather than transparently
+# recreated as an empty replacement.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tank-operator-sessions-mgr
   namespace: {{ .Values.namespaces.sessions }}
 rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]
@@ -34,6 +31,46 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: tank-operator-sessions-mgr
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tank-operator-terminal-invoker
+rules:
+  - apiGroups: ["terminal.tank-operator.io"]
+    resources: ["sessions"]
+    # WebSocket upgrade is a GET; keep create for future POST/debug calls
+    # through the same kube-rbac-proxy config.
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tank-operator-terminal-invoker
+  namespace: {{ .Values.namespaces.sessions }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.orchestrator.serviceAccount }}
+    namespace: {{ .Values.namespaces.orchestrator }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tank-operator-terminal-invoker
+---
+# Session-pod kube-rbac-proxy validates the orchestrator's projected service
+# account token before forwarding terminal WebSockets to terminald.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.session.serviceAccount }}-auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.session.serviceAccount }}
+    namespace: {{ .Values.namespaces.sessions }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
 ---
 # Session SA gets cluster-admin so an in-cluster Claude session can act on
 # the cluster directly (patch finalizers, delete wedged releases, edit

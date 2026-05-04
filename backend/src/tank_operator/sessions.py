@@ -15,7 +15,9 @@ from kubernetes_asyncio import client, config
 log = logging.getLogger(__name__)
 
 SESSIONS_NAMESPACE = os.environ.get("SESSIONS_NAMESPACE", "tank-operator-sessions")
-SESSION_IMAGE = os.environ.get("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:latest")
+SESSION_IMAGE = os.environ.get(
+    "SESSION_IMAGE", "romainecr.azurecr.io/claude-container:latest"
+)
 CODEX_SESSION_IMAGE = os.environ.get(
     "CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:latest"
 )
@@ -25,18 +27,28 @@ PI_SESSION_IMAGE = os.environ.get(
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
 SESSION_CONFIGMAP = os.environ.get("SESSION_CONFIGMAP", "tank-session-config")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
+TERMINAL_PROXY_CONFIGMAP = os.environ.get(
+    "TERMINAL_PROXY_CONFIGMAP", "tank-terminal-proxy"
+)
+TERMINALD_PORT = int(os.environ.get("TERMINALD_PORT", "7680"))
+TERMINAL_PROXY_PORT = int(os.environ.get("TERMINAL_PROXY_PORT", "7681"))
+TERMINAL_PROXY_IMAGE = os.environ.get(
+    "TERMINAL_PROXY_IMAGE", "quay.io/brancz/kube-rbac-proxy:v0.22.0"
+)
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
 # Session pods reach it via a hostAlias mapping platform.claude.com to this
 # Service's ClusterIP — hostAliases requires an IP, not a DNS name, so we
-# resolve once at startup and stamp the IP onto every Deployment manifest.
+# resolve once at startup and stamp the IP onto every session Pod manifest.
 OAUTH_GATEWAY_HOST = os.environ.get(
     "CLAUDE_OAUTH_GATEWAY_HOST",
     "claude-oauth-gateway.tank-operator.svc.cluster.local",
 )
-OAUTH_GATEWAY_CA_CONFIGMAP = os.environ.get("CLAUDE_OAUTH_GATEWAY_CA_CONFIGMAP", "claude-oauth-ca")
+OAUTH_GATEWAY_CA_CONFIGMAP = os.environ.get(
+    "CLAUDE_OAUTH_GATEWAY_CA_CONFIGMAP", "claude-oauth-ca"
+)
 # In-cluster proxy that fronts api.anthropic.com. Same hostAlias trick as
 # the OAuth gateway (DNS resolution at orchestrator startup, IP literal
-# stamped onto each Deployment manifest). Pods send their requests to
+# stamped onto each session Pod manifest). Pods send their requests to
 # api.anthropic.com normally; the proxy strips their placeholder
 # Authorization header, injects the current real OAuth Bearer, and
 # refreshes against platform.claude.com on upstream 401.
@@ -44,10 +56,10 @@ API_PROXY_HOST = os.environ.get(
     "CLAUDE_API_PROXY_HOST",
     "claude-api-proxy.tank-operator.svc.cluster.local",
 )
-# Stamping these on each session Deployment makes ArgoCD claim it into the
+# Stamping these on each session Pod makes ArgoCD claim it into the
 # tank-operator-sessions Application's resource tree (visible alongside the
 # orchestrator's chart-managed resources). That app has no auto-sync, so
-# Argo never tries to reconcile / prune the dynamic deployments — pure
+# Argo never tries to reconcile / prune the dynamic runtime objects — pure
 # visualization.
 ARGOCD_TRACKING_APP = os.environ.get("ARGOCD_TRACKING_APP", "tank-operator-sessions")
 # Reaper config: a session with no open WS for IDLE_TIMEOUT_SECONDS gets
@@ -63,6 +75,10 @@ class SessionNotFound(Exception):
 
 
 class SessionNotOwned(Exception):
+    pass
+
+
+class SessionTerminalUnavailable(Exception):
     pass
 
 
@@ -158,7 +174,7 @@ PI_MODES = frozenset({PI_CONFIG_MODE, PI_SUBSCRIPTION_MODE})
 
 
 # Friendly-name annotation set by PATCH /api/sessions/{id}. Stored on the
-# Deployment so it survives orchestrator restarts without a separate store.
+# Pod so it survives orchestrator restarts without a separate store.
 # K8s allows up to ~256 KB of annotations per object — we cap inbound names
 # well below that for UI sanity.
 NAME_ANNOTATION = "tank-operator/display-name"
@@ -193,12 +209,12 @@ class SessionInfo:
     owner: str
     status: str
     mode: str
-    # ISO timestamp from the Deployment's creation time. The frontend uses
+    # ISO timestamp from the Pod's creation time. The frontend uses
     # this to show a small "running for" indicator on session rows.
     created_at: str | None = None
     # User-provided friendly name. None when unset; the frontend falls back
     # to the session id slug. The slug stays canonical in URLs and the
-    # Deployment/pod name — this is purely a display label.
+    # Pod name — this is purely a display label.
     name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -228,13 +244,11 @@ def _session_config_volume() -> dict[str, Any]:
 
 
 class SessionManager:
-    """Manages session lifecycle as one Deployment per session.
+    """Manages session lifecycle as one Pod per session.
 
-    Deployment was chosen over Job because the workload is long-running until
-    explicitly killed (claude CLI inside `sleep infinity`); Jobs are batch
-    primitives. Bonus: ArgoCD's resource tree renders Deployments richly
-    (ReplicaSet → Pod with health rollup), Jobs do not — useful once we
-    surface the sessions namespace as orphaned resources.
+    A session Pod is the runtime identity: workspace, tmux, agent process, and
+    terminal transport all live there. If the Pod dies, the session is failed
+    rather than silently recreated as a new empty runtime.
     """
 
     def __init__(self) -> None:
@@ -248,7 +262,7 @@ class SessionManager:
         self._activity: dict[str, float] = {}
         self._reaper_task: asyncio.Task[None] | None = None
         # ClusterIP of the OAuth gateway Service — resolved once at startup
-        # and stamped onto each Deployment as a hostAlias, since K8s
+        # and stamped onto each Pod as a hostAlias, since K8s
         # hostAliases require an IP literal, not a DNS name.
         self._oauth_gateway_ip: str | None = None
         # Same idea for the api.anthropic.com proxy — see API_PROXY_HOST.
@@ -282,7 +296,9 @@ class SessionManager:
             infos = await loop.getaddrinfo(host, None, type=socket.SOCK_STREAM)
             return infos[0][4][0]
         except Exception:
-            log.warning("could not resolve %s %s; sessions will boot without it", label, host)
+            log.warning(
+                "could not resolve %s %s; sessions will boot without it", label, host
+            )
             return None
 
     async def shutdown(self) -> None:
@@ -293,7 +309,7 @@ class SessionManager:
         if self._api is not None:
             await self._api.close()
 
-    def _deployment_manifest(
+    def _pod_manifest(
         self,
         session_id: str,
         owner: str,
@@ -301,14 +317,15 @@ class SessionManager:
         glimmung_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         owner_label = _owner_label(owner)
-        selector_labels = {"tank-operator/session-id": session_id}
-        deployment_name = f"session-{session_id}"
+        pod_name = f"session-{session_id}"
         argocd_tracking_id = (
-            f"{ARGOCD_TRACKING_APP}:apps/Deployment:{SESSIONS_NAMESPACE}/{deployment_name}"
+            f"{ARGOCD_TRACKING_APP}:/Pod:{SESSIONS_NAMESPACE}/{pod_name}"
         )
         context_json = ""
         if glimmung_context is not None:
-            context_json = json.dumps(glimmung_context, sort_keys=True, separators=(",", ":"))
+            context_json = json.dumps(
+                glimmung_context, sort_keys=True, separators=(",", ":")
+            )
         if mode in CODEX_MODES:
             session_image = CODEX_SESSION_IMAGE
         elif mode in PI_MODES:
@@ -328,6 +345,27 @@ class SessionManager:
                 "fsGroup": 1000,
             },
             "containers": [
+                {
+                    "name": "terminal-proxy",
+                    "image": TERMINAL_PROXY_IMAGE,
+                    "imagePullPolicy": "IfNotPresent",
+                    "args": [
+                        f"--insecure-listen-address=0.0.0.0:{TERMINAL_PROXY_PORT}",
+                        f"--upstream=http://127.0.0.1:{TERMINALD_PORT}/",
+                        "--config-file=/etc/kube-rbac-proxy/config.yaml",
+                        "--v=2",
+                    ],
+                    "ports": [
+                        {"name": "terminal", "containerPort": TERMINAL_PROXY_PORT},
+                    ],
+                    "volumeMounts": [
+                        {
+                            "name": "terminal-proxy-config",
+                            "mountPath": "/etc/kube-rbac-proxy",
+                            "readOnly": True,
+                        }
+                    ],
+                },
                 # Sidecar: localhost reverse proxy that injects fresh SA-token
                 # bearer auth into outbound HTTP MCP calls. Same image as the
                 # main container, different command. Required because the
@@ -347,11 +385,16 @@ class SessionManager:
                     "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": [
-                        "bash",
-                        "-lc",
-                        "bash /opt/tank/write-glimmung-context.sh; exec sleep infinity",
+                        "tank-terminald",
+                    ],
+                    "ports": [
+                        {"name": "terminald", "containerPort": TERMINALD_PORT},
                     ],
                     "env": [
+                        {
+                            "name": "TERMINALD_PORT",
+                            "value": str(TERMINALD_PORT),
+                        },
                         # Read by exec_proxy's bootstrap to pick the
                         # auth path. Sourced at the env level (not
                         # via secret) because the value is per-pod,
@@ -363,19 +406,27 @@ class SessionManager:
                         },
                         {
                             "name": "TANK_GLIMMUNG_RUN_ID",
-                            "value": str((glimmung_context or {}).get("glimmung_run_id") or ""),
+                            "value": str(
+                                (glimmung_context or {}).get("glimmung_run_id") or ""
+                            ),
                         },
                         {
                             "name": "TANK_GLIMMUNG_ISSUE_ID",
-                            "value": str((glimmung_context or {}).get("glimmung_issue_id") or ""),
+                            "value": str(
+                                (glimmung_context or {}).get("glimmung_issue_id") or ""
+                            ),
                         },
                         {
                             "name": "TANK_GLIMMUNG_PR_ID",
-                            "value": str((glimmung_context or {}).get("glimmung_pr_id") or ""),
+                            "value": str(
+                                (glimmung_context or {}).get("glimmung_pr_id") or ""
+                            ),
                         },
                         {
                             "name": "TANK_GLIMMUNG_VALIDATION_URL",
-                            "value": str((glimmung_context or {}).get("validation_url") or ""),
+                            "value": str(
+                                (glimmung_context or {}).get("validation_url") or ""
+                            ),
                         },
                         # Force claude (and anything else using the
                         # `supports-hyperlinks` npm lib) to emit OSC 8
@@ -403,12 +454,16 @@ class SessionManager:
                     "envFrom": [
                         {"secretRef": {"name": GITHUB_APP_SECRET}},
                     ],
-                    "stdin": True,
-                    "tty": True,
                     "volumeMounts": _session_config_mounts(),
-                }
+                },
             ],
-            "volumes": [_session_config_volume()],
+            "volumes": [
+                _session_config_volume(),
+                {
+                    "name": "terminal-proxy-config",
+                    "configMap": {"name": TERMINAL_PROXY_CONFIGMAP},
+                },
+            ],
         }
         # OAuth gateway plumbing: add a hostAlias so platform.claude.com
         # resolves to the in-cluster gateway Service, mount the gateway's
@@ -426,7 +481,9 @@ class SessionManager:
         # OpenAI). Pointing any of them at our in-cluster Claude gateway
         # would 404 the auth endpoints (or, in codex_subscription's case,
         # be just irrelevant overhead).
-        if mode not in NO_CLAUDE_HIJACK_MODES and (self._oauth_gateway_ip or self._api_proxy_ip):
+        if mode not in NO_CLAUDE_HIJACK_MODES and (
+            self._oauth_gateway_ip or self._api_proxy_ip
+        ):
             host_aliases: list[dict[str, Any]] = []
             if mode != PI_SUBSCRIPTION_MODE and self._oauth_gateway_ip:
                 host_aliases.append(
@@ -514,10 +571,10 @@ class SessionManager:
         if context_json:
             annotations[GLIMMUNG_CONTEXT_ANNOTATION] = context_json
         return {
-            "apiVersion": "apps/v1",
-            "kind": "Deployment",
+            "apiVersion": "v1",
+            "kind": "Pod",
             "metadata": {
-                "name": deployment_name,
+                "name": pod_name,
                 "namespace": SESSIONS_NAMESPACE,
                 "labels": {
                     "app.kubernetes.io/managed-by": "tank-operator",
@@ -525,28 +582,11 @@ class SessionManager:
                     "tank-operator/owner": owner_label,
                     "tank-operator/session-id": session_id,
                     "tank-operator/mode": mode,
+                    "azure.workload.identity/use": "true",
                 },
                 "annotations": annotations,
             },
-            "spec": {
-                "replicas": 1,
-                # No old ReplicaSets — this Deployment is never updated, only
-                # created and deleted, so history is just clutter in Argo.
-                "revisionHistoryLimit": 0,
-                "selector": {"matchLabels": selector_labels},
-                "template": {
-                    "metadata": {
-                        "labels": {
-                            "app.kubernetes.io/managed-by": "tank-operator",
-                            "tank-operator/owner": owner_label,
-                            "tank-operator/session-id": session_id,
-                            "tank-operator/mode": mode,
-                            "azure.workload.identity/use": "true",
-                        },
-                    },
-                    "spec": pod_spec,
-                },
-            },
+            "spec": pod_spec,
         }
 
     async def create(
@@ -555,7 +595,7 @@ class SessionManager:
         mode: str = DEFAULT_SESSION_MODE,
         glimmung_context: dict[str, Any] | None = None,
     ) -> SessionInfo:
-        assert self._apps is not None
+        assert self._core is not None
         if mode not in SESSION_MODES:
             raise ValueError(f"unknown session mode: {mode!r}")
         # Lazy retry of in-cluster Service resolution — handles the
@@ -565,7 +605,9 @@ class SessionManager:
         if self._oauth_gateway_ip is None:
             self._oauth_gateway_ip = await self._resolve_oauth_gateway_ip()
         if self._api_proxy_ip is None:
-            self._api_proxy_ip = await self._resolve_service_ip(API_PROXY_HOST, "API proxy")
+            self._api_proxy_ip = await self._resolve_service_ip(
+                API_PROXY_HOST, "API proxy"
+            )
         # No credential refresh on the create path: the api-proxy
         # (api-proxy/src/tank_api_proxy/server.py) owns rotation now,
         # triggered by upstream 401s on real api.anthropic.com calls.
@@ -573,9 +615,9 @@ class SessionManager:
         # and injects the real one, refreshing against platform.claude.com
         # behind the scenes when it observes a 401.
         session_id = uuid.uuid4().hex[:10]
-        created = await self._apps.create_namespaced_deployment(
+        created = await self._core.create_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
-            body=self._deployment_manifest(session_id, owner, mode, glimmung_context),
+            body=self._pod_manifest(session_id, owner, mode, glimmung_context),
         )
         # Seed activity so the reaper gives the session a full
         # IDLE_TIMEOUT to receive its first WS before being eligible
@@ -587,7 +629,7 @@ class SessionManager:
             created_at = created.metadata.creation_timestamp.isoformat()
         return SessionInfo(
             id=session_id,
-            pod_name=None,
+            pod_name=created.metadata.name if created.metadata else None,
             owner=owner,
             status="Pending",
             mode=mode,
@@ -595,57 +637,46 @@ class SessionManager:
         )
 
     async def list(self, owner: str) -> list[SessionInfo]:
-        assert self._apps is not None
+        assert self._core is not None
         owner_label = _owner_label(owner)
-        deployments = await self._apps.list_namespaced_deployment(
+        pods = await self._core.list_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
             label_selector=f"tank-operator/owner={owner_label}",
         )
         return [
             SessionInfo(
-                id=d.metadata.labels.get(
-                    "tank-operator/session-id", d.metadata.name
+                id=p.metadata.labels.get(
+                    "tank-operator/session-id", p.metadata.name.removeprefix("session-")
                 ),
-                pod_name=None,
+                pod_name=p.metadata.name,
                 owner=owner,
-                status=_deployment_status(d),
-                mode=d.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
-                created_at=_deployment_created_at(d),
-                name=(d.metadata.annotations or {}).get(NAME_ANNOTATION),
+                status=_pod_status(p),
+                mode=p.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
+                created_at=_pod_created_at(p),
+                name=(p.metadata.annotations or {}).get(NAME_ANNOTATION),
             )
-            for d in deployments.items
+            for p in pods.items
         ]
 
     async def get_session(self, owner: str, session_id: str) -> SessionInfo:
         """Look up a single session by id, verifying ownership.
 
         Cheaper than get_pod_name because it doesn't wait for pod-Ready —
-        just reads the Deployment to get mode/status. Use this when you
+        just reads the Pod to get mode/status. Use this when you
         only need session metadata (e.g. checking mode before allowing an
         action), and get_pod_name when you need to actually exec into the
         pod.
         """
-        assert self._apps is not None
-        owner_label = _owner_label(owner)
-        try:
-            deployment = await self._apps.read_namespaced_deployment(
-                name=f"session-{session_id}", namespace=SESSIONS_NAMESPACE
-            )
-        except client.ApiException as e:
-            if e.status == 404:
-                raise SessionNotFound(session_id) from e
-            raise
-        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
-            raise SessionNotOwned(session_id)
-        mode = deployment.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        pod = await self._read_owned_pod(owner, session_id)
+        mode = pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
         return SessionInfo(
             id=session_id,
-            pod_name=None,
+            pod_name=pod.metadata.name,
             owner=owner,
-            status=_deployment_status(deployment),
+            status=_pod_status(pod),
             mode=mode,
-            created_at=_deployment_created_at(deployment),
-            name=(deployment.metadata.annotations or {}).get(NAME_ANNOTATION),
+            created_at=_pod_created_at(pod),
+            name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
         )
 
     async def set_name(
@@ -653,94 +684,109 @@ class SessionManager:
     ) -> SessionInfo:
         """Set or clear the friendly display name on a session.
 
-        Stored as an annotation on the Deployment, so it survives
+        Stored as an annotation on the Pod, so it survives
         orchestrator restarts and is visible to anyone who can read the
-        Deployment (the owner, via the existing label-scoped list).
+        Pod (the owner, via the existing label-scoped list).
         Pass `None` (or empty string after trim) to clear.
 
         Strategic-merge-patch semantics: a `None` annotation value tells
         the apiserver to remove the key.
         """
-        assert self._apps is not None
-        owner_label = _owner_label(owner)
-        deployment_name = f"session-{session_id}"
-        try:
-            deployment = await self._apps.read_namespaced_deployment(
-                name=deployment_name, namespace=SESSIONS_NAMESPACE
-            )
-        except client.ApiException as e:
-            if e.status == 404:
-                raise SessionNotFound(session_id) from e
-            raise
-        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
-            raise SessionNotOwned(session_id)
+        assert self._core is not None
+        pod = await self._read_owned_pod(owner, session_id)
         normalized = name.strip() if name else ""
-        annotation_value: str | None = normalized[:MAX_NAME_LENGTH] if normalized else None
-        await self._apps.patch_namespaced_deployment(
-            name=deployment_name,
+        annotation_value: str | None = (
+            normalized[:MAX_NAME_LENGTH] if normalized else None
+        )
+        patched = await self._core.patch_namespaced_pod(
+            name=pod.metadata.name,
             namespace=SESSIONS_NAMESPACE,
             body={"metadata": {"annotations": {NAME_ANNOTATION: annotation_value}}},
         )
-        mode = deployment.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        mode = patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
         return SessionInfo(
             id=session_id,
-            pod_name=None,
+            pod_name=patched.metadata.name,
             owner=owner,
-            status=_deployment_status(deployment),
+            status=_pod_status(patched),
             mode=mode,
-            created_at=_deployment_created_at(deployment),
+            created_at=_pod_created_at(patched),
             name=annotation_value,
         )
 
-    async def get_pod_name(self, owner: str, session_id: str, timeout: float = 90.0) -> str:
+    async def get_pod_name(
+        self, owner: str, session_id: str, timeout: float = 90.0
+    ) -> str:
         """Look up the pod backing a session, waiting up to `timeout` seconds for it to be Ready."""
-        assert self._apps is not None and self._core is not None
-        owner_label = _owner_label(owner)
-        name = f"session-{session_id}"
-        try:
-            deployment = await self._apps.read_namespaced_deployment(
-                name=name, namespace=SESSIONS_NAMESPACE
-            )
-        except client.ApiException as e:
-            if e.status == 404:
-                raise SessionNotFound(session_id) from e
-            raise
-        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
-            raise SessionNotOwned(session_id)
-
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
-            pods = await self._core.list_namespaced_pod(
-                namespace=SESSIONS_NAMESPACE,
-                label_selector=f"tank-operator/session-id={session_id}",
-            )
-            for pod in pods.items:
-                if _pod_ready(pod):
-                    return pod.metadata.name
+            pod = await self._read_owned_pod(owner, session_id)
+            if _pod_ready(pod):
+                return pod.metadata.name
+            await asyncio.sleep(1)
+        raise PodNotReady(session_id)
+
+    async def get_terminal_endpoint(
+        self, owner: str, session_id: str, timeout: float = 90.0
+    ) -> tuple[str, int]:
+        """Return the current session pod IP and terminal proxy port."""
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            pod = await self._read_owned_pod(owner, session_id)
+            if _pod_ready(pod) and pod.status and pod.status.pod_ip:
+                if not _pod_has_container(pod, "terminal-proxy"):
+                    raise SessionTerminalUnavailable(session_id)
+                return pod.status.pod_ip, TERMINAL_PROXY_PORT
             await asyncio.sleep(1)
         raise PodNotReady(session_id)
 
     async def delete(self, owner: str, session_id: str) -> None:
-        assert self._apps is not None
+        assert self._core is not None
+        pod = await self._read_owned_pod(owner, session_id)
+        await self._delete_session_runtime(pod)
+        self._ws_count.pop(session_id, None)
+        self._activity.pop(session_id, None)
+
+    async def _read_owned_pod(self, owner: str, session_id: str) -> Any:
+        assert self._core is not None
         owner_label = _owner_label(owner)
-        name = f"session-{session_id}"
         try:
-            deployment = await self._apps.read_namespaced_deployment(
-                name=name, namespace=SESSIONS_NAMESPACE
+            pod = await self._core.read_namespaced_pod(
+                name=f"session-{session_id}", namespace=SESSIONS_NAMESPACE
             )
         except client.ApiException as e:
             if e.status == 404:
-                raise SessionNotFound(session_id) from e
-            raise
-        if deployment.metadata.labels.get("tank-operator/owner") != owner_label:
+                pods = await self._core.list_namespaced_pod(
+                    namespace=SESSIONS_NAMESPACE,
+                    label_selector=f"tank-operator/session-id={session_id}",
+                )
+                if not pods.items:
+                    raise SessionNotFound(session_id) from e
+                pod = pods.items[0]
+            else:
+                raise
+        if pod.metadata.labels.get("tank-operator/owner") != owner_label:
             raise SessionNotOwned(session_id)
-        await self._apps.delete_namespaced_deployment(
-            name=name,
+        return pod
+
+    async def _delete_session_runtime(self, pod: Any) -> None:
+        assert self._core is not None
+        deployment_name = _legacy_deployment_owner(pod)
+        if deployment_name and self._apps is not None:
+            try:
+                await self._apps.delete_namespaced_deployment(
+                    name=deployment_name,
+                    namespace=SESSIONS_NAMESPACE,
+                    propagation_policy="Foreground",
+                )
+                return
+            except client.ApiException as e:
+                if e.status != 404:
+                    raise
+        await self._core.delete_namespaced_pod(
+            name=pod.metadata.name,
             namespace=SESSIONS_NAMESPACE,
-            propagation_policy="Foreground",
         )
-        self._ws_count.pop(session_id, None)
-        self._activity.pop(session_id, None)
 
     @contextlib.asynccontextmanager
     async def track_ws(self, session_id: str) -> AsyncIterator[None]:
@@ -769,14 +815,14 @@ class SessionManager:
                 log.exception("reaper sweep failed")
 
     async def _reap_idle(self) -> None:
-        assert self._apps is not None
+        assert self._core is not None
         now = time.monotonic()
-        deployments = await self._apps.list_namespaced_deployment(
+        pods = await self._core.list_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
             label_selector="app.kubernetes.io/managed-by=tank-operator",
         )
-        for d in deployments.items:
-            session_id = d.metadata.labels.get("tank-operator/session-id")
+        for pod in pods.items:
+            session_id = pod.metadata.labels.get("tank-operator/session-id")
             if not session_id:
                 continue
             if self._ws_count.get(session_id, 0) > 0:
@@ -794,11 +840,7 @@ class SessionManager:
                 continue
             log.info("reaping idle session %s (idle %.0fs)", session_id, now - last)
             try:
-                await self._apps.delete_namespaced_deployment(
-                    name=d.metadata.name,
-                    namespace=SESSIONS_NAMESPACE,
-                    propagation_policy="Foreground",
-                )
+                await self._delete_session_runtime(pod)
             except client.ApiException:
                 log.exception("failed to delete idle session %s", session_id)
                 continue
@@ -806,30 +848,42 @@ class SessionManager:
             self._activity.pop(session_id, None)
 
 
-def _deployment_status(deployment: Any) -> str:
-    """Map a Deployment's status to the same vocabulary the frontend already uses."""
-    status = deployment.status
+def _pod_status(pod: Any) -> str:
+    """Map a Pod's status to the same vocabulary the frontend already uses."""
+    status = pod.status
     if status is None:
         return "Pending"
-    ready = status.ready_replicas or 0
-    if ready >= 1:
+    if status.phase == "Running" and _pod_ready(pod):
         return "Active"
-    if status.conditions:
-        for c in status.conditions:
-            # ReplicaFailure or Progressing=False with reason ProgressDeadlineExceeded
-            # both indicate the rollout has given up. Treat as Failed so the UI
-            # shows red and the user can delete + retry.
-            if c.type == "ReplicaFailure" and c.status == "True":
-                return "Failed"
-            if c.type == "Progressing" and c.status == "False":
-                return "Failed"
+    if status.phase in ("Failed", "Succeeded"):
+        return "Failed"
+    statuses = status.container_statuses or []
+    if any(
+        cs.state and cs.state.waiting and cs.state.waiting.reason == "CrashLoopBackOff"
+        for cs in statuses
+    ):
+        return "Failed"
     return "Pending"
 
 
-def _deployment_created_at(deployment: Any) -> str | None:
-    if not deployment.metadata or not deployment.metadata.creation_timestamp:
+def _pod_created_at(pod: Any) -> str | None:
+    if not pod.metadata or not pod.metadata.creation_timestamp:
         return None
-    return deployment.metadata.creation_timestamp.isoformat()
+    return pod.metadata.creation_timestamp.isoformat()
+
+
+def _legacy_deployment_owner(pod: Any) -> str | None:
+    """Return the pre-terminald Deployment owner for old session pods, if any."""
+    for owner in pod.metadata.owner_references or []:
+        if owner.kind != "ReplicaSet" or not owner.name:
+            continue
+        session_id = pod.metadata.labels.get("tank-operator/session-id")
+        expected_prefix = f"session-{session_id}-" if session_id else "session-"
+        if owner.name.startswith(expected_prefix):
+            return (
+                f"session-{session_id}" if session_id else owner.name.rsplit("-", 1)[0]
+            )
+    return None
 
 
 def _pod_ready(pod: Any) -> bool:
@@ -837,3 +891,8 @@ def _pod_ready(pod: Any) -> bool:
         return False
     statuses = pod.status.container_statuses or []
     return bool(statuses) and all(cs.ready for cs in statuses)
+
+
+def _pod_has_container(pod: Any, name: str) -> bool:
+    spec = getattr(pod, "spec", None)
+    return any(c.name == name for c in (getattr(spec, "containers", None) or []))

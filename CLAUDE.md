@@ -12,7 +12,7 @@ Web frontend over a thin K8s orchestrator that spawns ephemeral session pods on 
 
 ## Stack
 
-FastAPI + kubernetes-asyncio backend, Vite + React + xterm.js frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Deployments).
+FastAPI + kubernetes-asyncio backend, Vite + React + xterm.js frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Pods).
 
 ## Container build verification
 

@@ -5,7 +5,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    Cookie,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -38,6 +47,7 @@ from .sessions import (
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
+    SessionTerminalUnavailable,
 )
 
 sessions = SessionManager()
@@ -50,7 +60,9 @@ PASTE_IMAGE_TYPES = {
     "image/webp": "webp",
     "image/gif": "gif",
 }
-MAX_PASTE_IMAGE_BYTES = int(os.environ.get("MAX_PASTE_IMAGE_BYTES", str(8 * 1024 * 1024)))
+MAX_PASTE_IMAGE_BYTES = int(
+    os.environ.get("MAX_PASTE_IMAGE_BYTES", str(8 * 1024 * 1024))
+)
 
 
 @asynccontextmanager
@@ -197,7 +209,9 @@ async def github_install_url(user: User = Depends(current_user)) -> RedirectResp
     token usable to retry later.
     """
     state = mint_install_state(user.email)
-    target = f"https://github.com/apps/{GITHUB_APP_SLUG}/installations/new?state={state}"
+    target = (
+        f"https://github.com/apps/{GITHUB_APP_SLUG}/installations/new?state={state}"
+    )
     return RedirectResponse(url=target, status_code=302)
 
 
@@ -230,7 +244,11 @@ async def github_install_callback(
         # GitHub sends `setup_action=request` for org-controlled installs that
         # are pending admin approval; installation_id arrives later via the
         # webhook (out of scope for stage 2).
-        return _err("pending_approval" if setup_action == "request" else "missing_installation_id")
+        return _err(
+            "pending_approval"
+            if setup_action == "request"
+            else "missing_installation_id"
+        )
     try:
         state_email = verify_install_state(state)
     except HTTPException:
@@ -298,7 +316,9 @@ async def create_session_with_context(
     if body.mode not in SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
     if body.caller_email and body.caller_email.lower() != user.email.lower():
-        raise HTTPException(status_code=403, detail="caller_email does not match session user")
+        raise HTTPException(
+            status_code=403, detail="caller_email does not match session user"
+        )
 
     context = {
         "glimmung_run_id": body.glimmung_run_id,
@@ -322,7 +342,9 @@ async def list_sessions(user: User = Depends(current_user)) -> list[SessionInfo]
 
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str, user: User = Depends(current_user)) -> dict[str, str]:
+async def delete_session(
+    session_id: str, user: User = Depends(current_user)
+) -> dict[str, str]:
     try:
         await sessions.delete(owner=user.email, session_id=session_id)
     except SessionNotFound:
@@ -405,7 +427,9 @@ async def paste_image(
     content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
     extension = PASTE_IMAGE_TYPES.get(content_type)
     if extension is None:
-        raise HTTPException(status_code=415, detail="clipboard item is not a supported image")
+        raise HTTPException(
+            status_code=415, detail="clipboard item is not a supported image"
+        )
 
     body = await request.body()
     if not body:
@@ -425,10 +449,14 @@ async def paste_image(
     timestamp_ms = int(time.time() * 1000)
     path = f"/workspace/.tank-pastes/{session_id}/clipboard-{timestamp_ms}.{extension}"
     try:
-        await exec_write_file(namespace=SESSIONS_NAMESPACE, pod_name=pod_name, path=path, data=body)
+        await exec_write_file(
+            namespace=SESSIONS_NAMESPACE, pod_name=pod_name, path=path, data=body
+        )
     except RuntimeError as e:
         log.warning("failed to write pasted image for session %s: %s", session_id, e)
-        raise HTTPException(status_code=502, detail="failed to write image into session pod")
+        raise HTTPException(
+            status_code=502, detail="failed to write image into session pod"
+        )
     return {"path": path}
 
 
@@ -445,12 +473,19 @@ async def session_exec(ws: WebSocket, session_id: str) -> None:
         return
 
     try:
-        pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
+        pod_ip, terminal_port = await sessions.get_terminal_endpoint(
+            owner=user.email, session_id=session_id
+        )
     except SessionNotOwned:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
         return
     except SessionNotFound:
         await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
+        return
+    except SessionTerminalUnavailable:
+        await ws.close(
+            code=status.WS_1011_INTERNAL_ERROR, reason="session needs restart"
+        )
         return
     except PodNotReady:
         await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
@@ -458,13 +493,15 @@ async def session_exec(ws: WebSocket, session_id: str) -> None:
 
     async with sessions.track_ws(session_id):
         try:
-            await bridge(ws, namespace=SESSIONS_NAMESPACE, pod_name=pod_name)
+            await bridge(ws, pod_ip=pod_ip, terminal_port=terminal_port)
         except WebSocketDisconnect:
             pass
 
 
 _static_env = os.environ.get("TANK_OPERATOR_STATIC_DIR")
-_static = Path(_static_env) if _static_env else Path(__file__).resolve().parent / "static"
+_static = (
+    Path(_static_env) if _static_env else Path(__file__).resolve().parent / "static"
+)
 if _static.exists():
     app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
     app.mount("/fonts", StaticFiles(directory=_static / "fonts"), name="fonts")

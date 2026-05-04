@@ -39,6 +39,14 @@ spec:
               value: {{ .Values.session.serviceAccount | quote }}
             - name: SESSION_CONFIGMAP
               value: {{ .Values.session.configMap | quote }}
+            - name: TERMINAL_PROXY_CONFIGMAP
+              value: {{ .Values.terminalProxy.configMap | quote }}
+            - name: TERMINAL_PROXY_IMAGE
+              value: {{ .Values.terminalProxy.image | quote }}
+            - name: TERMINALD_PORT
+              value: {{ .Values.terminalProxy.terminaldPort | quote }}
+            - name: TERMINAL_PROXY_PORT
+              value: {{ .Values.terminalProxy.proxyPort | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ .Values.externalSecret.githubApp.secretName | quote }}
             - name: IDLE_TIMEOUT_SECONDS
