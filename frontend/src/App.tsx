@@ -30,7 +30,9 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
+  requested_at: string | null;
   created_at: string | null;
+  ready_at: string | null;
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
 }
@@ -112,7 +114,9 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "subscription",
+    requested_at: new Date(Date.now() - 12 * 60 * 1000 - 2 * 1000).toISOString(),
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
   },
   {
@@ -121,7 +125,9 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "codex_subscription",
+    requested_at: new Date(Date.now() - 68 * 60 * 1000 - 4 * 1000).toISOString(),
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
+    ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
   },
   {
@@ -130,7 +136,9 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "pi_subscription",
+    requested_at: new Date(Date.now() - 3 * 60 * 60 * 1000 - 3 * 1000).toISOString(),
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
   },
 ];
@@ -332,7 +340,9 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     owner: "preview",
     status: "Active",
     mode,
+    requested_at: new Date().toISOString(),
     created_at: new Date().toISOString(),
+    ready_at: null,
     name: `${label} ${index}`,
   };
 }
@@ -566,6 +576,13 @@ function formatRuntime(ms: number): string {
   return `${days}d`;
 }
 
+function formatBootTime(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 1) return "<1s";
+  if (seconds < 60) return `${seconds}s`;
+  return formatRuntime(ms);
+}
+
 function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
   if (!session.created_at) return null;
   const startedMs = Date.parse(session.created_at);
@@ -577,6 +594,33 @@ function sessionRuntimeTitle(session: Session, nowMs: number): string {
   const startedMs = session.created_at ? Date.parse(session.created_at) : NaN;
   const runtime = Number.isFinite(startedMs) ? formatRuntime(nowMs - startedMs) : "unknown";
   return `running ${runtime}`;
+}
+
+function sessionBootStartMs(session: Session): number {
+  const requestedMs = session.requested_at ? Date.parse(session.requested_at) : NaN;
+  if (Number.isFinite(requestedMs)) return requestedMs;
+  const createdMs = session.created_at ? Date.parse(session.created_at) : NaN;
+  return Number.isFinite(createdMs) ? createdMs : NaN;
+}
+
+function sessionBootLabel(session: Session, nowMs: number): string | null {
+  const startMs = sessionBootStartMs(session);
+  if (!Number.isFinite(startMs)) return null;
+  const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
+  if (Number.isFinite(readyMs)) return formatBootTime(readyMs - startMs);
+  if (session.status === "Pending") return formatBootTime(nowMs - startMs);
+  return null;
+}
+
+function sessionBootTitle(session: Session, nowMs: number): string {
+  const startMs = sessionBootStartMs(session);
+  if (!Number.isFinite(startMs)) return "startup time unknown";
+  const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
+  if (Number.isFinite(readyMs)) {
+    return `ready ${formatBootTime(readyMs - startMs)} after request`;
+  }
+  if (session.status === "Pending") return `starting for ${formatBootTime(nowMs - startMs)} since request`;
+  return "startup time unknown";
 }
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
@@ -1043,6 +1087,7 @@ function DemoLanding() {
               const statusDotClass = s.mode.startsWith("codex")
                 ? "status-dot status-codex-waiting"
                 : `status-dot status-${s.status.toLowerCase()}`;
+              const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
               return (
                 <li
@@ -1059,9 +1104,20 @@ function DemoLanding() {
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
-                    {runtimeLabel && (
-                      <span className="session-runtime" title={sessionRuntimeTitle(s, Date.now())}>
-                        {runtimeLabel}
+                    {(bootLabel || runtimeLabel) && (
+                      <span className="session-stats">
+                        {bootLabel && (
+                          <span className="session-stat" title={sessionBootTitle(s, Date.now())}>
+                            <span aria-hidden="true">↓</span>
+                            <span>{bootLabel}</span>
+                          </span>
+                        )}
+                        {runtimeLabel && (
+                          <span className="session-stat" title={sessionRuntimeTitle(s, Date.now())}>
+                            <span aria-hidden="true">↑</span>
+                            <span>{runtimeLabel}</span>
+                          </span>
+                        )}
                       </span>
                     )}
                     <button
@@ -1695,6 +1751,7 @@ export function App() {
               const statusLabel = agentActivity
                 ? `${MODE_LABELS[s.mode]} ${agentActivity}`
                 : s.status;
+              const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               return (
                 <li
@@ -1749,13 +1806,28 @@ export function App() {
                         <span className="session-id">{sessionDisplayName(s)}</span>
                       </button>
                     )}
-                    {runtimeLabel && (
-                      <span
-                        className="session-runtime"
-                        title={sessionRuntimeTitle(s, nowMs)}
-                        aria-label={sessionRuntimeTitle(s, nowMs)}
-                      >
-                        {runtimeLabel}
+                    {(bootLabel || runtimeLabel) && (
+                      <span className="session-stats">
+                        {bootLabel && (
+                          <span
+                            className="session-stat"
+                            title={sessionBootTitle(s, nowMs)}
+                            aria-label={sessionBootTitle(s, nowMs)}
+                          >
+                            <span aria-hidden="true">↓</span>
+                            <span>{bootLabel}</span>
+                          </span>
+                        )}
+                        {runtimeLabel && (
+                          <span
+                            className="session-stat"
+                            title={sessionRuntimeTitle(s, nowMs)}
+                            aria-label={sessionRuntimeTitle(s, nowMs)}
+                          >
+                            <span aria-hidden="true">↑</span>
+                            <span>{runtimeLabel}</span>
+                          </span>
+                        )}
                       </span>
                     )}
                     <button

@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -24,7 +25,13 @@ def _claude_container(manifest: dict) -> dict:
     return next(c for c in _pod_spec(manifest)["containers"] if c["name"] == "claude")
 
 
-def _session_pod(session_id: str, containers: list[str]) -> SimpleNamespace:
+def _session_pod(
+    session_id: str,
+    containers: list[str],
+    *,
+    created_at: datetime.datetime | None = None,
+    ready_at: datetime.datetime | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         metadata=SimpleNamespace(
             name=f"session-{session_id}",
@@ -34,12 +41,24 @@ def _session_pod(session_id: str, containers: list[str]) -> SimpleNamespace:
                 "tank-operator/mode": "subscription",
             },
             annotations={},
-            creation_timestamp=None,
+            creation_timestamp=created_at,
         ),
         spec=SimpleNamespace(
             containers=[SimpleNamespace(name=name) for name in containers]
         ),
-        status=SimpleNamespace(phase="Pending", container_statuses=[]),
+        status=SimpleNamespace(
+            phase="Running" if ready_at else "Pending",
+            container_statuses=[],
+            conditions=[
+                SimpleNamespace(
+                    type="Ready",
+                    status="True",
+                    last_transition_time=ready_at,
+                )
+            ]
+            if ready_at
+            else [],
+        ),
     )
 
 
@@ -151,6 +170,41 @@ def test_session_list_uses_registry_and_adopts_only_terminald_pods() -> None:
     assert [session.id for session in listed] == ["terminald"]
     assert asyncio.run(registry.get("operator@example.test", "legacy")) is None
     assert asyncio.run(registry.get("operator@example.test", "terminald")) is not None
+
+
+def test_session_list_reports_request_creation_and_ready_timestamps() -> None:
+    requested_at = "2026-05-04T20:00:00+00:00"
+    created_at = datetime.datetime.fromisoformat("2026-05-04T20:00:03+00:00")
+    ready_at = datetime.datetime.fromisoformat("2026-05-04T20:00:41+00:00")
+    registry = SessionRegistryStore()
+    asyncio.run(
+        registry.upsert(
+            email="operator@example.test",
+            session_id="timed",
+            mode="subscription",
+            pod_name="session-timed",
+            requested_at=requested_at,
+            created_at=created_at.isoformat(),
+        )
+    )
+    manager = _ReaperSessionManager(
+        [
+            _session_pod(
+                "timed",
+                ["mcp-auth-proxy", "terminal-proxy", "claude"],
+                created_at=created_at,
+                ready_at=ready_at,
+            )
+        ],
+        registry=registry,
+    )
+
+    listed = asyncio.run(manager.list(owner="operator@example.test"))
+
+    assert len(listed) == 1
+    assert listed[0].requested_at == requested_at
+    assert listed[0].created_at == created_at.isoformat()
+    assert listed[0].ready_at == ready_at.isoformat()
 
 
 def test_delete_hides_registry_session_when_runtime_pod_is_gone() -> None:

@@ -63,6 +63,7 @@ class SessionRecord:
     pod_name: str | None = None
     name: str | None = None
     visible: bool = True
+    requested_at: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -92,6 +93,7 @@ def _session_from_doc(doc: dict) -> SessionRecord:
         pod_name=doc.get("pod_name"),
         name=doc.get("name"),
         visible=doc.get("visible", True),
+        requested_at=doc.get("requested_at", ""),
         created_at=doc.get("created_at", ""),
         updated_at=doc.get("updated_at", ""),
     )
@@ -244,6 +246,7 @@ class SessionRegistryStore:
         mode: str,
         pod_name: str | None,
         name: str | None = None,
+        requested_at: str | None = None,
         created_at: str | None = None,
         visible: bool = True,
     ) -> SessionRecord:
@@ -257,6 +260,7 @@ class SessionRegistryStore:
             pod_name=pod_name,
             name=name if name is not None else (existing.name if existing else None),
             visible=visible,
+            requested_at=requested_at or (existing.requested_at if existing else now),
             created_at=created_at or (existing.created_at if existing else now),
             updated_at=now,
         )
@@ -310,6 +314,7 @@ class SessionRegistryStore:
             mode=record.mode,
             pod_name=record.pod_name,
             name=name,
+            requested_at=record.requested_at,
             created_at=record.created_at,
             visible=record.visible,
         )
@@ -337,6 +342,7 @@ def _session_doc(record: SessionRecord) -> dict[str, Any]:
         "pod_name": record.pod_name,
         "name": record.name,
         "visible": record.visible,
+        "requested_at": record.requested_at,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
