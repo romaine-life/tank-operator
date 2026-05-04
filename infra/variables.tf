@@ -8,6 +8,12 @@ variable "arm_tenant_id" {
   type        = string
 }
 
+variable "mcp_azure_extra_reader_subscription_ids" {
+  description = "Additional Azure subscription IDs where the read-only mcp-azure UAMI should receive Reader. Set from repo variable MCP_AZURE_EXTRA_READER_SUBSCRIPTION_IDS as a comma-separated list."
+  type        = string
+  default     = ""
+}
+
 variable "github_pat" {
   description = "GitHub PAT for the github provider. Sourced from KV by the workflow and passed via TF_VAR_github_pat."
   type        = string
