@@ -85,7 +85,7 @@ function createWindow(initialUrl = tankUrl) {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (isTankUrl(url)) {
+    if (isTankUrl(url) || isAuthNavigation(url)) {
       createWindow(url);
     } else {
       void shell.openExternal(url);
