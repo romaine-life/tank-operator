@@ -486,6 +486,8 @@ type GlimmungLaunchContext = {
   validation_url: string | null;
 };
 
+const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
+
 // One-line summaries for the install_error reasons the backend may surface
 // via redirect query param after a failed install callback. Anything not in
 // the map renders as the raw reason — keeps unknown errors visible without
@@ -565,16 +567,43 @@ function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   const params = new URLSearchParams(window.location.search);
   const runId = params.get("glimmung_run_id");
   const issueId = params.get("glimmung_issue_id");
-  if (!runId || !issueId) return null;
-  return {
+  if (!runId || !issueId) {
+    try {
+      const stored = window.sessionStorage.getItem(GLIMMUNG_LAUNCH_CONTEXT_KEY);
+      if (!stored) return null;
+      const parsed = JSON.parse(stored) as Partial<GlimmungLaunchContext>;
+      if (!parsed.glimmung_run_id || !parsed.glimmung_issue_id) return null;
+      return {
+        glimmung_run_id: parsed.glimmung_run_id,
+        glimmung_issue_id: parsed.glimmung_issue_id,
+        glimmung_pr_id: parsed.glimmung_pr_id ?? null,
+        validation_url: parsed.validation_url ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const context = {
     glimmung_run_id: runId,
     glimmung_issue_id: issueId,
     glimmung_pr_id: params.get("glimmung_pr_id"),
     validation_url: params.get("validation_url"),
   };
+  try {
+    window.sessionStorage.setItem(GLIMMUNG_LAUNCH_CONTEXT_KEY, JSON.stringify(context));
+  } catch {
+    // Storage may be unavailable in hardened/private browser contexts.
+  }
+  return context;
 }
 
 function clearGlimmungLaunchContext(): void {
+  try {
+    window.sessionStorage.removeItem(GLIMMUNG_LAUNCH_CONTEXT_KEY);
+  } catch {
+    // Storage may be unavailable in hardened/private browser contexts.
+  }
   const url = new URL(window.location.href);
   for (const key of [
     "glimmung_run_id",
@@ -1178,6 +1207,7 @@ export function App() {
         await refresh();
         activate(session.id);
       } catch (e) {
+        glimmungLaunchContext.current = context;
         setError(String(e));
       } finally {
         setBusy(false);
