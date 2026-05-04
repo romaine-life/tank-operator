@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
@@ -199,15 +200,30 @@ const DEMO_PI_LINES = [
   "> Summarize this repo and run the checks.",
 ];
 
-function demoTerminalLines(session: Session): string[] {
+const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
+
+function demoTerminalLines(session: Session, promptText?: string): string[] {
   const template = session.mode === "codex_subscription"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_subscription"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
-  if (!session.id.includes("-preview-")) return template;
+  const lines = [...template];
+  if (promptText) {
+    if (session.mode === "codex_subscription") {
+      lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
+    } else if (session.mode === "pi_subscription") {
+      lines[lines.length - 1] = `> ${promptText}`;
+    } else {
+      const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
+      if (promptIndex >= 0) {
+        lines[promptIndex] = `❯\u00a0${promptText}\x1b[7m \x1b[27m`;
+      }
+    }
+  }
+  if (!session.id.includes("-preview-")) return lines;
   return [
-    ...template,
+    ...lines,
     "",
     "Preview session only. The real app creates a Kubernetes pod here.",
   ];
@@ -881,9 +897,12 @@ function DemoLanding() {
   const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
+  const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
   const selectedMode = PROVIDER_DEFAULT_MODES[selectedProvider];
-  const terminalLines = selected ? demoTerminalLines(selected) : DEMO_LANDING_LINES;
+  const terminalLines = selected
+    ? demoTerminalLines(selected, demoPromptMessages[selected.id])
+    : DEMO_LANDING_LINES;
 
   useEffect(() => {
     if (!modeMenuOpen) return;
@@ -927,9 +946,21 @@ function DemoLanding() {
   function deletePreviewSession(id: string) {
     const next = demoSessions.filter((session) => session.id !== id);
     setDemoSessions(next);
+    setDemoPromptMessages((prev) => {
+      if (!(id in prev)) return prev;
+      const nextMessages = { ...prev };
+      delete nextMessages[id];
+      return nextMessages;
+    });
     if (activeDemoSession === id) {
       setActiveDemoSession(next[0]?.id ?? "");
     }
+  }
+
+  function handleDemoTerminalKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Enter" || !selected) return;
+    event.preventDefault();
+    setDemoPromptMessages((prev) => ({ ...prev, [selected.id]: DEMO_LOGIN_MESSAGE }));
   }
 
   return (
@@ -1079,6 +1110,8 @@ function DemoLanding() {
           className={`demo-terminal${selected?.mode === "subscription" ? " is-claude" : " is-codex"}`}
           role="img"
           aria-label="tank-operator terminal preview"
+          tabIndex={0}
+          onKeyDown={handleDemoTerminalKeyDown}
         >
           <div className="demo-terminal-screen">
             {terminalLines.map((line, index) => (
