@@ -1234,6 +1234,7 @@ export function App() {
       event.stopPropagation();
       setActive(nextId);
       setMounted((prev) => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
+      focusTerminalAfterRender(nextId);
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
@@ -1242,6 +1243,15 @@ export function App() {
   function activate(id: string) {
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
+
+  function focusTerminalAfterRender(id: string, attempts = 6) {
+    window.requestAnimationFrame(() => {
+      const focused = terminalRefs.current.get(id)?.focus() ?? false;
+      if (!focused && attempts > 1) {
+        window.setTimeout(() => focusTerminalAfterRender(id, attempts - 1), 25);
+      }
+    });
   }
 
   function setAgentActivity(sessionId: string, activity: AgentActivity) {
