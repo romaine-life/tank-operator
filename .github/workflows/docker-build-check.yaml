@@ -33,7 +33,7 @@ jobs:
             context: .
             build_args: ""
           - name: api-proxy
-            file: Dockerfile
+            file: api-proxy/Dockerfile
             context: api-proxy
             build_args: ""
           - name: session-agent-claude
@@ -49,19 +49,19 @@ jobs:
             context: .
             build_args: TANK_AGENT=pi
           - name: mcp-argocd
-            file: Dockerfile
+            file: mcp-servers/argocd/Dockerfile
             context: mcp-servers/argocd
             build_args: ""
           - name: mcp-azure-admin
-            file: Dockerfile
+            file: mcp-servers/azure-admin/Dockerfile
             context: mcp-servers/azure-admin
             build_args: ""
           - name: mcp-github
-            file: Dockerfile
+            file: mcp-servers/github/Dockerfile
             context: mcp-servers/github
             build_args: ""
           - name: mcp-k8s
-            file: Dockerfile
+            file: mcp-servers/k8s/Dockerfile
             context: mcp-servers/k8s
             build_args: ""
           - name: issue-agent-runner
