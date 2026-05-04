@@ -20,6 +20,7 @@ ARM = "https://management.azure.com"
 ARM_SCOPE = "https://management.azure.com/.default"
 STATIC_SITE_API_VERSION = "2024-04-01"
 RESOURCE_GROUP_API_VERSION = "2024-11-01"
+AKS_API_VERSION = "2024-10-01"
 POLL_TIMEOUT_SECONDS = 600
 
 
@@ -51,16 +52,22 @@ def _headers() -> dict[str, str]:
     }
 
 
-def _request(method: str, path: str, *, ok: set[int]) -> requests.Response:
-    resp = requests.request(method, f"{ARM}{path}", headers=_headers(), timeout=30)
+def _request(
+    method: str,
+    path: str,
+    *,
+    ok: set[int],
+    json: dict[str, Any] | None = None,
+) -> requests.Response:
+    resp = requests.request(method, f"{ARM}{path}", headers=_headers(), json=json, timeout=30)
     if resp.status_code not in ok:
         detail = resp.text.strip()
         raise RuntimeError(f"Azure ARM {method} {path} failed with {resp.status_code}: {detail}")
     return resp
 
 
-def _poll(location: str) -> dict[str, Any]:
-    deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
+def _poll(location: str, *, timeout_seconds: int = POLL_TIMEOUT_SECONDS) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
     while True:
         resp = requests.get(location, headers=_headers(), timeout=30)
         if resp.status_code not in {200, 201, 202, 204}:
@@ -76,12 +83,21 @@ def _poll(location: str) -> dict[str, Any]:
             return payload
 
         if time.monotonic() >= deadline:
-            raise TimeoutError(f"Azure operation did not finish within {POLL_TIMEOUT_SECONDS}s")
+            raise TimeoutError(f"Azure operation did not finish within {timeout_seconds}s")
         time.sleep(5)
 
 
 def _operation_url(resp: requests.Response) -> str | None:
     return resp.headers.get("Azure-AsyncOperation") or resp.headers.get("Location")
+
+
+def _run_command_logs(payload: dict[str, Any]) -> str:
+    properties = payload.get("properties") if isinstance(payload.get("properties"), dict) else {}
+    for key in ("logs", "output", "result"):
+        value = properties.get(key) or payload.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
 
 
 def _require_confirmation(value: str, confirmation: str | None, label: str) -> None:
@@ -146,4 +162,55 @@ def register_tools(mcp: FastMCP) -> None:
             "deleted": True,
             "subscription": sub,
             "resource_group": resource_group,
+        }
+
+    @mcp.tool()
+    def run_aks_command(
+        resource_group: str,
+        cluster: str,
+        command: str,
+        subscription: str | None = None,
+        context: str = "",
+        timeout_seconds: int = POLL_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
+        """Run a command against an AKS cluster through Azure Run Command.
+
+        Use for targeted kubectl inspection or one-off migration operations
+        against a cluster that is not the caller's in-cluster Kubernetes API.
+        `context`, when provided, must be a base64 encoded zip file accepted by
+        AKS Run Command. Requires the MCP admin identity to have Azure
+        permissions for Microsoft.ContainerService/managedClusters/runCommand/action.
+        """
+        if not command.strip():
+            raise ValueError("command is required")
+        if timeout_seconds < 30 or timeout_seconds > 1800:
+            raise ValueError("timeout_seconds must be between 30 and 1800")
+
+        sub = _subscription(subscription)
+        path = (
+            f"/subscriptions/{sub}/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.ContainerService/managedClusters/{cluster}/runCommand"
+            f"?api-version={AKS_API_VERSION}"
+        )
+        body = {
+            "command": command,
+            "context": context,
+        }
+        resp = _request("POST", path, ok={200, 201, 202}, json=body)
+
+        payload: dict[str, Any]
+        if resp.status_code == 202 and (operation_url := _operation_url(resp)):
+            payload = _poll(operation_url, timeout_seconds=timeout_seconds)
+        elif resp.text:
+            payload = resp.json()
+        else:
+            payload = {"status": "Accepted"}
+
+        return {
+            "subscription": sub,
+            "resource_group": resource_group,
+            "cluster": cluster,
+            "command": command,
+            "logs": _run_command_logs(payload),
+            "result": payload,
         }
