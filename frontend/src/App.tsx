@@ -1467,7 +1467,7 @@ export function App() {
       terminal.sendInput("/rollout\r");
       return;
     }
-    terminal.sendInput("$rollout");
+    terminal.sendInput("$rollout ");
     window.setTimeout(() => terminal.sendInput("\r"), CODEX_ROLLOUT_SUBMIT_DELAY_MS);
   }
 
