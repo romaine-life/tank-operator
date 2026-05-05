@@ -14,7 +14,7 @@ When the user invokes `/rollout`, carry the current change all the way through d
 3. **Merge the PR.** Once the PR is ready and checks allow it, merge it. Prefer the repo's normal merge strategy and do not bypass required checks.
 4. **Follow the builds.** Watch the GitHub Actions workflows or other build jobs triggered by the merge. Identify the image tag or artifact produced by the build.
 5. **Watch ArgoCD.** Argo usually syncs within seconds after the build is produced. Use the ArgoCD MCP/tools available in the session and poll about every 5 seconds until the new image lands in the target application.
-6. **Notify the user.** Message the user when the image is deployed. Include the PR, merge commit, image tag, and Argo application or workload that received it.
+6. **Notify the user.** Message the user when the image is deployed. Include the PR, merge commit, image tag, and Argo application or workload that received it. Include the URL of the site relevant to the project being worked on, and anything else relevant.
 
 ## Guardrails
 
