@@ -2,6 +2,10 @@ name: Rename Azure MCP Repository
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rename-azure-mcp-repo.yml'
 
 permissions:
   id-token: write
