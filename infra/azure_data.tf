@@ -33,7 +33,7 @@ data "terraform_remote_state" "infra_bootstrap" {
 }
 
 locals {
-  aks_cluster_id        = data.terraform_remote_state.infra_bootstrap.outputs.aks_cluster_id
-  aks_oidc_issuer_url   = data.terraform_remote_state.infra_bootstrap.outputs.aks_oidc_issuer_url
-  aks_subscription_id   = split("/", local.aks_cluster_id)[2]
+  aks_cluster_id      = data.terraform_remote_state.infra_bootstrap.outputs.aks_cluster_id
+  aks_oidc_issuer_url = data.terraform_remote_state.infra_bootstrap.outputs.aks_oidc_issuer_url
+  aks_subscription_id = split("/", local.aks_cluster_id)[2]
 }

@@ -23,14 +23,17 @@ resource "azurerm_key_vault_secret" "mcp_tenant_id" {
 }
 
 locals {
-  mcp_azure_extra_reader_subscription_ids = setsubtract(toset([
-    for id in split(",", var.mcp_azure_extra_reader_subscription_ids) :
-    trimspace(id)
-    if trimspace(id) != ""
-  ]), [
-    data.azurerm_client_config.current.subscription_id,
-    local.aks_subscription_id,
-  ])
+  mcp_azure_extra_reader_subscription_ids = setsubtract(
+    toset([
+      for id in split(",", var.mcp_azure_extra_reader_subscription_ids) :
+      trimspace(id)
+      if trimspace(id) != ""
+    ]),
+    [
+      data.azurerm_client_config.current.subscription_id,
+      local.aks_subscription_id,
+    ],
+  )
 }
 
 # ----------------------------------------------------------------------------
