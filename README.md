@@ -19,7 +19,7 @@ to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:
 
-- [`mcp-azure-personal`](https://github.com/nelsong6/mcp-azure-admin) — first-party personal Azure MCP server and chart. The runtime name has moved off "admin"; the GitHub repo slug still needs an admin rename.
+- [`mcp-azure-personal`](https://github.com/nelsong6/mcp-azure-personal) — first-party personal Azure MCP server and chart.
 - [`mcp-github`](https://github.com/nelsong6/mcp-github) — custom GitHub App-backed MCP server.
 - [`mcp-k8s`](https://github.com/nelsong6/mcp-k8s) — read-only kubectl/helm MCP server.
 - [`mcp-argocd`](https://github.com/nelsong6/mcp-argocd) — read-only ArgoCD MCP server.
