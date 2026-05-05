@@ -6,8 +6,10 @@ closes." See [issue #1](https://github.com/nelsong6/tank-operator/issues/1) for 
 design and rationale.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
-in this repo (`Dockerfile`, plus bundled `platform-mcp/` and `mcp-auth-proxy`
-Python packages). Session-facing MCP config, AGENTS/CLAUDE primers, the
+in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy` and `terminald`
+Python packages). `platform-mcp` is installed from its standalone
+[`nelsong6/platform-mcp`](https://github.com/nelsong6/platform-mcp) repo.
+Session-facing MCP config, AGENTS/CLAUDE primers, the
 bootstrap shell script, and bundled skill docs live in `k8s/session-config/` and are mounted
 through the chart's `tank-session-config` ConfigMap. [claude-container-build.yml](.github/workflows/claude-container-build.yml)
 pushes SHA-pinned `romainecr.azurecr.io/claude-container:<sha>` and
@@ -15,18 +17,17 @@ pushes SHA-pinned `romainecr.azurecr.io/claude-container:<sha>` and
 `romainecr.azurecr.io/pi-container:<sha>` images, then rewrites the Helm chart
 to point each session mode at the right image.
 
-The HTTP MCP servers it talks to also live here:
+The HTTP MCP servers it talks to live in standalone repos:
 
-- `k8s-mcp-azure/` — Helm chart wrapping Microsoft's `azure-mcp` image, fronted by kube-rbac-proxy.
-- `k8s-mcp-github/` + `mcp-servers/github/` — chart + Python source for a custom GitHub App-backed MCP server. Built by [mcp-github-build.yml](.github/workflows/mcp-github-build.yml).
-- `k8s-mcp-k8s/` + `mcp-servers/k8s/` — chart + Python source for a read-only kubectl/helm MCP. Built by [mcp-k8s-build.yml](.github/workflows/mcp-k8s-build.yml).
-- `k8s-mcp-argocd/` + `mcp-servers/argocd/` — chart + Python source for a read-only ArgoCD MCP that authenticates outbound via Dex SA-token exchange. Built by [mcp-argocd-build.yml](.github/workflows/mcp-argocd-build.yml).
+- [`mcp-azure-admin`](https://github.com/nelsong6/mcp-azure-admin) — guarded Azure cleanup server plus the chart wrapping Microsoft's `azure-mcp`.
+- [`mcp-github`](https://github.com/nelsong6/mcp-github) — custom GitHub App-backed MCP server.
+- [`mcp-k8s`](https://github.com/nelsong6/mcp-k8s) — read-only kubectl/helm MCP server.
+- [`mcp-argocd`](https://github.com/nelsong6/mcp-argocd) — read-only ArgoCD MCP server.
 
 Runtime UAMIs (e.g. `mcp.tf`, `mcp-server/`) live under `infra/`. CI auth
-(image-push to ACR) for every workflow uses `vars.ARM_CLIENT_ID` — the
-identity infra-bootstrap mints for tank-operator via
-`module.app["tank-operator"]`. Shared cluster infrastructure (the AKS
-cluster itself, the ACR, the Key Vault) also lives in
+(image-push to ACR) for those standalone MCP repos is managed by
+infra-bootstrap. Shared cluster infrastructure (the AKS cluster itself, the
+ACR, the Key Vault) also lives in
 [infra-bootstrap](https://github.com/nelsong6/infra-bootstrap) and is
 referenced here as data sources.
 

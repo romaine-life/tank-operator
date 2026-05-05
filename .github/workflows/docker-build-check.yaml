@@ -48,22 +48,6 @@ jobs:
             file: claude-container/Dockerfile
             context: .
             build_args: TANK_AGENT=pi
-          - name: mcp-argocd
-            file: mcp-servers/argocd/Dockerfile
-            context: mcp-servers/argocd
-            build_args: ""
-          - name: mcp-azure-admin
-            file: mcp-servers/azure-admin/Dockerfile
-            context: mcp-servers/azure-admin
-            build_args: ""
-          - name: mcp-github
-            file: mcp-servers/github/Dockerfile
-            context: mcp-servers/github
-            build_args: ""
-          - name: mcp-k8s
-            file: mcp-servers/k8s/Dockerfile
-            context: mcp-servers/k8s
-            build_args: ""
           - name: issue-agent-runner
             file: runner/Dockerfile
             context: .

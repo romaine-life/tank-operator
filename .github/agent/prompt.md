@@ -38,9 +38,8 @@ styleguide drifted from the live UI."
 
 - Do **not** modify `.github/workflows/`, `.github/agent/`, or `.mcp.json`
   — these are runner-local config and shouldn't be touched by the agent.
-- Don't modify the `claude-container/`, `mcp-servers/`, or `k8s-mcp-*/`
-  trees unless the issue is explicitly about them — those touch the
-  in-cluster MCP infrastructure that other agent runs depend on.
+- Don't modify the `claude-container/` tree unless the issue is explicitly
+  about session images or terminal/runtime wiring.
 - Keep diffs focused. Add comments only where a future reader genuinely
   needs context that isn't obvious from the code.
 - If the issue is ambiguous, narrow scope to the most concrete

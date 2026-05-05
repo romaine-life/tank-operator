@@ -47,18 +47,23 @@ The browser xterm.js terminal is *the* route, not a demo surface. SSH / VS Code 
 
 ## In-cluster MCP servers
 
-`mcp-servers/<name>/` (Python source) + `k8s-mcp-<name>/` (Helm chart with `kube-rbac-proxy` sidecar). Inbound auth: claude-session SA token validated via TokenReview + SubjectAccessReview against the synthetic `mcp.tank-operator.io/servers/<name>` resource. Currently:
+The HTTP MCP servers live in standalone repos; this repo keeps only the
+runtime identities under `infra/mcp.tf`. Each MCP repo owns its Python source,
+image build workflow, and Helm chart with the `kube-rbac-proxy` sidecar.
+Inbound auth: claude-session SA token validated via TokenReview +
+SubjectAccessReview against the synthetic
+`mcp.tank-operator.io/servers/<name>` resource. Currently:
 
-- `mcp-azure` — wraps Microsoft's `azure-mcp` image
-- `mcp-github` — custom GitHub-App-backed
-- `mcp-k8s` — read-only kubectl/helm
-- `mcp-argocd` — read-only ArgoCD via Dex SA-token exchange (no static API tokens)
+- `nelsong6/mcp-azure-admin` — guarded Azure admin server plus the chart that wraps Microsoft's `azure-mcp` image
+- `nelsong6/mcp-github` — custom GitHub-App-backed
+- `nelsong6/mcp-k8s` — read-only kubectl/helm
+- `nelsong6/mcp-argocd` — read-only ArgoCD via Dex SA-token exchange (no static API tokens)
 
-**Two GitHub Apps live alongside each other.** `romaine-life-app` is the host's dev/automation bot — it authors PRs from session pods, runs cluster-side automation, etc. The user-facing App is `tank-operator-romaine-life`, intended for friends to install on their own accounts; its credentials live in KV under `tank-operator-app-*`. Today `mcp-github` reads only romaine-life-app's keys (`GITHUB_APP_*` env via `k8s-mcp-github`'s ExternalSecret) and mints every session-pod token from that single installation — multi-user is *configured* (Cosmos profiles, install flow, slug) but not yet *routed*. Stage 3 of #57 is the swap: mcp-github reads `tank-operator-app-*` keys instead, looks up `installation_id` per inbound caller from the Cosmos profile, and falls back to the host's installation (downscoped) when a non-host user touches host-owned repos. Until that lands, session-pod GitHub writes are all attributed to `romaine-life-app[bot]` on host's repos regardless of caller.
+**Two GitHub Apps live alongside each other.** `romaine-life-app` is the host's dev/automation bot — it authors PRs from session pods, runs cluster-side automation, etc. The user-facing App is `tank-operator-romaine-life`, intended for friends to install on their own accounts; its credentials live in KV under `tank-operator-app-*`. Today `mcp-github` reads only romaine-life-app's keys (`GITHUB_APP_*` env via the standalone mcp-github chart's ExternalSecret) and mints every session-pod token from that single installation — multi-user is *configured* (Cosmos profiles, install flow, slug) but not yet *routed*. Stage 3 of #57 is the swap: mcp-github reads `tank-operator-app-*` keys instead, looks up `installation_id` per inbound caller from the Cosmos profile, and falls back to the host's installation (downscoped) when a non-host user touches host-owned repos. Until that lands, session-pod GitHub writes are all attributed to `romaine-life-app[bot]` on host's repos regardless of caller.
 
 ### mcp-github write surface: no caller-provided SHAs
 
-Every mutation in `mcp-servers/github/tools.py` resolves base refs and blob shas server-side at call time — `create_branch(base="main")`, `create_or_update_file(branch=…)`, `delete_file(branch=…)`, `commit_to_branch(branch=…, base="main", files=…)`. There is intentionally no `from_sha` / `sha` parameter on the public surface. The reason this matters: a prior Claude session reverted a merged PR by branching off a *cached* SHA — it had read `main`'s HEAD early in the session, merged a PR, then made a second PR from the cached pre-merge SHA. The narrow fix (caller still supplies SHA, but tool requires it) doesn't help, because the caller's cache is the bug. The actual fix is to never let the caller supply identifiers for "where am I branching from" or "what version of the file am I overwriting" — the server reads fresh on every call. `commit_to_branch` is the preferred path for any multi-file change because it lands one coherent commit instead of N consecutive `create_or_update_file` calls.
+Every mutation in `nelsong6/mcp-github/src/mcp_github/tools.py` resolves base refs and blob shas server-side at call time — `create_branch(base="main")`, `create_or_update_file(branch=…)`, `delete_file(branch=…)`, `commit_to_branch(branch=…, base="main", files=…)`. There is intentionally no `from_sha` / `sha` parameter on the public surface. The reason this matters: a prior Claude session reverted a merged PR by branching off a *cached* SHA — it had read `main`'s HEAD early in the session, merged a PR, then made a second PR from the cached pre-merge SHA. The narrow fix (caller still supplies SHA, but tool requires it) doesn't help, because the caller's cache is the bug. The actual fix is to never let the caller supply identifiers for "where am I branching from" or "what version of the file am I overwriting" — the server reads fresh on every call. `commit_to_branch` is the preferred path for any multi-file change because it lands one coherent commit instead of N consecutive `create_or_update_file` calls.
 
 Pair with: prefer the MCP write tools above over `git push` for routine mutations — they resolve refs server-side and dodge the cached-SHA footgun by construction. `mint_clone_token` defaults to a read-only token (`contents: read`); pass `write=True` only when a working-tree push is the right shape (large lockfiles, tool-driven multi-file refactors, anything awkward to enumerate as an explicit `files` array). Push tokens still can't force-push to protected branches — branch protection is the second line of defense, not this scope. The image deliberately doesn't ship a credential helper for `https://github.com`; the inline `x-access-token:<token>@github.com/...` URL form is the only auth path.
 

@@ -27,12 +27,7 @@ frontend
 infra
 k8s
 k8s-arc-runners
-k8s-mcp-argocd
-k8s-mcp-azure
-k8s-mcp-github
-k8s-mcp-k8s
 k8s-sessions
-mcp-servers
 runner
 scripts
 

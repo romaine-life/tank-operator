@@ -1,5 +1,5 @@
-# azure-mcp + github-mcp + k8s-mcp run as in-cluster HTTP MCP servers
-# (see k8s-mcp-azure/, k8s-mcp-github/, k8s-mcp-k8s/). The container
+# azure-mcp + github-mcp + k8s-mcp run as in-cluster HTTP MCP servers.
+# The container
 # reaches them via the mcp-auth-proxy sidecar on 127.0.0.1, which reads
 # the projected SA token fresh per request and forwards as a Bearer
 # token. No co-located MCP binaries needed in this image — keep it
@@ -18,6 +18,7 @@ ARG GO_VERSION=1.26.2
 ARG VITE_VERSION=5.4.21
 ARG TYPESCRIPT_VERSION=5.9.3
 ARG TANK_AGENT=claude
+ARG PLATFORM_MCP_REF=main
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
@@ -68,8 +69,7 @@ RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/
         -o /usr/local/bin/yq \
     && chmod +x /usr/local/bin/yq
 
-# uv — fast pip replacement for the python projects (glimmung,
-# mcp-servers, platform-mcp). Hardcoded musl x86_64 path because
+# uv — fast pip replacement for Python projects. Hardcoded musl x86_64 path because
 # astral-sh/uv release artifacts aren't named with docker's TARGETARCH
 # convention; the image is alpine + amd64 today.
 RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-musl.tar.gz" \
@@ -93,8 +93,8 @@ RUN pip install --no-cache-dir --break-system-packages \
         "pytest==${PYTEST_VERSION}" \
         "ruff==${RUFF_VERSION}"
 
-COPY claude-container/platform-mcp /opt/platform-mcp
-RUN pip install --no-cache-dir --break-system-packages /opt/platform-mcp
+RUN pip install --no-cache-dir --break-system-packages \
+        "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}"
 
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session
