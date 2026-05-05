@@ -24,7 +24,7 @@ resource "azurerm_federated_identity_credential" "api_proxy" {
   resource_group_name = data.azurerm_resource_group.main.name
   parent_id           = azurerm_user_assigned_identity.api_proxy.id
   audience            = ["api://AzureADTokenExchange"]
-  issuer              = data.azurerm_kubernetes_cluster.main.oidc_issuer_url
+  issuer              = local.aks_oidc_issuer_url
   subject             = "system:serviceaccount:tank-operator:claude-api-proxy"
 }
 

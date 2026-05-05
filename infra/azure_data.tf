@@ -20,9 +20,20 @@ data "azurerm_container_registry" "main" {
   resource_group_name = data.azurerm_resource_group.main.name
 }
 
-data "azurerm_kubernetes_cluster" "main" {
-  provider = azurerm.cluster
+data "terraform_remote_state" "infra_bootstrap" {
+  backend = "azurerm"
 
-  name                = "infra-aks"
-  resource_group_name = var.cluster_resource_group
+  config = {
+    resource_group_name  = "infra"
+    storage_account_name = "nelsontofu"
+    container_name       = "tfstate"
+    key                  = "infra-bootstrap.tfstate"
+    use_oidc             = true
+  }
+}
+
+locals {
+  aks_cluster_id        = data.terraform_remote_state.infra_bootstrap.outputs.aks_cluster_id
+  aks_oidc_issuer_url   = data.terraform_remote_state.infra_bootstrap.outputs.aks_oidc_issuer_url
+  aks_subscription_id   = split("/", local.aks_cluster_id)[2]
 }

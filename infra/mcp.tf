@@ -27,7 +27,10 @@ locals {
     for id in split(",", var.mcp_azure_extra_reader_subscription_ids) :
     trimspace(id)
     if trimspace(id) != ""
-  ]), [data.azurerm_client_config.current.subscription_id])
+  ]), [
+    data.azurerm_client_config.current.subscription_id,
+    local.aks_subscription_id,
+  ])
 }
 
 # ----------------------------------------------------------------------------
@@ -45,7 +48,7 @@ module "mcp_azure" {
   resource_group_name      = data.azurerm_resource_group.main.name
   resource_group_location  = data.azurerm_resource_group.main.location
   key_vault_id             = data.azurerm_key_vault.main.id
-  aks_oidc_issuer_url      = data.azurerm_kubernetes_cluster.main.oidc_issuer_url
+  aks_oidc_issuer_url      = local.aks_oidc_issuer_url
   aks_namespace            = "mcp-azure"
   aks_service_account_name = "mcp-azure"
 
@@ -91,7 +94,7 @@ module "mcp_azure_admin" {
   resource_group_name      = data.azurerm_resource_group.main.name
   resource_group_location  = data.azurerm_resource_group.main.location
   key_vault_id             = data.azurerm_key_vault.main.id
-  aks_oidc_issuer_url      = data.azurerm_kubernetes_cluster.main.oidc_issuer_url
+  aks_oidc_issuer_url      = local.aks_oidc_issuer_url
   aks_namespace            = "mcp-azure"
   aks_service_account_name = "mcp-azure-admin"
 

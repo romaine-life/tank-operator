@@ -30,7 +30,6 @@ env:
   ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
   TF_VAR_arm_subscription_id: ${{ vars.ARM_SUBSCRIPTION_ID }}
   TF_VAR_arm_tenant_id: ${{ vars.ARM_TENANT_ID }}
-  TF_VAR_cluster_subscription_id: ${{ vars.CLUSTER_ARM_SUBSCRIPTION_ID || '606a1ca1-5833-4d21-8937-d0fcd97cd0a0' }}
   TF_VAR_mcp_azure_extra_reader_subscription_ids: ${{ vars.MCP_AZURE_EXTRA_READER_SUBSCRIPTION_IDS }}
 
 jobs:
