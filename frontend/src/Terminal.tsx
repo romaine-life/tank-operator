@@ -95,6 +95,8 @@ interface Props {
   sessionId: string;
   mode: string;
   status: string;
+  bootLabel?: string | null;
+  bootTitle?: string;
   completionSoundEnabled: boolean;
   completionSoundVolume: number;
   onAgentActivityChange?: (sessionId: string, activity: AgentActivity) => void;
@@ -252,6 +254,8 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     sessionId,
     mode,
     status,
+    bootLabel,
+    bootTitle,
     visible,
     completionSoundEnabled,
     completionSoundVolume,
@@ -684,7 +688,12 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   if (!everActive) {
     return (
       <div className="terminal-waiting" style={{ display: visible ? "flex" : "none" }}>
-        waiting for pod to be ready… (status: {status})
+        <span>waiting for pod to be ready... (status: {status})</span>
+        {bootLabel && (
+          <span className="terminal-waiting-time" title={bootTitle}>
+            boot {bootLabel}
+          </span>
+        )}
       </div>
     );
   }

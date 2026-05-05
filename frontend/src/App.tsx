@@ -1987,6 +1987,8 @@ export function App() {
                   sessionId={s.id}
                   mode={s.mode}
                   status={s.status}
+                  bootLabel={sessionBootLabel(s, nowMs)}
+                  bootTitle={sessionBootTitle(s, nowMs)}
                   completionSoundEnabled={completionSoundEnabled}
                   completionSoundVolume={completionSoundVolume}
                   visible={active === s.id}

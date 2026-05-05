@@ -1505,9 +1505,15 @@ button:disabled {
 
 .terminal-waiting {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+.terminal-waiting-time {
+  color: var(--text);
 }
