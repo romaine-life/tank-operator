@@ -21,6 +21,8 @@ data "azurerm_container_registry" "main" {
 }
 
 data "azurerm_kubernetes_cluster" "main" {
+  provider = azurerm.cluster
+
   name                = "infra-aks"
-  resource_group_name = data.azurerm_resource_group.main.name
+  resource_group_name = var.cluster_resource_group
 }

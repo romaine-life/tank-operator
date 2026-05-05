@@ -5,6 +5,15 @@ provider "azurerm" {
   tenant_id       = var.arm_tenant_id
 }
 
+provider "azurerm" {
+  alias = "cluster"
+
+  features {}
+  use_oidc        = true
+  subscription_id = var.cluster_subscription_id
+  tenant_id       = var.arm_tenant_id
+}
+
 provider "azuread" {
   use_oidc  = true
   tenant_id = var.arm_tenant_id

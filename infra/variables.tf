@@ -3,6 +3,23 @@ variable "arm_subscription_id" {
   type        = string
 }
 
+variable "cluster_subscription_id" {
+  description = "Azure subscription ID containing the AKS cluster."
+  type        = string
+  default     = "606a1ca1-5833-4d21-8937-d0fcd97cd0a0"
+
+  validation {
+    condition     = can(regex("^[0-9a-fA-F-]{36}$", var.cluster_subscription_id))
+    error_message = "cluster_subscription_id must be an Azure subscription UUID."
+  }
+}
+
+variable "cluster_resource_group" {
+  description = "Resource group containing the AKS cluster."
+  type        = string
+  default     = "infra"
+}
+
 variable "arm_tenant_id" {
   description = "Entra tenant ID. Set via TF_VAR_arm_tenant_id from the workflow."
   type        = string
