@@ -54,7 +54,7 @@ Inbound auth: claude-session SA token validated via TokenReview +
 SubjectAccessReview against the synthetic
 `mcp.tank-operator.io/servers/<name>` resource. Currently:
 
-- `nelsong6/mcp-azure-admin` — guarded Azure admin server plus the chart that wraps Microsoft's `azure-mcp` image
+- `nelsong6/mcp-azure-personal` — first-party personal Azure MCP server and chart
 - `nelsong6/mcp-github` — custom GitHub-App-backed
 - `nelsong6/mcp-k8s` — read-only kubectl/helm
 - `nelsong6/mcp-argocd` — read-only ArgoCD via Dex SA-token exchange (no static API tokens)
