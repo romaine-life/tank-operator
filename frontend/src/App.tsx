@@ -871,7 +871,25 @@ function ModeChip({ mode }: { mode: SessionMode }) {
 }
 
 function TankIcon({ className }: { className?: string }) {
-  return <img className={className} src="/assets/mark.svg" alt="" aria-hidden="true" />;
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <rect x="8" y="28" width="40" height="14" rx="3" />
+      <circle cx="16" cy="46" r="5" />
+      <circle cx="40" cy="46" r="5" />
+      <line x1="48" y1="32" x2="58" y2="32" />
+      <rect x="22" y="20" width="14" height="8" rx="1.5" />
+    </svg>
+  );
 }
 
 function initials(user: SessionUser): string {
@@ -1192,6 +1210,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
+  const [rolloutClickedIds, setRolloutClickedIds] = useState<Set<string>>(() => new Set());
   const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
   // Sessions whose Terminal stays mounted (so the WS keeps draining and
   // scrollback survives switching). A session is mounted the first time it
@@ -1332,6 +1351,16 @@ export function App() {
       return changed ? next : prev;
     });
     setClosingIds((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (existing.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
+    setRolloutClickedIds((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
       const next = new Set<string>();
@@ -1595,6 +1624,7 @@ export function App() {
   }
 
   function startRollout(id: string, mode: SessionMode) {
+    setRolloutClickedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
     const terminal = terminalRefs.current.get(id);
     if (!terminal) return;
     if (!CODEX_ROLLOUT_MODES.has(mode)) {
@@ -1856,7 +1886,7 @@ export function App() {
                     )}
                     {ROLLOUT_MODES.has(s.mode) && isLive && (
                       <button
-                        className="session-action session-rollout is-icon"
+                        className={`session-action session-rollout is-icon${rolloutClickedIds.has(s.id) ? " is-clicked" : ""}`}
                         onClick={(e) => { e.stopPropagation(); startRollout(s.id, s.mode); }}
                         disabled={isClosing}
                         title={

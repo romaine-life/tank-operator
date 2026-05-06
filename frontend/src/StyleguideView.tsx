@@ -33,7 +33,25 @@ const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">
 const STATUSES = ["active", "pending", "error"] as const;
 
 function TankIcon({ className }: { className?: string }) {
-  return <img className={className} src="/assets/mark.svg" alt="" aria-hidden="true" />;
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+      aria-hidden="true"
+    >
+      <rect x="8" y="28" width="40" height="14" rx="3" />
+      <circle cx="16" cy="46" r="5" />
+      <circle cx="40" cy="46" r="5" />
+      <line x1="48" y1="32" x2="58" y2="32" />
+      <rect x="22" y="20" width="14" height="8" rx="1.5" />
+    </svg>
+  );
 }
 
 const sectionStyle: React.CSSProperties = {
@@ -289,6 +307,9 @@ export function StyleguideView() {
                   <span>↗</span>
                 </button>
                 <button className="session-action session-rollout is-icon" type="button" aria-label="start rollout">
+                  <TankIcon className="session-action-tank-icon" />
+                </button>
+                <button className="session-action session-rollout is-icon is-clicked" type="button" aria-label="start rollout">
                   <TankIcon className="session-action-tank-icon" />
                 </button>
               </div>
