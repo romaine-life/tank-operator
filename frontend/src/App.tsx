@@ -887,7 +887,7 @@ function ModeChip({ mode }: { mode: SessionMode }) {
   );
 }
 
-function TankIcon({ className, timerLabel }: { className?: string; timerLabel?: string }) {
+function TankIcon({ className }: { className?: string }) {
   return (
     <svg
       className={className}
@@ -901,18 +901,6 @@ function TankIcon({ className, timerLabel }: { className?: string; timerLabel?: 
       aria-hidden="true"
     >
       <rect x="8" y="28" width="40" height="14" rx="3" />
-      {timerLabel && (
-        <text
-          x="28"
-          y="38"
-          fill="currentColor"
-          stroke="none"
-          textAnchor="middle"
-          aria-hidden="true"
-        >
-          {timerLabel}
-        </text>
-      )}
       <circle cx="16" cy="46" r="5" />
       <circle cx="40" cy="46" r="5" />
       <line x1="48" y1="32" x2="58" y2="32" />
@@ -1967,7 +1955,12 @@ export function App() {
                         title={rolloutTimerTitle(s.id, s.mode)}
                         aria-label="start rollout"
                       >
-                        <TankIcon className="session-action-tank-icon" timerLabel={rolloutLabel ?? undefined} />
+                        <TankIcon className="session-action-tank-icon" />
+                        {rolloutLabel && (
+                          <span className="session-rollout-timer" aria-hidden="true">
+                            {rolloutLabel}
+                          </span>
+                        )}
                       </button>
                     )}
                     {CONFIG_MODES.has(s.mode) && (
