@@ -1468,11 +1468,24 @@ button:disabled {
   background: rgba(74, 222, 128, 0.26);
   color: #86efac;
 }
+.session-action.session-rollout.is-timing {
+  min-width: 2.15rem;
+}
 
 .session-action-tank-icon {
   width: 14px;
   height: 14px;
   display: block;
+}
+.session-action.session-rollout.is-timing .session-action-tank-icon {
+  width: 30px;
+  height: 20px;
+}
+.session-action-tank-icon text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Inline rename input — replaces the session-id span after clicking the name. */
