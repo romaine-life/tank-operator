@@ -49,6 +49,19 @@
 # on redraw, even though the pane history itself still contains UTF-8.
 tmux_utf8=(tmux -u)
 
+configure_git_identity() {
+  case "${TANK_SESSION_MODE:-api_key}" in
+    codex_config|codex_subscription)
+      git config --global user.name "tank-operator-codex[bot]"
+      git config --global user.email "tank-operator-codex@romaine.life"
+      ;;
+    *)
+      git config --global user.name "tank-operator-claude[bot]"
+      git config --global user.email "tank-operator-claude@romaine.life"
+      ;;
+  esac
+}
+
 # Reconnect fast-path: if the tmux session already exists this is a
 # reattach, not a fresh boot. Skip settings/credentials setup (already
 # done on first connect; rewriting is idempotent but wasteful, and in
@@ -57,6 +70,7 @@ if "${tmux_utf8[@]}" has-session -t tank 2>/dev/null; then
   exec "${tmux_utf8[@]}" attach-session -t tank
 fi
 bash /opt/tank/write-glimmung-context.sh
+configure_git_identity
 # Config-mode: short-circuit the regular session bootstrap. The user is
 # here to do `claude /login` once so we can capture credentials.json and
 # write it to KV. No MCP wiring, no onboarding bypass, no credentials
