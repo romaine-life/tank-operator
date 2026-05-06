@@ -512,6 +512,11 @@ type GlimmungLaunchContext = {
   validation_url: string | null;
 };
 
+type RolloutTimer = {
+  startedAtMs: number;
+  stoppedAtMs: number | null;
+};
+
 const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
 
 // One-line summaries for the install_error reasons the backend may surface
@@ -581,6 +586,18 @@ function formatBootTime(ms: number): string {
   if (seconds < 1) return "<1s";
   if (seconds < 60) return `${seconds}s`;
   return formatRuntime(ms);
+}
+
+function formatRolloutElapsed(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 100) return `${seconds}s`;
+  if (seconds < 60 * 60) {
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+    return `${minutes}:${String(remaining).padStart(2, "0")}`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  return `${hours}h`;
 }
 
 function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
@@ -870,7 +887,7 @@ function ModeChip({ mode }: { mode: SessionMode }) {
   );
 }
 
-function TankIcon({ className }: { className?: string }) {
+function TankIcon({ className, timerLabel }: { className?: string; timerLabel?: string }) {
   return (
     <svg
       className={className}
@@ -884,6 +901,18 @@ function TankIcon({ className }: { className?: string }) {
       aria-hidden="true"
     >
       <rect x="8" y="28" width="40" height="14" rx="3" />
+      {timerLabel && (
+        <text
+          x="28"
+          y="38"
+          fill="currentColor"
+          stroke="none"
+          textAnchor="middle"
+          aria-hidden="true"
+        >
+          {timerLabel}
+        </text>
+      )}
       <circle cx="16" cy="46" r="5" />
       <circle cx="40" cy="46" r="5" />
       <line x1="48" y1="32" x2="58" y2="32" />
@@ -1210,7 +1239,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
-  const [rolloutClickedIds, setRolloutClickedIds] = useState<Set<string>>(() => new Set());
+  const [rolloutTimers, setRolloutTimers] = useState<Record<string, RolloutTimer>>({});
   const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
   // Sessions whose Terminal stays mounted (so the WS keeps draining and
   // scrollback survives switching). A session is mounted the first time it
@@ -1288,9 +1317,11 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    const t = setInterval(() => setNowMs(Date.now()), SESSION_RUNTIME_TICK_MS);
+    const hasRunningRolloutTimer = Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null);
+    const tickMs = hasRunningRolloutTimer ? 1000 : SESSION_RUNTIME_TICK_MS;
+    const t = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(t);
-  }, [user]);
+  }, [user, rolloutTimers]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
@@ -1360,14 +1391,16 @@ export function App() {
       });
       return changed ? next : prev;
     });
-    setRolloutClickedIds((prev) => {
+    setRolloutTimers((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
-      const next = new Set<string>();
-      prev.forEach((id) => {
-        if (existing.has(id)) next.add(id);
-        else changed = true;
-      });
+      const next = Object.fromEntries(
+        Object.entries(prev).filter(([id]) => {
+          const keep = existing.has(id);
+          if (!keep) changed = true;
+          return keep;
+        })
+      ) as Record<string, RolloutTimer>;
       return changed ? next : prev;
     });
     setAgentActivityBySession((prev) => {
@@ -1378,6 +1411,41 @@ export function App() {
       return Object.keys(next).length === Object.keys(prev).length ? prev : next;
     });
   }, [sessions, active, closingIds]);
+
+  useEffect(() => {
+    if (Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null)) {
+      setNowMs(Date.now());
+    }
+  }, [rolloutTimers]);
+
+  function rolloutTimerLabel(sessionId: string): string | null {
+    const timer = rolloutTimers[sessionId];
+    if (!timer) return null;
+    return formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
+  }
+
+  function rolloutTimerTitle(sessionId: string, mode: SessionMode): string {
+    const timer = rolloutTimers[sessionId];
+    const action = CODEX_ROLLOUT_MODES.has(mode)
+      ? "type $rollout into this Codex session"
+      : "type /rollout into this Claude session";
+    if (!timer) return action;
+    const elapsed = formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
+    return timer.stoppedAtMs == null
+      ? `rollout running for ${elapsed}`
+      : `rollout finished in ${elapsed}`;
+  }
+
+  function stopRolloutTimer(sessionId: string) {
+    setRolloutTimers((prev) => {
+      const timer = prev[sessionId];
+      if (!timer || timer.stoppedAtMs != null) return prev;
+      return {
+        ...prev,
+        [sessionId]: { ...timer, stoppedAtMs: Date.now() },
+      };
+    });
+  }
 
   useEffect(() => {
     const target = initialSessionId.current;
@@ -1624,7 +1692,12 @@ export function App() {
   }
 
   function startRollout(id: string, mode: SessionMode) {
-    setRolloutClickedIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    const startedAtMs = Date.now();
+    setNowMs(startedAtMs);
+    setRolloutTimers((prev) => ({
+      ...prev,
+      [id]: { startedAtMs, stoppedAtMs: null },
+    }));
     const terminal = terminalRefs.current.get(id);
     if (!terminal) return;
     if (!CODEX_ROLLOUT_MODES.has(mode)) {
@@ -1783,6 +1856,8 @@ export function App() {
                 : s.status;
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
+              const rolloutLabel = rolloutTimerLabel(s.id);
+              const isRolloutTiming = Boolean(rolloutLabel);
               return (
                 <li
                   key={s.id}
@@ -1886,17 +1961,13 @@ export function App() {
                     )}
                     {ROLLOUT_MODES.has(s.mode) && isLive && (
                       <button
-                        className={`session-action session-rollout is-icon${rolloutClickedIds.has(s.id) ? " is-clicked" : ""}`}
+                        className={`session-action session-rollout is-icon${isRolloutTiming ? " is-clicked is-timing" : ""}`}
                         onClick={(e) => { e.stopPropagation(); startRollout(s.id, s.mode); }}
                         disabled={isClosing}
-                        title={
-                          CODEX_ROLLOUT_MODES.has(s.mode)
-                            ? "type $rollout into this Codex session"
-                            : "type /rollout into this Claude session"
-                        }
+                        title={rolloutTimerTitle(s.id, s.mode)}
                         aria-label="start rollout"
                       >
-                        <TankIcon className="session-action-tank-icon" />
+                        <TankIcon className="session-action-tank-icon" timerLabel={rolloutLabel ?? undefined} />
                       </button>
                     )}
                     {CONFIG_MODES.has(s.mode) && (
@@ -2023,6 +2094,7 @@ export function App() {
                   completionSoundVolume={completionSoundVolume}
                   visible={active === s.id}
                   onAgentActivityChange={setAgentActivity}
+                  onAgentCompletion={stopRolloutTimer}
                 />
               ))}
           </div>

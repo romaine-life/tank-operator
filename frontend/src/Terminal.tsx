@@ -100,6 +100,7 @@ interface Props {
   completionSoundEnabled: boolean;
   completionSoundVolume: number;
   onAgentActivityChange?: (sessionId: string, activity: AgentActivity) => void;
+  onAgentCompletion?: (sessionId: string) => void;
   /**
    * When false the component stays mounted (preserving WS + scrollback) but
    * the DOM is hidden via CSS. On every transition to true we re-run fit() so
@@ -260,6 +261,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     completionSoundEnabled,
     completionSoundVolume,
     onAgentActivityChange,
+    onAgentCompletion,
   },
   ref,
 ) {
@@ -270,6 +272,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   const completionSoundEnabledRef = useRef(completionSoundEnabled);
   const completionSoundVolumeRef = useRef(completionSoundVolume);
   const onAgentActivityChangeRef = useRef(onAgentActivityChange);
+  const onAgentCompletionRef = useRef(onAgentCompletion);
   const [everActive, setEverActive] = useState(false);
 
   useEffect(() => {
@@ -287,6 +290,10 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
   useEffect(() => {
     onAgentActivityChangeRef.current = onAgentActivityChange;
   }, [onAgentActivityChange]);
+
+  useEffect(() => {
+    onAgentCompletionRef.current = onAgentCompletion;
+  }, [onAgentCompletion]);
 
   useEffect(() => {
     window.addEventListener("pointerdown", completionSound.unlock, { once: true });
@@ -330,6 +337,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     fitRef.current = fit;
     term.loadAddon(fit);
     const onBellDisp = term.onBell(() => {
+      onAgentCompletionRef.current?.(sessionId);
       if (!reportsAgentActivity(mode)) return;
       onAgentActivityChangeRef.current?.(sessionId, "waiting");
       if (completionSoundEnabledRef.current) {
