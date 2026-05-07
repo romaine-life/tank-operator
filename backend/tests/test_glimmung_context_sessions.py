@@ -116,6 +116,7 @@ def test_session_config_is_mounted_from_configmap() -> None:
         "write-glimmung-context.sh",
     ) in mounts
     assert ("/opt/tank/bootstrap.sh", "tank-bootstrap.sh") in mounts
+    assert ("/opt/tank/headless-run.sh", "headless-run.sh") in mounts
     assert ("/home/node/.claude/skills/done/SKILL.md", "skills.done.SKILL.md") in mounts
     assert (
         "/home/node/.codex/skills/rollout/SKILL.md",
@@ -286,6 +287,46 @@ def test_pi_subscription_uses_pi_image_and_mounts_codex_credentials() -> None:
         and volume["secret"]["secretName"] == "codex-credentials"
         for volume in _pod_spec(manifest).get("volumes", [])
     )
+
+
+def test_headless_codex_uses_codex_image_and_mounts_credentials() -> None:
+    manifest = SessionManager()._pod_manifest(
+        "abc123",
+        owner="operator@example.test",
+        mode="codex_headless",
+    )
+
+    assert _claude_container(manifest)["image"].endswith("/codex-container:latest")
+    assert any(
+        mount["name"] == "codex-creds" and mount["mountPath"] == "/etc/codex-creds"
+        for mount in _claude_container(manifest).get("volumeMounts", [])
+    )
+    assert any(
+        volume["name"] == "codex-creds"
+        and volume["secret"]["secretName"] == "codex-credentials"
+        for volume in _pod_spec(manifest).get("volumes", [])
+    )
+
+
+def test_headless_claude_keeps_anthropic_proxy_plumbing() -> None:
+    manager = SessionManager()
+    manager._oauth_gateway_ip = "10.0.0.10"
+    manager._api_proxy_ip = "10.0.0.20"
+
+    manifest = manager._pod_manifest(
+        "abc123",
+        owner="operator@example.test",
+        mode="subscription_headless",
+    )
+
+    assert _pod_spec(manifest)["hostAliases"] == [
+        {"ip": "10.0.0.10", "hostnames": ["platform.claude.com"]},
+        {"ip": "10.0.0.20", "hostnames": ["api.anthropic.com"]},
+    ]
+    mount_names = {
+        mount["name"] for mount in _claude_container(manifest)["volumeMounts"]
+    }
+    assert "oauth-gateway-ca" in mount_names
 
 
 def test_pi_subscription_only_hijacks_anthropic_api_proxy() -> None:

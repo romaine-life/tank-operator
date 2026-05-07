@@ -13,16 +13,23 @@ import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 type SessionMode =
   | "api_key"
   | "subscription"
+  | "subscription_headless"
   | "config"
   | "codex_subscription"
+  | "codex_headless"
   | "codex_config"
   | "pi_subscription"
   | "pi_config";
 type DefaultSessionMode = Extract<
   SessionMode,
-  "subscription" | "codex_subscription" | "pi_subscription"
+  | "subscription"
+  | "subscription_headless"
+  | "codex_subscription"
+  | "codex_headless"
+  | "pi_subscription"
 >;
 type Provider = "anthropic" | "openai" | "pi";
+type SessionInteraction = "terminal" | "run";
 
 interface Session {
   id: string;
@@ -40,8 +47,10 @@ interface Session {
 const MODE_LABELS: Record<SessionMode, string> = {
   api_key: "Claude API key",
   subscription: "Claude",
+  subscription_headless: "Claude run",
   config: "Claude config",
   codex_subscription: "Codex",
+  codex_headless: "Codex run",
   codex_config: "Codex config",
   pi_subscription: "Pi",
   pi_config: "Pi config",
@@ -52,8 +61,10 @@ const MODE_LABELS: Record<SessionMode, string> = {
 const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   api_key: "api",
   subscription: "claude",
+  subscription_headless: "claude-run",
   config: "config",
   codex_subscription: "codex",
+  codex_headless: "codex-run",
   codex_config: "codex-cfg",
   pi_subscription: "pi",
   pi_config: "pi-cfg",
@@ -61,24 +72,31 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   subscription: "anthropic",
+  subscription_headless: "anthropic",
   codex_subscription: "openai",
+  codex_headless: "openai",
   pi_subscription: "pi",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   api_key: "anthropic",
   subscription: "anthropic",
+  subscription_headless: "anthropic",
   config: "anthropic",
   codex_subscription: "openai",
+  codex_headless: "openai",
   codex_config: "openai",
   pi_subscription: "pi",
   pi_config: "pi",
 };
 
-const PROVIDER_DEFAULT_MODES: Record<Provider, DefaultSessionMode> = {
-  anthropic: "subscription",
-  openai: "codex_subscription",
-  pi: "pi_subscription",
+const PROVIDER_INTERACTION_MODES: Record<
+  Provider,
+  Record<SessionInteraction, DefaultSessionMode | null>
+> = {
+  anthropic: { terminal: "subscription", run: "subscription_headless" },
+  openai: { terminal: "codex_subscription", run: "codex_headless" },
+  pi: { terminal: "pi_subscription", run: null },
 };
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
@@ -89,9 +107,11 @@ const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
 
 const MODE_HINTS: Record<SessionMode, string> = {
   subscription: "Uses claude.ai login",
+  subscription_headless: "Headless claude -p output",
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
   codex_subscription: "Uses ChatGPT login from KV",
+  codex_headless: "Headless codex exec output",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_subscription: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
@@ -99,9 +119,11 @@ const MODE_HINTS: Record<SessionMode, string> = {
 
 const MODE_ORDER: SessionMode[] = [
   "subscription",
+  "subscription_headless",
   "api_key",
   "config",
   "codex_subscription",
+  "codex_headless",
   "codex_config",
   "pi_subscription",
   "pi_config",
@@ -366,7 +388,13 @@ const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
 const MIN_COMPLETION_SOUND_VOLUME = 0.05;
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
-  return value === "subscription" || value === "codex_subscription" || value === "pi_subscription";
+  return (
+    value === "subscription" ||
+    value === "subscription_headless" ||
+    value === "codex_subscription" ||
+    value === "codex_headless" ||
+    value === "pi_subscription"
+  );
 }
 
 function readDefaultSessionMode(): DefaultSessionMode {
@@ -481,8 +509,13 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CODEX_MODES = new Set<SessionMode>(["codex_subscription", "codex_config"]);
+const CODEX_MODES = new Set<SessionMode>([
+  "codex_subscription",
+  "codex_headless",
+  "codex_config",
+]);
 const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
+const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
@@ -492,6 +525,17 @@ const ROLLOUT_MODES = new Set<SessionMode>([
 const CODEX_ROLLOUT_SUBMIT_DELAY_MS = 200;
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
+
+function sessionInteraction(mode: SessionMode): SessionInteraction {
+  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
+}
+
+function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
+  return (
+    PROVIDER_INTERACTION_MODES[provider][interaction] ??
+    PROVIDER_INTERACTION_MODES[provider].terminal!
+  );
+}
 
 interface SessionUser {
   sub: string;
@@ -978,7 +1022,7 @@ function DemoLanding() {
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
-  const selectedMode = PROVIDER_DEFAULT_MODES[selectedProvider];
+  const selectedMode = defaultModeFor(selectedProvider, "terminal");
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -1094,7 +1138,7 @@ function DemoLanding() {
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {PROVIDERS.map((provider) => {
-                  const mode = PROVIDER_DEFAULT_MODES[provider];
+                  const mode = defaultModeFor(provider, "terminal");
                   return (
                     <li key={provider}>
                       <button
@@ -1214,6 +1258,130 @@ function DemoLanding() {
         </div>
       </main>
     </div>
+  );
+}
+
+type RunEvent = {
+  stream?: "stdout" | "stderr";
+  data?: string;
+  status?: "done" | "error";
+  detail?: string;
+};
+
+function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
+  const [prompt, setPrompt] = useState("");
+  const [output, setOutput] = useState("");
+  const [stderr, setStderr] = useState("");
+  const [running, setRunning] = useState(false);
+  const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    return () => {
+      wsRef.current?.close();
+      wsRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active") return;
+    const touch = () => {
+      void authedFetch(`/api/sessions/${session.id}/touch`, {
+        method: "POST",
+      }).catch(() => undefined);
+    };
+    touch();
+    const interval = window.setInterval(touch, 30_000);
+    return () => window.clearInterval(interval);
+  }, [session.id, session.status, visible]);
+
+  function startRun() {
+    const trimmed = prompt.trim();
+    if (!trimmed || running || session.status !== "Active") return;
+    wsRef.current?.close();
+    setOutput("");
+    setStderr("");
+    setRunStatus("running");
+    setRunning(true);
+    const wsUrl =
+      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
+      `/api/sessions/${session.id}/run`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ prompt: trimmed }));
+    };
+    ws.onmessage = (event) => {
+      let msg: RunEvent;
+      try {
+        msg = JSON.parse(String(event.data));
+      } catch {
+        setOutput((prev) => prev + String(event.data));
+        return;
+      }
+      if (msg.stream === "stdout" && msg.data) {
+        setOutput((prev) => prev + msg.data);
+      } else if (msg.stream === "stderr" && msg.data) {
+        setStderr((prev) => prev + msg.data);
+      } else if (msg.status === "done") {
+        setRunStatus("done");
+        setRunning(false);
+        ws.close();
+      } else if (msg.status === "error") {
+        setRunStatus("error");
+        setRunning(false);
+        setStderr((prev) => `${prev}${msg.detail ?? "run failed"}\n`);
+        ws.close();
+      }
+    };
+    ws.onerror = () => {
+      setRunStatus("error");
+      setRunning(false);
+    };
+    ws.onclose = () => {
+      setRunning(false);
+      if (runStatus === "running") {
+        setRunStatus((prev) => (prev === "running" ? "done" : prev));
+      }
+    };
+  }
+
+  return (
+    <section className="run-panel">
+      <div className="run-composer">
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder={`Ask ${MODE_LABELS[session.mode]} to work in /workspace`}
+          disabled={running}
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              startRun();
+            }
+          }}
+        />
+        <button
+          className="run-submit"
+          onClick={startRun}
+          disabled={running || session.status !== "Active" || !prompt.trim()}
+        >
+          {running ? "running" : "run"}
+        </button>
+      </div>
+      <div className={`run-output run-output-${runStatus}`}>
+        {session.status !== "Active" ? (
+          <span className="run-muted">waiting for session pod</span>
+        ) : output || stderr ? (
+          <>
+            {output && <pre>{output}</pre>}
+            {stderr && <pre className="run-stderr">{stderr}</pre>}
+          </>
+        ) : (
+          <span className="run-muted">ready</span>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -1551,10 +1719,18 @@ export function App() {
   }
 
   function setDefaultProvider(provider: Provider) {
-    const mode = PROVIDER_DEFAULT_MODES[provider];
+    const mode = defaultModeFor(provider, sessionInteraction(defaultSessionMode));
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
     setModeMenuOpen(false);
+  }
+
+  function toggleDefaultInteraction() {
+    const provider = MODE_MENU_ICONS[defaultSessionMode];
+    const nextInteraction = sessionInteraction(defaultSessionMode) === "run" ? "terminal" : "run";
+    const mode = defaultModeFor(provider, nextInteraction);
+    setDefaultSessionMode(mode);
+    writeDefaultSessionMode(mode);
   }
 
   function updateCompletionSoundEnabled(enabled: boolean) {
@@ -1772,6 +1948,23 @@ export function App() {
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
+            <button
+              className="new-row-interaction-toggle"
+              onClick={toggleDefaultInteraction}
+              disabled={busy || MODE_MENU_ICONS[defaultSessionMode] === "pi"}
+              aria-label={`Use ${
+                sessionInteraction(defaultSessionMode) === "run" ? "terminal" : "run"
+              } interaction`}
+              title={
+                MODE_MENU_ICONS[defaultSessionMode] === "pi"
+                  ? "Pi only supports terminal sessions"
+                  : sessionInteraction(defaultSessionMode) === "run"
+                    ? "switch to terminal interaction"
+                    : "switch to run interaction"
+              }
+            >
+              {sessionInteraction(defaultSessionMode)}
+            </button>
             <div className="new-row-action-group" role="group" aria-label="session actions">
               <button
                 className="new-row-action"
@@ -1801,7 +1994,7 @@ export function App() {
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {PROVIDERS.map((provider) => {
-                  const mode = PROVIDER_DEFAULT_MODES[provider];
+                  const mode = defaultModeFor(provider, sessionInteraction(defaultSessionMode));
                   return (
                     <li key={provider}>
                     <button
@@ -2071,25 +2264,35 @@ export function App() {
           <div className="terminals">
             {sessions
               .filter((s) => mounted.has(s.id))
-              .map((s) => (
-                <Terminal
-                  key={s.id}
-                  ref={(h) => {
-                    if (h) terminalRefs.current.set(s.id, h);
-                    else terminalRefs.current.delete(s.id);
-                  }}
-                  sessionId={s.id}
-                  mode={s.mode}
-                  status={s.status}
-                  bootLabel={sessionBootLabel(s, nowMs)}
-                  bootTitle={sessionBootTitle(s, nowMs)}
-                  completionSoundEnabled={completionSoundEnabled}
-                  completionSoundVolume={completionSoundVolume}
-                  visible={active === s.id}
-                  onAgentActivityChange={setAgentActivity}
-                  onAgentCompletion={stopRolloutTimer}
-                />
-              ))}
+              .map((s) =>
+                HEADLESS_MODES.has(s.mode) ? (
+                  <div
+                    key={s.id}
+                    className="run-body"
+                    hidden={active !== s.id}
+                  >
+                    <HeadlessRun session={s} visible={active === s.id} />
+                  </div>
+                ) : (
+                  <Terminal
+                    key={s.id}
+                    ref={(h) => {
+                      if (h) terminalRefs.current.set(s.id, h);
+                      else terminalRefs.current.delete(s.id);
+                    }}
+                    sessionId={s.id}
+                    mode={s.mode}
+                    status={s.status}
+                    bootLabel={sessionBootLabel(s, nowMs)}
+                    bootTitle={sessionBootTitle(s, nowMs)}
+                    completionSoundEnabled={completionSoundEnabled}
+                    completionSoundVolume={completionSoundVolume}
+                    visible={active === s.id}
+                    onAgentActivityChange={setAgentActivity}
+                    onAgentCompletion={stopRolloutTimer}
+                  />
+                )
+              )}
           </div>
         )}
       </main>

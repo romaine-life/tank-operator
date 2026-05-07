@@ -36,10 +36,12 @@ from .credentials_seed import (
     harvest_and_save,
     harvest_codex_and_save,
 )
-from .exec_proxy import bridge, exec_write_file
+from .exec_proxy import bridge, exec_stream_to_websocket, exec_write_file
 from .profiles import ProfileStore, SessionRegistryStore
 from .sessions import (
+    CODEX_HEADLESS_MODE,
     DEFAULT_SESSION_MODE,
+    HEADLESS_MODES,
     SESSION_MODES,
     SESSIONS_NAMESPACE,
     PodNotReady,
@@ -96,6 +98,11 @@ class TerminalDebugBody(BaseModel):
     session_id: str | None = None
     mode: str | None = None
     payload: dict[str, Any] = {}
+
+
+MAX_HEADLESS_PROMPT_BYTES = int(
+    os.environ.get("MAX_HEADLESS_PROMPT_BYTES", str(256 * 1024))
+)
 
 
 @app.get("/healthz")
@@ -357,6 +364,19 @@ async def delete_session(
     return {"id": session_id, "status": "deleted"}
 
 
+@app.post("/api/sessions/{session_id}/touch")
+async def touch_session(
+    session_id: str, user: User = Depends(current_user)
+) -> dict[str, str]:
+    try:
+        await sessions.touch(owner=user.email, session_id=session_id)
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    return {"id": session_id, "status": "touched"}
+
+
 class PatchSessionBody(BaseModel):
     # Empty string / null clears the name; otherwise stored verbatim (trimmed
     # + length-capped server-side).
@@ -497,6 +517,86 @@ async def session_exec(ws: WebSocket, session_id: str) -> None:
     async with sessions.track_ws(session_id):
         try:
             await bridge(ws, pod_ip=pod_ip, terminal_port=terminal_port)
+        except WebSocketDisconnect:
+            pass
+
+
+@app.websocket("/api/sessions/{session_id}/run")
+async def session_run(ws: WebSocket, session_id: str) -> None:
+    await ws.accept()
+    try:
+        user = current_user_ws(ws)
+    except HTTPException as e:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.detail)
+        return
+
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
+        return
+    except SessionNotFound:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
+        return
+
+    if session.mode not in HEADLESS_MODES:
+        await ws.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="session mode does not support headless runs",
+        )
+        return
+
+    try:
+        first = await ws.receive_json()
+    except Exception:
+        await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="expected JSON")
+        return
+    prompt = first.get("prompt") if isinstance(first, dict) else None
+    if not isinstance(prompt, str) or not prompt.strip():
+        await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
+        return
+    prompt_bytes = prompt.encode()
+    if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
+        await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
+        return
+
+    try:
+        pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
+        return
+    except SessionNotFound:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
+        return
+    except PodNotReady:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
+        return
+
+    provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+    command = [
+        "bash",
+        "-lc",
+        (
+            "set -uo pipefail; "
+            "prompt_file=$(mktemp); "
+            "status=0; "
+            f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
+            "if [ \"$status\" -eq 0 ]; then "
+            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" || status=$?; "
+            "fi; "
+            "rm -f \"$prompt_file\"; "
+            "exit $status"
+        ),
+    ]
+    async with sessions.track_ws(session_id):
+        try:
+            await exec_stream_to_websocket(
+                ws,
+                namespace=SESSIONS_NAMESPACE,
+                pod_name=pod_name,
+                command=command,
+                stdin=prompt_bytes,
+            )
         except WebSocketDisconnect:
             pass
 
