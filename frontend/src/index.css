@@ -94,12 +94,16 @@
      candy-pink consumer warmth of the previous palette. */
   --mode-subscription-bg: var(--accent-soft);
   --mode-subscription-fg: var(--accent-fg);
+  --mode-subscription-headless-bg: rgba(229, 169, 132, 0.12);
+  --mode-subscription-headless-fg: #e8b28f;
   --mode-api-key-bg: rgba(159, 122, 234, 0.12);
   --mode-api-key-fg: #c8b6f5;
   --mode-config-bg: rgba(217, 119, 87, 0.12);
   --mode-config-fg: #e6b59a;
   --mode-codex-subscription-bg: rgba(120, 200, 180, 0.12);
   --mode-codex-subscription-fg: #9fd6c5;
+  --mode-codex-headless-bg: rgba(93, 190, 165, 0.14);
+  --mode-codex-headless-fg: #8bd7c5;
   --mode-codex-config-bg: rgba(180, 200, 120, 0.10);
   --mode-codex-config-fg: #c9d68b;
   --mode-pi-subscription-bg: rgba(99, 179, 237, 0.12);
@@ -438,6 +442,28 @@ button:disabled {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
+.new-row-interaction-toggle {
+  height: 2rem;
+  min-width: 3.75rem;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xl);
+  background: var(--bg-sidebar-control);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: 11px;
+  text-transform: lowercase;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+}
+
+.new-row-interaction-toggle:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .new-row-action-group {
   display: flex;
   align-items: stretch;
@@ -567,6 +593,7 @@ button:disabled {
 }
 
 .sidebar.is-collapsed .new-row-provider-toggle,
+.sidebar.is-collapsed .new-row-interaction-toggle,
 .sidebar.is-collapsed .new-row-action {
   width: 2.25rem;
   min-width: 2.25rem;
@@ -1096,9 +1123,11 @@ button:disabled {
 }
 
 .mode-subscription        { background: var(--mode-subscription-bg); color: var(--mode-subscription-fg); }
+.mode-subscription_headless { background: var(--mode-subscription-headless-bg); color: var(--mode-subscription-headless-fg); }
 .mode-api_key             { background: var(--mode-api-key-bg); color: var(--mode-api-key-fg); }
 .mode-config              { background: var(--mode-config-bg); color: var(--mode-config-fg); }
 .mode-codex_subscription  { background: var(--mode-codex-subscription-bg); color: var(--mode-codex-subscription-fg); }
+.mode-codex_headless      { background: var(--mode-codex-headless-bg); color: var(--mode-codex-headless-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
 .mode-pi_subscription     { background: var(--mode-pi-subscription-bg); color: var(--mode-pi-subscription-fg); }
 .mode-pi_config           { background: var(--mode-pi-config-bg); color: var(--mode-pi-config-fg); }
@@ -1521,6 +1550,94 @@ button:disabled {
   flex: 1;
   position: relative;
   overflow: hidden;
+}
+
+.run-body {
+  position: absolute;
+  inset: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+}
+
+.run-body[hidden] {
+  display: none;
+}
+
+.run-panel {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+.run-composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.run-composer textarea {
+  min-height: 7rem;
+  max-height: 14rem;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  padding: var(--space-3);
+}
+
+.run-composer textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.run-submit {
+  width: 5rem;
+  border-radius: var(--radius-lg);
+  background: var(--accent);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.run-submit:disabled {
+  opacity: 0.45;
+}
+
+.run-output {
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--gray-950);
+  color: var(--text-body);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.run-output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-stderr {
+  color: var(--status-error-fg);
+}
+
+.run-muted {
+  color: var(--text-muted);
 }
 
 .terminal-body,

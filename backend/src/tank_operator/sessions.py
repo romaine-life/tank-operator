@@ -95,8 +95,10 @@ SESSION_MODES = (
     "config",
     "codex_config",
     "codex_subscription",
+    "codex_headless",
     "pi_config",
     "pi_subscription",
+    "subscription_headless",
 )
 DEFAULT_SESSION_MODE = "subscription"
 # Config mode: a one-shot pod the user logs into via `claude /login` to seed
@@ -136,7 +138,9 @@ CODEX_CONFIG_MODE = "codex_config"
 # centralized codex-api-proxy that single-flights refresh (mandatory if it
 # does). Determined by observing rotation behavior in a codex_config pod.
 CODEX_SUBSCRIPTION_MODE = "codex_subscription"
+CODEX_HEADLESS_MODE = "codex_headless"
 CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
+SUBSCRIPTION_HEADLESS_MODE = "subscription_headless"
 # Pi-config is a disposable Pi login sandbox. Pi-subscription curates
 # Tank-backed Claude/Codex subscriptions into Pi's auth.json at pod startup so
 # the launcher only needs one Pi option while Pi still sees multiple providers.
@@ -160,11 +164,15 @@ NO_CLAUDE_HIJACK_MODES = frozenset(
         CONFIG_MODE,
         CODEX_CONFIG_MODE,
         CODEX_SUBSCRIPTION_MODE,
+        CODEX_HEADLESS_MODE,
         PI_CONFIG_MODE,
     }
 )
-CODEX_MODES = frozenset({CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE})
+CODEX_MODES = frozenset(
+    {CODEX_CONFIG_MODE, CODEX_SUBSCRIPTION_MODE, CODEX_HEADLESS_MODE}
+)
 PI_MODES = frozenset({PI_CONFIG_MODE, PI_SUBSCRIPTION_MODE})
+HEADLESS_MODES = frozenset({SUBSCRIPTION_HEADLESS_MODE, CODEX_HEADLESS_MODE})
 # Remote-control: there used to be a dedicated `remote_control` session mode
 # whose bootstrap auto-launched `claude '/remote-control'` to put the bridge
 # URL in the TUI on session start. That cold-start raced claude's slash
@@ -191,6 +199,7 @@ SESSION_CONFIG_MOUNTS = (
     ("default-claude.md", "/workspace/AGENTS.md"),
     ("write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"),
     ("tank-bootstrap.sh", "/opt/tank/bootstrap.sh"),
+    ("headless-run.sh", "/opt/tank/headless-run.sh"),
     ("skills.done.SKILL.md", "/home/node/.claude/skills/done/SKILL.md"),
     ("skills.rollout.SKILL.md", "/home/node/.claude/skills/rollout/SKILL.md"),
     (
@@ -542,7 +551,7 @@ class SessionManager:
         # lets the pod boot before any codex_config harvest has run; the
         # bootstrap surfaces a clear error in that case instead of the
         # kubelet getting stuck on a missing-Secret mount.
-        if mode == CODEX_SUBSCRIPTION_MODE:
+        if mode in (CODEX_SUBSCRIPTION_MODE, CODEX_HEADLESS_MODE):
             container = next(c for c in pod_spec["containers"] if c["name"] == "claude")
             container.setdefault("volumeMounts", []).append(
                 {
@@ -826,6 +835,10 @@ class SessionManager:
             await self._registry.mark_deleted(owner, session_id)
         self._ws_count.pop(session_id, None)
         self._activity.pop(session_id, None)
+
+    async def touch(self, owner: str, session_id: str) -> None:
+        await self._read_owned_pod(owner, session_id)
+        self._activity[session_id] = time.monotonic()
 
     async def _read_owned_pod(self, owner: str, session_id: str) -> Any:
         assert self._core is not None

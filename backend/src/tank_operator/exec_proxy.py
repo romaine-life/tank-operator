@@ -192,6 +192,86 @@ async def exec_write_file(
         raise RuntimeError(f"exec write {path} failed: {error_status}")
 
 
+async def exec_stream_to_websocket(
+    browser: WebSocket,
+    namespace: str,
+    pod_name: str,
+    command: list[str],
+    stdin: bytes,
+) -> None:
+    """Run a one-shot command and forward stdout/stderr chunks to the browser.
+
+    Browser frames are JSON objects:
+    - {"stream":"stdout"|"stderr","data":"..."} for command output
+    - {"status":"done"} when Kubernetes reports a successful exit
+    - {"status":"error","detail":"..."} for non-zero exits or stream failures
+    """
+    ws_client = WsApiClient()
+    core = client.CoreV1Api(api_client=ws_client)
+    try:
+        cm = await core.connect_get_namespaced_pod_exec(
+            name=pod_name,
+            namespace=namespace,
+            container=SESSION_CONTAINER,
+            command=command,
+            stdin=True,
+            stdout=True,
+            stderr=True,
+            tty=False,
+            _preload_content=False,
+        )
+        error_status: dict[str, str] | None = None
+        async with cm as k8s_ws:
+            for offset in range(0, len(stdin), 64 * 1024):
+                await k8s_ws.send_bytes(
+                    bytes([STDIN_CHANNEL]) + stdin[offset : offset + 64 * 1024]
+                )
+            async for wsmsg in k8s_ws:
+                if wsmsg.type == aiohttp.WSMsgType.BINARY:
+                    if not wsmsg.data:
+                        continue
+                    channel = wsmsg.data[0]
+                    payload = wsmsg.data[1:]
+                    if channel == STDOUT_CHANNEL:
+                        await browser.send_json(
+                            {
+                                "stream": "stdout",
+                                "data": payload.decode(errors="replace"),
+                            }
+                        )
+                    elif channel == STDERR_CHANNEL:
+                        await browser.send_json(
+                            {
+                                "stream": "stderr",
+                                "data": payload.decode(errors="replace"),
+                            }
+                        )
+                    elif channel == ERROR_CHANNEL:
+                        try:
+                            error_status = json.loads(payload)
+                        except ValueError:
+                            error_status = {
+                                "status": "Failure",
+                                "message": payload.decode(errors="replace"),
+                            }
+                elif wsmsg.type in (
+                    aiohttp.WSMsgType.CLOSE,
+                    aiohttp.WSMsgType.CLOSED,
+                    aiohttp.WSMsgType.ERROR,
+                ):
+                    break
+    except Exception as e:
+        await browser.send_json({"status": "error", "detail": str(e)})
+        return
+    finally:
+        await ws_client.close()
+
+    if error_status is not None and error_status.get("status") != "Success":
+        await browser.send_json({"status": "error", "detail": str(error_status)})
+        return
+    await browser.send_json({"status": "done"})
+
+
 async def bridge(browser: WebSocket, pod_ip: str, terminal_port: int) -> None:
     token = _service_account_token()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
