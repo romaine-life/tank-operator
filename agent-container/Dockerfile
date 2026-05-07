@@ -12,6 +12,12 @@ FROM mcr.microsoft.com/playwright:v1.49.1-noble
 ARG TARGETARCH=amd64
 ARG GO_VERSION=1.26.2
 ARG VITE_VERSION=5.4.21
+# Must match the base image tag above. The base image bundles its
+# matching chromium under /ms-playwright; an unpinned `npm install
+# playwright` would otherwise pull a newer release whose chromium
+# revision (e.g. headless_shell-1217) is not on disk and break in-pod
+# screenshot capture.
+ARG PLAYWRIGHT_VERSION=1.49.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
@@ -42,14 +48,21 @@ RUN printf '%s\n' 'export PATH="/usr/local/go/bin:${PATH}"' > /etc/profile.d/go-
 # chromium under /ms-playwright but NOT the playwright JS package, so any
 # `import "playwright"` from a script (e.g. ambience's
 # scripts/agent/capture-screenshot.mjs) would fail without this. Browsers
-# are already on disk so we skip re-downloading.
+# are already on disk so we skip re-downloading; the npm playwright
+# version is pinned to match the base image so the bundled chromium is
+# the version playwright actually requests.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-RUN npm install -g @anthropic-ai/claude-code playwright "vite@${VITE_VERSION}"
+RUN npm install -g @anthropic-ai/claude-code "playwright@${PLAYWRIGHT_VERSION}" "vite@${VITE_VERSION}"
 
 # NODE_PATH lets bare `import "playwright"` resolve from the global
-# install above without per-script `npm link`. Standard global path on
-# Debian-derived images.
+# install above for CommonJS callers. The Node ESM resolver does NOT
+# honor NODE_PATH, so for ESM `import` from arbitrary working
+# directories we also export PLAYWRIGHT_PACKAGE_PATH — ambience's
+# scripts/agent/capture-screenshot.mjs reads this and imports the
+# global install directly via pathToFileURL, side-stepping the
+# bare-name resolver entirely.
 ENV NODE_PATH=/usr/lib/node_modules
+ENV PLAYWRIGHT_PACKAGE_PATH=/usr/lib/node_modules/playwright/index.mjs
 
 # Rename the playwright base's pwuser (uid 1000) to `node` so the agent
 # Job's runAsUser:1000 securityContext finds a valid user named `node`,
