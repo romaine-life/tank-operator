@@ -308,7 +308,7 @@ spec:
             - name: AZURE_KEYVAULT_URL
               value: {{ .Values.credentialRefresher.keyVaultUrl | quote }}
             - name: CLAUDE_CREDENTIALS_KV_KEY
-              value: {{ .Values.externalSecret.claudeCredentials.kvKey | quote }}
+              value: {{ include "tank-operator.claudeCredentialsKvKey" . | quote }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST

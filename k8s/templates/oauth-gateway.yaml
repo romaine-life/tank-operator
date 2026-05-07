@@ -243,8 +243,8 @@ To re-seed (refresh chain dies, etc.) use the in-app "+ config sub"
 flow which captures a logged-in credentials.json and writes it to KV
 via POST /api/sessions/{id}/save-credentials. Out-of-band: upload a
 fresh blob to the KV secret named by
-.Values.externalSecret.claudeCredentials.kvKey; ESO picks it up on the
-next refresh.
+{{ include "tank-operator.claudeCredentialsKvKey" . }}; ESO picks it up
+on the next refresh.
 */}}
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
@@ -263,7 +263,7 @@ spec:
   data:
     - secretKey: {{ .Values.externalSecret.claudeCredentials.secretKey }}
       remoteRef:
-        key: {{ .Values.externalSecret.claudeCredentials.kvKey }}
+        key: {{ include "tank-operator.claudeCredentialsKvKey" . }}
         conversionStrategy: Default
         decodingStrategy: None
         metadataPolicy: None
