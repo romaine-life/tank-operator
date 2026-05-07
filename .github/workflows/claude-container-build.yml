@@ -5,12 +5,18 @@ on:
     branches: [main]
     paths:
       - 'claude-container/**'
+      - 'scripts/image-fingerprint.sh'
       - '.github/workflows/claude-container-build.yml'
   workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Git ref or commit SHA to build. Leave blank to build the dispatch revision."
+        required: false
+        type: string
 
 concurrency:
   group: session-agent-images-build
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -18,14 +24,49 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.agent }} image
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent: claude
+            image: claude-container
+          - agent: codex
+            image: codex-container
+          - agent: pi
+            image: pi-container
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Azure login
+      - name: Resolve requested ref
+        env:
+          INPUT_REF: ${{ inputs.git_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin '+refs/heads/*:refs/remotes/origin/*'
+
+          TARGET_REF="${INPUT_REF:-$GITHUB_SHA}"
+          FULL_SHA=""
+          if FULL_SHA="$(git rev-parse --verify "${TARGET_REF}^{commit}" 2>/dev/null)"; then
+            :
+          elif git show-ref --verify --quiet "refs/remotes/origin/${TARGET_REF}"; then
+            FULL_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_REF}^{commit}")"
+          elif git show-ref --verify --quiet "refs/tags/${TARGET_REF}"; then
+            FULL_SHA="$(git rev-parse "refs/tags/${TARGET_REF}^{commit}")"
+          else
+            echo "::error::Unable to resolve git_ref '${TARGET_REF}' to a commit."
+            exit 1
+          fi
+          git checkout --detach "${FULL_SHA}"
+          echo "Resolved ${TARGET_REF} -> ${FULL_SHA}"
+
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ vars.ARM_CLIENT_ID }}
@@ -35,36 +76,116 @@ jobs:
       - name: ACR login
         run: az acr login --name romainecr
 
-      - name: Compute tag
-        id: tag
-        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build + push session images (SHA-pinned, no :latest)
+      - name: Resolve image tag
         run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          docker build -f claude-container/Dockerfile \
-            --build-arg TANK_AGENT=claude \
-            -t romainecr.azurecr.io/claude-container:$TAG .
-          docker build -f claude-container/Dockerfile \
-            --build-arg TANK_AGENT=codex \
-            -t romainecr.azurecr.io/codex-container:$TAG .
-          docker build -f claude-container/Dockerfile \
-            --build-arg TANK_AGENT=pi \
-            -t romainecr.azurecr.io/pi-container:$TAG .
-          docker push romainecr.azurecr.io/claude-container:$TAG
-          docker push romainecr.azurecr.io/codex-container:$TAG
-          docker push romainecr.azurecr.io/pi-container:$TAG
+          TAG="$(git rev-parse --short=7 HEAD)"
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+
+      - name: Compute image fingerprint
+        id: fingerprint
+        env:
+          PROOF_REPOSITORY: ${{ matrix.image }}-build-proof
+        run: |
+          set -euo pipefail
+          # Each TANK_AGENT variant builds a different image even from the
+          # same Dockerfile (the `case "${TANK_AGENT}" in ... esac` step
+          # branches per agent), so the fingerprint must include the agent
+          # name. --image is what the script uses to namespace the alias
+          # tag, and we propagate that through to ALIAS_TAG below.
+          fingerprint="$(scripts/image-fingerprint.sh \
+            --image ${{ matrix.agent }} \
+            --dockerfile claude-container/Dockerfile \
+            --context . \
+            --paths 'claude-container/Dockerfile claude-container/mcp-auth-proxy claude-container/terminald' \
+            | awk -F= '$1 == "fingerprint" { print $2 }')"
+          echo "ALIAS_TAG=${{ matrix.agent }}-${fingerprint}" >> "$GITHUB_ENV"
+
+      - name: Check existing image aliases
+        id: image
+        run: |
+          set -euo pipefail
+          if az acr repository show-tags \
+              --name romainecr \
+              --repository ${{ matrix.image }} \
+              --query "[?@=='${TAG}'] | [0]" \
+              --output tsv | grep -qx "${TAG}"; then
+            echo "target_exists=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "target_exists=false" >>"${GITHUB_OUTPUT}"
+          fi
+
+          if az acr repository show-tags \
+              --name romainecr \
+              --repository ${{ matrix.image }} \
+              --query "[?@=='${ALIAS_TAG}'] | [0]" \
+              --output tsv | grep -qx "${ALIAS_TAG}"; then
+            echo "alias_exists=true" >>"${GITHUB_OUTPUT}"
+            echo "Found reusable image romainecr.azurecr.io/${{ matrix.image }}:${ALIAS_TAG}"
+          else
+            echo "alias_exists=false" >>"${GITHUB_OUTPUT}"
+            echo "No reusable image found for ${{ matrix.agent }} fingerprint"
+          fi
+
+      - name: Retag existing fingerprint image
+        if: steps.image.outputs.target_exists != 'true' && steps.image.outputs.alias_exists == 'true'
+        run: |
+          set -euo pipefail
+          az acr import \
+            --name romainecr \
+            --source "romainecr.azurecr.io/${{ matrix.image }}:${ALIAS_TAG}" \
+            --image "${{ matrix.image }}:${TAG}" \
+            --force
+
+      - name: Build and push image
+        if: steps.image.outputs.target_exists != 'true' && steps.image.outputs.alias_exists != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: claude-container/Dockerfile
+          push: true
+          build-args: |
+            TANK_AGENT=${{ matrix.agent }}
+          tags: |
+            romainecr.azurecr.io/${{ matrix.image }}:${{ env.TAG }}
+            romainecr.azurecr.io/${{ matrix.image }}:${{ env.ALIAS_TAG }}
+          cache-from: type=registry,ref=romainecr.azurecr.io/${{ matrix.image }}-build-cache:${{ matrix.agent }}
+          cache-to: type=registry,ref=romainecr.azurecr.io/${{ matrix.image }}-build-cache:${{ matrix.agent }},mode=max
+
+      - name: Summarize
+        run: |
           {
-            echo "### Pushed session images"
-            echo "- romainecr.azurecr.io/claude-container:$TAG"
-            echo "- romainecr.azurecr.io/codex-container:$TAG"
-            echo "- romainecr.azurecr.io/pi-container:$TAG"
+            echo "### ${{ matrix.image }} :${TAG}"
+            if [[ "${{ steps.image.outputs.target_exists }}" == "true" ]]; then
+              echo "- target tag already existed; nothing to do"
+            elif [[ "${{ steps.image.outputs.alias_exists }}" == "true" ]]; then
+              echo "- retagged from \`${ALIAS_TAG}\` (cached)"
+            else
+              echo "- built fresh and pushed (\`${ALIAS_TAG}\` + \`${TAG}\`)"
+            fi
           } >> $GITHUB_STEP_SUMMARY
 
-      - name: Bump session images in tank-operator chart
+  bump-tag:
+    name: Bump session image tags in chart
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: prod
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump session image tags
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          # session.image / session.codexImage are repo:tag strings; rewrite them.
+          set -euo pipefail
+          tag="$(git rev-parse --short=7 HEAD)"
+          # session.image / session.codexImage / session.piImage are
+          # repo:tag strings; rewrite them. The matrix above pushed
+          # all three tags at this SHA before this job runs.
           sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${tag}|" k8s/values.yaml
           sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${tag}|" k8s/values.yaml
           sed -i -E "s|^(  piImage: ).*$|\1romainecr.azurecr.io/pi-container:${tag}|" k8s/values.yaml
