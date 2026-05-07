@@ -68,7 +68,14 @@ resource "azuread_application" "oauth_test" {
   }
 
   single_page_application {
-    redirect_uris = []
+    # Bootstrap the current standby set so the test app is usable immediately.
+    # Glimmung owns changes after creation; ignore_changes below prevents Tofu
+    # from fighting slot-count reconciliation.
+    redirect_uris = [
+      "https://tank-slot-1.tank.dev.romaine.life/",
+      "https://tank-slot-2.tank.dev.romaine.life/",
+      "https://tank-slot-3.tank.dev.romaine.life/",
+    ]
   }
 
   lifecycle {
