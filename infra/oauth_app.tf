@@ -139,7 +139,7 @@ resource "azurerm_key_vault_secret" "oauth_allowed_emails" {
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
-# Allow the azure-personal MCP UAMI to manage redirect URIs on app
+# Allow the azure-personal MCP UAMI to patch redirect URIs on app
 # registrations it explicitly owns, without granting broad directory list
 # permissions. The test OAuth app grants ownership above; production remains
 # owned only by the infra deployment identity.
