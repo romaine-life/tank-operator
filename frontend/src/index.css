@@ -1640,6 +1640,118 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.run-transcript {
+  display: grid;
+  gap: var(--space-3);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.run-transcript-message {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.run-transcript-message-content {
+  max-width: min(52rem, 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
+  justify-self: end;
+  background: rgba(93, 190, 165, 0.14);
+  color: var(--text-primary);
+}
+
+.run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
+  justify-self: start;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.run-transcript-message-text {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.run-transcript-tools {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+}
+
+.run-transcript-tools-header,
+.run-transcript-tool-header {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-secondary);
+}
+
+.run-transcript-tools-body {
+  display: grid;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.run-transcript-tool {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--gray-950);
+}
+
+.run-transcript-tool-body {
+  border-top: 1px solid var(--border-subtle);
+  padding: var(--space-3);
+}
+
+.run-transcript-code,
+.run-transcript-code-muted {
+  display: block;
+  max-height: 24rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.26);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: var(--space-2);
+}
+
+.run-transcript-code-muted {
+  color: var(--text-muted);
+}
+
+.run-transcript [data-slot="meta"] {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.run-transcript [data-severity="error"],
+.run-transcript-error {
+  color: var(--status-error-fg);
+}
+
+.run-tool-icon,
+.run-chevron,
+.run-pending {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .terminal-body,
 .terminal-waiting {
   position: absolute;

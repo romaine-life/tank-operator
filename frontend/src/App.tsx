@@ -5,6 +5,8 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
+import { AgentTranscript } from "@sandbox-agent/react";
+import type { TranscriptEntry } from "@sandbox-agent/react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1268,13 +1270,321 @@ type RunEvent = {
   detail?: string;
 };
 
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function shortJson(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function upsertEntry(entries: TranscriptEntry[], entry: TranscriptEntry): TranscriptEntry[] {
+  const index = entries.findIndex((candidate) => candidate.id === entry.id);
+  if (index === -1) return [...entries, entry];
+  const next = [...entries];
+  next[index] = { ...next[index], ...entry };
+  return next;
+}
+
+function appendMeta(
+  entries: TranscriptEntry[],
+  id: string,
+  title: string,
+  detail?: string,
+  severity: "info" | "error" = "info",
+): TranscriptEntry[] {
+  return [
+    ...entries,
+    {
+      id,
+      kind: "meta",
+      time: nowIso(),
+      meta: { title, detail, severity },
+    },
+  ];
+}
+
+function appendAssistantMessage(
+  entries: TranscriptEntry[],
+  id: string,
+  text: string,
+): TranscriptEntry[] {
+  if (!text.trim()) return entries;
+  return [
+    ...entries,
+    {
+      id,
+      kind: "message",
+      role: "assistant",
+      text,
+      time: nowIso(),
+    },
+  ];
+}
+
+function describeUsage(usage: unknown): string {
+  if (!isJsonObject(usage)) return "";
+  const input = usage.input_tokens;
+  const cached = usage.cached_input_tokens;
+  const output = usage.output_tokens;
+  const reasoning = usage.reasoning_output_tokens;
+  return [
+    typeof input === "number" ? `input ${input}` : null,
+    typeof cached === "number" ? `cached ${cached}` : null,
+    typeof output === "number" ? `output ${output}` : null,
+    typeof reasoning === "number" ? `reasoning ${reasoning}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function codexToolEntry(event: JsonObject): TranscriptEntry | null {
+  const item = event.item;
+  if (!isJsonObject(item)) return null;
+  const id = typeof item.id === "string" ? item.id : `codex-tool-${Date.now()}`;
+  const status = typeof item.status === "string" ? item.status : String(event.type ?? "");
+  const itemType = item.type;
+
+  if (itemType === "command_execution") {
+    const command = typeof item.command === "string" ? item.command : "command";
+    return {
+      id,
+      kind: "tool",
+      toolName: command,
+      toolInput: command,
+      toolOutput: shortJson(item.aggregated_output),
+      toolStatus: status,
+      time: nowIso(),
+    };
+  }
+
+  if (itemType === "file_change") {
+    return {
+      id,
+      kind: "tool",
+      toolName: "file change",
+      toolInput: shortJson(item.changes),
+      toolStatus: status,
+      time: nowIso(),
+    };
+  }
+
+  if (itemType === "mcp_tool_call") {
+    const server = typeof item.server === "string" ? item.server : "mcp";
+    const tool = typeof item.tool === "string" ? item.tool : "tool";
+    return {
+      id,
+      kind: "tool",
+      toolName: `${server}.${tool}`,
+      toolInput: shortJson(item.arguments),
+      toolOutput: shortJson(item.result ?? item.error),
+      toolStatus: status,
+      time: nowIso(),
+    };
+  }
+
+  if (itemType === "web_search") {
+    return {
+      id,
+      kind: "tool",
+      toolName: "web search",
+      toolInput: typeof item.query === "string" ? item.query : shortJson(item),
+      toolStatus: status,
+      time: nowIso(),
+    };
+  }
+
+  return null;
+}
+
+function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+  const type = event.type;
+  if (type === "thread.started") {
+    const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
+    return appendMeta(entries, `codex-thread-${threadId || Date.now()}`, "Codex thread started", threadId);
+  }
+  if (type === "turn.started") {
+    return appendMeta(entries, `codex-turn-started-${Date.now()}`, "Turn started");
+  }
+  if (type === "turn.completed") {
+    return appendMeta(entries, `codex-turn-completed-${Date.now()}`, "Turn completed", describeUsage(event.usage));
+  }
+  if (type === "turn.failed" || type === "error") {
+    const error = isJsonObject(event.error) ? event.error.message : event.message;
+    return appendMeta(
+      entries,
+      `codex-error-${Date.now()}`,
+      type === "turn.failed" ? "Turn failed" : "Codex error",
+      typeof error === "string" ? error : shortJson(event),
+      "error",
+    );
+  }
+  if (type === "item.started" || type === "item.updated" || type === "item.completed") {
+    const item = event.item;
+    if (!isJsonObject(item)) return entries;
+    if (item.type === "agent_message") {
+      return appendAssistantMessage(
+        entries,
+        typeof item.id === "string" ? item.id : `codex-message-${Date.now()}`,
+        typeof item.text === "string" ? item.text : "",
+      );
+    }
+    if (item.type === "reasoning") {
+      const id = typeof item.id === "string" ? item.id : `codex-reasoning-${Date.now()}`;
+      return upsertEntry(entries, {
+        id,
+        kind: "reasoning",
+        time: nowIso(),
+        reasoning: { text: typeof item.text === "string" ? item.text : shortJson(item) },
+      });
+    }
+    const toolEntry = codexToolEntry(event);
+    return toolEntry ? upsertEntry(entries, toolEntry) : entries;
+  }
+  return appendMeta(entries, `codex-event-${Date.now()}`, String(type || "Codex event"), shortJson(event));
+}
+
+function claudeTextFromContent(content: unknown, includeToolResults: boolean): string {
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      if (!isJsonObject(block)) return "";
+      if (block.type === "text" && typeof block.text === "string") return block.text;
+      if (includeToolResults && block.type === "tool_result") return shortJson(block.content);
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
+  const message = event.message;
+  if (!isJsonObject(message) || !Array.isArray(message.content)) return [];
+  return message.content.flatMap((block): TranscriptEntry[] => {
+    if (!isJsonObject(block) || block.type !== "tool_use") return [];
+    const id = typeof block.id === "string" ? block.id : `claude-tool-${Date.now()}`;
+    return [
+      {
+        id,
+        kind: "tool",
+        toolName: typeof block.name === "string" ? block.name : "tool",
+        toolInput: shortJson(block.input),
+        toolStatus: "started",
+        time: nowIso(),
+      },
+    ];
+  });
+}
+
+function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+  const message = event.message;
+  if (!isJsonObject(message) || !Array.isArray(message.content)) return entries;
+  return message.content.reduce<TranscriptEntry[]>((nextEntries, block) => {
+    if (!isJsonObject(block) || block.type !== "tool_result") return nextEntries;
+    const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+    if (!toolUseId) return nextEntries;
+    const existing = nextEntries.find((entry) => entry.id === toolUseId);
+    return upsertEntry(nextEntries, {
+      id: toolUseId,
+      kind: "tool",
+      toolName: existing?.toolName ?? "tool result",
+      toolInput: existing?.toolInput,
+      toolOutput: shortJson(block.content),
+      toolStatus: block.is_error === true ? "failed" : "completed",
+      time: existing?.time ?? nowIso(),
+    });
+  }, entries);
+}
+
+function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+  const type = event.type;
+  if (type === "system") {
+    const subtype = typeof event.subtype === "string" ? event.subtype : "system";
+    const sessionId = typeof event.session_id === "string" ? event.session_id : "";
+    return appendMeta(entries, `claude-system-${subtype}-${Date.now()}`, `Claude ${subtype}`, sessionId);
+  }
+  if (type === "assistant") {
+    let nextEntries = entries;
+    for (const toolEntry of claudeToolEntries(event)) {
+      nextEntries = upsertEntry(nextEntries, toolEntry);
+    }
+    const message = event.message;
+    const text = isJsonObject(message) ? claudeTextFromContent(message.content, false) : "";
+    if (text) {
+      nextEntries = appendAssistantMessage(
+        nextEntries,
+        typeof event.uuid === "string" ? event.uuid : `claude-message-${Date.now()}`,
+        text,
+      );
+    }
+    return nextEntries;
+  }
+  if (type === "user") {
+    return applyClaudeToolResults(entries, event);
+  }
+  if (type === "result") {
+    const isError = event.is_error === true || event.subtype === "error";
+    const result = typeof event.result === "string" ? event.result : "";
+    let nextEntries = appendMeta(
+      entries,
+      `claude-result-${Date.now()}`,
+      isError ? "Claude run failed" : "Claude run completed",
+      result,
+      isError ? "error" : "info",
+    );
+    if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
+      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result);
+    }
+    return nextEntries;
+  }
+  return appendMeta(entries, `claude-event-${Date.now()}`, String(type || "Claude event"), shortJson(event));
+}
+
+function applyProviderEvent(
+  entries: TranscriptEntry[],
+  mode: SessionMode,
+  event: JsonObject,
+): TranscriptEntry[] {
+  if (mode === "codex_headless") return applyCodexEvent(entries, event);
+  return applyClaudeEvent(entries, event);
+}
+
+const transcriptClassNames = {
+  root: "run-transcript",
+  message: "run-transcript-message",
+  messageContent: "run-transcript-message-content",
+  messageText: "run-transcript-message-text",
+  toolGroupContainer: "run-transcript-tools",
+  toolGroupHeader: "run-transcript-tools-header",
+  toolGroupBody: "run-transcript-tools-body",
+  toolItem: "run-transcript-tool",
+  toolItemHeader: "run-transcript-tool-header",
+  toolItemBody: "run-transcript-tool-body",
+  toolCode: "run-transcript-code",
+  toolCodeMuted: "run-transcript-code-muted",
+  meta: "run-transcript-meta",
+  error: "run-transcript-error",
+};
+
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
   const [prompt, setPrompt] = useState("");
-  const [output, setOutput] = useState("");
-  const [stderr, setStderr] = useState("");
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const wsRef = useRef<WebSocket | null>(null);
+  const stdoutBufferRef = useRef("");
 
   useEffect(() => {
     return () => {
@@ -1295,12 +1605,54 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     return () => window.clearInterval(interval);
   }, [session.id, session.status, visible]);
 
+  function applyStdoutLine(line: string) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let providerEvent: unknown;
+    try {
+      providerEvent = JSON.parse(trimmed);
+    } catch {
+      setEntries((prev) =>
+        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", line),
+      );
+      return;
+    }
+    if (!isJsonObject(providerEvent)) {
+      setEntries((prev) =>
+        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", shortJson(providerEvent)),
+      );
+      return;
+    }
+    setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
+  }
+
+  function applyStdoutChunk(chunk: string) {
+    stdoutBufferRef.current += chunk;
+    const lines = stdoutBufferRef.current.split(/\r?\n/);
+    stdoutBufferRef.current = lines.pop() ?? "";
+    for (const line of lines) applyStdoutLine(line);
+  }
+
+  function flushStdoutBuffer() {
+    const pending = stdoutBufferRef.current;
+    stdoutBufferRef.current = "";
+    if (pending.trim()) applyStdoutLine(pending);
+  }
+
   function startRun() {
     const trimmed = prompt.trim();
     if (!trimmed || running || session.status !== "Active") return;
     wsRef.current?.close();
-    setOutput("");
-    setStderr("");
+    stdoutBufferRef.current = "";
+    setEntries([
+      {
+        id: `user-${Date.now()}`,
+        kind: "message",
+        role: "user",
+        text: trimmed,
+        time: nowIso(),
+      },
+    ]);
     setRunStatus("running");
     setRunning(true);
     const wsUrl =
@@ -1316,33 +1668,43 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       try {
         msg = JSON.parse(String(event.data));
       } catch {
-        setOutput((prev) => prev + String(event.data));
+        setEntries((prev) =>
+          appendMeta(prev, `websocket-message-${Date.now()}`, "websocket message", String(event.data)),
+        );
         return;
       }
       if (msg.stream === "stdout" && msg.data) {
-        setOutput((prev) => prev + msg.data);
+        applyStdoutChunk(msg.data);
       } else if (msg.stream === "stderr" && msg.data) {
-        setStderr((prev) => prev + msg.data);
+        setEntries((prev) =>
+          appendMeta(prev, `stderr-${Date.now()}`, "stderr", msg.data, "error"),
+        );
       } else if (msg.status === "done") {
+        flushStdoutBuffer();
         setRunStatus("done");
         setRunning(false);
         ws.close();
       } else if (msg.status === "error") {
+        flushStdoutBuffer();
         setRunStatus("error");
         setRunning(false);
-        setStderr((prev) => `${prev}${msg.detail ?? "run failed"}\n`);
+        setEntries((prev) =>
+          appendMeta(prev, `run-error-${Date.now()}`, "run failed", msg.detail, "error"),
+        );
         ws.close();
       }
     };
     ws.onerror = () => {
       setRunStatus("error");
       setRunning(false);
+      setEntries((prev) =>
+        appendMeta(prev, `websocket-error-${Date.now()}`, "websocket error", undefined, "error"),
+      );
     };
     ws.onclose = () => {
+      flushStdoutBuffer();
       setRunning(false);
-      if (runStatus === "running") {
-        setRunStatus((prev) => (prev === "running" ? "done" : prev));
-      }
+      setRunStatus((prev) => (prev === "running" ? "done" : prev));
     };
   }
 
@@ -1372,11 +1734,18 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       <div className={`run-output run-output-${runStatus}`}>
         {session.status !== "Active" ? (
           <span className="run-muted">waiting for session pod</span>
-        ) : output || stderr ? (
-          <>
-            {output && <pre>{output}</pre>}
-            {stderr && <pre className="run-stderr">{stderr}</pre>}
-          </>
+        ) : entries.length ? (
+          <AgentTranscript
+            entries={entries}
+            classNames={transcriptClassNames}
+            isThinking={running}
+            renderMessageText={(entry) => <div>{entry.text}</div>}
+            renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
+            renderToolGroupIcon={() => <span className="run-tool-icon">tools</span>}
+            renderChevron={(expanded) => (
+              <span className="run-chevron">{expanded ? "hide" : "show"}</span>
+            )}
+          />
         ) : (
           <span className="run-muted">ready</span>
         )}
