@@ -9,6 +9,7 @@ from fastapi import (
     Cookie,
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Request,
     WebSocket,
@@ -29,6 +30,7 @@ from .auth import (
     exchange_microsoft_token,
     gravatar_url,
     mint_install_state,
+    mint_session_token_for_k8s_subject,
     verify_install_state,
 )
 from .credentials_seed import (
@@ -158,6 +160,29 @@ async def logout() -> JSONResponse:
     response = JSONResponse({"status": "ok"})
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
+
+
+@app.post("/api/internal/auth/k8s")
+async def auth_via_k8s_sa(authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Cluster-native auth path. Caller presents a kubernetes
+    ServiceAccount projected token in `Authorization: Bearer <token>`;
+    the orchestrator validates it via TokenReview and, if the SA
+    subject is in K8S_AUTH_ALLOWED_SUBJECTS, returns a session JWT
+    bound to the mapped email.
+
+    Lets in-cluster automation (smoke tests, headless-browser probes,
+    health-check sidecars) authenticate without going through MSAL.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer SA token")
+    sa_token = authorization[7:]
+    session_token, user = await mint_session_token_for_k8s_subject(sa_token)
+    return JSONResponse(
+        {
+            "token": session_token,
+            "user": {"email": user.email, "name": user.name, "sub": user.sub},
+        }
+    )
 
 
 @app.get("/api/auth/me", response_model=dict)

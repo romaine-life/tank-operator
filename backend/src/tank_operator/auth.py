@@ -33,6 +33,21 @@ ALLOWED_EMAILS = frozenset(
     e.strip().lower() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()
 )
 
+# Cluster-native auth path. Maps a kubernetes ServiceAccount subject
+# (system:serviceaccount:<ns>:<sa>) to an email that the orchestrator
+# treats as the session identity. Format: comma-separated
+# "subject=email" pairs. Used by /api/internal/auth/k8s to mint a real
+# session JWT for in-cluster automation (smoke tests, playwright
+# probes) without needing the MSAL OAuth roundtrip.
+K8S_AUTH_SUBJECT_TO_EMAIL: dict[str, str] = {}
+for _entry in os.environ.get("K8S_AUTH_ALLOWED_SUBJECTS", "").split(","):
+    if "=" not in _entry:
+        continue
+    _sa, _email = _entry.split("=", 1)
+    _sa, _email = _sa.strip(), _email.strip().lower()
+    if _sa and _email:
+        K8S_AUTH_SUBJECT_TO_EMAIL[_sa] = _email
+
 # Match kill-me's posture: `common` JWKS endpoint, regex issuer match. Lets
 # any Microsoft user attempt to sign in; the email allowlist is the gate.
 _JWKS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
@@ -203,3 +218,73 @@ def current_user_ws(ws: WebSocket) -> User:
     authorization = ws.headers.get("authorization")
     auth_cookie = ws.cookies.get(COOKIE_NAME)
     return _decode_session_token(_token_from_request(authorization, auth_cookie))
+
+
+async def mint_session_token_for_k8s_subject(sa_token: str) -> tuple[str, User]:
+    """Validate a k8s ServiceAccount projected token and mint a session JWT
+    bound to the email mapped from that SA subject.
+
+    Looked up via TokenReview against the cluster's auth API — the
+    orchestrator's ServiceAccount needs `create tokenreviews` (the
+    standard ClusterRole `system:auth-delegator` covers it). Any SA
+    token the cluster issues can be presented; only subjects listed in
+    the K8S_AUTH_ALLOWED_SUBJECTS env are accepted, and the mapped
+    email must also be in ALLOWED_EMAILS.
+
+    Designed for in-cluster automation (smoke tests, headless-browser
+    probes) that needs to act as an authenticated user without going
+    through MSAL.
+    """
+    if not JWT_SECRET:
+        raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
+    if not K8S_AUTH_SUBJECT_TO_EMAIL:
+        raise HTTPException(
+            status_code=503, detail="k8s auth not configured (K8S_AUTH_ALLOWED_SUBJECTS empty)"
+        )
+    # Imported here so module load doesn't depend on a kube config —
+    # this path is only ever called inside the orchestrator pod.
+    from kubernetes_asyncio import client as _k8s_client
+
+    api = _k8s_client.AuthenticationV1Api()
+    # Audience-scoped TokenReview. The smoke caller mints a projected
+    # token with `audience: tank-operator` (instead of the default
+    # cluster audience) so the same SA's other tokens — used for
+    # different services — can't be replayed against tank-operator.
+    body = _k8s_client.V1TokenReview(
+        spec=_k8s_client.V1TokenReviewSpec(
+            token=sa_token,
+            audiences=["tank-operator"],
+        )
+    )
+    try:
+        result = await api.create_token_review(body=body)
+    except _k8s_client.ApiException as exc:
+        raise HTTPException(status_code=500, detail=f"TokenReview failed: {exc.status}") from exc
+    if not result.status or not result.status.authenticated:
+        raise HTTPException(status_code=401, detail="invalid k8s SA token")
+    subject = result.status.user.username if result.status.user else None
+    if not subject:
+        raise HTTPException(status_code=401, detail="TokenReview returned no subject")
+    email = K8S_AUTH_SUBJECT_TO_EMAIL.get(subject)
+    if not email:
+        raise HTTPException(
+            status_code=403, detail=f"subject not allowed: {subject}"
+        )
+    if email not in ALLOWED_EMAILS:
+        raise HTTPException(
+            status_code=403, detail=f"mapped email not in ALLOWED_EMAILS: {email}"
+        )
+    user = User(sub=f"k8s:{subject}", email=email, name=email)
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": user.sub,
+            "email": user.email,
+            "name": user.name,
+            "iat": now,
+            "exp": now + SESSION_TTL_SECONDS,
+        },
+        JWT_SECRET,
+        algorithm=ALGORITHM_HS,
+    )
+    return token, user
