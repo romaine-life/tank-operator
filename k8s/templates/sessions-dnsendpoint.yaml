@@ -1,0 +1,21 @@
+{{- if .Values.sessionsIngress.dnsEndpoint.enabled -}}
+# Wildcard DNS for the slot's session subdomain space, watched by
+# external-dns. Pairs with the wildcard cert + Gateway listener that
+# cover *.{{ .Values.ingress.hostname }}. Without this, external-dns
+# would mint one A record per session HTTPRoute on every session
+# create — chatty, racy on the first browser load. The wildcard
+# resolves the entire space immediately and lets the orchestrator's
+# per-session HTTPRoutes opt out of external-dns publication.
+apiVersion: externaldns.k8s.io/v1alpha1
+kind: DNSEndpoint
+metadata:
+  name: tank-operator-sessions-wildcard
+  namespace: {{ .Values.namespaces.orchestrator }}
+spec:
+  endpoints:
+    - dnsName: '*.{{ .Values.ingress.hostname }}'
+      recordType: A
+      recordTTL: {{ .Values.sessionsIngress.dnsEndpoint.ttl }}
+      targets:
+        - {{ .Values.sessionsIngress.gatewayIP | quote }}
+{{- end }}
