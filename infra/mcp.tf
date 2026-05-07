@@ -44,6 +44,13 @@ module "mcp_azure_personal" {
       scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
       role_definition_name = "Contributor"
     }
+    # Data-plane RBAC for romaine-kv. Subscription Contributor covers the
+    # control plane but not secret reads/writes — secret-officer is what the
+    # keyvault_get_secret / keyvault_set_secret tools call against.
+    "romaine-kv-secrets-officer" = {
+      scope                = data.azurerm_key_vault.main.id
+      role_definition_name = "Key Vault Secrets Officer"
+    }
   }
 }
 
