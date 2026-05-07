@@ -25,6 +25,7 @@ session:
   piImage: romainecr.azurecr.io/pi-container:2ec5b61
   configMap: tank-session-config
   serviceAccount: claude-session
+  registryScope: default
   # Idle reaper: a session with no open WebSocket connections for this many
   # seconds is deleted by the orchestrator's background sweep. 7 days is
   # effectively "manual close only" — the in-app close button is the

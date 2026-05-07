@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 COSMOS_ENDPOINT = os.environ.get("COSMOS_ENDPOINT", "")
 COSMOS_DATABASE = os.environ.get("COSMOS_DATABASE", "tank-operator")
 COSMOS_PROFILES_CONTAINER = os.environ.get("COSMOS_PROFILES_CONTAINER", "profiles")
+SESSION_REGISTRY_SCOPE = os.environ.get("SESSION_REGISTRY_SCOPE", "default").strip() or "default"
 
 
 @dataclass
@@ -60,6 +61,7 @@ class SessionRecord:
     id: str
     email: str
     mode: str
+    scope: str = "default"
     pod_name: str | None = None
     name: str | None = None
     visible: bool = True
@@ -87,9 +89,10 @@ def _profile_from_doc(doc: dict) -> Profile:
 
 def _session_from_doc(doc: dict) -> SessionRecord:
     return SessionRecord(
-        id=doc["id"].removeprefix("session:"),
+        id=doc.get("session_id") or doc["id"].removeprefix("session:"),
         email=doc["email"],
         mode=doc.get("mode", "subscription"),
+        scope=doc.get("session_scope") or doc.get("scope") or "default",
         pod_name=doc.get("pod_name"),
         name=doc.get("name"),
         visible=doc.get("visible", True),
@@ -211,15 +214,17 @@ class SessionRegistryStore:
     Kubernetes remains the runtime source of truth, but this store owns product
     visibility: only registered, visible sessions appear in the UI. We reuse the
     existing `/email`-partitioned profiles container so this can roll out before
-    any new infrastructure container exists.
+    any new infrastructure container exists. Deployments set a registry scope
+    so prod and validation slots do not show or mutate each other's sessions.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, scope: str | None = None) -> None:
         self._credential: DefaultAzureCredential | None = None
         self._client: CosmosClient | None = None
         self._container = None
         self._enabled = bool(COSMOS_ENDPOINT)
-        self._memory: dict[str, dict[str, SessionRecord]] = {}
+        self._scope = (scope or SESSION_REGISTRY_SCOPE).strip() or "default"
+        self._memory: dict[str, dict[str, dict[str, SessionRecord]]] = {}
 
     async def startup(self) -> None:
         if not self._enabled:
@@ -257,6 +262,7 @@ class SessionRegistryStore:
             id=session_id,
             email=normalized,
             mode=mode,
+            scope=self._scope,
             pod_name=pod_name,
             name=name if name is not None else (existing.name if existing else None),
             visible=visible,
@@ -265,7 +271,7 @@ class SessionRegistryStore:
             updated_at=now,
         )
         if not self._enabled or self._container is None:
-            self._memory.setdefault(normalized, {})[session_id] = record
+            self._memory.setdefault(self._scope, {}).setdefault(normalized, {})[session_id] = record
             return record
         await self._container.upsert_item(body=_session_doc(record))
         return record
@@ -273,26 +279,52 @@ class SessionRegistryStore:
     async def get(self, email: str, session_id: str) -> SessionRecord | None:
         normalized = email.lower()
         if not self._enabled or self._container is None:
-            return self._memory.get(normalized, {}).get(session_id)
+            return self._memory.get(self._scope, {}).get(normalized, {}).get(session_id)
         try:
             doc = await self._container.read_item(
-                item=f"session:{session_id}", partition_key=normalized
+                item=_session_doc_id(self._scope, session_id), partition_key=normalized
             )
         except CosmosResourceNotFoundError:
-            return None
+            if self._scope != "default":
+                return None
+            try:
+                doc = await self._container.read_item(
+                    item=f"session:{session_id}", partition_key=normalized
+                )
+            except CosmosResourceNotFoundError:
+                return None
         if doc.get("type") != "session":
             return None
-        return _session_from_doc(doc)
+        record = _session_from_doc(doc)
+        if record.scope != self._scope:
+            return None
+        return record
 
     async def list(self, email: str) -> list[SessionRecord]:
         normalized = email.lower()
         if not self._enabled or self._container is None:
-            return [r for r in self._memory.get(normalized, {}).values() if r.visible]
-        query = (
-            "SELECT * FROM c WHERE c.email = @email "
-            "AND c.type = 'session' AND c.visible = true"
-        )
-        params = [{"name": "@email", "value": normalized}]
+            return [
+                r
+                for r in self._memory.get(self._scope, {}).get(normalized, {}).values()
+                if r.visible
+            ]
+        if self._scope == "default":
+            query = (
+                "SELECT * FROM c WHERE c.email = @email "
+                "AND c.type = 'session' AND c.visible = true "
+                "AND (NOT IS_DEFINED(c.session_scope) OR c.session_scope = 'default')"
+            )
+            params = [{"name": "@email", "value": normalized}]
+        else:
+            query = (
+                "SELECT * FROM c WHERE c.email = @email "
+                "AND c.type = 'session' AND c.visible = true "
+                "AND c.session_scope = @scope"
+            )
+            params = [
+                {"name": "@email", "value": normalized},
+                {"name": "@scope", "value": self._scope},
+            ]
         items = self._container.query_items(
             query=query,
             parameters=params,
@@ -327,16 +359,17 @@ class SessionRegistryStore:
         record.visible = False
         record.updated_at = _now_iso()
         if not self._enabled or self._container is None:
-            self._memory.setdefault(normalized, {})[session_id] = record
+            self._memory.setdefault(self._scope, {}).setdefault(normalized, {})[session_id] = record
             return
         await self._container.upsert_item(body=_session_doc(record))
 
 
 def _session_doc(record: SessionRecord) -> dict[str, Any]:
     return {
-        "id": f"session:{record.id}",
+        "id": _session_doc_id(record.scope, record.id),
         "type": "session",
         "email": record.email,
+        "session_scope": record.scope,
         "session_id": record.id,
         "mode": record.mode,
         "pod_name": record.pod_name,
@@ -346,3 +379,9 @@ def _session_doc(record: SessionRecord) -> dict[str, Any]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _session_doc_id(scope: str, session_id: str) -> str:
+    if scope == "default":
+        return f"session:{session_id}"
+    return f"session:{scope}:{session_id}"

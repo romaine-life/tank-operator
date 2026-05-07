@@ -173,6 +173,36 @@ def test_session_list_uses_registry_and_adopts_only_terminald_pods() -> None:
     assert asyncio.run(registry.get("operator@example.test", "terminald")) is not None
 
 
+def test_session_registry_scope_isolates_environments() -> None:
+    prod = SessionRegistryStore(scope="default")
+    slot = SessionRegistryStore(scope="tank-slot-1")
+
+    asyncio.run(
+        prod.upsert(
+            email="operator@example.test",
+            session_id="shared-id",
+            mode="subscription",
+            pod_name="session-prod",
+        )
+    )
+    asyncio.run(
+        slot.upsert(
+            email="operator@example.test",
+            session_id="shared-id",
+            mode="subscription_headless",
+            pod_name="session-slot",
+        )
+    )
+
+    prod_list = asyncio.run(prod.list("operator@example.test"))
+    slot_list = asyncio.run(slot.list("operator@example.test"))
+
+    assert [session.pod_name for session in prod_list] == ["session-prod"]
+    assert [session.pod_name for session in slot_list] == ["session-slot"]
+    assert asyncio.run(prod.get("operator@example.test", "shared-id")).pod_name == "session-prod"
+    assert asyncio.run(slot.get("operator@example.test", "shared-id")).pod_name == "session-slot"
+
+
 def test_session_list_reports_request_creation_and_ready_timestamps() -> None:
     requested_at = "2026-05-04T20:00:00+00:00"
     created_at = datetime.datetime.fromisoformat("2026-05-04T20:00:03+00:00")

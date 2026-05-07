@@ -15,6 +15,7 @@ helm template "$name" "$(dirname "$0")/../k8s" \
   --set "orchestrator.serviceAccount=${name}" \
   --set "session.serviceAccount=${name}-session" \
   --set "session.configMap=${name}-session-config" \
+  --set "session.registryScope=${name}" \
   --set "oauthGateway.serviceHost=claude-oauth-gateway.${name}.svc.cluster.local" \
   --set "apiProxy.serviceHost=claude-api-proxy.${name}.svc.cluster.local" \
   --set "externalSecret.githubApp.secretName=${name}-github-app-creds" \

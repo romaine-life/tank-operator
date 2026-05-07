@@ -39,6 +39,8 @@ spec:
               value: {{ .Values.session.serviceAccount | quote }}
             - name: SESSION_CONFIGMAP
               value: {{ .Values.session.configMap | quote }}
+            - name: SESSION_REGISTRY_SCOPE
+              value: {{ .Values.session.registryScope | quote }}
             - name: TERMINAL_PROXY_CONFIGMAP
               value: {{ .Values.terminalProxy.configMap | quote }}
             - name: TERMINAL_PROXY_IMAGE
