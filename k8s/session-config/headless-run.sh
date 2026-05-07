@@ -121,7 +121,7 @@ configure_git_identity
 case "$provider" in
   claude)
     configure_claude
-    exec claude -p --output-format stream-json "$(cat "$prompt_file")"
+    exec claude -p --verbose --output-format stream-json "$(cat "$prompt_file")"
     ;;
   codex)
     configure_codex
