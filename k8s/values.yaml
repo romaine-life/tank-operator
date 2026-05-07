@@ -160,7 +160,11 @@ externalSecret:
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
-    kvKey: claude-code-credentials
+    # Optional Key Vault secret name override. When empty, production uses
+    # the historical `claude-code-credentials` name and validation slots use
+    # `<orchestrator-namespace>-claude-code-credentials`, so each test env
+    # gets its own refresh-token chain.
+    kvKey: ""
   # OpenAI codex subscription credentials. Unlike claudeCredentials,
   # this Secret lives in the SESSIONS namespace — codex_subscription
   # pods mount it directly (no api-proxy in front today). The
