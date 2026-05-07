@@ -9,6 +9,12 @@ Listens on two ports when the OAuth gateway TLS material is present:
 
 If the cert files aren't mounted (e.g. local dev), only the HTTP port is
 served, so `python -m tank_operator` still works without cert-manager.
+
+If RELOAD=true (slot-env iter loop only), only the HTTP port is served and
+uvicorn watches RELOAD_DIRS (default /opt/live-pkg) for source changes,
+hot-reloading workers in-process. Avoids the kill-the-pid-1 dance for
+backend live-cp iteration. Sessions that depend on the TLS port (claude
+auth proxying) won't work in this mode — drop RELOAD when testing those.
 """
 import asyncio
 import os
@@ -50,8 +56,30 @@ async def _serve_all() -> None:
     await asyncio.gather(*(s.serve() for s in servers))
 
 
+def _reload_main() -> None:
+    """Single-port HTTP server with watchfiles-driven hot reload.
+
+    Used by slot envs that set RELOAD=true. uvicorn.run owns process
+    lifecycle in this mode (subprocess workers, reload via watchfiles),
+    so it doesn't compose with asyncio.gather over two ports — TLS is
+    intentionally skipped here.
+    """
+    reload_dirs = os.environ.get("RELOAD_DIRS", "/opt/live-pkg").split(",")
+    uvicorn.run(
+        "tank_operator.api:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", "8000")),
+        log_level="info",
+        reload=True,
+        reload_dirs=[d for d in reload_dirs if d],
+    )
+
+
 def main() -> None:
-    asyncio.run(_serve_all())
+    if os.environ.get("RELOAD", "").lower() in ("1", "true", "yes"):
+        _reload_main()
+    else:
+        asyncio.run(_serve_all())
 
 
 if __name__ == "__main__":
