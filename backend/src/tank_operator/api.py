@@ -582,7 +582,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             "status=0; "
             f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
             "if [ \"$status\" -eq 0 ]; then "
-            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" || status=$?; "
+            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" </dev/null || status=$?; "
             "fi; "
             "rm -f \"$prompt_file\"; "
             "exit $status"
