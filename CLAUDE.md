@@ -25,6 +25,23 @@ image-packaging change needs feedback before a PR is ready, manually dispatch
 that workflow with `git_ref`. Release/deploy workflows are the only path that
 publishes images.
 
+## Agentic flows ship as multi-stage LLM splits
+
+When a project on this platform ships an autonomous agent flow (issue-agent
+runs in spirelens, glimmung-dispatched native-k8s runs in ambience, etc.),
+the LLM work should be **split into stages** — typically a plan / test-design
+phase, an implementation phase, and a verification phase — each running as
+its own narrowly-scoped LLM call with its own prompt, tool permissions,
+timeout, and JSON+Markdown handoff artifacts. See
+[docs/agent-llm-task-splitting.md](docs/agent-llm-task-splitting.md) for the
+rationale and stage shape; spirelens's `issue-agent.yaml` workflow is the
+canonical example.
+
+A single LLM doing code + tests + screenshots in one run carries each
+phase's noise into the next decision. The split is the load-bearing
+context-reduction mechanism for autonomous work — don't let it drift back
+into a monolith.
+
 **Per-user profile store: Cosmos DB (SQL API), serverless** — `infra/cosmos.tf` provisions one account, one database, one `profiles` container partitioned on `/email`. Backend at `backend/src/tank_operator/profiles.py`. Auth is workload identity (the same `claude-credentials-refresher-identity` UAMI that already writes KV); `local_authentication_disabled = true` on the account so there's no key-based parallel surface to rotate. A profile row is auto-created on `/api/auth/microsoft/login` and exposed at `/api/auth/me`. The store boots in degraded "stub" mode if `COSMOS_ENDPOINT` is unset (first-install ordering before tofu has applied) — login still works, profile fields are null.
 
 ## Terminal
