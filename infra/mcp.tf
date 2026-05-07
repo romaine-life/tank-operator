@@ -75,19 +75,3 @@ resource "azurerm_cosmosdb_sql_role_assignment" "mcp_azure_personal_tank_operato
   principal_id        = module.mcp_azure_personal.managed_identity_principal_id
   scope               = azurerm_cosmosdb_account.tank_operator.id
 }
-
-# Glimmung reconciles dynamic validation-slot workload identity subjects via
-# the azure-personal MCP tool. Keep the permission boundary in Tank: the MCP
-# identity may manage federated credentials only on the two Tank UAMIs that
-# validation slots need to use.
-resource "azurerm_role_assignment" "mcp_azure_personal_slot_federation" {
-  for_each = {
-    credentials = azurerm_user_assigned_identity.credential_refresher.id
-    api_proxy   = azurerm_user_assigned_identity.api_proxy.id
-  }
-
-  scope                = each.value
-  role_definition_name = "Managed Identity Contributor"
-  principal_id         = module.mcp_azure_personal.managed_identity_principal_id
-  principal_type       = "ServicePrincipal"
-}
