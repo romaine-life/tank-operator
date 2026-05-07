@@ -125,7 +125,25 @@ case "$provider" in
     ;;
   codex)
     configure_codex
-    exec codex exec --json "$(cat "$prompt_file")"
+    exec python3 - "$prompt_file" <<'PY'
+import os
+import pty
+import sys
+
+prompt_path = sys.argv[1]
+with open(prompt_path, encoding="utf-8") as f:
+    prompt = f.read()
+
+os.chdir("/workspace")
+status = pty.spawn([
+    "codex",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    prompt,
+])
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
     ;;
   *)
     echo "unknown provider: $provider" >&2
