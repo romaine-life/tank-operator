@@ -51,6 +51,8 @@ spec:
               value: {{ .Values.terminalProxy.proxyPort | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ .Values.externalSecret.githubApp.secretName | quote }}
+            - name: CODEX_CREDS_SECRET
+              value: {{ .Values.externalSecret.codexCredentials.secretName | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS

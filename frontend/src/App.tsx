@@ -7,6 +7,8 @@ import type {
 } from "react";
 import { AgentTranscript } from "@sandbox-agent/react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1510,10 +1512,8 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
 
 function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
-  if (type === "system") {
-    const subtype = typeof event.subtype === "string" ? event.subtype : "system";
-    const sessionId = typeof event.session_id === "string" ? event.session_id : "";
-    return appendMeta(entries, `claude-system-${subtype}-${Date.now()}`, `Claude ${subtype}`, sessionId);
+  if (type === "system" || type === "rate_limit_event") {
+    return entries;
   }
   if (type === "assistant") {
     let nextEntries = entries;
@@ -1537,12 +1537,18 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
   if (type === "result") {
     const isError = event.is_error === true || event.subtype === "error";
     const result = typeof event.result === "string" ? event.result : "";
+    if (!isError) {
+      if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
+        return appendAssistantMessage(entries, `claude-result-message-${Date.now()}`, result);
+      }
+      return entries;
+    }
     let nextEntries = appendMeta(
       entries,
       `claude-result-${Date.now()}`,
-      isError ? "Claude run failed" : "Claude run completed",
+      "Claude run failed",
       result,
-      isError ? "error" : "info",
+      "error",
     );
     if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
       nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result);
@@ -1561,21 +1567,67 @@ function applyProviderEvent(
   return applyClaudeEvent(entries, event);
 }
 
+function isClaudeRunMode(mode: SessionMode): boolean {
+  return mode === "subscription_headless";
+}
+
+function getRunToolGroupSummary(entries: TranscriptEntry[], mode: SessionMode): string {
+  const toolCount = entries.filter((entry) => entry.kind === "tool").length;
+  const errorCount = entries.filter((entry) => entry.kind === "meta" && entry.meta?.severity === "error").length;
+  const eventCount = entries.length;
+  if (isClaudeRunMode(mode)) {
+    if (toolCount > 0 && errorCount > 0) return `${toolCount} tool${toolCount === 1 ? "" : "s"} · ${errorCount} error${errorCount === 1 ? "" : "s"}`;
+    if (toolCount > 0) return `${toolCount} Claude tool${toolCount === 1 ? "" : "s"}`;
+    if (errorCount > 0) return `${errorCount} Claude error${errorCount === 1 ? "" : "s"}`;
+    return `${eventCount} Claude event${eventCount === 1 ? "" : "s"}`;
+  }
+  return `${eventCount} Event${eventCount === 1 ? "" : "s"}`;
+}
+
+function getRunToolItemIcon(entry: TranscriptEntry): string {
+  if (entry.kind === "reasoning") return "think";
+  if (entry.kind === "meta") return entry.meta?.severity === "error" ? "error" : "info";
+  const name = entry.toolName ?? "";
+  if (name === "Bash" || name === "command" || name.includes("bash")) return "$";
+  if (name === "Read" || name === "Write" || name === "Edit" || name === "MultiEdit") return "file";
+  if (name.includes("mcp")) return "mcp";
+  return "tool";
+}
+
 const transcriptClassNames = {
   root: "run-transcript",
+  divider: "run-transcript-divider",
+  dividerLine: "run-transcript-divider-line",
+  dividerText: "run-transcript-divider-text",
   message: "run-transcript-message",
   messageContent: "run-transcript-message-content",
   messageText: "run-transcript-message-text",
+  toolGroupSingle: "run-transcript-tool-single",
   toolGroupContainer: "run-transcript-tools",
   toolGroupHeader: "run-transcript-tools-header",
+  toolGroupIcon: "run-transcript-tools-icon",
+  toolGroupLabel: "run-transcript-tools-label",
+  toolGroupChevron: "run-transcript-tools-chevron",
   toolGroupBody: "run-transcript-tools-body",
   toolItem: "run-transcript-tool",
+  toolItemConnector: "run-transcript-tool-connector",
+  toolItemDot: "run-transcript-tool-dot",
+  toolItemLine: "run-transcript-tool-line",
+  toolItemContent: "run-transcript-tool-content",
   toolItemHeader: "run-transcript-tool-header",
+  toolItemIcon: "run-transcript-tool-icon",
+  toolItemLabel: "run-transcript-tool-label",
+  toolItemSpinner: "run-transcript-tool-spinner",
+  toolItemChevron: "run-transcript-tool-chevron",
   toolItemBody: "run-transcript-tool-body",
+  toolSection: "run-transcript-tool-section",
+  toolSectionTitle: "run-transcript-tool-section-title",
   toolCode: "run-transcript-code",
   toolCodeMuted: "run-transcript-code-muted",
   meta: "run-transcript-meta",
   error: "run-transcript-error",
+  thinkingRow: "run-transcript-thinking",
+  thinkingIndicator: "run-transcript-thinking-indicator",
 };
 
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
@@ -1717,7 +1769,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
           placeholder={`Ask ${MODE_LABELS[session.mode]} to work in /workspace`}
           disabled={running}
           onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               startRun();
             }
@@ -1737,13 +1789,25 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         ) : entries.length ? (
           <AgentTranscript
             entries={entries}
+            className={isClaudeRunMode(session.mode) ? "run-transcript-claude" : "run-transcript-codex"}
             classNames={transcriptClassNames}
             isThinking={running}
-            renderMessageText={(entry) => <div>{entry.text}</div>}
+            getToolGroupSummary={(toolEntries) => getRunToolGroupSummary(toolEntries, session.mode)}
+            renderMessageText={(entry) => (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text ?? ""}</ReactMarkdown>
+            )}
             renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
-            renderToolGroupIcon={() => <span className="run-tool-icon">tools</span>}
+            renderToolItemIcon={(entry) => <span>{getRunToolItemIcon(entry)}</span>}
+            renderToolGroupIcon={() => <span className="run-tool-icon">{isClaudeRunMode(session.mode) ? "claude" : "tools"}</span>}
             renderChevron={(expanded) => (
-              <span className="run-chevron">{expanded ? "hide" : "show"}</span>
+              <span className="run-chevron">{expanded ? "less" : "more"}</span>
+            )}
+            renderThinkingState={() => (
+              <div className="run-transcript-thinking">
+                <span className="run-transcript-thinking-indicator">
+                  {isClaudeRunMode(session.mode) ? "Claude is working..." : "Codex is working..."}
+                </span>
+              </div>
             )}
           />
         ) : (
