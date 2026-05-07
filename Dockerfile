@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 COPY backend/pyproject.toml ./
 COPY backend/src ./src
 RUN pip install --no-cache-dir .
-COPY --from=frontend /frontend/dist /app/static
+COPY --chown=1000:0 --from=frontend /frontend/dist /app/static
 ENV TANK_OPERATOR_STATIC_DIR=/app/static
 EXPOSE 8000
 USER 1000

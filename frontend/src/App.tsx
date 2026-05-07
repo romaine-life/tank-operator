@@ -7,8 +7,7 @@ import type {
 } from "react";
 import { AgentTranscript } from "@sandbox-agent/react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Streamdown } from "streamdown";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1794,7 +1793,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             isThinking={running}
             getToolGroupSummary={(toolEntries) => getRunToolGroupSummary(toolEntries, session.mode)}
             renderMessageText={(entry) => (
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text ?? ""}</ReactMarkdown>
+              <Streamdown>{entry.text ?? ""}</Streamdown>
             )}
             renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
             renderToolItemIcon={(entry) => <span>{getRunToolItemIcon(entry)}</span>}
