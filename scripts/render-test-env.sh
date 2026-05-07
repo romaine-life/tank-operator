@@ -29,4 +29,6 @@ helm template "$name" "$(dirname "$0")/../k8s" \
   --set-string "externalSecret.auth.keys[2].envVar=ALLOWED_EMAILS" \
   --set-string "externalSecret.auth.keys[2].kvKey=tank-operator-oauth-allowed-emails" \
   --set "credentialRefresher.configSecret=${name}-credentials-refresher-config" \
-  --set "apiProxy.configSecret=${name}-api-proxy-config"
+  --set "apiProxy.configSecret=${name}-api-proxy-config" \
+  --set "sessionsIngress.dnsEndpoint.enabled=true" \
+  --set "sessionsIngress.gatewayIP=172.179.163.96"

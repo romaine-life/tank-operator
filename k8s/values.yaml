@@ -47,6 +47,21 @@ ingress:
   certIssuer: letsencrypt-prod
   tlsSecret: tank-operator-tls
 
+# Sessions ingress: wildcard DNS for *.<ingress.hostname>. Off by
+# default; enabled only for slot envs that host a per-session
+# subdomain space (cloudcli iframes etc). external-dns watches the
+# DNSEndpoint and creates a wildcard A record, so per-session
+# HTTPRoutes don't need their own DNS records (orchestrator marks
+# them with external-dns.alpha.kubernetes.io/exclude=true).
+sessionsIngress:
+  # Set to a real value (the envoy-gateway LoadBalancer IP) when
+  # enabling. Hardcoded because the Service holds a stable
+  # Azure-allocated IP across normal operation.
+  gatewayIP: ""
+  dnsEndpoint:
+    enabled: false
+    ttl: 300
+
 # OAuth gateway: the orchestrator pod also serves an HTTPS listener
 # impersonating platform.claude.com (self-signed CA, trusted only by session
 # pods that mount our ca.crt). Session pods get a hostAlias mapping that
