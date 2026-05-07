@@ -20,6 +20,16 @@ api.anthropic.com), just localized to the pod because the SA token is
 per-pod identity. Hardcoded LISTENERS map mirrors the entries in
 k8s/session-config/mcp.json — keep them in sync; both sides describe the
 same set of MCPs from opposite ends.
+
+OAuth discovery short-circuit: Claude CLI's MCP SDK probes
+`/.well-known/oauth-authorization-server` and `/.well-known/oauth-
+protected-resource` to discover whether the server speaks OAuth.
+Our MCP servers don't — the upstream returns kube-rbac-proxy's plain-
+text "Not Found", which crashes the SDK's JSON parser ("Unexpected
+identifier 'Not'") and leaves the connection unrecoverable across
+upstream pod rotations. We answer those paths locally with a JSON-
+shaped 404 so the SDK falls through cleanly to bearer-auth POSTs that
+this proxy already injects.
 """
 from __future__ import annotations
 
@@ -64,6 +74,30 @@ _STRIP_RESPONSE_HEADERS = frozenset(
 
 def _read_token() -> str:
     return TOKEN_PATH.read_text().strip()
+
+
+# OAuth discovery paths the MCP SDK probes. RFC 8414 (auth server) and
+# RFC 9728 (protected resource) — the SDK tries both before/after a
+# transport failure to decide whether OAuth is available. Answering
+# locally with a JSON-shaped 404 keeps the SDK's parser from crashing
+# on upstream's plain-text "Not Found" body.
+_OAUTH_DISCOVERY_PATHS = (
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/oauth-protected-resource",
+)
+
+
+async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
+    return web.json_response(
+        {
+            "error": "not_found",
+            "error_description": (
+                "OAuth not configured on this MCP server; bearer SA-token "
+                "auth is injected by the mcp-auth-proxy sidecar."
+            ),
+        },
+        status=404,
+    )
 
 
 def _make_handler(upstream: str, http: ClientSession):
@@ -124,6 +158,8 @@ async def run() -> None:
     try:
         for port, upstream in LISTENERS:
             app = web.Application()
+            for discovery_path in _OAUTH_DISCOVERY_PATHS:
+                app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
             app.router.add_route("*", "/{tail:.*}", _make_handler(upstream, http))
             runner = web.AppRunner(app)
             await runner.setup()
