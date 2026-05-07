@@ -54,8 +54,45 @@ resource "azuread_application" "oauth" {
   }
 }
 
+resource "azuread_application" "oauth_test" {
+  display_name = "tank-operator-oauth-test"
+  # Same public-client posture as prod, but this app is for native-webapp
+  # validation slots. Glimmung owns the slot redirect URI list because it
+  # owns standby DNS/count reconciliation.
+  sign_in_audience               = "AzureADandPersonalMicrosoftAccount"
+  fallback_public_client_enabled = true
+  owners                         = [data.azuread_client_config.current.object_id]
+
+  api {
+    requested_access_token_version = 2
+  }
+
+  single_page_application {
+    redirect_uris = []
+  }
+
+  lifecycle {
+    ignore_changes = [
+      single_page_application[0].redirect_uris,
+    ]
+  }
+
+  required_resource_access {
+    resource_app_id = "00000003-0000-0000-c000-000000000000"
+
+    resource_access {
+      id   = "e1fe6dd8-ba31-4d61-89e7-88639da4683d" # User.Read
+      type = "Scope"
+    }
+  }
+}
+
 resource "azuread_service_principal" "oauth" {
   client_id = azuread_application.oauth.client_id
+}
+
+resource "azuread_service_principal" "oauth_test" {
+  client_id = azuread_application.oauth_test.client_id
 }
 
 # Self-signed JWT secret used by the backend to mint per-session tokens after
@@ -69,6 +106,12 @@ resource "random_password" "jwt_secret" {
 resource "azurerm_key_vault_secret" "oauth_client_id" {
   name         = "tank-operator-oauth-client-id"
   value        = azuread_application.oauth.client_id
+  key_vault_id = data.azurerm_key_vault.main.id
+}
+
+resource "azurerm_key_vault_secret" "oauth_test_client_id" {
+  name         = "tank-operator-test-oauth-client-id"
+  value        = azuread_application.oauth_test.client_id
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
