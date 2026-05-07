@@ -61,7 +61,10 @@ resource "azuread_application" "oauth_test" {
   # owns standby DNS/count reconciliation.
   sign_in_audience               = "AzureADandPersonalMicrosoftAccount"
   fallback_public_client_enabled = true
-  owners                         = [data.azuread_client_config.current.object_id]
+  owners = [
+    data.azuread_client_config.current.object_id,
+    module.mcp_azure_personal.managed_identity_principal_id,
+  ]
 
   api {
     requested_access_token_version = 2
