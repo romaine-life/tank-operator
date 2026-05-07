@@ -32,17 +32,6 @@ resource "azurerm_federated_identity_credential" "credential_refresher_orchestra
   subject             = "system:serviceaccount:tank-operator:tank-operator"
 }
 
-resource "azurerm_federated_identity_credential" "credential_refresher_test_orchestrator" {
-  for_each = toset(["1", "2", "3"])
-
-  name                = "aks-tank-slot-${each.key}-credentials"
-  resource_group_name = data.azurerm_resource_group.main.name
-  parent_id           = azurerm_user_assigned_identity.credential_refresher.id
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = local.aks_oidc_issuer_url
-  subject             = "system:serviceaccount:tank-slot-${each.key}:tank-slot-${each.key}"
-}
-
 # `Key Vault Secrets Officer` covers get + set + list + delete on secrets.
 # We only need get + set, but there's no narrower built-in role and a
 # custom role is overkill for a one-secret writer. Scope is the entire

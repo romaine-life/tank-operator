@@ -28,17 +28,6 @@ resource "azurerm_federated_identity_credential" "api_proxy" {
   subject             = "system:serviceaccount:tank-operator:claude-api-proxy"
 }
 
-resource "azurerm_federated_identity_credential" "api_proxy_test" {
-  for_each = toset(["1", "2", "3"])
-
-  name                = "aks-tank-slot-${each.key}-claude-api-proxy"
-  resource_group_name = data.azurerm_resource_group.main.name
-  parent_id           = azurerm_user_assigned_identity.api_proxy.id
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = local.aks_oidc_issuer_url
-  subject             = "system:serviceaccount:tank-slot-${each.key}:claude-api-proxy"
-}
-
 # Same justification as credential_refresher_kv: get+set on the credentials
 # secret is the entire Azure surface this identity uses, vault scope is the
 # narrowest built-in role we can pick without hand-rolling a custom one.
