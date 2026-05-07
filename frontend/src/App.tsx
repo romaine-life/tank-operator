@@ -8,6 +8,19 @@ import type {
 import { AgentTranscript } from "@sandbox-agent/react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
 import { Streamdown } from "streamdown";
+import {
+  PromptInput,
+  PromptInputActionAddAttachments,
+  PromptInputActionAddScreenshot,
+  PromptInputActionMenu,
+  PromptInputActionMenuContent,
+  PromptInputActionMenuTrigger,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+  type PromptInputMessage,
+} from "@/components/ai-elements/prompt-input";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1630,7 +1643,6 @@ const transcriptClassNames = {
 };
 
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
-  const [prompt, setPrompt] = useState("");
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
@@ -1690,12 +1702,25 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     if (pending.trim()) applyStdoutLine(pending);
   }
 
-  function startRun() {
-    const trimmed = prompt.trim();
+  function cancelRun() {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setRunning(false);
+    setRunStatus((prev) => (prev === "running" ? "done" : prev));
+  }
+
+  function handleSubmit(message: PromptInputMessage) {
+    const trimmed = message.text.trim();
     if (!trimmed || running || session.status !== "Active") return;
+    startRun(trimmed);
+  }
+
+  function startRun(trimmed: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
-    setEntries([
+    const followUp = entries.length > 0;
+    setEntries((prev) => [
+      ...prev,
       {
         id: `user-${Date.now()}`,
         kind: "message",
@@ -1712,7 +1737,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ prompt: trimmed }));
+      ws.send(JSON.stringify({ prompt: trimmed, follow_up: followUp }));
     };
     ws.onmessage = (event) => {
       let msg: RunEvent;
@@ -1759,29 +1784,37 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     };
   }
 
+  const submitStatus =
+    runStatus === "running"
+      ? "streaming"
+      : runStatus === "error"
+        ? "error"
+        : undefined;
+
   return (
     <section className="run-panel">
-      <div className="run-composer">
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+      <PromptInput onSubmit={handleSubmit} className="run-composer">
+        <PromptInputTextarea
           placeholder={`Ask ${MODE_LABELS[session.mode]} to work in /workspace`}
-          disabled={running}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              startRun();
-            }
-          }}
+          disabled={session.status !== "Active"}
         />
-        <button
-          className="run-submit"
-          onClick={startRun}
-          disabled={running || session.status !== "Active" || !prompt.trim()}
-        >
-          {running ? "running" : "run"}
-        </button>
-      </div>
+        <PromptInputFooter>
+          <PromptInputTools>
+            <PromptInputActionMenu>
+              <PromptInputActionMenuTrigger />
+              <PromptInputActionMenuContent>
+                <PromptInputActionAddAttachments />
+                <PromptInputActionAddScreenshot />
+              </PromptInputActionMenuContent>
+            </PromptInputActionMenu>
+          </PromptInputTools>
+          <PromptInputSubmit
+            status={submitStatus}
+            onStop={cancelRun}
+            disabled={session.status !== "Active"}
+          />
+        </PromptInputFooter>
+      </PromptInput>
       <div className={`run-output run-output-${runStatus}`}>
         {session.status !== "Active" ? (
           <span className="run-muted">waiting for session pod</span>
