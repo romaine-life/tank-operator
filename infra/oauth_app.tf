@@ -138,3 +138,17 @@ resource "azurerm_key_vault_secret" "oauth_allowed_emails" {
   value        = join(",", var.allowed_emails)
   key_vault_id = data.azurerm_key_vault.main.id
 }
+
+# Allow the azure-personal MCP identity to manage redirect URIs on app
+# registrations it explicitly owns, without granting broad directory list
+# permissions. The test OAuth app grants ownership above; production remains
+# owned only by the infra deployment identity.
+data "azuread_service_principal" "microsoft_graph" {
+  client_id = "00000003-0000-0000-c000-000000000000"
+}
+
+resource "azuread_app_role_assignment" "mcp_azure_personal_application_readwrite_ownedby" {
+  app_role_id         = data.azuread_service_principal.microsoft_graph.app_role_ids["Application.ReadWrite.OwnedBy"]
+  principal_object_id = module.mcp_azure_personal.managed_identity_principal_id
+  resource_object_id  = data.azuread_service_principal.microsoft_graph.object_id
+}
