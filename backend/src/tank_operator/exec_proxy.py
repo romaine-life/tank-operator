@@ -269,9 +269,11 @@ async def exec_stream_to_websocket(
                                 {"stream": "stdout", "data": payload.decode(errors="replace")}
                             )
                         elif channel == STDERR_CHANNEL:
-                            await browser.send_json(
-                                {"stream": "stderr", "data": payload.decode(errors="replace")}
-                            )
+                            text = payload.decode(errors="replace")
+                            # Claude CLI emits this when stdin is non-TTY even
+                            # with < /dev/null; it's harmless but alarms users.
+                            if "Warning: no stdin data received" not in text:
+                                await browser.send_json({"stream": "stderr", "data": text})
                         elif channel == ERROR_CHANNEL:
                             try:
                                 status = json.loads(payload)
