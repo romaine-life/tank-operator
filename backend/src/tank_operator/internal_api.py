@@ -73,12 +73,25 @@ async def _validate_sa_token(token: str) -> CallerSubject:
     orchestrator SA to hold ``system:auth-delegator`` (granted in the
     Helm chart). Returns the caller's namespace+SA on success; raises
     401 on invalid/expired tokens.
+
+    ``audiences=["tank-operator"]`` matches the other internal SA-auth
+    path (``auth.py:_authenticate_with_k8s_sa_token``). The caller side
+    in mcp-github mints a projected SA token with that audience, so a
+    token issued for any *other* audience (e.g. the default cluster
+    audience used for kubelet/apiserver auth) is rejected here. Defense
+    in depth on top of the ``ALLOWED_CALLER_SUBJECTS`` allowlist:
+    confines replay to projected tokens explicitly issued for this API.
     """
     api_client = client.ApiClient()
     try:
         authn = client.AuthenticationV1Api(api_client)
         review = await authn.create_token_review(
-            body=client.V1TokenReview(spec=client.V1TokenReviewSpec(token=token)),
+            body=client.V1TokenReview(
+                spec=client.V1TokenReviewSpec(
+                    token=token,
+                    audiences=["tank-operator"],
+                ),
+            ),
         )
     finally:
         await api_client.close()

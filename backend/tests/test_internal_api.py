@@ -269,6 +269,47 @@ def test_authorized_caller_rejects_non_serviceaccount(
     assert exc_info.value.status_code == 403
 
 
+def test_validate_sa_token_passes_tank_operator_audience(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The TokenReview submitted to the apiserver must scope ``audiences`` to
+    ``["tank-operator"]`` so a projected SA token minted for any other
+    audience (e.g. the default cluster audience used for kubelet auth) is
+    rejected. Without this, a SA token issued for one consumer could be
+    replayed against this internal API.
+    """
+    captured: dict[str, object] = {}
+
+    class _FakeReview:
+        def __init__(self) -> None:
+            self.status = type(
+                "S", (), {"authenticated": True, "user": type("U", (), {"username": "system:serviceaccount:mcp-github:mcp-github"})()},
+            )()
+
+    class _FakeAuthnApi:
+        def __init__(self, _client: object) -> None:
+            pass
+
+        async def create_token_review(self, *, body: object) -> _FakeReview:
+            captured["body"] = body
+            return _FakeReview()
+
+    class _FakeApiClient:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(internal_api.client, "ApiClient", _FakeApiClient)
+    monkeypatch.setattr(internal_api.client, "AuthenticationV1Api", _FakeAuthnApi)
+
+    subject = asyncio.run(internal_api._validate_sa_token("any-token"))
+
+    assert subject.qualified == "mcp-github/mcp-github"
+    body = captured["body"]
+    assert body.spec.audiences == ["tank-operator"], (  # type: ignore[union-attr]
+        f"TokenReview must request the tank-operator audience, got {body.spec.audiences!r}"  # type: ignore[union-attr]
+    )
+
+
 def test_authorized_caller_reloads_with_widened_allowlist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
