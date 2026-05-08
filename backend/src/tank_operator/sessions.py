@@ -840,6 +840,31 @@ class SessionManager:
         await self._read_owned_pod(owner, session_id)
         self._activity[session_id] = time.monotonic()
 
+    async def find_pod_by_ip(self, pod_ip: str) -> Any | None:
+        """Look up a session pod by its current ``status.podIP``.
+
+        Used by the internal ``/api/internal/resolve-caller`` endpoint
+        (#57 stage 3) to map an inbound MCP request's source IP back to
+        the session pod that issued it. Returns ``None`` when no pod in
+        the sessions namespace currently has that IP (raced deletion,
+        non-session caller, stale cache on the proxy side).
+
+        We list managed-by=tank-operator pods rather than filtering on
+        ``status.podIP=`` because that field selector isn't index-backed
+        on apiserver and the namespace stays small.
+        """
+        if not pod_ip or self._core is None:
+            return None
+        pods = await self._core.list_namespaced_pod(
+            namespace=SESSIONS_NAMESPACE,
+            label_selector="app.kubernetes.io/managed-by=tank-operator",
+        )
+        for pod in pods.items:
+            status = getattr(pod, "status", None)
+            if status and getattr(status, "pod_ip", None) == pod_ip:
+                return pod
+        return None
+
     async def _read_owned_pod(self, owner: str, session_id: str) -> Any:
         assert self._core is not None
         owner_label = _owner_label(owner)

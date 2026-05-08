@@ -102,6 +102,12 @@ spec:
             # the redirect to complete.
             - name: GITHUB_APP_SLUG
               value: {{ .Values.github.appSlug | quote }}
+            # Cluster operator email (#57 stage 3) — tagged on the
+            # /api/internal/resolve-caller response so mcp-github can
+            # use the host's romaine-life-app installation for
+            # host-owned repos when a non-host caller touches them.
+            - name: HOST_EMAIL
+              value: {{ .Values.host.email | quote }}
           envFrom:
             - secretRef:
                 name: {{ .Values.externalSecret.auth.secretName }}
