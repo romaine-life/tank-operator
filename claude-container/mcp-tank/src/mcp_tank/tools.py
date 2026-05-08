@@ -126,6 +126,26 @@ def register_tools(mcp: FastMCP) -> None:
         return {"sessions": r.json(), "self": os.environ.get(SESSION_ID_ENV) or None}
 
     @mcp.tool()
+    def whoami() -> dict[str, Any]:
+        """Return the user this pod is acting on behalf of, plus the pod's session id.
+
+        Useful before deciding whether to spawn a sibling vs. continue in
+        place. The user identity comes from /api/auth/me, which decodes the
+        same TANK_API_TOKEN JWT this server uses for every other call — so
+        the answer reflects exactly which user the orchestrator will
+        attribute subsequent spawn / send actions to.
+        """
+        with _client() as c:
+            r = c.get("/api/auth/me")
+        if r.status_code >= 400:
+            return {"error": r.text, "status_code": r.status_code}
+        body = r.json()
+        return {
+            "email": body.get("email"),
+            "session_id": os.environ.get(SESSION_ID_ENV) or None,
+        }
+
+    @mcp.tool()
     def get_run_history(session_id: str) -> dict[str, Any]:
         """Read the claude-code conversation transcript for a headless run.
 
