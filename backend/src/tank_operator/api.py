@@ -559,6 +559,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
         await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
         return
+    follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
 
     try:
         pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
@@ -582,7 +583,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             "status=0; "
             f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
             "if [ \"$status\" -eq 0 ]; then "
-            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" </dev/null || status=$?; "
+            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" {'true' if follow_up else 'false'} </dev/null || status=$?; "
             "fi; "
             "rm -f \"$prompt_file\"; "
             "exit $status"

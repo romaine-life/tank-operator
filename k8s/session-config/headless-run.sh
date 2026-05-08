@@ -3,9 +3,10 @@ set -euo pipefail
 
 provider="${1:-}"
 prompt_file="${2:-}"
+follow_up="${3:-false}"
 
 if [ -z "$provider" ] || [ -z "$prompt_file" ] || [ ! -f "$prompt_file" ]; then
-  echo "usage: headless-run.sh <claude|codex> <prompt-file>" >&2
+  echo "usage: headless-run.sh <claude|codex> <prompt-file> [follow_up]" >&2
   exit 64
 fi
 
@@ -121,10 +122,16 @@ configure_git_identity
 case "$provider" in
   claude)
     configure_claude
-    exec claude -p --verbose --output-format stream-json "$(cat "$prompt_file")"
+    claude_args=(-p --verbose --output-format stream-json)
+    if [ "$follow_up" = "true" ]; then
+      claude_args=(--continue "${claude_args[@]}")
+    fi
+    exec claude "${claude_args[@]}" "$(cat "$prompt_file")"
     ;;
   codex)
     configure_codex
+    # Codex `exec --json` is single-turn; conversation continuity for codex is
+    # tracked separately. Today follow_up is ignored for codex.
     exec python3 - "$prompt_file" <<'PY'
 import os
 import pty
