@@ -2850,7 +2850,7 @@ function HeadlessRun({
     const main = transcriptScrollRef.current;
     if (!main) return;
     main.scrollTop = main.scrollHeight;
-  }, [entries.length, userScrolledUp]);
+  }, [entries.length, userScrolledUp, visible, activeTab]);
 
   // Detect user scroll-away from the bottom. Threshold of 24px so small
   // overshoots (image loads) don't disable auto-scroll.
