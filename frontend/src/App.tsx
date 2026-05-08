@@ -1590,7 +1590,16 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
 
 function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
-  if (type === "system" || type === "rate_limit_event") {
+  // Skip internal claude-code events that appear in the JSONL file but are
+  // not streamed via WebSocket and have no chat-visible meaning.
+  if (
+    type === "system" ||
+    type === "rate_limit_event" ||
+    type === "ai-title" ||
+    type === "last-prompt" ||
+    type === "attachment" ||
+    type === "queue-operation"
+  ) {
     return entries;
   }
   if (type === "assistant") {
@@ -1610,7 +1619,32 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
     return nextEntries;
   }
   if (type === "user") {
-    return applyClaudeToolResults(entries, event);
+    // Reconstruct tool results first.
+    let nextEntries = applyClaudeToolResults(entries, event);
+    // Also reconstruct user text messages (initial prompt and follow-ups).
+    // These are stored in the JSONL but not re-emitted by the live stream
+    // (the frontend adds the user bubble directly in startRun). Use text
+    // deduplication so re-running this during live streaming is a no-op.
+    const message = event.message;
+    if (isJsonObject(message) && Array.isArray(message.content)) {
+      for (const block of message.content as unknown[]) {
+        if (!isJsonObject(block) || block.type !== "text") continue;
+        const text = typeof block.text === "string" ? block.text.trim() : "";
+        if (text && !nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
+          nextEntries = [
+            ...nextEntries,
+            {
+              id: typeof event.uuid === "string" ? event.uuid : `user-msg-${Date.now()}`,
+              kind: "message" as const,
+              role: "user" as const,
+              text,
+              time: nowIso(),
+            },
+          ];
+        }
+      }
+    }
+    return nextEntries;
   }
   if (type === "result") {
     const isError = event.is_error === true || event.subtype === "error";
