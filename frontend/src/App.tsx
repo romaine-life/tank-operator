@@ -2702,6 +2702,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   // applyStdoutLine when an `assistant` or `result` event with usage info
   // arrives. Drives the % ring in the composer footer.
   const [tokensUsed, setTokensUsed] = useState(0);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
   const [slashOpen, setSlashOpen] = useState(false);
@@ -2793,6 +2794,18 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [running]);
+
+  // Auto-send a message that was submitted while a run was in progress.
+  useEffect(() => {
+    if (!running && pendingMessage !== null) {
+      const msg = pendingMessage;
+      setPendingMessage(null);
+      startRun(msg);
+    }
+  // startRun is intentionally omitted — it's redefined each render, and
+  // useEffect's closure gives us the fresh version when deps actually change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, pendingMessage]);
 
   // Auto-scroll the transcript to the bottom when entries grow, unless
   // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
@@ -3379,7 +3392,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
 
   function handleSubmit(message: PromptInputMessage) {
     const trimmed = message.text.trim();
-    if (!trimmed || running || session.status !== "Active") return;
+    if (!trimmed || session.status !== "Active") return;
     // Wait until all attachments have finished uploading. If any errored
     // out, surface it but still let the run go ahead with what's ready.
     const ready = attachments.filter((a) => a.status === "ready");
@@ -3392,14 +3405,21 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         .join("\n");
       composed = `${trimmed}\n\nAttachments (use the Read tool to load):\n${lines}`;
     }
-    startRun(composed);
-    // Clear attachment state once they've been baked into the run.
+    // Clear attachment state once they've been baked into the run (or queue).
     setAttachments((prev) => {
       for (const a of prev) {
         if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
       }
       return [];
     });
+    if (running) {
+      // Queue message to send once the current run finishes rather than
+      // silently dropping it (the PromptInput clears its textarea before
+      // calling onSubmit, so the text would otherwise be lost).
+      setPendingMessage(composed);
+      return;
+    }
+    startRun(composed);
   }
 
   function startRun(trimmed: string) {
