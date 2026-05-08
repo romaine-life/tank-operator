@@ -1700,6 +1700,21 @@ const transcriptClassNames = {
 
 type RunTab = "chat" | "shell" | "files";
 
+interface ComposerAttachment {
+  id: string; // local-only id for keying
+  name: string;
+  /** Path relative to /workspace, e.g. ".attachments/1715..-foo.png". */
+  path: string;
+  /** Full path inside the pod, e.g. "/workspace/.attachments/...". */
+  absPath: string;
+  size: number;
+  /** Browser blob URL for the thumbnail (if image). */
+  previewUrl?: string;
+  /** Either "uploading" while the POST is in flight, or "ready" / "error". */
+  status: "uploading" | "ready" | "error";
+  errorMsg?: string;
+}
+
 interface FileEntry {
   name: string;
   type: "file" | "dir" | "symlink" | "other";
@@ -1950,12 +1965,21 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
+  // Edit-mode bookkeeping for the file viewer.
+  const [fileDraft, setFileDraft] = useState<string | null>(null);
+  const [fileSaving, setFileSaving] = useState(false);
+  const [fileSaveError, setFileSaveError] = useState<string | null>(null);
   // Auto-scroll bookkeeping — track whether the user has scrolled away from
   // the bottom; if so, suppress auto-scroll on new entries and offer the
   // floating "scroll to bottom" button.
   const [userScrolledUp, setUserScrolledUp] = useState(false);
+  // Composer attachments — uploaded to /workspace/.attachments and referenced
+  // in the prompt so Claude can Read them via tool use.
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [dragActive, setDragActive] = useState(false);
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
 
@@ -2094,10 +2118,132 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     if (type === "dir") {
       setFilesPath(next);
       setSelectedFile(null);
+      setFileDraft(null);
+      setFileSaveError(null);
       return;
     }
     // Trigger content fetch by setting a placeholder.
     setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setFileDraft(null);
+    setFileSaveError(null);
+  }
+
+  async function uploadAttachment(file: File) {
+    const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const previewUrl = file.type.startsWith("image/")
+      ? URL.createObjectURL(file)
+      : undefined;
+    setAttachments((prev) => [
+      ...prev,
+      {
+        id,
+        name: file.name || "file",
+        path: "",
+        absPath: "",
+        size: file.size,
+        previewUrl,
+        status: "uploading",
+      },
+    ]);
+    try {
+      // Raw-body upload (orchestrator image doesn't ship python-multipart).
+      const res = await authedFetch(
+        `/api/sessions/${session.id}/files/upload?name=${encodeURIComponent(file.name)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+          },
+          body: file,
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as {
+        path: string;
+        abs_path: string;
+        name: string;
+        size: number;
+      };
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                path: body.path,
+                absPath: body.abs_path,
+                name: body.name,
+                status: "ready",
+              }
+            : a,
+        ),
+      );
+    } catch (err) {
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                status: "error",
+                errorMsg: String((err as Error).message ?? err),
+              }
+            : a,
+        ),
+      );
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }
+
+  function handleAttachmentFiles(files: FileList | null) {
+    if (!files) return;
+    for (const f of Array.from(files)) {
+      // Be permissive on file type — Claude's Read tool handles many.
+      void uploadAttachment(f);
+    }
+  }
+
+  async function saveFileDraft() {
+    if (!selectedFile || fileDraft == null) return;
+    setFileSaving(true);
+    setFileSaveError(null);
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${session.id}/files/content?path=${encodeURIComponent(selectedFile.path)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: fileDraft }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as SelectedFile;
+      setSelectedFile(body);
+      setFileDraft(null);
+      // Re-fetch the listing in case size changed.
+      void authedFetch(
+        `/api/sessions/${session.id}/files?path=${encodeURIComponent(filesPath)}`,
+      )
+        .then(async (r) => {
+          if (!r.ok) return;
+          const listing = (await r.json()) as { entries: FileEntry[] };
+          setFilesEntries(listing.entries);
+        })
+        .catch(() => undefined);
+    } catch (err) {
+      setFileSaveError(String((err as Error).message ?? err));
+    } finally {
+      setFileSaving(false);
+    }
   }
 
   // When the session id changes (user picks a different session in the
@@ -2293,7 +2439,26 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   function handleSubmit(message: PromptInputMessage) {
     const trimmed = message.text.trim();
     if (!trimmed || running || session.status !== "Active") return;
-    startRun(trimmed);
+    // Wait until all attachments have finished uploading. If any errored
+    // out, surface it but still let the run go ahead with what's ready.
+    const ready = attachments.filter((a) => a.status === "ready");
+    const stillUploading = attachments.some((a) => a.status === "uploading");
+    if (stillUploading) return;
+    let composed = trimmed;
+    if (ready.length > 0) {
+      const lines = ready
+        .map((a) => `- ${a.absPath}`)
+        .join("\n");
+      composed = `${trimmed}\n\nAttachments (use the Read tool to load):\n${lines}`;
+    }
+    startRun(composed);
+    // Clear attachment state once they've been baked into the run.
+    setAttachments((prev) => {
+      for (const a of prev) {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      }
+      return [];
+    });
   }
 
   function startRun(trimmed: string) {
@@ -2582,14 +2747,56 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                       <span className="run-files-viewer-path">
                         {selectedFile.path}
                       </span>
-                      <span className="run-files-viewer-meta">
-                        {humanFileSize(selectedFile.size)}
-                        {selectedFile.truncated && " · truncated"}
-                      </span>
+                      <div className="run-files-viewer-actions">
+                        {fileDraft != null && fileDraft !== selectedFile.text && (
+                          <>
+                            <button
+                              type="button"
+                              className="run-files-viewer-btn"
+                              disabled={fileSaving}
+                              onClick={() => {
+                                setFileDraft(null);
+                                setFileSaveError(null);
+                              }}
+                            >
+                              Reset
+                            </button>
+                            <button
+                              type="button"
+                              className="run-files-viewer-btn run-files-viewer-btn-primary"
+                              disabled={fileSaving}
+                              onClick={() => void saveFileDraft()}
+                            >
+                              {fileSaving ? "Saving…" : "Save"}
+                            </button>
+                          </>
+                        )}
+                        <span className="run-files-viewer-meta">
+                          {humanFileSize(selectedFile.size)}
+                          {selectedFile.truncated && " · truncated"}
+                        </span>
+                      </div>
                     </div>
-                    <pre className="run-files-viewer-content">
-                      {selectedFile.text}
-                    </pre>
+                    {fileSaveError && (
+                      <div className="run-files-status run-files-error">
+                        {fileSaveError}
+                      </div>
+                    )}
+                    {/* Editable when not truncated. Truncated reads aren't
+                        safe to overwrite — would silently destroy the
+                        unread tail. */}
+                    {selectedFile.truncated ? (
+                      <pre className="run-files-viewer-content">
+                        {selectedFile.text}
+                      </pre>
+                    ) : (
+                      <textarea
+                        className="run-files-viewer-content run-files-viewer-editor"
+                        value={fileDraft ?? selectedFile.text}
+                        onChange={(e) => setFileDraft(e.target.value)}
+                        spellCheck={false}
+                      />
+                    )}
                   </>
                 )}
               </div>
@@ -2719,7 +2926,94 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       )}
 
       {activeTab === "chat" && (
-        <footer className="run-composer-wrap" ref={composerWrapRef}>
+        <footer
+          className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
+          ref={composerWrapRef}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!dragActive) setDragActive(true);
+          }}
+          onDragLeave={(e) => {
+            // dragleave fires on child crossings; only deactivate if
+            // we've left the wrap entirely.
+            if (e.currentTarget === e.target) setDragActive(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            handleAttachmentFiles(e.dataTransfer?.files ?? null);
+          }}
+          onPaste={(e) => {
+            // Pull image/file data out of the clipboard. Plain text
+            // continues to paste into the textarea naturally.
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            const fs: File[] = [];
+            for (const it of Array.from(items)) {
+              if (it.kind === "file") {
+                const f = it.getAsFile();
+                if (f) fs.push(f);
+              }
+            }
+            if (fs.length > 0) {
+              e.preventDefault();
+              for (const f of fs) void uploadAttachment(f);
+            }
+          }}
+        >
+          {dragActive && (
+            <div className="run-composer-drop-overlay" aria-hidden="true">
+              Drop to attach
+            </div>
+          )}
+          {attachments.length > 0 && (
+            <div className="run-composer-attachments">
+              {attachments.map((a) => (
+                <div
+                  key={a.id}
+                  className={`run-composer-chip run-composer-chip-${a.status}`}
+                  title={a.errorMsg ?? a.name}
+                >
+                  {a.previewUrl ? (
+                    <img
+                      className="run-composer-chip-thumb"
+                      src={a.previewUrl}
+                      alt=""
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <FileIcon size={14} aria-hidden="true" />
+                  )}
+                  <span className="run-composer-chip-name">{a.name}</span>
+                  {a.status === "uploading" && (
+                    <Loader2Icon size={12} className="run-spin" aria-hidden="true" />
+                  )}
+                  <button
+                    type="button"
+                    className="run-composer-chip-remove"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      removeAttachment(a.id);
+                    }}
+                    aria-label={`Remove ${a.name}`}
+                  >
+                    <XIcon size={11} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              handleAttachmentFiles(e.target.files);
+              // Reset so the same file can be reselected later.
+              e.target.value = "";
+            }}
+          />
           {/* Slash-command palette — opens above the composer when the
               user types `/` at a word boundary. Up/Down navigates,
               Enter/Tab inserts, Esc closes. Backed by SLASH_COMMANDS
@@ -2758,28 +3052,17 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             />
             <PromptInputFooter className="run-composer-footer">
               <PromptInputTools className="run-composer-tools">
-                {/* Attachment menu — driven directly by shadcn
-                    DropdownMenu so the trigger is a plain button (not
-                    AI Elements' PromptInputButton wrapper, which
-                    swallowed the click in our composer footer). The
-                    items below are visual stubs today; the AI Elements
-                    AttachmentsContext-driven flow can be wired in once
-                    the backend WS prompt payload accepts files. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn"
-                      aria-label="Attach"
-                    >
-                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent side="top" align="start" className="run-attach-menu">
-                    <DropdownMenuItem disabled>Attach files</DropdownMenuItem>
-                    <DropdownMenuItem disabled>Add screenshot</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {/* Image-attach button — opens the hidden file input.
+                    Drag-and-drop and clipboard paste are wired
+                    separately on the composer wrap. */}
+                <button
+                  type="button"
+                  className="run-composer-icon-btn"
+                  aria-label="Attach files"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                </button>
                 {/* Permission-mode dropdown — five cloudcli-equivalent
                     modes. Backend wire-through: `acceptEdits`/`auto`/
                     `bypassPermissions` map to `claude -p

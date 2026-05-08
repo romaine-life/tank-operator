@@ -1833,6 +1833,92 @@ button:disabled {
   position: relative;
 }
 
+/* Drag-active outline + overlay on the composer wrap. */
+.run-composer-wrap-drag .run-composer {
+  outline: 2px dashed rgba(96, 165, 250, 0.6);
+  outline-offset: 2px;
+}
+
+.run-composer-drop-overlay {
+  position: absolute;
+  inset: var(--space-3) var(--space-5) var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.85rem;
+  background: rgba(37, 99, 235, 0.18);
+  border: 2px dashed rgba(96, 165, 250, 0.6);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Attachment chips — render above the composer textarea. */
+.run-composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.run-composer-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.45rem 0.25rem 0.3rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+}
+
+.run-composer-chip-uploading {
+  opacity: 0.85;
+}
+
+.run-composer-chip-error {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+.run-composer-chip-thumb {
+  width: 1.4rem;
+  height: 1.4rem;
+  object-fit: cover;
+  border-radius: 0.3rem;
+}
+
+.run-composer-chip-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-composer-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 0.25rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.run-composer-chip-remove:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
 /* Slash-command palette — anchored above the composer. Width matches
    the composer; visually grouped with it via shared horizontal padding
    on the wrap. */
@@ -2452,6 +2538,59 @@ button:disabled {
   color: var(--text-body);
   background: var(--bg-base, #0a0a0a);
   white-space: pre;
+}
+
+textarea.run-files-viewer-editor {
+  border: none;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  width: 100%;
+  display: block;
+  tab-size: 2;
+}
+
+textarea.run-files-viewer-editor:focus {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.run-files-viewer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-files-viewer-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-files-viewer-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.run-files-viewer-btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
+.run-files-viewer-btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.run-files-viewer-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* Streaming status bar — sits between transcript and composer while the

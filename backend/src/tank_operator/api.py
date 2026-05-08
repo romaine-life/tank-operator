@@ -457,6 +457,10 @@ class FileContent(BaseModel):
     binary: bool
 
 
+class WriteFileBody(BaseModel):
+    text: str
+
+
 @app.get("/api/sessions/{session_id}/files", response_model=FileListing)
 async def list_session_files(
     session_id: str,
@@ -568,6 +572,97 @@ async def get_session_file_content(
         return FileContent(
             path=rel, size=len(data), truncated=truncated, text="", binary=True
         )
+
+
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MiB cap on a single attachment.
+ATTACHMENTS_REL_DIR = ".attachments"
+
+
+class UploadResponse(BaseModel):
+    path: str  # Relative to /workspace
+    abs_path: str  # Full path in the session pod, what claude reads
+    name: str
+    size: int
+
+
+@app.post("/api/sessions/{session_id}/files/upload", response_model=UploadResponse)
+async def upload_session_file(
+    session_id: str,
+    request: Request,
+    name: str = "",
+    user: User = Depends(current_user),
+) -> UploadResponse:
+    """Save an uploaded file to /workspace/.attachments inside the session pod.
+
+    Used by the chat composer to attach images / files; the prompt is
+    then sent with explicit path references so claude can `Read` them.
+
+    Body is raw bytes (Content-Type: image/png, etc); the file name comes
+    in via the `name` query param. Avoids the multipart parser so we
+    don't need python-multipart in the orchestrator image.
+    """
+    import re as _re_up
+    raw_name = name or "file"
+    safe_name = _re_up.sub(r"[^A-Za-z0-9._-]", "_", raw_name)[:100] or "file"
+    stamp = int(time.time() * 1000)
+    rel_path = f"{ATTACHMENTS_REL_DIR}/{stamp}-{safe_name}"
+    abs_path = _safe_workspace_path(rel_path)
+    contents = await request.body()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (max {MAX_UPLOAD_BYTES} bytes)",
+        )
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    await exec_write_file(SESSIONS_NAMESPACE, pod_name, abs_path, contents)
+    return UploadResponse(
+        path=rel_path, abs_path=abs_path, name=safe_name, size=len(contents)
+    )
+
+
+@app.put("/api/sessions/{session_id}/files/content", response_model=FileContent)
+async def put_session_file_content(
+    session_id: str,
+    path: str,
+    body: WriteFileBody,
+    user: User = Depends(current_user),
+) -> FileContent:
+    """Write `body.text` to a file under /workspace. Refuses to write
+    over a directory or outside /workspace. Capped at MAX_FILE_BYTES.
+    """
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot write to root")
+    data = body.text.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (max {MAX_FILE_BYTES} bytes)",
+        )
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    await exec_write_file(SESSIONS_NAMESPACE, pod_name, abs_path, data)
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/")
+    return FileContent(
+        path=rel, size=len(data), truncated=False, text=body.text, binary=False
+    )
 
 
 # ---------------------------------------------------------------------------
