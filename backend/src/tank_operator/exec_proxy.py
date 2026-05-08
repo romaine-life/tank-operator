@@ -192,6 +192,31 @@ async def exec_write_file(
         raise RuntimeError(f"exec write {path} failed: {error_status}")
 
 
+async def exec_launch_detached(
+    namespace: str,
+    pod_name: str,
+    command: str,
+    log_path: str,
+) -> None:
+    """Launch a shell command on the pod and detach immediately.
+
+    The exec connection lasts only as long as it takes the launcher shell
+    to fork+disown. The launched process keeps running after we return,
+    with stdout/stderr redirected to `log_path` for later inspection.
+
+    Used by the headless run endpoints — the calling agent doesn't want
+    to block on the receiving agent's run completion.
+    """
+    launcher = (
+        f"set -uo pipefail; "
+        f"nohup bash -c {shlex.quote(command)} "
+        f"> {shlex.quote(log_path)} 2>&1 < /dev/null & "
+        f"disown $! 2>/dev/null || true; "
+        f"echo launched"
+    )
+    await exec_capture(namespace, pod_name, ["bash", "-lc", launcher])
+
+
 async def exec_stream_to_websocket(
     browser: WebSocket,
     namespace: str,

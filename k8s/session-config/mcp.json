@@ -22,6 +22,9 @@
     },
     "platform": {
       "command": "platform-mcp"
+    },
+    "tank": {
+      "command": "mcp-tank"
     }
   }
 }

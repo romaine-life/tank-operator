@@ -42,6 +42,7 @@ from .credentials_seed import (
 from .exec_proxy import (
     bridge,
     exec_capture,
+    exec_launch_detached,
     exec_stream_to_websocket,
     exec_write_file,
 )
@@ -52,6 +53,7 @@ from .sessions import (
     HEADLESS_MODES,
     SESSION_MODES,
     SESSIONS_NAMESPACE,
+    SUBSCRIPTION_HEADLESS_MODE,
     PodNotReady,
     SessionInfo,
     SessionManager,
@@ -111,6 +113,51 @@ class TerminalDebugBody(BaseModel):
 MAX_HEADLESS_PROMPT_BYTES = int(
     os.environ.get("MAX_HEADLESS_PROMPT_BYTES", str(256 * 1024))
 )
+
+# headless-run.sh's positional args 4 + 5 (model, permission_mode) reach the
+# claude/codex CLI verbatim. Constraining what gets there to a tight charset
+# means we can splice them into bash command literals without a quoting layer.
+import re as _re_arg
+import secrets as _secrets
+import shlex as _shlex
+_HEADLESS_ARG_PATTERN = _re_arg.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_HEADLESS_PROMPT_DIR = "/tmp"
+
+
+def _validate_headless_arg(value: str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str) and _HEADLESS_ARG_PATTERN.match(value):
+        return value
+    return ""
+
+
+def _new_prompt_path() -> str:
+    return f"{_HEADLESS_PROMPT_DIR}/tank-prompt-{_secrets.token_hex(8)}"
+
+
+def _build_headless_script(
+    *,
+    provider: str,
+    prompt_path: str,
+    follow_up: bool,
+    model: str,
+    permission_mode: str,
+) -> str:
+    """Bash one-liner that runs headless-run.sh against an on-pod prompt file.
+
+    Used by both the live-stream WS endpoint (wrapped in `bash -lc` and
+    streamed to the browser) and the fire-and-forget HTTP endpoints
+    (wrapped in nohup+disown by exec_launch_detached). model and
+    permission_mode are pre-validated against [A-Za-z0-9._-]{1,64}, so
+    splicing them into the literal is safe.
+    """
+    quoted_path = _shlex.quote(prompt_path)
+    return (
+        f"bash /opt/tank/headless-run.sh {provider} {quoted_path} "
+        f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}' "
+        f"</dev/null; rc=$?; rm -f {quoted_path}; exit $rc"
+    )
 
 
 @app.get("/healthz")
@@ -953,6 +1000,127 @@ async def session_exec(ws: WebSocket, session_id: str) -> None:
             pass
 
 
+class SpawnRunSessionBody(BaseModel):
+    """Spawn a fresh headless session and dispatch one prompt to it."""
+
+    prompt: str
+    mode: str = SUBSCRIPTION_HEADLESS_MODE
+    name: str | None = None
+    model: str | None = None
+    permission_mode: str | None = None
+
+
+class SpawnRunSessionResponse(BaseModel):
+    session: SessionInfo
+    session_url: str
+
+
+class SessionMessageBody(BaseModel):
+    """Append a follow-up prompt to an existing headless session."""
+
+    prompt: str
+    model: str | None = None
+    permission_mode: str | None = None
+
+
+class SessionMessageResponse(BaseModel):
+    session_id: str
+    status: str  # "dispatched"
+
+
+def _validate_prompt(prompt: str) -> bytes:
+    if not prompt or not prompt.strip():
+        raise HTTPException(status_code=400, detail="missing prompt")
+    encoded = prompt.encode()
+    if len(encoded) > MAX_HEADLESS_PROMPT_BYTES:
+        raise HTTPException(status_code=413, detail="prompt too large")
+    return encoded
+
+
+@app.post("/api/sessions/run", response_model=SpawnRunSessionResponse, status_code=202)
+async def spawn_run_session(
+    body: SpawnRunSessionBody,
+    request: Request,
+    user: User = Depends(current_user),
+) -> SpawnRunSessionResponse:
+    """Create a new headless session and dispatch a first prompt to it.
+
+    Agent-to-agent handoff entrypoint paired with mcp-tank's
+    spawn_run_session tool. Returns 202 once the run has been launched on
+    the pod (fire-and-forget); poll /api/sessions/{id}/run/history for
+    output.
+    """
+    if body.mode not in HEADLESS_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"mode {body.mode!r} does not support headless runs",
+        )
+    _validate_prompt(body.prompt)
+    created = await sessions.create(owner=user.email, mode=body.mode)
+    if body.name:
+        try:
+            created = await sessions.set_name(
+                owner=user.email, session_id=created.id, name=body.name
+            )
+        except (SessionNotFound, SessionNotOwned):
+            # Race: pod was deleted between create and rename. Continue with
+            # the unnamed session — caller can rename later if it cares.
+            pass
+    try:
+        await sessions.dispatch_headless(
+            owner=user.email,
+            session_id=created.id,
+            prompt=body.prompt,
+            follow_up=False,
+            model=body.model or "",
+            permission_mode=body.permission_mode or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    session_url = str(request.base_url).rstrip("/") + f"/?session={created.id}"
+    return SpawnRunSessionResponse(session=created, session_url=session_url)
+
+
+@app.post(
+    "/api/sessions/{session_id}/messages",
+    response_model=SessionMessageResponse,
+    status_code=202,
+)
+async def send_session_message(
+    session_id: str,
+    body: SessionMessageBody,
+    user: User = Depends(current_user),
+) -> SessionMessageResponse:
+    """Append a follow-up prompt to an existing headless session.
+
+    Equivalent to opening the existing /run WebSocket with follow_up=true,
+    but as a fire-and-forget HTTP call so an agent in another session can
+    deliver a message without holding a stream open. Receiving session must
+    be in a headless mode.
+    """
+    _validate_prompt(body.prompt)
+    try:
+        await sessions.dispatch_headless(
+            owner=user.email,
+            session_id=session_id,
+            prompt=body.prompt,
+            follow_up=True,
+            model=body.model or "",
+            permission_mode=body.permission_mode or "",
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return SessionMessageResponse(session_id=session_id, status="dispatched")
+
+
 @app.websocket("/api/sessions/{session_id}/run")
 async def session_run(ws: WebSocket, session_id: str) -> None:
     await ws.accept()
@@ -992,20 +1160,11 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
         return
     follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
-    # Optional model + permission_mode from the frontend. Conservatively
-    # constrained to [A-Za-z0-9._-]{1,64} so they're safe to splice into
-    # the bash command literal below without risking a shell injection.
-    import re as _re
-    _allowed_arg = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
     raw_model = first.get("model") if isinstance(first, dict) else None
-    model = (
-        raw_model
-        if isinstance(raw_model, str) and _allowed_arg.match(raw_model)
-        else ""
-    )
     raw_pm = first.get("permission_mode") if isinstance(first, dict) else None
-    permission_mode = (
-        raw_pm if isinstance(raw_pm, str) and _allowed_arg.match(raw_pm) else ""
+    model = _validate_headless_arg(raw_model if isinstance(raw_model, str) else None)
+    permission_mode = _validate_headless_arg(
+        raw_pm if isinstance(raw_pm, str) else None
     )
 
     try:
@@ -1021,24 +1180,23 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
-    # model + permission_mode reach headless-run.sh as positional args.
-    # Both have already been validated against [A-Za-z0-9._-]{1,64} so
-    # they're safe to splice unquoted into the bash command literal.
-    command = [
-        "bash",
-        "-lc",
-        (
-            "set -uo pipefail; "
-            "prompt_file=$(mktemp); "
-            "status=0; "
-            f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
-            "if [ \"$status\" -eq 0 ]; then "
-            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" {'true' if follow_up else 'false'} '{model}' '{permission_mode}' </dev/null || status=$?; "
-            "fi; "
-            "rm -f \"$prompt_file\"; "
-            "exit $status"
-        ),
-    ]
+    prompt_path = _new_prompt_path()
+    try:
+        await exec_write_file(
+            SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
+        )
+    except RuntimeError as exc:
+        await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
+        return
+    script = _build_headless_script(
+        provider=provider,
+        prompt_path=prompt_path,
+        follow_up=follow_up,
+        model=model,
+        permission_mode=permission_mode,
+    )
+    command = ["bash", "-lc", script]
     async with sessions.track_ws(session_id):
         try:
             await exec_stream_to_websocket(
@@ -1046,7 +1204,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 namespace=SESSIONS_NAMESPACE,
                 pod_name=pod_name,
                 command=command,
-                stdin=prompt_bytes,
+                stdin=b"",
             )
         except WebSocketDisconnect:
             pass

@@ -19,6 +19,7 @@ ARG VITE_VERSION=5.4.21
 ARG TYPESCRIPT_VERSION=5.9.3
 ARG TANK_AGENT=claude
 ARG PLATFORM_MCP_REF=main
+ARG MCP_TANK_REF=main
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
@@ -94,7 +95,8 @@ RUN pip install --no-cache-dir --break-system-packages \
         "ruff==${RUFF_VERSION}"
 
 RUN pip install --no-cache-dir --break-system-packages \
-        "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}"
+        "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}" \
+        "git+https://github.com/nelsong6/mcp-tank.git@${MCP_TANK_REF}"
 
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session

@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator
 
 from kubernetes_asyncio import client, config
 
+from .auth import mint_session_token_for_email
 from .profiles import SessionRecord, SessionRegistryStore
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,13 @@ ARGOCD_TRACKING_APP = os.environ.get("ARGOCD_TRACKING_APP", "tank-operator-sessi
 # README's "killed when the tab closes" promise.
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
 REAPER_INTERVAL_SECONDS = int(os.environ.get("REAPER_INTERVAL_SECONDS", "60"))
+# In-cluster URL the orchestrator's own Service is reachable at. Stamped onto
+# each session pod as TANK_OPERATOR_URL so the in-pod mcp-tank stdio server
+# can call back to /api/sessions/* on behalf of the owner.
+TANK_OPERATOR_URL = os.environ.get(
+    "TANK_OPERATOR_URL",
+    "http://tank-operator.tank-operator.svc.cluster.local",
+)
 
 
 class SessionNotFound(Exception):
@@ -341,6 +349,7 @@ class SessionManager:
         owner: str,
         mode: str,
         glimmung_context: dict[str, Any] | None = None,
+        api_token: str | None = None,
     ) -> dict[str, Any]:
         owner_label = _owner_label(owner)
         pod_name = f"session-{session_id}"
@@ -466,6 +475,15 @@ class SessionManager:
                         # auto-wrap, and xterm.js's built-in OSC 8
                         # support renders them natively.
                         {"name": "FORCE_HYPERLINK", "value": "1"},
+                        # Orchestrator URL + per-pod session JWT so the
+                        # in-pod mcp-tank stdio server can call back as the
+                        # owning user. The JWT is bound to `owner` via the
+                        # same JWT_SECRET the orchestrator validates user
+                        # browser sessions with — one identity model, two
+                        # transports (browser cookie / pod env).
+                        {"name": "TANK_OPERATOR_URL", "value": TANK_OPERATOR_URL},
+                        {"name": "TANK_API_TOKEN", "value": api_token or ""},
+                        {"name": "TANK_SESSION_ID", "value": session_id},
                         # Switch claude's TUI to the alternate-screen-buffer
                         # renderer (vim/htop-style) instead of the default
                         # in-place redraw. Fixes the documented Ink
@@ -643,9 +661,22 @@ class SessionManager:
         # and injects the real one, refreshing against platform.claude.com
         # behind the scenes when it observes a 401.
         session_id = uuid.uuid4().hex[:10]
+        # Mint a per-pod JWT bound to the owner's email. If JWT_SECRET isn't
+        # configured (local dev / first install) skip injection — pods boot
+        # without TANK_API_TOKEN and the in-pod mcp-tank tools surface an
+        # actionable "no token" error instead of the orchestrator failing
+        # to spawn pods at all.
+        api_token: str | None
+        try:
+            api_token = mint_session_token_for_email(owner, sub=f"pod:{session_id}")
+        except Exception:
+            log.warning("could not mint TANK_API_TOKEN for %s; spawning without it", owner)
+            api_token = None
         created = await self._core.create_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
-            body=self._pod_manifest(session_id, owner, mode, glimmung_context),
+            body=self._pod_manifest(
+                session_id, owner, mode, glimmung_context, api_token=api_token
+            ),
         )
         # Seed activity so the reaper gives the session a full
         # IDLE_TIMEOUT to receive its first WS before being eligible
@@ -675,6 +706,67 @@ class SessionManager:
                 created_at=created_at,
             )
         return info
+
+    async def dispatch_headless(
+        self,
+        owner: str,
+        session_id: str,
+        prompt: str,
+        *,
+        follow_up: bool,
+        model: str,
+        permission_mode: str,
+    ) -> None:
+        """Fire-and-forget launch of headless-run.sh on a session pod.
+
+        Used by the HTTP handoff endpoints (POST /api/sessions/run, POST
+        /api/sessions/{id}/messages). Returns once the command has been
+        spawned on the pod — does not wait for the agent run to complete.
+        Conversation output lands in claude-code's session JSONL, which the
+        existing /api/sessions/{id}/run/history endpoint reads back.
+        /tmp/tank-headless-<token>.log captures stdout+stderr for
+        post-mortem if the run misbehaves.
+        """
+        # Late import to dodge an api.py → sessions.py → api.py cycle. The
+        # script-shape helpers live next to the WS endpoint that introduced
+        # them, but dispatch_headless reuses them so both paths produce the
+        # exact same on-pod command.
+        from .api import _build_headless_script, _new_prompt_path, _validate_headless_arg
+        from .exec_proxy import exec_launch_detached, exec_write_file
+
+        session = await self.get_session(owner=owner, session_id=session_id)
+        if session.mode not in HEADLESS_MODES:
+            raise ValueError(
+                f"session mode {session.mode!r} does not support headless dispatch"
+            )
+        pod_name = await self.get_pod_name(owner=owner, session_id=session_id)
+
+        safe_model = _validate_headless_arg(model)
+        safe_pm = _validate_headless_arg(permission_mode)
+        if model and not safe_model:
+            raise ValueError("invalid model")
+        if permission_mode and not safe_pm:
+            raise ValueError("invalid permission_mode")
+
+        provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+        prompt_path = _new_prompt_path()
+        log_path = f"/tmp/tank-headless-{uuid.uuid4().hex[:12]}.log"
+        await exec_write_file(
+            SESSIONS_NAMESPACE, pod_name, prompt_path, prompt.encode()
+        )
+        script = _build_headless_script(
+            provider=provider,
+            prompt_path=prompt_path,
+            follow_up=follow_up,
+            model=safe_model,
+            permission_mode=safe_pm,
+        )
+        await exec_launch_detached(
+            namespace=SESSIONS_NAMESPACE,
+            pod_name=pod_name,
+            command=script,
+            log_path=log_path,
+        )
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._core is not None
