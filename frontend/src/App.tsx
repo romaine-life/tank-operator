@@ -4,6 +4,7 @@ import type {
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactElement,
 } from "react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
 import { Streamdown } from "streamdown";
@@ -159,6 +160,11 @@ const PROVIDER_INTERACTION_MODES: Record<
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
   terminal: "terminal",
   run: "gui",
+};
+
+const INTERACTION_ICONS: Record<SessionInteraction, () => ReactElement> = {
+  terminal: IconTerminalCLI,
+  run: IconMonitor,
 };
 
 const INTERACTION_OPTIONS: SessionInteraction[] = ["terminal", "run"];
@@ -939,6 +945,29 @@ function IconReload() {
          stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
       <polyline points="13.5 2.5 13.5 5 11 5" />
+    </svg>
+  );
+}
+
+function IconTerminalCLI(): ReactElement {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none"
+         stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"
+         focusable="false" aria-hidden="true">
+      <polyline points="3,5 6.5,8 3,11" />
+      <line x1="8.5" y1="11" x2="13" y2="11" />
+    </svg>
+  );
+}
+
+function IconMonitor(): ReactElement {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none"
+         stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
+         focusable="false" aria-hidden="true">
+      <rect x="1.5" y="2" width="13" height="8.5" rx="1.5" />
+      <line x1="8" y1="10.5" x2="8" y2="13.5" />
+      <line x1="5.5" y1="13.5" x2="10.5" y2="13.5" />
     </svg>
   );
 }
@@ -4821,7 +4850,7 @@ export function App() {
                 aria-label="choose interaction"
                 aria-expanded={interactionMenuOpen}
               >
-                {INTERACTION_LABELS[defaultInteraction]}
+                {INTERACTION_ICONS[defaultInteraction]()}
                 <IconChevronDown className="new-row-interaction-chevron" />
               </button>
               {interactionMenuOpen && (
@@ -4834,7 +4863,7 @@ export function App() {
                         aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
                         className={defaultInteraction === interaction ? "is-selected" : undefined}
                       >
-                        {INTERACTION_LABELS[interaction]}
+                        {INTERACTION_ICONS[interaction]()}
                       </button>
                     </li>
                   ))}
