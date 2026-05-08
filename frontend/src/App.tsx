@@ -50,6 +50,7 @@ import {
   SquareIcon,
   SquarePenIcon,
   TerminalIcon,
+  TimerIcon,
   WrenchIcon,
   XIcon,
   type LucideIcon,
@@ -2035,12 +2036,16 @@ interface RunPrefs {
   sendByCtrlEnter: boolean;
   showThinking: boolean;
   autoExpandTools: boolean;
+  showTimestamps: boolean;
+  showDuration: boolean;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
   sendByCtrlEnter: false,
   showThinking: true,
   autoExpandTools: false,
+  showTimestamps: true,
+  showDuration: true,
 };
 
 function loadRunPrefs(): RunPrefs {
@@ -2131,6 +2136,13 @@ function formatMessageTime(iso: string): string {
   }
 }
 
+function formatTurnDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const m = Math.floor(ms / 60_000);
+  const s = Math.floor((ms % 60_000) / 1000);
+  return `${m}m ${s}s`;
+}
+
 /** Simple LCS-based line diff. Returns lines marked context/del/add. */
 function computeLineDiff(
   oldStr: string,
@@ -2201,10 +2213,20 @@ const RunContext = createContext<{ sendStdin: (text: string) => void }>({
   sendStdin: () => {},
 });
 
-function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
+function RunMessageBubble({
+  entry,
+  showTimestamps,
+  showDuration,
+}: {
+  entry: TranscriptEntry;
+  showTimestamps: boolean;
+  showDuration: boolean;
+}) {
   const variant = entry.role === "user" ? "user" : "assistant";
   const text = entry.text ?? "";
   const time = formatMessageTime(entry.time);
+  const durationMs = (entry as Record<string, unknown>).durationMs as number | undefined;
+  const alwaysVisible = showTimestamps || showDuration;
   return (
     <div
       className="run-transcript-message"
@@ -2220,8 +2242,19 @@ function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
         <div className="run-transcript-message-text" data-slot="message-text">
           <Streamdown>{text}</Streamdown>
         </div>
-        <div className="run-msg-footer">
-          {time && <span className="run-msg-time">{time}</span>}
+        <div
+          className="run-msg-footer"
+          data-always-visible={alwaysVisible ? "" : undefined}
+        >
+          <div className="run-msg-timings">
+            {showTimestamps && time && <span className="run-msg-time">{time}</span>}
+            {showDuration && durationMs != null && (
+              <span className="run-msg-duration">
+                <TimerIcon size={9} aria-hidden="true" />
+                {formatTurnDuration(durationMs)}
+              </span>
+            )}
+          </div>
           <CopyButton text={text} />
         </div>
       </div>
@@ -2657,10 +2690,14 @@ function RunMessages({
   entries,
   showThinking,
   autoExpandTools,
+  showTimestamps,
+  showDuration,
 }: {
   entries: TranscriptEntry[];
   showThinking: boolean;
   autoExpandTools: boolean;
+  showTimestamps: boolean;
+  showDuration: boolean;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   return (
@@ -2687,7 +2724,14 @@ function RunMessages({
         if (g.kind === "meta") {
           return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
         }
-        return <RunMessageBubble key={g.entry.id} entry={g.entry} />;
+        return (
+          <RunMessageBubble
+            key={g.entry.id}
+            entry={g.entry}
+            showTimestamps={showTimestamps}
+            showDuration={showDuration}
+          />
+        );
       })}
     </div>
   );
@@ -3469,6 +3513,7 @@ function HeadlessRun({
     wsRef.current?.close();
     stdoutBufferRef.current = "";
     const followUp = entries.length > 0;
+    const turnStart = Date.now();
     setEntries((prev) => [
       ...prev,
       {
@@ -3524,6 +3569,17 @@ function HeadlessRun({
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
+        const durationMs = Date.now() - turnStart;
+        setEntries((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].kind === "message" && prev[i].role === "assistant") {
+              const updated = [...prev];
+              updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
+              return updated;
+            }
+          }
+          return prev;
+        });
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
         activeToolNameRef.current = null;
         setActiveToolName(null);
@@ -3748,6 +3804,32 @@ function HeadlessRun({
                 <span className="run-settings-row">
                   <span className="run-settings-label">Auto-expand tools</span>
                   {runPrefs.autoExpandTools && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("showTimestamps", !runPrefs.showTimestamps);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Show timestamps</span>
+                  {runPrefs.showTimestamps && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("showDuration", !runPrefs.showDuration);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Show duration</span>
+                  {runPrefs.showDuration && (
                     <CheckIcon className="run-settings-check" aria-hidden="true" />
                   )}
                 </span>
@@ -4037,6 +4119,8 @@ function HeadlessRun({
               entries={entries}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
+              showTimestamps={runPrefs.showTimestamps}
+              showDuration={runPrefs.showDuration}
             />
           </>
         )}
