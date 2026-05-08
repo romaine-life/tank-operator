@@ -2693,11 +2693,21 @@ function RunMessages({
   );
 }
 
-function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
+function HeadlessRun({
+  session,
+  visible,
+  onRename,
+}: {
+  session: Session;
+  visible: boolean;
+  onRename: (id: string, name: string | null) => void;
+}) {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     loadStoredEntries(session.id),
   );
   const [running, setRunning] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editingTitleValue, setEditingTitleValue] = useState("");
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
@@ -3633,7 +3643,43 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
-          <h2 className="run-header-name">{sessionDisplayName(session)}</h2>
+          {editingTitle ? (
+            <input
+              className="run-header-name-input"
+              value={editingTitleValue}
+              autoFocus
+              onChange={(e) => setEditingTitleValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const trimmed = editingTitleValue.trim();
+                  const nextName = trimmed === "" ? null : trimmed;
+                  onRename(session.id, nextName);
+                  setEditingTitle(false);
+                } else if (e.key === "Escape") {
+                  setEditingTitle(false);
+                }
+              }}
+              onBlur={() => {
+                const trimmed = editingTitleValue.trim();
+                const nextName = trimmed === "" ? null : trimmed;
+                onRename(session.id, nextName);
+                setEditingTitle(false);
+              }}
+              placeholder={defaultSessionName(session)}
+              maxLength={80}
+            />
+          ) : (
+            <button
+              className="run-header-name-btn"
+              title={session.name ? `${defaultSessionName(session)} — click to rename` : "click to rename"}
+              onClick={() => {
+                setEditingTitleValue(session.name ?? "");
+                setEditingTitle(true);
+              }}
+            >
+              {sessionDisplayName(session)}
+            </button>
+          )}
         </div>
         <nav className="run-tabs" role="tablist" aria-label="Session views">
           <button
@@ -5299,7 +5345,7 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun session={s} visible={active === s.id} />
+                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} />
                   </div>
                 ) : (
                   <Terminal
