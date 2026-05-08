@@ -230,9 +230,14 @@ async def exec_stream_to_websocket(
     - {"stream":"stdout"|"stderr","data":"..."} for command output
     - {"status":"done"} when Kubernetes reports a successful exit
     - {"status":"error","detail":"..."} for non-zero exits or stream failures
+
+    While the command runs the browser may send {"stdin":"..."} frames to
+    inject additional bytes into the pod's stdin channel — used for interactive
+    prompts such as AskUserQuestion tool calls in headless Claude runs.
     """
     ws_client = WsApiClient()
     core = client.CoreV1Api(api_client=ws_client)
+    error_status: dict[str, str] | None = None
     try:
         cm = await core.connect_get_namespaced_pod_exec(
             name=pod_name,
@@ -245,46 +250,77 @@ async def exec_stream_to_websocket(
             tty=False,
             _preload_content=False,
         )
-        error_status: dict[str, str] | None = None
         async with cm as k8s_ws:
             for offset in range(0, len(stdin), 64 * 1024):
                 await k8s_ws.send_bytes(
                     bytes([STDIN_CHANNEL]) + stdin[offset : offset + 64 * 1024]
                 )
-            async for wsmsg in k8s_ws:
-                if wsmsg.type == aiohttp.WSMsgType.BINARY:
-                    if not wsmsg.data:
-                        continue
-                    channel = wsmsg.data[0]
-                    payload = wsmsg.data[1:]
-                    if channel == STDOUT_CHANNEL:
-                        await browser.send_json(
-                            {
-                                "stream": "stdout",
-                                "data": payload.decode(errors="replace"),
-                            }
-                        )
-                    elif channel == STDERR_CHANNEL:
-                        await browser.send_json(
-                            {
-                                "stream": "stderr",
-                                "data": payload.decode(errors="replace"),
-                            }
-                        )
-                    elif channel == ERROR_CHANNEL:
+
+            async def pump_pod() -> dict[str, str] | None:
+                status: dict[str, str] | None = None
+                async for wsmsg in k8s_ws:
+                    if wsmsg.type == aiohttp.WSMsgType.BINARY:
+                        if not wsmsg.data:
+                            continue
+                        channel = wsmsg.data[0]
+                        payload = wsmsg.data[1:]
+                        if channel == STDOUT_CHANNEL:
+                            await browser.send_json(
+                                {"stream": "stdout", "data": payload.decode(errors="replace")}
+                            )
+                        elif channel == STDERR_CHANNEL:
+                            await browser.send_json(
+                                {"stream": "stderr", "data": payload.decode(errors="replace")}
+                            )
+                        elif channel == ERROR_CHANNEL:
+                            try:
+                                status = json.loads(payload)
+                            except ValueError:
+                                status = {
+                                    "status": "Failure",
+                                    "message": payload.decode(errors="replace"),
+                                }
+                    elif wsmsg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        break
+                return status
+
+            async def pump_browser() -> None:
+                try:
+                    while True:
+                        raw = await browser.receive_text()
                         try:
-                            error_status = json.loads(payload)
+                            msg = json.loads(raw)
                         except ValueError:
-                            error_status = {
-                                "status": "Failure",
-                                "message": payload.decode(errors="replace"),
-                            }
-                elif wsmsg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.ERROR,
-                ):
-                    break
+                            continue
+                        if isinstance(msg, dict) and isinstance(msg.get("stdin"), str):
+                            data = msg["stdin"].encode()
+                            if data:
+                                await k8s_ws.send_bytes(bytes([STDIN_CHANNEL]) + data)
+                except Exception:
+                    pass
+
+            pod_task: asyncio.Task[dict[str, str] | None] = asyncio.create_task(pump_pod())
+            browser_task: asyncio.Task[None] = asyncio.create_task(pump_browser())
+
+            done, pending = await asyncio.wait(
+                {pod_task, browser_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            try:
+                error_status = pod_task.result()
+            except (asyncio.CancelledError, Exception):
+                error_status = None
     except Exception as e:
         await browser.send_json({"status": "error", "detail": str(e)})
         return

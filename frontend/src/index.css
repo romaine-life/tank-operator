@@ -3402,6 +3402,68 @@ textarea.run-files-viewer-editor:focus {
   color: #34d399;
 }
 
+.run-tool-ask {
+  padding: 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.run-tool-ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.run-tool-ask-text {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.run-tool-ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.run-tool-ask-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.4rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, border-color 0.1s;
+}
+
+.run-tool-ask-option:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.run-tool-ask-option-label {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.run-tool-ask-option-desc {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.run-tool-ask-answered {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .run-composer textarea {
   min-height: 7rem;
   max-height: 14rem;

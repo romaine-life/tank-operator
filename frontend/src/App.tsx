@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
@@ -2154,6 +2154,10 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+const RunContext = createContext<{ sendStdin: (text: string) => void }>({
+  sendStdin: () => {},
+});
+
 function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
   const variant = entry.role === "user" ? "user" : "assistant";
   const text = entry.text ?? "";
@@ -2259,7 +2263,75 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
   if (name === "Read") {
     return <ToolReadBody input={input} />;
   }
+  if (name === "AskUserQuestion") {
+    return <ToolAskUserBody entry={entry} input={input} />;
+  }
   return <ToolDefaultBody entry={entry} input={input} />;
+}
+
+function ToolAskUserBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const { sendStdin } = useContext(RunContext);
+  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+
+  const questions = Array.isArray(input?.questions)
+    ? (input.questions as Array<Record<string, unknown>>)
+    : [];
+
+  const answered = selectedAnswer !== null || entry.toolStatus === "completed";
+  const displayAnswer = selectedAnswer ?? entry.toolOutput ?? null;
+
+  if (answered) {
+    return (
+      <div className="run-tool-body run-tool-ask">
+        <span className="run-tool-ask-answered">{displayAnswer ?? "answered"}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="run-tool-body run-tool-ask">
+      {questions.map((q, qi) => {
+        const questionText = String(q.question ?? "");
+        const options = Array.isArray(q.options)
+          ? (q.options as Array<Record<string, unknown>>)
+          : [];
+        return (
+          <div key={qi} className="run-tool-ask-question">
+            {questionText && <p className="run-tool-ask-text">{questionText}</p>}
+            <div className="run-tool-ask-options">
+              {options.map((opt, oi) => {
+                const label = String(opt.label ?? "");
+                return (
+                  <button
+                    key={oi}
+                    type="button"
+                    className="run-tool-ask-option"
+                    onClick={() => {
+                      sendStdin(label + "\n");
+                      setSelectedAnswer(label);
+                    }}
+                  >
+                    <span className="run-tool-ask-option-label">{label}</span>
+                    {typeof opt.description === "string" && opt.description && (
+                      <span className="run-tool-ask-option-desc">
+                        {opt.description}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function ToolDiffBody({
@@ -2412,7 +2484,7 @@ function RunToolItem({
   entry: TranscriptEntry;
   autoExpand: boolean;
 }) {
-  const [expanded, setExpanded] = useState(autoExpand);
+  const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = (entry.toolStatus ?? "completed") as string;
   return (
@@ -3448,7 +3520,12 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
   const verb = STREAM_VERBS[verbIndex];
 
+  const sendStdin = (text: string) => {
+    wsRef.current?.send(JSON.stringify({ stdin: text }));
+  };
+
   return (
+    <RunContext.Provider value={{ sendStdin }}>
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
@@ -4215,6 +4292,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         </footer>
       )}
     </section>
+    </RunContext.Provider>
   );
 }
 
