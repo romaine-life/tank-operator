@@ -2700,6 +2700,13 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+  // Ref keeps the latest activeToolName readable from WS close/error closures
+  // without stale capture (state captured at WS creation time is always null).
+  const activeToolNameRef = useRef<string | null>(null);
+  // Mirrors cloudcli's ClaudeStatus idle state: persists the last status text
+  // after the run ends so the pill stays visible (amber/static) instead of
+  // vanishing. Cleared when the next run starts.
+  const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>(() => readSessionInitialTab(session.id));
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
@@ -3378,16 +3385,19 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
           const toolBlock = (msg.content as unknown[]).find(
             (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
           );
-          setActiveToolName(toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null);
+          const toolName = toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null;
+          activeToolNameRef.current = toolName;
+          setActiveToolName(toolName);
         }
       }
     } else if (t === "user") {
-      // Tool results received — tool call finished.
+      activeToolNameRef.current = null;
       setActiveToolName(null);
     } else if (t === "result") {
       const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
       const total = totalContextTokens(u);
       if (total > 0) setTokensUsed(total);
+      activeToolNameRef.current = null;
       setActiveToolName(null);
     }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
@@ -3409,6 +3419,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   function cancelRun() {
     wsRef.current?.close();
     wsRef.current = null;
+    setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
     setRunning(false);
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
   }
@@ -3461,7 +3472,9 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     ]);
     setRunStatus("running");
     setRunning(true);
+    activeToolNameRef.current = null;
     setActiveToolName(null);
+    setLastStatusText(null);
     setRunStartedAt(Date.now());
     setNow(Date.now());
     // The form clears the textarea internally on submit but doesn't
@@ -3501,11 +3514,13 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
+        setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
         setRunStatus("done");
         setRunning(false);
         ws.close();
       } else if (msg.status === "error") {
         flushStdoutBuffer();
+        setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
         setRunStatus("error");
         setRunning(false);
         setEntries((prev) =>
@@ -3515,6 +3530,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       }
     };
     ws.onerror = () => {
+      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
       setRunStatus("error");
       setRunning(false);
       setEntries((prev) =>
@@ -3523,6 +3539,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     };
     ws.onclose = (event) => {
       flushStdoutBuffer();
+      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
       setRunning(false);
       // 1000 = normal close, 1005 = no status (most cancel/done paths since
       // we call ws.close() with no code), 1001 = going away (page nav).
@@ -3974,30 +3991,42 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       {/* Streaming status pill — pinned between transcript and composer
           while the run is in flight. Provider icon, rotating verb +
           animated dots, elapsed counter, Stop button with ESC hint. */}
-      {activeTab === "chat" && running && (
-        <div className="run-status-bar" role="status" aria-live="polite">
+      {activeTab === "chat" && (running || lastStatusText !== null) && (
+        <div
+          className={`run-status-bar${!running ? " run-status-bar-idle" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
           <span className="run-status-icon">
             <ProviderIcon provider={provider} />
           </span>
           <span className="run-status-text">
-            <span className="run-status-verb">{verb}</span>
-            <span className="run-status-dots" aria-hidden="true">
-              {dots}
+            <span className="run-status-verb">
+              {running ? verb : lastStatusText}
             </span>
+            {running && (
+              <span className="run-status-dots" aria-hidden="true">
+                {dots}
+              </span>
+            )}
           </span>
-          <span className="run-status-elapsed" title="elapsed">
-            {elapsedLabel}
-          </span>
-          <button
-            type="button"
-            className="run-status-stop"
-            onClick={cancelRun}
-            aria-label="Stop generating"
-          >
-            <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
-            <span>Stop</span>
-            <kbd className="run-status-kbd">ESC</kbd>
-          </button>
+          {running && (
+            <>
+              <span className="run-status-elapsed" title="elapsed">
+                {elapsedLabel}
+              </span>
+              <button
+                type="button"
+                className="run-status-stop"
+                onClick={cancelRun}
+                aria-label="Stop generating"
+              >
+                <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
+                <span>Stop</span>
+                <kbd className="run-status-kbd">ESC</kbd>
+              </button>
+            </>
+          )}
         </div>
       )}
 

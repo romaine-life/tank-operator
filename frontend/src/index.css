@@ -2761,6 +2761,16 @@ textarea.run-files-viewer-editor:focus {
   animation: run-status-pulse 2.4s ease-in-out infinite;
 }
 
+/* Idle state: run finished, last status frozen. Amber tint, no pulse.
+   Mirrors cloudcli's ClaudeStatus amber indicator. */
+.run-status-bar.run-status-bar-idle {
+  border-color: rgba(251, 191, 36, 0.25);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0.02));
+  box-shadow: none;
+  animation: none;
+  opacity: 0.85;
+}
+
 /* Brief banner shown above the transcript when entries are restored from
    localStorage on mount or from the backend history endpoint. Auto-fades
    after 3s via React state. */
@@ -2788,6 +2798,20 @@ textarea.run-files-viewer-editor:focus {
 @keyframes run-status-pulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
+}
+
+/* Idle state — mirrors cloudcli's ClaudeStatus amber/static pill.
+   Shown after the run ends so the user always knows the last state
+   rather than seeing a blank where the pill was. */
+.run-status-bar-idle {
+  animation: none;
+  border-color: rgba(251, 191, 36, 0.25);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0.03));
+  box-shadow: none;
+}
+
+.run-status-bar-idle .run-status-verb {
+  color: rgba(251, 191, 36, 0.85);
 }
 
 .run-status-icon {
