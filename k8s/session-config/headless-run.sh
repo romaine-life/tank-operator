@@ -146,7 +146,7 @@ case "$provider" in
         prompt_text="[Plan mode: produce a step-by-step plan first; do not execute tool calls until the plan is confirmed in a follow-up message.]\n\n${prompt_text}"
         ;;
     esac
-    exec claude "${claude_args[@]}" "$prompt_text"
+    exec claude "${claude_args[@]}" "$prompt_text" < /dev/null
     ;;
   codex)
     configure_codex
