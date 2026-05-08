@@ -303,13 +303,29 @@ async def exec_stream_to_websocket(
                 except Exception:
                     pass
 
+            async def pump_keepalive() -> None:
+                # Send a no-op frame every 30s so the gateway's idle stream
+                # timeout (Envoy default ~5min) doesn't close a quiet run.
+                try:
+                    while True:
+                        await asyncio.sleep(30)
+                        await browser.send_json({"keepalive": True})
+                except Exception:
+                    pass
+
             pod_task: asyncio.Task[dict[str, str] | None] = asyncio.create_task(pump_pod())
             browser_task: asyncio.Task[None] = asyncio.create_task(pump_browser())
+            keepalive_task: asyncio.Task[None] = asyncio.create_task(pump_keepalive())
 
             done, pending = await asyncio.wait(
                 {pod_task, browser_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            keepalive_task.cancel()
+            try:
+                await keepalive_task
+            except (asyncio.CancelledError, Exception):
+                pass
             for task in pending:
                 task.cancel()
                 try:
