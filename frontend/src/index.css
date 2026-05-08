@@ -1829,6 +1829,77 @@ button:disabled {
 .run-composer-wrap {
   flex: 0 0 auto;
   padding: var(--space-3) var(--space-5) var(--space-5);
+  position: relative;
+}
+
+/* Slash-command palette — anchored above the composer. Width matches
+   the composer; visually grouped with it via shared horizontal padding
+   on the wrap. */
+.run-slash-palette {
+  position: absolute;
+  left: var(--space-5);
+  right: var(--space-5);
+  bottom: calc(100% - var(--space-3));
+  max-height: 18rem;
+  overflow-y: auto;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(15, 17, 21, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  z-index: 20;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.run-slash-palette-label {
+  padding: 0.4rem 0.65rem 0.3rem;
+  font-family: var(--font-primary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.run-slash-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.45rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-slash-item:hover,
+.run-slash-item-active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-slash-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #93c5fd;
+  font-size: var(--text-sm);
+}
+
+.run-slash-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-composer {

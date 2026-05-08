@@ -1680,6 +1680,59 @@ function formatStreamElapsed(ms: number): string {
   return `${m}m ${s}s`;
 }
 
+interface SlashCommand {
+  name: string; // includes leading slash, e.g. "/clear"
+  desc: string;
+}
+
+// Hardcoded for now — these match the slash commands Claude Code
+// recognises. Backend wire-through (per-project / user-defined) is a
+// follow-up; today they're inserted into the prompt verbatim.
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "/clear", desc: "Clear the conversation history" },
+  { name: "/compact", desc: "Compact the conversation context" },
+  { name: "/context", desc: "Show context window usage" },
+  { name: "/help", desc: "List available commands" },
+  { name: "/init", desc: "Initialize a project" },
+  { name: "/model", desc: "Switch model" },
+  { name: "/review", desc: "Review the pending changes" },
+  { name: "/security-review", desc: "Run a security review" },
+  { name: "/usage", desc: "Show token / billing usage" },
+];
+
+/**
+ * Walks backwards from the cursor to find an active slash context: a `/`
+ * at the start of the textarea or after whitespace, with no whitespace
+ * between it and the cursor. Returns the start offset of the slash and
+ * the typed query (without the leading slash). Null if not in a slash
+ * context.
+ */
+function findSlashContext(
+  textarea: HTMLTextAreaElement,
+): { start: number; query: string } | null {
+  const value = textarea.value;
+  const cursor = textarea.selectionStart ?? 0;
+  for (let i = cursor - 1; i >= 0; i--) {
+    const c = value[i];
+    if (c === "/") {
+      if (i === 0 || /\s/.test(value[i - 1])) {
+        return { start: i, query: value.slice(i + 1, cursor) };
+      }
+      return null;
+    }
+    if (/\s/.test(c)) return null;
+  }
+  return null;
+}
+
+function filterSlashCommands(query: string): SlashCommand[] {
+  if (!query) return SLASH_COMMANDS;
+  const q = query.toLowerCase();
+  return SLASH_COMMANDS.filter(
+    (c) => c.name.slice(1).toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
+  );
+}
+
 interface ModelOption {
   id: string; // value passed to backend (claude-cli's --model arg)
   label: string; // display name in dropdown + provider card
@@ -1711,8 +1764,16 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   // interval while running so the bar updates without a per-element timer.
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
+  // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
+  // and `slashIndex` drive filtering and keyboard selection.
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [slashIndex, setSlashIndex] = useState(0);
+  const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+
+  const slashFiltered = slashOpen ? filterSlashCommands(slashQuery) : [];
 
   useEffect(() => {
     return () => {
@@ -1744,17 +1805,127 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
 
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
   // Stop pill. Capture phase so it fires even if focus is on the textarea.
+  // Skips when the slash palette is open — Esc closes the palette in that
+  // case (handled below).
   useEffect(() => {
     if (!running) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !slashOpen) {
         e.preventDefault();
         cancelRun();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [running]);
+  }, [running, slashOpen]);
+
+  // Slash-palette typing detection. Listens at the composer wrap; reads
+  // the textarea's value + cursor on every event to recompute the active
+  // slash context. Only resets the selection index when the query
+  // actually changes — otherwise ArrowDown nav would snap back to 0 on
+  // every keyup.
+  useEffect(() => {
+    const wrap = composerWrapRef.current;
+    if (!wrap) return;
+    const recompute = () => {
+      const ta = wrap.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (!ta) {
+        setSlashOpen(false);
+        return;
+      }
+      const ctx = findSlashContext(ta);
+      if (ctx) {
+        setSlashOpen(true);
+        setSlashQuery((prev) => {
+          if (prev !== ctx.query) setSlashIndex(0);
+          return ctx.query;
+        });
+      } else {
+        setSlashOpen(false);
+      }
+    };
+    wrap.addEventListener("input", recompute);
+    wrap.addEventListener("click", recompute);
+    // keyup is the trigger for cursor-position changes via arrow keys
+    // (e.g. left/right out of slash context). Filter to ignore the
+    // arrow keys we use for palette nav so they don't trigger a
+    // recompute mid-navigation.
+    const onKeyUp = (e: Event) => {
+      const ke = e as KeyboardEvent;
+      if (
+        ke.key === "ArrowDown" ||
+        ke.key === "ArrowUp" ||
+        ke.key === "Tab" ||
+        ke.key === "Enter"
+      ) {
+        return;
+      }
+      recompute();
+    };
+    wrap.addEventListener("keyup", onKeyUp);
+    return () => {
+      wrap.removeEventListener("input", recompute);
+      wrap.removeEventListener("click", recompute);
+      wrap.removeEventListener("keyup", onKeyUp);
+    };
+  }, [activeTab]);
+
+  // Slash-palette keyboard nav. Up/Down moves selection, Enter/Tab applies,
+  // Esc closes. Capture phase + stopPropagation so the textarea's own
+  // Enter-to-submit doesn't fire while the palette is open.
+  useEffect(() => {
+    if (!slashOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const filtered = filterSlashCommands(slashQuery);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) =>
+          filtered.length ? (i - 1 + filtered.length) % filtered.length : 0,
+        );
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        if (!filtered.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applySlashCommand(filtered[Math.min(slashIndex, filtered.length - 1)].name);
+        setSlashOpen(false);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [slashOpen, slashQuery, slashIndex]);
+
+  function applySlashCommand(name: string) {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const ctx = findSlashContext(ta);
+    const start = ctx?.start ?? ta.selectionStart ?? 0;
+    const cursor = ta.selectionStart ?? start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(cursor);
+    const insert = name + " ";
+    const newValue = before + insert + after;
+    // Native setter so React-controlled / form-managed textareas pick up
+    // the change instead of dropping it on the next render.
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, newValue);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    const newPos = start + insert.length;
+    ta.setSelectionRange(newPos, newPos);
+    ta.focus();
+  }
 
   function applyStdoutLine(line: string) {
     const trimmed = line.trim();
@@ -2043,7 +2214,37 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       )}
 
       {activeTab === "chat" && (
-        <footer className="run-composer-wrap">
+        <footer className="run-composer-wrap" ref={composerWrapRef}>
+          {/* Slash-command palette — opens above the composer when the
+              user types `/` at a word boundary. Up/Down navigates,
+              Enter/Tab inserts, Esc closes. Backed by SLASH_COMMANDS
+              today; project-scoped + user-defined commands TBD. */}
+          {slashOpen && slashFiltered.length > 0 && (
+            <div className="run-slash-palette" role="listbox" aria-label="Slash commands">
+              <div className="run-slash-palette-label">Slash commands</div>
+              {slashFiltered.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  role="option"
+                  aria-selected={i === slashIndex}
+                  className={`run-slash-item${i === slashIndex ? " run-slash-item-active" : ""}`}
+                  onMouseDown={(e) => {
+                    // mousedown not click — click would fire after blur of
+                    // the textarea, which closes the palette via the
+                    // input handler.
+                    e.preventDefault();
+                    applySlashCommand(cmd.name);
+                    setSlashOpen(false);
+                  }}
+                  onMouseEnter={() => setSlashIndex(i)}
+                >
+                  <span className="run-slash-name">{cmd.name}</span>
+                  <span className="run-slash-desc">{cmd.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <PromptInput onSubmit={handleSubmit} className="run-composer">
             <PromptInputTextarea
               className="run-composer-textarea"
