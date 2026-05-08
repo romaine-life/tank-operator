@@ -32,6 +32,7 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronDownIcon,
+  ClockIcon,
   ChevronUpIcon,
   ClipboardListIcon,
   CopyIcon,
@@ -2247,11 +2248,16 @@ function RunMessageBubble({
           data-always-visible={alwaysVisible ? "" : undefined}
         >
           <div className="run-msg-timings">
-            {showTimestamps && time && <span className="run-msg-time">{time}</span>}
             {showDuration && durationMs != null && (
-              <span className="run-msg-duration">
-                <TimerIcon size={9} aria-hidden="true" />
+              <span className="run-msg-timing-row">
                 {formatTurnDuration(durationMs)}
+                <TimerIcon size={9} aria-hidden="true" />
+              </span>
+            )}
+            {showTimestamps && time && (
+              <span className="run-msg-timing-row">
+                {time}
+                <ClockIcon size={9} aria-hidden="true" />
               </span>
             )}
           </div>
