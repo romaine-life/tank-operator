@@ -2092,6 +2092,119 @@ button:disabled {
   background: var(--bg-base, #0a0a0a);
 }
 
+/* Streaming status bar — sits between transcript and composer while the
+   run is in flight. Matches cloudcli's ClaudeStatus shape: provider icon
+   on the left, rotating action verb + animated dots, elapsed counter on
+   the right, destructive Stop pill with ESC kbd hint. Hidden when idle. */
+.run-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 var(--space-5) var(--space-2);
+  padding: 0.55rem 0.75rem 0.55rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.08), rgba(52, 211, 153, 0.03));
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04);
+  animation: run-status-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes run-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
+  50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
+}
+
+.run-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-status-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.05rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-status-verb {
+  letter-spacing: 0.01em;
+}
+
+.run-status-dots {
+  display: inline-block;
+  width: 1.5em;
+  text-align: left;
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-status-elapsed {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 0.25rem;
+}
+
+.run-status-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(239, 68, 68, 0.38);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-status-stop:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fee2e2;
+}
+
+.run-status-stop-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: currentColor;
+}
+
+.run-status-kbd {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.15rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
 .run-composer textarea {
   min-height: 7rem;
   max-height: 14rem;

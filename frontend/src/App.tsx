@@ -33,6 +33,7 @@ import {
   ImageIcon,
   MessageSquareIcon,
   SendHorizontalIcon,
+  SquareIcon,
   TerminalIcon,
 } from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
@@ -1659,6 +1660,26 @@ const transcriptClassNames = {
 type RunTab = "chat" | "shell" | "files";
 type RunComposerMode = "default" | "plan";
 
+// Verbs cycled by the streaming status pill. Matches cloudcli's
+// ClaudeStatus rotation so the user sees motion even when the model
+// hasn't sent any text deltas yet.
+const STREAM_VERBS = [
+  "Thinking",
+  "Processing",
+  "Analyzing",
+  "Working",
+  "Computing",
+  "Reasoning",
+] as const;
+
+function formatStreamElapsed(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s}s`;
+}
+
 interface ModelOption {
   id: string; // value passed to backend (claude-cli's --model arg)
   label: string; // display name in dropdown + provider card
@@ -1685,6 +1706,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
   const [selectedModelId, setSelectedModelId] = useState<string>(modelOptions[0].id);
+  // Run timing — drives the streaming status pill's elapsed counter and the
+  // rotating action verb / animated dots. Both refresh on a single 250ms
+  // interval while running so the bar updates without a per-element timer.
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
 
@@ -1706,6 +1732,29 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const interval = window.setInterval(touch, 30_000);
     return () => window.clearInterval(interval);
   }, [session.id, session.status, visible]);
+
+  // Tick `now` every 250ms while running. 250 is the LCM-ish for the dot
+  // animation (500ms cycle) and the elapsed counter (1s display step) —
+  // one timer drives both without per-element setIntervals.
+  useEffect(() => {
+    if (!running) return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [running]);
+
+  // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
+  // Stop pill. Capture phase so it fires even if focus is on the textarea.
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelRun();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [running]);
 
   function applyStdoutLine(line: string) {
     const trimmed = line.trim();
@@ -1770,6 +1819,8 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     ]);
     setRunStatus("running");
     setRunning(true);
+    setRunStartedAt(Date.now());
+    setNow(Date.now());
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/run`;
@@ -1835,6 +1886,15 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const ready = session.status === "Active";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+
+  // Streaming-pill computeds — only meaningful while running.
+  const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
+  const elapsedLabel = formatStreamElapsed(elapsedMs);
+  const dotPhase = Math.floor(now / 500) % 3; // 0..2
+  const dots = ".".repeat(dotPhase + 1);
+  // Rotating verb cycles every 3s. Matches cloudcli's ClaudeStatus.
+  const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
+  const verb = STREAM_VERBS[verbIndex];
 
   return (
     <section className="run-panel">
@@ -1947,16 +2007,40 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             renderChevron={(expanded) => (
               <span className="run-chevron">{expanded ? "less" : "more"}</span>
             )}
-            renderThinkingState={() => (
-              <div className="run-transcript-thinking">
-                <span className="run-transcript-thinking-indicator">
-                  {isClaudeRunMode(session.mode) ? "Claude is working..." : "Codex is working..."}
-                </span>
-              </div>
-            )}
+            renderThinkingState={() => null}
           />
         )}
       </main>
+
+      {/* Streaming status pill — pinned between transcript and composer
+          while the run is in flight. Provider icon, rotating verb +
+          animated dots, elapsed counter, Stop button with ESC hint. */}
+      {activeTab === "chat" && running && (
+        <div className="run-status-bar" role="status" aria-live="polite">
+          <span className="run-status-icon">
+            <ProviderIcon provider={provider} />
+          </span>
+          <span className="run-status-text">
+            <span className="run-status-verb">{verb}</span>
+            <span className="run-status-dots" aria-hidden="true">
+              {dots}
+            </span>
+          </span>
+          <span className="run-status-elapsed" title="elapsed">
+            {elapsedLabel}
+          </span>
+          <button
+            type="button"
+            className="run-status-stop"
+            onClick={cancelRun}
+            aria-label="Stop generating"
+          >
+            <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
+            <span>Stop</span>
+            <kbd className="run-status-kbd">ESC</kbd>
+          </button>
+        </div>
+      )}
 
       {activeTab === "chat" && (
         <footer className="run-composer-wrap">
