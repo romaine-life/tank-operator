@@ -1,0 +1,19 @@
+[project]
+name = "mcp-tank"
+version = "0.1.0"
+description = "Stdio MCP server for cross-session messaging on tank-operator. Spawns headless run sessions and delivers follow-up prompts to existing ones, all on behalf of the pod's owning user."
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.18.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_tank"]
+
+[project.scripts]
+mcp-tank = "mcp_tank.__main__:main"
