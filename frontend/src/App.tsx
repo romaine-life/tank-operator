@@ -10,17 +10,31 @@ import type { TranscriptEntry } from "@sandbox-agent/react";
 import { Streamdown } from "streamdown";
 import {
   PromptInput,
-  PromptInputActionAddAttachments,
-  PromptInputActionAddScreenshot,
-  PromptInputActionMenu,
-  PromptInputActionMenuContent,
-  PromptInputActionMenuTrigger,
   PromptInputFooter,
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  FolderIcon,
+  ImageIcon,
+  MessageSquareIcon,
+  SendHorizontalIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1642,10 +1656,35 @@ const transcriptClassNames = {
   thinkingIndicator: "run-transcript-thinking-indicator",
 };
 
+type RunTab = "chat" | "shell" | "files";
+type RunComposerMode = "default" | "plan";
+
+interface ModelOption {
+  id: string; // value passed to backend (claude-cli's --model arg)
+  label: string; // display name in dropdown + provider card
+}
+
+// Hardcoded for now. Backend doesn't yet accept --model from the WS prompt
+// payload — adding that is a follow-up. Selecting here only affects display.
+const CLAUDE_MODELS: ModelOption[] = [
+  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
+  { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
+  { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
+];
+const CODEX_MODELS: ModelOption[] = [
+  { id: "gpt-5-5", label: "Codex · GPT-5.5" },
+  { id: "gpt-5", label: "Codex · GPT-5" },
+];
+
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
+  const isClaude = isClaudeRunMode(session.mode);
+  const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
+  const [selectedModelId, setSelectedModelId] = useState<string>(modelOptions[0].id);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
 
@@ -1791,34 +1830,109 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         ? "error"
         : undefined;
 
+  const provider: Provider = isClaude ? "anthropic" : "openai";
+  const modeLabel = MODE_LABELS[session.mode];
+  const ready = session.status === "Active";
+  const selectedModel =
+    modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+
   return (
     <section className="run-panel">
-      <PromptInput onSubmit={handleSubmit} className="run-composer">
-        <PromptInputTextarea
-          placeholder={`Ask ${MODE_LABELS[session.mode]} to work in /workspace`}
-          disabled={session.status !== "Active"}
-        />
-        <PromptInputFooter>
-          <PromptInputTools>
-            <PromptInputActionMenu>
-              <PromptInputActionMenuTrigger />
-              <PromptInputActionMenuContent>
-                <PromptInputActionAddAttachments />
-                <PromptInputActionAddScreenshot />
-              </PromptInputActionMenuContent>
-            </PromptInputActionMenu>
-          </PromptInputTools>
-          <PromptInputSubmit
-            status={submitStatus}
-            onStop={cancelRun}
-            disabled={session.status !== "Active"}
-          />
-        </PromptInputFooter>
-      </PromptInput>
-      <div className={`run-output run-output-${runStatus}`}>
-        {session.status !== "Active" ? (
-          <span className="run-muted">waiting for session pod</span>
-        ) : entries.length ? (
+      <header className="run-header">
+        <div className="run-header-title">
+          <h2 className="run-header-name">{sessionDisplayName(session)}</h2>
+          <p className="run-header-sub">workspace</p>
+        </div>
+        <nav className="run-tabs" role="tablist" aria-label="Session views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "chat"}
+            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("chat")}
+          >
+            <MessageSquareIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Chat</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "shell"}
+            className={`run-tab${activeTab === "shell" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("shell")}
+          >
+            <TerminalIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Shell</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "files"}
+            className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("files")}
+          >
+            <FolderIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Files</span>
+          </button>
+        </nav>
+      </header>
+
+      <main className={`run-main run-main-${runStatus}`}>
+        {activeTab === "shell" ? (
+          <div className="run-shell">
+            <Terminal
+              sessionId={session.id}
+              mode={session.mode}
+              status={session.status}
+              completionSoundEnabled={false}
+              completionSoundVolume={0}
+              visible={visible && activeTab === "shell"}
+            />
+          </div>
+        ) : activeTab === "files" ? (
+          <div className="run-empty">
+            <span className="run-muted">Files coming soon</span>
+          </div>
+        ) : !ready ? (
+          <div className="run-empty">
+            <span className="run-muted">waiting for session pod</span>
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="run-empty run-empty-launchpad">
+            <h3 className="run-empty-title">Choose Your AI Assistant</h3>
+            <p className="run-empty-sub">Select a provider to start a new conversation</p>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="run-provider-card">
+                  <span className="run-provider-icon">
+                    <ProviderIcon provider={provider} />
+                  </span>
+                  <span className="run-provider-meta">
+                    <span className="run-provider-name">{selectedModel.label}</span>
+                    <span className="run-provider-sub">Click to change model</span>
+                  </span>
+                  <ChevronDownIcon className="run-provider-chevron" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="run-model-menu">
+                <DropdownMenuLabel>Model</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={selectedModelId}
+                  onValueChange={setSelectedModelId}
+                >
+                  {modelOptions.map((opt) => (
+                    <DropdownMenuRadioItem key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <p className="run-empty-status">
+              Ready to use {selectedModel.label}. Start typing your message below.
+            </p>
+          </div>
+        ) : (
           <AgentTranscript
             entries={entries}
             className={isClaudeRunMode(session.mode) ? "run-transcript-claude" : "run-transcript-codex"}
@@ -1842,10 +1956,122 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
               </div>
             )}
           />
-        ) : (
-          <span className="run-muted">ready</span>
         )}
-      </div>
+      </main>
+
+      {activeTab === "chat" && (
+        <footer className="run-composer-wrap">
+          <PromptInput onSubmit={handleSubmit} className="run-composer">
+            <PromptInputTextarea
+              className="run-composer-textarea"
+              placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
+              disabled={!ready}
+            />
+            <PromptInputFooter className="run-composer-footer">
+              <PromptInputTools className="run-composer-tools">
+                {/* Attachment menu — driven directly by shadcn
+                    DropdownMenu so the trigger is a plain button (not
+                    AI Elements' PromptInputButton wrapper, which
+                    swallowed the click in our composer footer). The
+                    items below are visual stubs today; the AI Elements
+                    AttachmentsContext-driven flow can be wired in once
+                    the backend WS prompt payload accepts files. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn"
+                      aria-label="Attach"
+                    >
+                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="top" align="start" className="run-attach-menu">
+                    <DropdownMenuItem disabled>Attach files</DropdownMenuItem>
+                    <DropdownMenuItem disabled>Add screenshot</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {/* Conversation mode dropdown — Default vs Plan. Plan
+                    mode is wired only as state today; backend doesn't
+                    yet consume it (would need a flag on headless-run.sh
+                    or a per-run prompt prefix). */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="run-mode-pill run-mode-pill-button"
+                      aria-label="Conversation mode"
+                    >
+                      <span className="run-mode-dot" aria-hidden="true" />
+                      {composerMode === "plan" ? "Plan Mode" : "Default Mode"}
+                      <ChevronDownIcon
+                        className="run-mode-chevron"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="top"
+                    align="start"
+                    className="run-mode-menu"
+                  >
+                    <DropdownMenuItem
+                      onSelect={() => setComposerMode("default")}
+                    >
+                      <span className="run-mode-menu-row">
+                        <span className="run-mode-menu-label">Default Mode</span>
+                        {composerMode === "default" && (
+                          <CheckIcon
+                            className="run-mode-menu-check"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={() => setComposerMode("plan")}
+                    >
+                      <span className="run-mode-menu-row">
+                        <span className="run-mode-menu-label">Plan Mode</span>
+                        {composerMode === "plan" && (
+                          <CheckIcon
+                            className="run-mode-menu-check"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span className="run-usage-ring" aria-label="Context usage">
+                  <span className="run-usage-ring-text">0.0%</span>
+                </span>
+                <span className="run-comments-badge" aria-label="Comments">
+                  <MessageSquareIcon className="run-comments-icon" aria-hidden="true" />
+                  <span className="run-comments-count">8</span>
+                </span>
+              </PromptInputTools>
+              <span className="run-composer-hint">
+                Enter to send · Shift+Enter for new line · / for slash commands
+              </span>
+              <PromptInputSubmit
+                className="run-submit-btn"
+                status={submitStatus}
+                onStop={cancelRun}
+                disabled={!ready}
+              >
+                {/* When idle, force the cloudcli-style paper-plane icon.
+                    When streaming/error, fall through to AI Elements'
+                    built-in Spinner/Stop/X (children is undefined). */}
+                {submitStatus ? undefined : (
+                  <SendHorizontalIcon className="run-submit-icon" aria-hidden="true" />
+                )}
+              </PromptInputSubmit>
+            </PromptInputFooter>
+          </PromptInput>
+        </footer>
+      )}
     </section>
   );
 }

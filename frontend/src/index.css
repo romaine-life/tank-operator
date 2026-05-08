@@ -1637,18 +1637,459 @@ button:disabled {
 
 .run-panel {
   height: 100%;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--bg-base, #0a0a0a);
+  font-family: var(--font-primary);
+}
+
+/* Header bar — session title left, tab nav right. */
+.run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  flex: 0 0 auto;
+}
+
+.run-header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.run-header-name {
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.run-header-sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.run-tabs {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.run-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-md, 0.5rem);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast, 120ms) ease,
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-tab:hover:not(.run-tab-active) {
+  color: var(--text-body);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.run-tab-active {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-soft, rgba(255, 255, 255, 0.12));
+}
+
+.run-tab-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Main content area — empty state or transcript. */
+.run-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-3);
+}
+
+.run-empty-launchpad {
+  gap: var(--space-3);
+}
+
+.run-empty-title {
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-2xl);
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.run-empty-sub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.run-provider-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-top: var(--space-3);
+  width: min(28rem, 90%);
+  border-radius: var(--radius-lg, 0.75rem);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
+}
+
+.run-provider-card:hover:not(:disabled) {
+  border-color: var(--accent, rgba(120, 160, 255, 0.4));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.run-provider-card:disabled {
+  cursor: default;
+}
+
+.run-provider-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-provider-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.run-provider-name {
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.run-provider-sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.run-provider-chevron {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted);
+}
+
+.run-empty-status {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 32rem;
+}
+
+/* Composer footer at the bottom of the chat pane. */
+.run-composer-wrap {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5) var(--space-5);
 }
 
 .run-composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
   align-items: stretch;
+  border-radius: var(--radius-lg, 0.75rem);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.02);
+  padding: var(--space-2);
+}
+
+.run-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: var(--text-xs);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.run-mode-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.55);
+}
+
+.run-composer-hint {
+  flex: 1 1 auto;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 0 var(--space-3);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Composer textarea — taller, more breathing room. */
+.run-composer-textarea {
+  min-height: 4.5rem !important;
+  padding: 0.75rem 1rem !important;
+  font-family: var(--font-primary) !important;
+  font-size: var(--text-sm) !important;
+  color: var(--text-primary) !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+.run-composer-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.32);
+}
+
+.run-composer-textarea:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Composer footer row — image attach, mode pill, usage circle, comments,
+   hint, send button. Match cloudcli's flex layout left-to-right. */
+.run-composer-footer {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+}
+
+.run-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.run-composer-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease, color var(--motion-fast, 120ms) ease;
+}
+
+.run-composer-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.run-composer-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.run-composer-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* Context usage ring — 0.0% placeholder; functional plumbing later. */
+.run-usage-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+}
+
+.run-usage-ring-text {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+/* Comment badge — placeholder slot for thread/notes count. */
+.run-comments-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.run-comments-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.run-comments-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #2563eb;
+  color: white;
+  font-family: var(--font-primary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Send button — cloudcli's distinctive blue square w/ paper-plane. */
+.run-submit-btn {
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+  min-width: 2.25rem !important;
+  border-radius: 0.5rem !important;
+  background: #2563eb !important;
+  color: white !important;
+  border: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    transform var(--motion-fast, 120ms) ease;
+  flex: 0 0 auto;
+}
+
+.run-submit-btn:hover:not(:disabled) {
+  background: #1d4ed8 !important;
+}
+
+.run-submit-btn:disabled {
+  background: rgba(37, 99, 235, 0.45) !important;
+  cursor: default;
+}
+
+.run-submit-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Mode pill rendered as a dropdown trigger — keep the pill look; add
+   the chevron + button affordances. */
+.run-mode-pill-button {
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-primary);
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-mode-pill-button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.run-mode-chevron {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-left: 0.15rem;
+  color: var(--text-muted);
+}
+
+/* Mode menu — small width, compact rows. */
+.run-mode-menu {
+  min-width: 11rem;
+}
+
+.run-mode-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.5rem;
+}
+
+.run-mode-menu-label {
+  font-family: var(--font-primary);
+}
+
+.run-mode-menu-check {
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent, #2563eb);
+}
+
+/* Model picker dropdown — rendered from the provider card. */
+.run-model-menu {
+  min-width: 16rem;
+}
+
+/* Shell tab content — Terminal uses position:absolute;inset:0 so it
+   needs a positioned ancestor or it escapes to the document. */
+.run-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  background: var(--bg-base, #0a0a0a);
 }
 
 .run-composer textarea {
