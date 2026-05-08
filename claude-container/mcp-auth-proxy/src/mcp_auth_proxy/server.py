@@ -21,15 +21,18 @@ per-pod identity. Hardcoded LISTENERS map mirrors the entries in
 k8s/session-config/mcp.json — keep them in sync; both sides describe the
 same set of MCPs from opposite ends.
 
-OAuth discovery short-circuit: Claude CLI's MCP SDK probes
-`/.well-known/oauth-authorization-server` and `/.well-known/oauth-
-protected-resource` to discover whether the server speaks OAuth.
-Our MCP servers don't — the upstream returns kube-rbac-proxy's plain-
-text "Not Found", which crashes the SDK's JSON parser ("Unexpected
-identifier 'Not'") and leaves the connection unrecoverable across
-upstream pod rotations. We answer those paths locally with a JSON-
-shaped 404 so the SDK falls through cleanly to bearer-auth POSTs that
-this proxy already injects.
+OAuth discovery short-circuit: Claude CLI's MCP SDK probes several
+well-known paths to discover whether the server speaks OAuth:
+`/.well-known/oauth-authorization-server` (RFC 8414),
+`/.well-known/oauth-protected-resource` (RFC 9728),
+`/.well-known/openid-configuration` (OIDC discovery), and
+`POST /register` (RFC 7591 Dynamic Client Registration).
+Our MCP servers don't speak OAuth — the upstream returns kube-rbac-
+proxy's plain-text "Not Found", which crashes the SDK's JSON parser
+("Unexpected identifier 'Not'") and leaves the connection unrecoverable
+across upstream pod rotations. We answer all of those paths locally
+with a JSON-shaped 404 so the SDK falls through cleanly to the bearer-
+auth POST that this proxy already injects.
 """
 from __future__ import annotations
 
@@ -76,14 +79,15 @@ def _read_token() -> str:
     return TOKEN_PATH.read_text().strip()
 
 
-# OAuth discovery paths the MCP SDK probes. RFC 8414 (auth server) and
-# RFC 9728 (protected resource) — the SDK tries both before/after a
-# transport failure to decide whether OAuth is available. Answering
-# locally with a JSON-shaped 404 keeps the SDK's parser from crashing
-# on upstream's plain-text "Not Found" body.
+# OAuth discovery paths the MCP SDK probes. RFC 8414 (auth server),
+# RFC 9728 (protected resource), and OIDC discovery — the SDK tries
+# all of these before/after a transport failure to decide whether OAuth
+# is available. Answering locally with a JSON-shaped 404 keeps the
+# SDK's parser from crashing on upstream's plain-text "Not Found" body.
 _OAUTH_DISCOVERY_PATHS = (
     "/.well-known/oauth-authorization-server",
     "/.well-known/oauth-protected-resource",
+    "/.well-known/openid-configuration",
 )
 
 
@@ -160,6 +164,9 @@ async def run() -> None:
             app = web.Application()
             for discovery_path in _OAUTH_DISCOVERY_PATHS:
                 app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
+            # RFC 7591 Dynamic Client Registration — also intercepted so the
+            # SDK gets a JSON 404 rather than kube-rbac-proxy's plain-text one.
+            app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
             app.router.add_route("*", "/{tail:.*}", _make_handler(upstream, http))
             runner = web.AppRunner(app)
             await runner.setup()
