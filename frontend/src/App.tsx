@@ -1871,6 +1871,17 @@ const STREAM_VERBS = [
   "Reasoning",
 ] as const;
 
+// Format a Claude tool name for display in the status pill.
+// "Bash" → "Bash"
+// "mcp__github__create_pull_request" → "github · create pull request"
+function formatToolLabel(toolName: string): string {
+  const stripped = toolName.replace(/^mcp__/, "");
+  const [server, ...rest] = stripped.split("__");
+  if (rest.length === 0) return server;
+  const action = rest.join("__").replace(/_/g, " ");
+  return `${server} · ${action}`;
+}
+
 // Context-window sizes per model. Used for the usage % ring. The 1M
 // variant of Opus is a separate id; for everything else, 200k is the
 // shipping default.
@@ -2688,6 +2699,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   );
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>(() => readSessionInitialTab(session.id));
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
@@ -3361,11 +3373,22 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         const u = (msg as JsonObject).usage as ClaudeUsage | undefined;
         const total = totalContextTokens(u);
         if (total > 0) setTokensUsed(total);
+        // Track active tool — first tool_use block in content, if any.
+        if (Array.isArray(msg.content)) {
+          const toolBlock = (msg.content as unknown[]).find(
+            (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
+          );
+          setActiveToolName(toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null);
+        }
       }
+    } else if (t === "user") {
+      // Tool results received — tool call finished.
+      setActiveToolName(null);
     } else if (t === "result") {
       const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
       const total = totalContextTokens(u);
       if (total > 0) setTokensUsed(total);
+      setActiveToolName(null);
     }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
   }
@@ -3438,6 +3461,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     ]);
     setRunStatus("running");
     setRunning(true);
+    setActiveToolName(null);
     setRunStartedAt(Date.now());
     setNow(Date.now());
     // The form clears the textarea internally on submit but doesn't
@@ -3568,9 +3592,12 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const elapsedLabel = formatStreamElapsed(elapsedMs);
   const dotPhase = Math.floor(now / 500) % 3; // 0..2
   const dots = ".".repeat(dotPhase + 1);
-  // Rotating verb cycles every 3s. Matches cloudcli's ClaudeStatus.
+  // When a tool call is in flight, show its name. Otherwise cycle the
+  // generic verbs every 3s (matches cloudcli's ClaudeStatus pattern).
   const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
-  const verb = STREAM_VERBS[verbIndex];
+  const verb = activeToolName
+    ? `Using ${formatToolLabel(activeToolName)}`
+    : STREAM_VERBS[verbIndex];
 
   const sendStdin = (text: string) => {
     wsRef.current?.send(JSON.stringify({ stdin: text }));
