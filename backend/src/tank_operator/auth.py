@@ -144,6 +144,35 @@ def _verify_entra_id_token(id_token: str) -> dict[str, Any]:
     return payload
 
 
+def mint_session_token_for_email(email: str, *, sub: str | None = None) -> str:
+    """Mint a session JWT bound to an existing allow-listed email.
+
+    Used to inject a per-pod token at session creation so the agent inside
+    the pod can call orchestrator endpoints back as the owning user (e.g.
+    via the mcp-tank stdio server). The token validates against the same
+    `current_user` path as a browser session — so any future MCP call that
+    has to know "which user is this on behalf of" reads the JWT, not the
+    pod's shared SA token.
+    """
+    if not JWT_SECRET:
+        raise HTTPException(status_code=500, detail="JWT_SECRET not configured")
+    normalized = email.strip().lower()
+    if normalized not in ALLOWED_EMAILS:
+        raise HTTPException(status_code=403, detail="email not allowed")
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "sub": sub or f"pod:{normalized}",
+            "email": normalized,
+            "name": normalized,
+            "iat": now,
+            "exp": now + SESSION_TTL_SECONDS,
+        },
+        JWT_SECRET,
+        algorithm=ALGORITHM_HS,
+    )
+
+
 async def exchange_microsoft_token(id_token: str) -> tuple[str, User]:
     """Verify an Entra ID token and mint a backend session JWT for the allowed user.
 
@@ -234,6 +263,12 @@ async def mint_session_token_for_k8s_subject(sa_token: str) -> tuple[str, User]:
     Designed for in-cluster automation (smoke tests, headless-browser
     probes) that needs to act as an authenticated user without going
     through MSAL.
+
+    NOT for session pods acting on behalf of their owner — those carry a
+    per-pod JWT minted via mint_session_token_for_email at create time
+    (TANK_API_TOKEN env var). The shared `claude-session` SA can only map
+    to one email here, so using this path from session pods would conflate
+    every user's traffic under a single principal.
     """
     if not JWT_SECRET:
         raise HTTPException(status_code=500, detail="JWT_SECRET not configured")

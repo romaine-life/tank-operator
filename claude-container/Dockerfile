@@ -96,6 +96,13 @@ RUN pip install --no-cache-dir --break-system-packages \
 RUN pip install --no-cache-dir --break-system-packages \
         "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}"
 
+# In-pod stdio MCP server for cross-session messaging on tank-operator. Lives
+# next to mcp-auth-proxy because it's tightly coupled to this repo's API
+# surface — no value in giving it a standalone repo. Installed by relative
+# path so the build doesn't depend on a github clone of itself.
+COPY claude-container/mcp-tank /opt/mcp-tank
+RUN pip install --no-cache-dir --break-system-packages /opt/mcp-tank
+
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session
 # pod (same image, command "mcp-auth-proxy"). See server.py for the
