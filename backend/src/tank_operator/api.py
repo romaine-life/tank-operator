@@ -38,7 +38,12 @@ from .credentials_seed import (
     harvest_and_save,
     harvest_codex_and_save,
 )
-from .exec_proxy import bridge, exec_stream_to_websocket, exec_write_file
+from .exec_proxy import (
+    bridge,
+    exec_capture,
+    exec_stream_to_websocket,
+    exec_write_file,
+)
 from .profiles import ProfileStore, SessionRegistryStore
 from .sessions import (
     CODEX_HEADLESS_MODE,
@@ -406,6 +411,166 @@ class PatchSessionBody(BaseModel):
     # Empty string / null clears the name; otherwise stored verbatim (trimmed
     # + length-capped server-side).
     name: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Files API — read-only browsing of /workspace inside the session pod.
+# Powers the Files tab in the chat pane. Edits are out of scope for now.
+
+WORKSPACE_ROOT = "/workspace"
+MAX_FILE_BYTES = 256 * 1024  # 256 KiB cap; UI shows a "truncated" hint above this.
+
+
+def _safe_workspace_path(path: str) -> str:
+    """Resolve a user-supplied path under /workspace, rejecting escapes.
+
+    Returns the absolute path. The orchestrator hands this to `find` /
+    `head` over `kubectl exec`, so we filter aggressively to avoid handing
+    a shell anything weird.
+    """
+    if path is None:
+        path = ""
+    if "\0" in path:
+        raise HTTPException(status_code=400, detail="invalid path (null byte)")
+    candidate = os.path.normpath(os.path.join(WORKSPACE_ROOT, path.lstrip("/")))
+    if candidate != WORKSPACE_ROOT and not candidate.startswith(WORKSPACE_ROOT + "/"):
+        raise HTTPException(status_code=400, detail="path outside /workspace")
+    return candidate
+
+
+class FileEntry(BaseModel):
+    name: str
+    type: str  # "file" | "dir" | "symlink" | "other"
+    size: int
+
+
+class FileListing(BaseModel):
+    path: str
+    entries: list[FileEntry]
+
+
+class FileContent(BaseModel):
+    path: str
+    size: int
+    truncated: bool
+    text: str
+    binary: bool
+
+
+@app.get("/api/sessions/{session_id}/files", response_model=FileListing)
+async def list_session_files(
+    session_id: str,
+    path: str = "",
+    user: User = Depends(current_user),
+) -> FileListing:
+    """Directory listing under /workspace inside the session pod.
+
+    `path` is relative to /workspace; empty / "/" lists the root.
+    """
+    abs_path = _safe_workspace_path(path)
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # BusyBox `find` (alpine) lacks GNU `-printf`, so we drop into python3
+    # inside the pod for a JSON listing. The claude-container image bakes
+    # python3 in via apk for orchestration helpers.
+    listing_script = (
+        "import os, json, sys\n"
+        "p = sys.argv[1]\n"
+        "out = []\n"
+        "for name in sorted(os.listdir(p)):\n"
+        "    full = os.path.join(p, name)\n"
+        "    try:\n"
+        "        st = os.lstat(full)\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    if os.path.islink(full):\n"
+        "        t = 'symlink'\n"
+        "    elif os.path.isdir(full):\n"
+        "        t = 'dir'\n"
+        "    elif os.path.isfile(full):\n"
+        "        t = 'file'\n"
+        "    else:\n"
+        "        t = 'other'\n"
+        "    out.append({'name': name, 'type': t, 'size': st.st_size if t == 'file' else 0})\n"
+        "print(json.dumps(out))\n"
+    )
+    cmd = ["python3", "-c", listing_script, abs_path]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"path not found: {exc}")
+    import json as _json
+    try:
+        listing = _json.loads(out.decode("utf-8", errors="replace") or "[]")
+    except _json.JSONDecodeError:
+        listing = []
+    entries: list[FileEntry] = []
+    for item in listing:
+        if not isinstance(item, dict):
+            continue
+        entries.append(
+            FileEntry(
+                name=str(item.get("name", "")),
+                type=str(item.get("type", "other")),
+                size=int(item.get("size", 0) or 0),
+            )
+        )
+    # Directories first, then files, alphabetical within each group.
+    entries.sort(key=lambda e: (e.type != "dir", e.name.lower()))
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/") if abs_path != WORKSPACE_ROOT else ""
+    return FileListing(path=rel, entries=entries)
+
+
+@app.get("/api/sessions/{session_id}/files/content", response_model=FileContent)
+async def get_session_file_content(
+    session_id: str,
+    path: str,
+    user: User = Depends(current_user),
+) -> FileContent:
+    """Read a file under /workspace, capped at MAX_FILE_BYTES."""
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot read directory")
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # Read 1 byte over the cap so we can tell whether the file was truncated.
+    cmd = ["head", "-c", str(MAX_FILE_BYTES + 1), "--", abs_path]
+    try:
+        data = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"file not found: {exc}")
+    truncated = len(data) > MAX_FILE_BYTES
+    if truncated:
+        data = data[:MAX_FILE_BYTES]
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/")
+    try:
+        text = data.decode("utf-8")
+        return FileContent(
+            path=rel, size=len(data), truncated=truncated, text=text, binary=False
+        )
+    except UnicodeDecodeError:
+        return FileContent(
+            path=rel, size=len(data), truncated=truncated, text="", binary=True
+        )
+
+
+# ---------------------------------------------------------------------------
 
 
 @app.patch("/api/sessions/{session_id}")

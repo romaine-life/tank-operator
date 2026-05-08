@@ -27,15 +27,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   ArrowDownIcon,
+  ArrowUpFromLineIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   ClipboardListIcon,
+  FileIcon,
   FileTextIcon,
   FolderIcon,
+  FolderOpenIcon,
   ImageIcon,
   ListChecksIcon,
+  Loader2Icon,
   MessageSquareIcon,
   PlugIcon,
   SearchIcon,
@@ -1695,6 +1699,36 @@ const transcriptClassNames = {
 };
 
 type RunTab = "chat" | "shell" | "files";
+
+interface FileEntry {
+  name: string;
+  type: "file" | "dir" | "symlink" | "other";
+  size: number;
+}
+
+interface SelectedFile {
+  path: string;
+  size: number;
+  truncated: boolean;
+  text: string;
+  binary: boolean;
+}
+
+function joinFilesPath(parent: string, name: string): string {
+  if (!parent) return name;
+  return `${parent}/${name}`;
+}
+
+function parentFilesPath(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx <= 0 ? "" : path.slice(0, idx);
+}
+
+function humanFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 type RunComposerMode =
   | "default"
   | "acceptEdits"
@@ -1909,6 +1943,13 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   // Composer text mirror — used to know when the input has content (drives
   // hint fade + clear-X visibility) without making the textarea controlled.
   const [composerText, setComposerText] = useState("");
+  // Files-tab state — read-only browse of /workspace inside the session pod.
+  const [filesPath, setFilesPath] = useState<string>("");
+  const [filesEntries, setFilesEntries] = useState<FileEntry[] | null>(null);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [fileContentLoading, setFileContentLoading] = useState(false);
   // Auto-scroll bookkeeping — track whether the user has scrolled away from
   // the bottom; if so, suppress auto-scroll on new entries and offer the
   // floating "scroll to bottom" button.
@@ -1988,6 +2029,76 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       // backend replay would cover this case anyway.
     }
   }, [entries, session.id]);
+
+  // Files tab — fetch directory listing whenever the path changes or the
+  // user opens the tab on a ready session.
+  useEffect(() => {
+    if (activeTab !== "files" || session.status !== "Active") return;
+    let cancelled = false;
+    setFilesLoading(true);
+    setFilesError(null);
+    void authedFetch(
+      `/api/sessions/${session.id}/files?path=${encodeURIComponent(filesPath)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`${res.status} ${await res.text()}`);
+        }
+        return (await res.json()) as { path: string; entries: FileEntry[] };
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setFilesEntries(body.entries);
+        setFilesLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setFilesError(String(err.message ?? err));
+        setFilesEntries([]);
+        setFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, filesPath, session.id, session.status]);
+
+  // Selected-file content fetch.
+  useEffect(() => {
+    if (!selectedFile || selectedFile.text || selectedFile.binary) return;
+    // text empty + not binary == placeholder created by openFile; load it.
+    let cancelled = false;
+    setFileContentLoading(true);
+    void authedFetch(
+      `/api/sessions/${session.id}/files/content?path=${encodeURIComponent(selectedFile.path)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return (await res.json()) as SelectedFile;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setSelectedFile(body);
+        setFileContentLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFileContentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, session.id]);
+
+  function openFileEntry(name: string, type: FileEntry["type"]) {
+    const next = joinFilesPath(filesPath, name);
+    if (type === "dir") {
+      setFilesPath(next);
+      setSelectedFile(null);
+      return;
+    }
+    // Trigger content fetch by setting a placeholder.
+    setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+  }
 
   // When the session id changes (user picks a different session in the
   // sidebar that re-mounts this HeadlessRun with a different id), reset
@@ -2347,8 +2458,142 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             />
           </div>
         ) : activeTab === "files" ? (
-          <div className="run-empty">
-            <span className="run-muted">Files coming soon</span>
+          <div className="run-files">
+            <div className="run-files-breadcrumb">
+              <button
+                type="button"
+                className="run-files-crumb"
+                onClick={() => {
+                  setFilesPath("");
+                  setSelectedFile(null);
+                }}
+              >
+                /workspace
+              </button>
+              {filesPath
+                .split("/")
+                .filter(Boolean)
+                .map((seg, i, arr) => {
+                  const target = arr.slice(0, i + 1).join("/");
+                  return (
+                    <span key={target} className="run-files-crumb-wrap">
+                      <span className="run-files-crumb-sep">/</span>
+                      <button
+                        type="button"
+                        className="run-files-crumb"
+                        onClick={() => {
+                          setFilesPath(target);
+                          setSelectedFile(null);
+                        }}
+                      >
+                        {seg}
+                      </button>
+                    </span>
+                  );
+                })}
+            </div>
+            <div className="run-files-body">
+              <div className="run-files-list">
+                {filesPath && (
+                  <button
+                    type="button"
+                    className="run-files-row"
+                    onClick={() => {
+                      setFilesPath(parentFilesPath(filesPath));
+                      setSelectedFile(null);
+                    }}
+                  >
+                    <ArrowUpFromLineIcon size={14} className="run-files-row-icon" aria-hidden="true" />
+                    <span className="run-files-row-name">..</span>
+                  </button>
+                )}
+                {filesLoading && (
+                  <div className="run-files-status">
+                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                    <span>Loading…</span>
+                  </div>
+                )}
+                {filesError && (
+                  <div className="run-files-status run-files-error">
+                    {filesError}
+                  </div>
+                )}
+                {!filesLoading &&
+                  !filesError &&
+                  filesEntries &&
+                  filesEntries.map((e) => {
+                    const Icon =
+                      e.type === "dir" ? FolderIcon : FileIcon;
+                    return (
+                      <button
+                        key={e.name}
+                        type="button"
+                        className={`run-files-row${
+                          selectedFile?.path === joinFilesPath(filesPath, e.name)
+                            ? " run-files-row-active"
+                            : ""
+                        }`}
+                        onClick={() => openFileEntry(e.name, e.type)}
+                      >
+                        <Icon
+                          size={14}
+                          className={`run-files-row-icon run-files-row-${e.type}`}
+                          aria-hidden="true"
+                        />
+                        <span className="run-files-row-name">{e.name}</span>
+                        {e.type === "file" && (
+                          <span className="run-files-row-size">
+                            {humanFileSize(e.size)}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                {!filesLoading &&
+                  !filesError &&
+                  filesEntries &&
+                  filesEntries.length === 0 &&
+                  !filesPath && (
+                    <div className="run-files-status">empty workspace</div>
+                  )}
+              </div>
+              <div className="run-files-viewer">
+                {!selectedFile ? (
+                  <div className="run-files-empty">
+                    <FolderOpenIcon size={28} aria-hidden="true" />
+                    <span>Select a file to preview</span>
+                  </div>
+                ) : fileContentLoading ? (
+                  <div className="run-files-status">
+                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                    <span>Loading…</span>
+                  </div>
+                ) : selectedFile.binary ? (
+                  <div className="run-files-status">
+                    <FileIcon size={14} aria-hidden="true" />
+                    <span>
+                      Binary file ({humanFileSize(selectedFile.size)}) — preview
+                      not available.
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="run-files-viewer-header">
+                      <span className="run-files-viewer-path">
+                        {selectedFile.path}
+                      </span>
+                      <span className="run-files-viewer-meta">
+                        {humanFileSize(selectedFile.size)}
+                        {selectedFile.truncated && " · truncated"}
+                      </span>
+                    </div>
+                    <pre className="run-files-viewer-content">
+                      {selectedFile.text}
+                    </pre>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         ) : !ready ? (
           <div className="run-empty">
