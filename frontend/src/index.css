@@ -2790,6 +2790,19 @@ textarea.run-files-viewer-editor:focus {
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
 }
 
+/* Idle/done state — amber static pill, no pulse. Mirrors cloudcli's
+   ClaudeStatus amber indicator when isLoading=false but status is set. */
+.run-status-bar-idle {
+  animation: none;
+  border-color: rgba(251, 191, 36, 0.25);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0.03));
+  box-shadow: none;
+}
+
+.run-status-bar-idle .run-status-verb {
+  color: rgba(251, 191, 36, 0.85);
+}
+
 .run-status-icon {
   display: inline-flex;
   align-items: center;
