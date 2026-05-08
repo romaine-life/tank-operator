@@ -1841,7 +1841,6 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       <header className="run-header">
         <div className="run-header-title">
           <h2 className="run-header-name">{sessionDisplayName(session)}</h2>
-          <p className="run-header-sub">workspace</p>
         </div>
         <nav className="run-tabs" role="tablist" aria-label="Session views">
           <button
