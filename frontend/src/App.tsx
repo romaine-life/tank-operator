@@ -4131,7 +4131,6 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             <PromptInputTextarea
               className="run-composer-textarea"
               placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
-              disabled={!ready}
             />
             <PromptInputFooter className="run-composer-footer">
               <PromptInputTools className="run-composer-tools">
