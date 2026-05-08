@@ -23,7 +23,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -1694,7 +1693,47 @@ const transcriptClassNames = {
 };
 
 type RunTab = "chat" | "shell" | "files";
-type RunComposerMode = "default" | "plan";
+type RunComposerMode =
+  | "default"
+  | "acceptEdits"
+  | "auto"
+  | "bypassPermissions"
+  | "plan";
+
+interface PermissionModeInfo {
+  label: string;
+  desc: string;
+  /** Color of the dot rendered next to the pill label. */
+  dotColor: string;
+}
+
+const PERMISSION_MODE_INFO: Record<RunComposerMode, PermissionModeInfo> = {
+  default: {
+    label: "Default Mode",
+    desc: "Ask before edits, agree to commands",
+    dotColor: "#34d399",
+  },
+  acceptEdits: {
+    label: "Accept Edits",
+    desc: "Auto-approve file changes",
+    dotColor: "#fbbf24",
+  },
+  auto: {
+    label: "Auto",
+    desc: "Auto-approve safe operations",
+    dotColor: "#60a5fa",
+  },
+  bypassPermissions: {
+    label: "Bypass Permissions",
+    desc: "Run without permission prompts",
+    dotColor: "#f87171",
+  },
+  plan: {
+    label: "Plan Mode",
+    desc: "Plan before execution",
+    dotColor: "#a78bfa",
+  },
+};
 
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
@@ -1707,6 +1746,42 @@ const STREAM_VERBS = [
   "Computing",
   "Reasoning",
 ] as const;
+
+// Context-window sizes per model. Used for the usage % ring. The 1M
+// variant of Opus is a separate id; for everything else, 200k is the
+// shipping default.
+const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
+  "claude-opus-4-7-1m": 1_000_000,
+  "claude-opus-4-7": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5": 200_000,
+  "gpt-5-5": 256_000,
+  "gpt-5": 128_000,
+};
+
+function getContextWindow(modelId: string): number {
+  return CONTEXT_WINDOW_BY_MODEL[modelId] ?? 200_000;
+}
+
+interface ClaudeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+/** Current-turn context size = the input that produced this response.
+ *  cache_read counts as in-context tokens that were sent for free; we
+ *  include it so the gauge reflects "how full is the window" not "how
+ *  many tokens were billed". */
+function totalContextTokens(u: ClaudeUsage | undefined): number {
+  if (!u) return 0;
+  return (
+    (u.input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0)
+  );
+}
 
 function formatStreamElapsed(ms: number): string {
   const sec = Math.floor(ms / 1000);
@@ -1820,6 +1895,10 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   // interval while running so the bar updates without a per-element timer.
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
+  // Context tokens used in the most recent assistant turn — updated via
+  // applyStdoutLine when an `assistant` or `result` event with usage info
+  // arrives. Drives the % ring in the composer footer.
+  const [tokensUsed, setTokensUsed] = useState(0);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
   const [slashOpen, setSlashOpen] = useState(false);
@@ -2026,6 +2105,22 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       );
       return;
     }
+    // Track context-window usage from claude's stream-json events. The
+    // assistant message and the final result both carry a `usage` block;
+    // the result is the most accurate "final state" so prefer it.
+    const t = (providerEvent as JsonObject).type;
+    if (t === "assistant") {
+      const msg = (providerEvent as JsonObject).message;
+      if (isJsonObject(msg)) {
+        const u = (msg as JsonObject).usage as ClaudeUsage | undefined;
+        const total = totalContextTokens(u);
+        if (total > 0) setTokensUsed(total);
+      }
+    } else if (t === "result") {
+      const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
+      const total = totalContextTokens(u);
+      if (total > 0) setTokensUsed(total);
+    }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
   }
 
@@ -2079,7 +2174,14 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ prompt: trimmed, follow_up: followUp }));
+      ws.send(
+        JSON.stringify({
+          prompt: trimmed,
+          follow_up: followUp,
+          model: selectedModelId,
+          permission_mode: composerMode,
+        }),
+      );
     };
     ws.onmessage = (event) => {
       let msg: RunEvent;
@@ -2138,6 +2240,9 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const ready = session.status === "Active";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+  const contextWindow = getContextWindow(selectedModel.id);
+  const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
+  const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
   // Streaming-pill computeds — only meaningful while running.
   const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
@@ -2371,19 +2476,26 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                     <DropdownMenuItem disabled>Add screenshot</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                {/* Conversation mode dropdown — Default vs Plan. Plan
-                    mode is wired only as state today; backend doesn't
-                    yet consume it (would need a flag on headless-run.sh
-                    or a per-run prompt prefix). */}
+                {/* Permission-mode dropdown — five cloudcli-equivalent
+                    modes. Backend wire-through: `acceptEdits`/`auto`/
+                    `bypassPermissions` map to `claude -p
+                    --dangerously-skip-permissions`; `plan` is rendered
+                    as a prompt prefix (Claude's headless mode doesn't
+                    have a CLI flag for plan today); `default` is the
+                    no-flag baseline. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <button
                       type="button"
                       className="run-mode-pill run-mode-pill-button"
-                      aria-label="Conversation mode"
+                      aria-label="Permission mode"
                     >
-                      <span className="run-mode-dot" aria-hidden="true" />
-                      {composerMode === "plan" ? "Plan Mode" : "Default Mode"}
+                      <span
+                        className="run-mode-dot"
+                        aria-hidden="true"
+                        style={{ background: PERMISSION_MODE_INFO[composerMode].dotColor }}
+                      />
+                      {PERMISSION_MODE_INFO[composerMode].label}
                       <ChevronDownIcon
                         className="run-mode-chevron"
                         aria-hidden="true"
@@ -2395,41 +2507,72 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                     align="start"
                     className="run-mode-menu"
                   >
-                    <DropdownMenuItem
-                      onSelect={() => setComposerMode("default")}
-                    >
-                      <span className="run-mode-menu-row">
-                        <span className="run-mode-menu-label">Default Mode</span>
-                        {composerMode === "default" && (
-                          <CheckIcon
-                            className="run-mode-menu-check"
-                            aria-hidden="true"
-                          />
-                        )}
-                      </span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onSelect={() => setComposerMode("plan")}
-                    >
-                      <span className="run-mode-menu-row">
-                        <span className="run-mode-menu-label">Plan Mode</span>
-                        {composerMode === "plan" && (
-                          <CheckIcon
-                            className="run-mode-menu-check"
-                            aria-hidden="true"
-                          />
-                        )}
-                      </span>
-                    </DropdownMenuItem>
+                    {(Object.keys(PERMISSION_MODE_INFO) as RunComposerMode[]).map(
+                      (modeKey) => {
+                        const info = PERMISSION_MODE_INFO[modeKey];
+                        return (
+                          <DropdownMenuItem
+                            key={modeKey}
+                            onSelect={() => setComposerMode(modeKey)}
+                          >
+                            <span className="run-mode-menu-row">
+                              <span className="run-mode-menu-meta">
+                                <span
+                                  className="run-mode-menu-dot"
+                                  aria-hidden="true"
+                                  style={{ background: info.dotColor }}
+                                />
+                                <span className="run-mode-menu-label">
+                                  {info.label}
+                                </span>
+                                <span className="run-mode-menu-desc">
+                                  {info.desc}
+                                </span>
+                              </span>
+                              {composerMode === modeKey && (
+                                <CheckIcon
+                                  className="run-mode-menu-check"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </span>
+                          </DropdownMenuItem>
+                        );
+                      },
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <span className="run-usage-ring" aria-label="Context usage">
-                  <span className="run-usage-ring-text">0.0%</span>
-                </span>
-                <span className="run-comments-badge" aria-label="Comments">
-                  <MessageSquareIcon className="run-comments-icon" aria-hidden="true" />
-                  <span className="run-comments-count">8</span>
+                <span
+                  className="run-usage-ring"
+                  aria-label={`Context usage: ${usagePct.toFixed(1)}%`}
+                  title={`${tokensUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
+                  data-level={usageLevel}
+                >
+                  <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="13"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeOpacity="0.18"
+                      strokeWidth="2.5"
+                    />
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="13"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
+                      transform="rotate(-90 16 16)"
+                    />
+                  </svg>
+                  <span className="run-usage-ring-text">
+                    {usagePct.toFixed(usagePct < 10 ? 1 : 0)}%
+                  </span>
                 </span>
               </PromptInputTools>
               <span className="run-composer-hint">

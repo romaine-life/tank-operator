@@ -585,6 +585,21 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
         return
     follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
+    # Optional model + permission_mode from the frontend. Conservatively
+    # constrained to [A-Za-z0-9._-]{1,64} so they're safe to splice into
+    # the bash command literal below without risking a shell injection.
+    import re as _re
+    _allowed_arg = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+    raw_model = first.get("model") if isinstance(first, dict) else None
+    model = (
+        raw_model
+        if isinstance(raw_model, str) and _allowed_arg.match(raw_model)
+        else ""
+    )
+    raw_pm = first.get("permission_mode") if isinstance(first, dict) else None
+    permission_mode = (
+        raw_pm if isinstance(raw_pm, str) and _allowed_arg.match(raw_pm) else ""
+    )
 
     try:
         pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
@@ -599,6 +614,9 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+    # model + permission_mode reach headless-run.sh as positional args.
+    # Both have already been validated against [A-Za-z0-9._-]{1,64} so
+    # they're safe to splice unquoted into the bash command literal.
     command = [
         "bash",
         "-lc",
@@ -608,7 +626,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             "status=0; "
             f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
             "if [ \"$status\" -eq 0 ]; then "
-            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" {'true' if follow_up else 'false'} </dev/null || status=$?; "
+            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" {'true' if follow_up else 'false'} '{model}' '{permission_mode}' </dev/null || status=$?; "
             "fi; "
             "rm -f \"$prompt_file\"; "
             "exit $status"
