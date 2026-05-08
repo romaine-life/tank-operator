@@ -3,9 +3,14 @@ set -euo pipefail
 
 provider="${1:-}"
 prompt_file="${2:-}"
+follow_up="${3:-false}"
+# 4th + 5th positional args added when the frontend ships them. Both are
+# pre-validated against [A-Za-z0-9._-]{1,64} in api.py before getting here.
+model="${4:-}"
+permission_mode="${5:-}"
 
 if [ -z "$provider" ] || [ -z "$prompt_file" ] || [ ! -f "$prompt_file" ]; then
-  echo "usage: headless-run.sh <claude|codex> <prompt-file>" >&2
+  echo "usage: headless-run.sh <claude|codex> <prompt-file> [follow_up] [model] [permission_mode]" >&2
   exit 64
 fi
 
@@ -121,10 +126,32 @@ configure_git_identity
 case "$provider" in
   claude)
     configure_claude
-    exec claude -p --verbose --output-format stream-json "$(cat "$prompt_file")"
+    claude_args=(-p --verbose --output-format stream-json)
+    if [ "$follow_up" = "true" ]; then
+      claude_args=(--continue "${claude_args[@]}")
+    fi
+    if [ -n "$model" ]; then
+      claude_args+=(--model "$model")
+    fi
+    # acceptEdits / auto / bypassPermissions all map to claude's
+    # --dangerously-skip-permissions in headless mode (the CLI doesn't
+    # have finer-grained per-mode flags). plan mode prefixes the prompt
+    # with a planning instruction since claude -p is non-interactive.
+    prompt_text="$(cat "$prompt_file")"
+    case "$permission_mode" in
+      acceptEdits|auto|bypassPermissions)
+        claude_args+=(--dangerously-skip-permissions)
+        ;;
+      plan)
+        prompt_text="[Plan mode: produce a step-by-step plan first; do not execute tool calls until the plan is confirmed in a follow-up message.]\n\n${prompt_text}"
+        ;;
+    esac
+    exec claude "${claude_args[@]}" "$prompt_text"
     ;;
   codex)
     configure_codex
+    # Codex `exec --json` is single-turn; conversation continuity for codex is
+    # tracked separately. Today follow_up is ignored for codex.
     exec python3 - "$prompt_file" <<'PY'
 import os
 import pty

@@ -9,12 +9,14 @@ from fastapi import (
     Cookie,
     Depends,
     FastAPI,
+    Header,
     HTTPException,
     Request,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
+from fastapi import Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -29,6 +31,7 @@ from .auth import (
     exchange_microsoft_token,
     gravatar_url,
     mint_install_state,
+    mint_session_token_for_k8s_subject,
     verify_install_state,
 )
 from .credentials_seed import (
@@ -36,7 +39,12 @@ from .credentials_seed import (
     harvest_and_save,
     harvest_codex_and_save,
 )
-from .exec_proxy import bridge, exec_stream_to_websocket, exec_write_file
+from .exec_proxy import (
+    bridge,
+    exec_capture,
+    exec_stream_to_websocket,
+    exec_write_file,
+)
 from .profiles import ProfileStore, SessionRegistryStore
 from .sessions import (
     CODEX_HEADLESS_MODE,
@@ -158,6 +166,29 @@ async def logout() -> JSONResponse:
     response = JSONResponse({"status": "ok"})
     response.delete_cookie(COOKIE_NAME, path="/")
     return response
+
+
+@app.post("/api/internal/auth/k8s")
+async def auth_via_k8s_sa(authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Cluster-native auth path. Caller presents a kubernetes
+    ServiceAccount projected token in `Authorization: Bearer <token>`;
+    the orchestrator validates it via TokenReview and, if the SA
+    subject is in K8S_AUTH_ALLOWED_SUBJECTS, returns a session JWT
+    bound to the mapped email.
+
+    Lets in-cluster automation (smoke tests, headless-browser probes,
+    health-check sidecars) authenticate without going through MSAL.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="missing bearer SA token")
+    sa_token = authorization[7:]
+    session_token, user = await mint_session_token_for_k8s_subject(sa_token)
+    return JSONResponse(
+        {
+            "token": session_token,
+            "user": {"email": user.email, "name": user.name, "sub": user.sub},
+        }
+    )
 
 
 @app.get("/api/auth/me", response_model=dict)
@@ -383,6 +414,407 @@ class PatchSessionBody(BaseModel):
     name: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Files API — read-only browsing of /workspace inside the session pod.
+# Powers the Files tab in the chat pane. Edits are out of scope for now.
+
+WORKSPACE_ROOT = "/workspace"
+MAX_FILE_BYTES = 256 * 1024  # 256 KiB cap; UI shows a "truncated" hint above this.
+
+
+def _safe_workspace_path(path: str) -> str:
+    """Resolve a user-supplied path under /workspace, rejecting escapes.
+
+    Returns the absolute path. The orchestrator hands this to `find` /
+    `head` over `kubectl exec`, so we filter aggressively to avoid handing
+    a shell anything weird.
+    """
+    if path is None:
+        path = ""
+    if "\0" in path:
+        raise HTTPException(status_code=400, detail="invalid path (null byte)")
+    candidate = os.path.normpath(os.path.join(WORKSPACE_ROOT, path.lstrip("/")))
+    if candidate != WORKSPACE_ROOT and not candidate.startswith(WORKSPACE_ROOT + "/"):
+        raise HTTPException(status_code=400, detail="path outside /workspace")
+    return candidate
+
+
+class FileEntry(BaseModel):
+    name: str
+    type: str  # "file" | "dir" | "symlink" | "other"
+    size: int
+
+
+class FileListing(BaseModel):
+    path: str
+    entries: list[FileEntry]
+
+
+class FileContent(BaseModel):
+    path: str
+    size: int
+    truncated: bool
+    text: str
+    binary: bool
+
+
+class WriteFileBody(BaseModel):
+    text: str
+
+
+@app.get("/api/sessions/{session_id}/files", response_model=FileListing)
+async def list_session_files(
+    session_id: str,
+    path: str = "",
+    user: User = Depends(current_user),
+) -> FileListing:
+    """Directory listing under /workspace inside the session pod.
+
+    `path` is relative to /workspace; empty / "/" lists the root.
+    """
+    abs_path = _safe_workspace_path(path)
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # BusyBox `find` (alpine) lacks GNU `-printf`, so we drop into python3
+    # inside the pod for a JSON listing. The claude-container image bakes
+    # python3 in via apk for orchestration helpers.
+    listing_script = (
+        "import os, json, sys\n"
+        "p = sys.argv[1]\n"
+        "out = []\n"
+        "for name in sorted(os.listdir(p)):\n"
+        "    full = os.path.join(p, name)\n"
+        "    try:\n"
+        "        st = os.lstat(full)\n"
+        "    except OSError:\n"
+        "        continue\n"
+        "    if os.path.islink(full):\n"
+        "        t = 'symlink'\n"
+        "    elif os.path.isdir(full):\n"
+        "        t = 'dir'\n"
+        "    elif os.path.isfile(full):\n"
+        "        t = 'file'\n"
+        "    else:\n"
+        "        t = 'other'\n"
+        "    out.append({'name': name, 'type': t, 'size': st.st_size if t == 'file' else 0})\n"
+        "print(json.dumps(out))\n"
+    )
+    cmd = ["python3", "-c", listing_script, abs_path]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"path not found: {exc}")
+    import json as _json
+    try:
+        listing = _json.loads(out.decode("utf-8", errors="replace") or "[]")
+    except _json.JSONDecodeError:
+        listing = []
+    entries: list[FileEntry] = []
+    for item in listing:
+        if not isinstance(item, dict):
+            continue
+        entries.append(
+            FileEntry(
+                name=str(item.get("name", "")),
+                type=str(item.get("type", "other")),
+                size=int(item.get("size", 0) or 0),
+            )
+        )
+    # Directories first, then files, alphabetical within each group.
+    entries.sort(key=lambda e: (e.type != "dir", e.name.lower()))
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/") if abs_path != WORKSPACE_ROOT else ""
+    return FileListing(path=rel, entries=entries)
+
+
+@app.get("/api/sessions/{session_id}/files/content", response_model=FileContent)
+async def get_session_file_content(
+    session_id: str,
+    path: str,
+    user: User = Depends(current_user),
+) -> FileContent:
+    """Read a file under /workspace, capped at MAX_FILE_BYTES."""
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot read directory")
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # Read 1 byte over the cap so we can tell whether the file was truncated.
+    cmd = ["head", "-c", str(MAX_FILE_BYTES + 1), "--", abs_path]
+    try:
+        data = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"file not found: {exc}")
+    truncated = len(data) > MAX_FILE_BYTES
+    if truncated:
+        data = data[:MAX_FILE_BYTES]
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/")
+    try:
+        text = data.decode("utf-8")
+        return FileContent(
+            path=rel, size=len(data), truncated=truncated, text=text, binary=False
+        )
+    except UnicodeDecodeError:
+        return FileContent(
+            path=rel, size=len(data), truncated=truncated, text="", binary=True
+        )
+
+
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MiB cap on a single attachment.
+ATTACHMENTS_REL_DIR = ".attachments"
+
+
+class UploadResponse(BaseModel):
+    path: str  # Relative to /workspace
+    abs_path: str  # Full path in the session pod, what claude reads
+    name: str
+    size: int
+
+
+@app.post("/api/sessions/{session_id}/files/upload", response_model=UploadResponse)
+async def upload_session_file(
+    session_id: str,
+    request: Request,
+    name: str = "",
+    user: User = Depends(current_user),
+) -> UploadResponse:
+    """Save an uploaded file to /workspace/.attachments inside the session pod.
+
+    Used by the chat composer to attach images / files; the prompt is
+    then sent with explicit path references so claude can `Read` them.
+
+    Body is raw bytes (Content-Type: image/png, etc); the file name comes
+    in via the `name` query param. Avoids the multipart parser so we
+    don't need python-multipart in the orchestrator image.
+    """
+    import re as _re_up
+    raw_name = name or "file"
+    safe_name = _re_up.sub(r"[^A-Za-z0-9._-]", "_", raw_name)[:100] or "file"
+    stamp = int(time.time() * 1000)
+    rel_path = f"{ATTACHMENTS_REL_DIR}/{stamp}-{safe_name}"
+    abs_path = _safe_workspace_path(rel_path)
+    contents = await request.body()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (max {MAX_UPLOAD_BYTES} bytes)",
+        )
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    await exec_write_file(SESSIONS_NAMESPACE, pod_name, abs_path, contents)
+    return UploadResponse(
+        path=rel_path, abs_path=abs_path, name=safe_name, size=len(contents)
+    )
+
+
+class FileWalkResponse(BaseModel):
+    paths: list[str]
+    truncated: bool
+
+
+MAX_WALK_RESULTS = 5000
+
+
+@app.get("/api/sessions/{session_id}/files/walk", response_model=FileWalkResponse)
+async def walk_session_files(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> FileWalkResponse:
+    """Recursive walk of /workspace; returns relative file paths capped at
+    MAX_WALK_RESULTS. Powers `@filename` mention autocomplete in the
+    composer.
+    """
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    walk_script = (
+        "import os, json, sys\n"
+        f"limit = {MAX_WALK_RESULTS}\n"
+        "root = sys.argv[1]\n"
+        "out = []\n"
+        "trunc = False\n"
+        "for dirpath, dirs, files in os.walk(root):\n"
+        # Skip dot-dirs (node_modules etc), but keep .attachments visible.
+        "    dirs[:] = [d for d in dirs if d == '.attachments' or not d.startswith('.')]\n"
+        "    dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', 'dist', 'build', '__pycache__', '.venv')]\n"
+        "    for name in files:\n"
+        "        if name.startswith('.') and not dirpath.endswith('/.attachments'):\n"
+        "            continue\n"
+        "        rel = os.path.relpath(os.path.join(dirpath, name), root)\n"
+        "        out.append(rel)\n"
+        "        if len(out) >= limit:\n"
+        "            trunc = True\n"
+        "            break\n"
+        "    if trunc:\n"
+        "        break\n"
+        "print(json.dumps({'paths': out, 'truncated': trunc}))\n"
+    )
+    cmd = ["python3", "-c", walk_script, WORKSPACE_ROOT]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"walk failed: {exc}")
+    import json as _json
+    try:
+        body = _json.loads(out.decode("utf-8", errors="replace") or "{}")
+    except _json.JSONDecodeError:
+        body = {"paths": [], "truncated": False}
+    return FileWalkResponse(
+        paths=list(body.get("paths") or []),
+        truncated=bool(body.get("truncated")),
+    )
+
+
+@app.get("/api/sessions/{session_id}/run/history")
+async def get_run_history(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> Response:
+    """Stream the most recent claude-code session JSONL out of the session
+    pod. Used by HeadlessRun on mount as a fallback when localStorage is
+    empty (different browser, cleared cache, etc).
+
+    Returns ndjson body. Empty body when no history exists yet — frontend
+    treats that as "no prior conversation".
+    """
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # claude-code persists each session at
+    # ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl. We don't track the
+    # uuid → tank session mapping yet; for now return the most recently
+    # modified jsonl in any project subdir, which corresponds to the last
+    # `claude -p` invocation on the pod.
+    cmd = [
+        "bash",
+        "-lc",
+        "ls -t /home/node/.claude/projects/*/*.jsonl 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null",
+    ]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError:
+        out = b""
+    return Response(content=out, media_type="application/x-ndjson")
+
+
+@app.get("/api/sessions/{session_id}/files/raw")
+async def get_session_file_raw(
+    session_id: str,
+    path: str,
+    user: User = Depends(current_user),
+) -> Response:
+    """Stream a raw file from /workspace as bytes — used by the file
+    viewer to render images. Capped at MAX_UPLOAD_BYTES (8 MiB).
+    """
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot read directory")
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    cmd = ["head", "-c", str(MAX_UPLOAD_BYTES), "--", abs_path]
+    try:
+        data = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"file not found: {exc}")
+    # Pick a content-type from the extension. Defensively narrow to the
+    # set the file viewer actually requests; everything else gets octet.
+    ext = abs_path.rsplit(".", 1)[-1].lower() if "." in abs_path else ""
+    ctype = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "svg": "image/svg+xml",
+        "bmp": "image/bmp",
+    }.get(ext, "application/octet-stream")
+    return Response(content=data, media_type=ctype)
+
+
+@app.put("/api/sessions/{session_id}/files/content", response_model=FileContent)
+async def put_session_file_content(
+    session_id: str,
+    path: str,
+    body: WriteFileBody,
+    user: User = Depends(current_user),
+) -> FileContent:
+    """Write `body.text` to a file under /workspace. Refuses to write
+    over a directory or outside /workspace. Capped at MAX_FILE_BYTES.
+    """
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot write to root")
+    data = body.text.encode("utf-8")
+    if len(data) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"file too large (max {MAX_FILE_BYTES} bytes)",
+        )
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    await exec_write_file(SESSIONS_NAMESPACE, pod_name, abs_path, data)
+    rel = abs_path[len(WORKSPACE_ROOT):].lstrip("/")
+    return FileContent(
+        path=rel, size=len(data), truncated=False, text=body.text, binary=False
+    )
+
+
+# ---------------------------------------------------------------------------
+
+
 @app.patch("/api/sessions/{session_id}")
 async def patch_session(
     session_id: str,
@@ -559,6 +991,22 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
         await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
         return
+    follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
+    # Optional model + permission_mode from the frontend. Conservatively
+    # constrained to [A-Za-z0-9._-]{1,64} so they're safe to splice into
+    # the bash command literal below without risking a shell injection.
+    import re as _re
+    _allowed_arg = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+    raw_model = first.get("model") if isinstance(first, dict) else None
+    model = (
+        raw_model
+        if isinstance(raw_model, str) and _allowed_arg.match(raw_model)
+        else ""
+    )
+    raw_pm = first.get("permission_mode") if isinstance(first, dict) else None
+    permission_mode = (
+        raw_pm if isinstance(raw_pm, str) and _allowed_arg.match(raw_pm) else ""
+    )
 
     try:
         pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
@@ -573,6 +1021,9 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+    # model + permission_mode reach headless-run.sh as positional args.
+    # Both have already been validated against [A-Za-z0-9._-]{1,64} so
+    # they're safe to splice unquoted into the bash command literal.
     command = [
         "bash",
         "-lc",
@@ -582,7 +1033,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             "status=0; "
             f"head -c {len(prompt_bytes)} > \"$prompt_file\" || status=$?; "
             "if [ \"$status\" -eq 0 ]; then "
-            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" </dev/null || status=$?; "
+            f"bash /opt/tank/headless-run.sh {provider} \"$prompt_file\" {'true' if follow_up else 'false'} '{model}' '{permission_mode}' </dev/null || status=$?; "
             "fi; "
             "rm -f \"$prompt_file\"; "
             "exit $status"

@@ -1,12 +1,60 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import { AgentTranscript } from "@sandbox-agent/react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
+import { Streamdown } from "streamdown";
+import {
+  PromptInput,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+  type PromptInputMessage,
+} from "@/components/ai-elements/prompt-input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertCircleIcon,
+  ArrowDownIcon,
+  ArrowUpFromLineIcon,
+  BotIcon,
+  BrainIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ClipboardListIcon,
+  CopyIcon,
+  FileIcon,
+  FileTextIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  ImageIcon,
+  InfoIcon,
+  ListChecksIcon,
+  Loader2Icon,
+  MessageSquareIcon,
+  PlugIcon,
+  SearchIcon,
+  SendHorizontalIcon,
+  SettingsIcon,
+  SquareIcon,
+  SquarePenIcon,
+  TerminalIcon,
+  WrenchIcon,
+  XIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
@@ -1510,10 +1558,8 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
 
 function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
-  if (type === "system") {
-    const subtype = typeof event.subtype === "string" ? event.subtype : "system";
-    const sessionId = typeof event.session_id === "string" ? event.session_id : "";
-    return appendMeta(entries, `claude-system-${subtype}-${Date.now()}`, `Claude ${subtype}`, sessionId);
+  if (type === "system" || type === "rate_limit_event") {
+    return entries;
   }
   if (type === "assistant") {
     let nextEntries = entries;
@@ -1537,12 +1583,18 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
   if (type === "result") {
     const isError = event.is_error === true || event.subtype === "error";
     const result = typeof event.result === "string" ? event.result : "";
+    if (!isError) {
+      if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
+        return appendAssistantMessage(entries, `claude-result-message-${Date.now()}`, result);
+      }
+      return entries;
+    }
     let nextEntries = appendMeta(
       entries,
       `claude-result-${Date.now()}`,
-      isError ? "Claude run failed" : "Claude run completed",
+      "Claude run failed",
       result,
-      isError ? "error" : "info",
+      "error",
     );
     if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
       nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result);
@@ -1561,30 +1613,1054 @@ function applyProviderEvent(
   return applyClaudeEvent(entries, event);
 }
 
-const transcriptClassNames = {
-  root: "run-transcript",
-  message: "run-transcript-message",
-  messageContent: "run-transcript-message-content",
-  messageText: "run-transcript-message-text",
-  toolGroupContainer: "run-transcript-tools",
-  toolGroupHeader: "run-transcript-tools-header",
-  toolGroupBody: "run-transcript-tools-body",
-  toolItem: "run-transcript-tool",
-  toolItemHeader: "run-transcript-tool-header",
-  toolItemBody: "run-transcript-tool-body",
-  toolCode: "run-transcript-code",
-  toolCodeMuted: "run-transcript-code-muted",
-  meta: "run-transcript-meta",
-  error: "run-transcript-error",
+function isClaudeRunMode(mode: SessionMode): boolean {
+  return mode === "subscription_headless";
+}
+
+// (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
+// summary computation now that AgentTranscript is unused.)
+
+interface ToolVisualConfig {
+  Icon: LucideIcon;
+  /** CSS class added to the icon span — drives the color stripe + icon hue. */
+  colorClass: string;
+}
+
+/** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
+function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
+  const name = entry.toolName ?? "";
+  if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
+    return { Icon: TerminalIcon, colorClass: "tool-color-bash" };
+  }
+  if (name === "Read") {
+    return { Icon: FileTextIcon, colorClass: "tool-color-read" };
+  }
+  if (name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch") {
+    return { Icon: SquarePenIcon, colorClass: "tool-color-edit" };
+  }
+  if (name === "Glob" || name === "Grep") {
+    return { Icon: SearchIcon, colorClass: "tool-color-search" };
+  }
+  if (name === "TodoWrite" || name === "Todo") {
+    return { Icon: ListChecksIcon, colorClass: "tool-color-todo" };
+  }
+  if (name === "Task" || name === "Agent") {
+    return { Icon: BotIcon, colorClass: "tool-color-task" };
+  }
+  if (name === "ExitPlanMode" || name === "EnterPlanMode") {
+    return { Icon: ClipboardListIcon, colorClass: "tool-color-plan" };
+  }
+  if (name.toLowerCase().includes("mcp")) {
+    return { Icon: PlugIcon, colorClass: "tool-color-mcp" };
+  }
+  return { Icon: WrenchIcon, colorClass: "tool-color-default" };
+}
+
+// (formerly: transcriptClassNames slot map for AgentTranscript — gone
+// now that the inline RunMessages renderer owns class names directly.)
+
+type RunTab = "chat" | "shell" | "files";
+
+interface ComposerAttachment {
+  id: string; // local-only id for keying
+  name: string;
+  /** Path relative to /workspace, e.g. ".attachments/1715..-foo.png". */
+  path: string;
+  /** Full path inside the pod, e.g. "/workspace/.attachments/...". */
+  absPath: string;
+  size: number;
+  /** Browser blob URL for the thumbnail (if image). */
+  previewUrl?: string;
+  /** Either "uploading" while the POST is in flight, or "ready" / "error". */
+  status: "uploading" | "ready" | "error";
+  errorMsg?: string;
+}
+
+interface FileEntry {
+  name: string;
+  type: "file" | "dir" | "symlink" | "other";
+  size: number;
+}
+
+interface SelectedFile {
+  path: string;
+  size: number;
+  truncated: boolean;
+  text: string;
+  binary: boolean;
+}
+
+function joinFilesPath(parent: string, name: string): string {
+  if (!parent) return name;
+  return `${parent}/${name}`;
+}
+
+function parentFilesPath(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx <= 0 ? "" : path.slice(0, idx);
+}
+
+function humanFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Map a filename to a syntax-highlighter language hint. Streamdown
+ *  pipes through Prism so common short identifiers work out of the box. */
+function syntaxLangForPath(path: string): string {
+  const lower = path.toLowerCase();
+  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
+  const name = lower.slice(lower.lastIndexOf("/") + 1);
+  // Special-cased filenames first.
+  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
+  if (name === "makefile") return "makefile";
+  if (name === ".gitignore" || name.endsWith(".gitignore")) return "ini";
+  if (name.endsWith(".env") || name === ".env") return "ini";
+  // Then by extension. Limited to common cases — Prism falls back to plain
+  // text on unknown lang, which is fine.
+  return (
+    {
+      ts: "ts",
+      tsx: "tsx",
+      js: "js",
+      jsx: "jsx",
+      mjs: "js",
+      cjs: "js",
+      py: "python",
+      rb: "ruby",
+      go: "go",
+      rs: "rust",
+      java: "java",
+      kt: "kotlin",
+      cs: "csharp",
+      cpp: "cpp",
+      cc: "cpp",
+      c: "c",
+      h: "c",
+      hpp: "cpp",
+      sh: "bash",
+      bash: "bash",
+      zsh: "bash",
+      fish: "bash",
+      yml: "yaml",
+      yaml: "yaml",
+      json: "json",
+      jsonc: "json",
+      md: "markdown",
+      mdx: "markdown",
+      sql: "sql",
+      html: "html",
+      htm: "html",
+      xml: "xml",
+      svg: "xml",
+      css: "css",
+      scss: "scss",
+      sass: "sass",
+      less: "less",
+      tf: "hcl",
+      hcl: "hcl",
+      toml: "toml",
+      lua: "lua",
+      php: "php",
+      swift: "swift",
+      dart: "dart",
+      ex: "elixir",
+      exs: "elixir",
+      erl: "erlang",
+      hs: "haskell",
+      r: "r",
+      scala: "scala",
+      vue: "html",
+      svelte: "html",
+      proto: "protobuf",
+      graphql: "graphql",
+      gql: "graphql",
+    }[ext] ?? "text"
+  );
+}
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
+function isImagePath(path: string): boolean {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  return IMAGE_EXTS.has(ext);
+}
+type RunComposerMode =
+  | "default"
+  | "acceptEdits"
+  | "auto"
+  | "bypassPermissions"
+  | "plan";
+
+interface PermissionModeInfo {
+  label: string;
+  desc: string;
+  /** Color of the dot rendered next to the pill label. */
+  dotColor: string;
+}
+
+const PERMISSION_MODE_INFO: Record<RunComposerMode, PermissionModeInfo> = {
+  default: {
+    label: "Default Mode",
+    desc: "Ask before edits, agree to commands",
+    dotColor: "#34d399",
+  },
+  acceptEdits: {
+    label: "Accept Edits",
+    desc: "Auto-approve file changes",
+    dotColor: "#fbbf24",
+  },
+  auto: {
+    label: "Auto",
+    desc: "Auto-approve safe operations",
+    dotColor: "#60a5fa",
+  },
+  bypassPermissions: {
+    label: "Bypass Permissions",
+    desc: "Run without permission prompts",
+    dotColor: "#f87171",
+  },
+  plan: {
+    label: "Plan Mode",
+    desc: "Plan before execution",
+    dotColor: "#a78bfa",
+  },
 };
 
+// Verbs cycled by the streaming status pill. Matches cloudcli's
+// ClaudeStatus rotation so the user sees motion even when the model
+// hasn't sent any text deltas yet.
+const STREAM_VERBS = [
+  "Thinking",
+  "Processing",
+  "Analyzing",
+  "Working",
+  "Computing",
+  "Reasoning",
+] as const;
+
+// Context-window sizes per model. Used for the usage % ring. The 1M
+// variant of Opus is a separate id; for everything else, 200k is the
+// shipping default.
+const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
+  "claude-opus-4-7-1m": 1_000_000,
+  "claude-opus-4-7": 200_000,
+  "claude-sonnet-4-6": 200_000,
+  "claude-haiku-4-5": 200_000,
+  "gpt-5-5": 256_000,
+  "gpt-5": 128_000,
+};
+
+function getContextWindow(modelId: string): number {
+  return CONTEXT_WINDOW_BY_MODEL[modelId] ?? 200_000;
+}
+
+interface ClaudeUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+}
+
+/** Current-turn context size = the input that produced this response.
+ *  cache_read counts as in-context tokens that were sent for free; we
+ *  include it so the gauge reflects "how full is the window" not "how
+ *  many tokens were billed". */
+function totalContextTokens(u: ClaudeUsage | undefined): number {
+  if (!u) return 0;
+  return (
+    (u.input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0)
+  );
+}
+
+function formatStreamElapsed(ms: number): string {
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}m ${s}s`;
+}
+
+interface SlashCommand {
+  name: string; // includes leading slash, e.g. "/clear"
+  desc: string;
+}
+
+// Hardcoded for now — these match the slash commands Claude Code
+// recognises. Backend wire-through (per-project / user-defined) is a
+// follow-up; today they're inserted into the prompt verbatim.
+const SLASH_COMMANDS: SlashCommand[] = [
+  { name: "/clear", desc: "Clear the conversation history" },
+  { name: "/compact", desc: "Compact the conversation context" },
+  { name: "/context", desc: "Show context window usage" },
+  { name: "/help", desc: "List available commands" },
+  { name: "/init", desc: "Initialize a project" },
+  { name: "/model", desc: "Switch model" },
+  { name: "/review", desc: "Review the pending changes" },
+  { name: "/security-review", desc: "Run a security review" },
+  { name: "/usage", desc: "Show token / billing usage" },
+];
+
+/**
+ * Walks backwards from the cursor to find an active trigger context:
+ * `/` for slash-commands or `@` for file-mention. The trigger must be
+ * at the start of the textarea or follow whitespace, and there must be
+ * no whitespace between it and the cursor. Returns the start offset
+ * and the typed query (sans leading trigger). Null if not in context.
+ */
+function findTriggerContext(
+  textarea: HTMLTextAreaElement,
+  trigger: "/" | "@",
+): { start: number; query: string } | null {
+  const value = textarea.value;
+  const cursor = textarea.selectionStart ?? 0;
+  for (let i = cursor - 1; i >= 0; i--) {
+    const c = value[i];
+    if (c === trigger) {
+      if (i === 0 || /\s/.test(value[i - 1])) {
+        return { start: i, query: value.slice(i + 1, cursor) };
+      }
+      return null;
+    }
+    if (/\s/.test(c)) return null;
+  }
+  return null;
+}
+
+function findSlashContext(
+  textarea: HTMLTextAreaElement,
+): { start: number; query: string } | null {
+  return findTriggerContext(textarea, "/");
+}
+
+function findMentionContext(
+  textarea: HTMLTextAreaElement,
+): { start: number; query: string } | null {
+  return findTriggerContext(textarea, "@");
+}
+
+/** Loose fuzzy filter — substring match against the path's lowercased
+ *  full string OR basename. Order is: basename matches first, then full
+ *  path. Capped to keep the menu tractable. */
+function filterMentionPaths(paths: string[], query: string, limit = 30): string[] {
+  if (!query) return paths.slice(0, limit);
+  const q = query.toLowerCase();
+  const basenameMatches: string[] = [];
+  const fullMatches: string[] = [];
+  for (const p of paths) {
+    const lower = p.toLowerCase();
+    const base = lower.slice(lower.lastIndexOf("/") + 1);
+    if (base.includes(q)) basenameMatches.push(p);
+    else if (lower.includes(q)) fullMatches.push(p);
+    if (basenameMatches.length + fullMatches.length >= limit * 2) break;
+  }
+  return [...basenameMatches, ...fullMatches].slice(0, limit);
+}
+
+function filterSlashCommands(query: string): SlashCommand[] {
+  if (!query) return SLASH_COMMANDS;
+  const q = query.toLowerCase();
+  return SLASH_COMMANDS.filter(
+    (c) => c.name.slice(1).toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
+  );
+}
+
+interface ModelOption {
+  id: string; // value passed to backend (claude-cli's --model arg)
+  label: string; // display name in dropdown + provider card
+}
+
+// Hardcoded for now. Backend doesn't yet accept --model from the WS prompt
+// payload — adding that is a follow-up. Selecting here only affects display.
+const CLAUDE_MODELS: ModelOption[] = [
+  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
+  { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
+  { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
+];
+const CODEX_MODELS: ModelOption[] = [
+  { id: "gpt-5-5", label: "Codex · GPT-5.5" },
+  { id: "gpt-5", label: "Codex · GPT-5" },
+];
+
+// Per-user run-pane preferences. localStorage-backed, shared across all
+// sessions in this browser. Keys mirror cloudcli's QuickSettings.
+const RUN_PREF_PREFIX = "tank-run-pref-";
+
+interface RunPrefs {
+  sendByCtrlEnter: boolean;
+  showThinking: boolean;
+  autoExpandTools: boolean;
+}
+
+const DEFAULT_RUN_PREFS: RunPrefs = {
+  sendByCtrlEnter: false,
+  showThinking: true,
+  autoExpandTools: false,
+};
+
+function loadRunPrefs(): RunPrefs {
+  const out = { ...DEFAULT_RUN_PREFS };
+  try {
+    for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
+      if (raw === "true" || raw === "false") {
+        out[key] = raw === "true";
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+// localStorage key for persisting a single run's transcript entries.
+// Backend-side persistence (replay JSONL from
+// ~/.claude/projects/<encoded-cwd>/<session>.jsonl in the session pod)
+// is a follow-up; localStorage is sufficient for refresh-survives-tab
+// and same-browser cross-tab.
+const RUN_STORAGE_PREFIX = "tank-run-entries-";
+
+function loadStoredEntries(sessionId: string): TranscriptEntry[] {
+  try {
+    const raw = localStorage.getItem(RUN_STORAGE_PREFIX + sessionId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as TranscriptEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline message renderer. Replaces AgentTranscript so we can ship per-tool
+// body renderers (diff viewer, todo list, bash, etc), per-message copy
+// buttons, timestamps, reasoning accordions, and a proper error box —
+// none of which the library exposes via render-prop slots. The CSS class
+// names match the AgentTranscript slot map so the existing message /
+// avatar / tool styling continues to apply.
+
+type EntryGroup =
+  | { kind: "message" | "reasoning" | "meta"; entry: TranscriptEntry }
+  | { kind: "tools"; entries: TranscriptEntry[] };
+
+function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
+  const groups: EntryGroup[] = [];
+  let bucket: TranscriptEntry[] = [];
+  const flush = () => {
+    if (bucket.length) {
+      groups.push({ kind: "tools", entries: bucket });
+      bucket = [];
+    }
+  };
+  for (const e of entries) {
+    if (e.kind === "tool") {
+      bucket.push(e);
+      continue;
+    }
+    flush();
+    if (e.kind === "message") groups.push({ kind: "message", entry: e });
+    else if (e.kind === "reasoning") groups.push({ kind: "reasoning", entry: e });
+    else groups.push({ kind: "meta", entry: e });
+  }
+  flush();
+  return groups;
+}
+
+function tryParseJson(s: string | undefined): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function formatMessageTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+/** Simple LCS-based line diff. Returns lines marked context/del/add. */
+function computeLineDiff(
+  oldStr: string,
+  newStr: string,
+): { kind: "ctx" | "del" | "add"; text: string }[] {
+  const a = oldStr.split("\n");
+  const b = newStr.split("\n");
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array(n + 1).fill(0),
+  );
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: { kind: "ctx" | "del" | "add"; text: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push({ kind: "ctx", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ kind: "del", text: a[i] });
+      i++;
+    } else {
+      out.push({ kind: "add", text: b[j] });
+      j++;
+    }
+  }
+  while (i < m) out.push({ kind: "del", text: a[i++] });
+  while (j < n) out.push({ kind: "add", text: b[j++] });
+  return out;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="run-msg-copy"
+      title="Copy"
+      aria-label={copied ? "Copied" : "Copy message"}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon size={12} aria-hidden="true" />
+      ) : (
+        <CopyIcon size={12} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
+  const variant = entry.role === "user" ? "user" : "assistant";
+  const text = entry.text ?? "";
+  const time = formatMessageTime(entry.time);
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant={variant}
+      data-role={variant}
+      data-kind="message"
+    >
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <Streamdown>{text}</Streamdown>
+        </div>
+        <div className="run-msg-footer">
+          {time && <span className="run-msg-time">{time}</span>}
+          <CopyButton text={text} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunReasoningBlock({
+  entry,
+  showThinking,
+}: {
+  entry: TranscriptEntry;
+  showThinking: boolean;
+}) {
+  if (!showThinking) return null;
+  const text = entry.reasoning?.text ?? entry.text ?? "";
+  if (!text.trim()) return null;
+  return (
+    <details className="run-reasoning">
+      <summary className="run-reasoning-summary">
+        <BrainIcon size={14} aria-hidden="true" />
+        <span>Reasoning</span>
+        <ChevronDownIcon size={12} className="run-reasoning-chevron" aria-hidden="true" />
+      </summary>
+      <div className="run-reasoning-body">
+        <Streamdown>{text}</Streamdown>
+      </div>
+    </details>
+  );
+}
+
+function RunMetaBlock({ entry }: { entry: TranscriptEntry }) {
+  const isError = entry.meta?.severity === "error";
+  const title = entry.meta?.title ?? entry.text ?? "";
+  const detail = entry.meta?.detail;
+  // JSON pretty-print fallback for detail strings that look like JSON.
+  let prettyDetail: string | null = null;
+  if (detail) {
+    try {
+      const parsed = JSON.parse(detail);
+      prettyDetail = JSON.stringify(parsed, null, 2);
+    } catch {
+      prettyDetail = null;
+    }
+  }
+  return (
+    <div className={`run-meta${isError ? " run-meta-error" : ""}`}>
+      <span className="run-meta-icon">
+        {isError ? (
+          <AlertCircleIcon size={14} aria-hidden="true" />
+        ) : (
+          <InfoIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <div className="run-meta-body">
+        <div className="run-meta-title">{title}</div>
+        {detail && (
+          <pre className="run-meta-detail">{prettyDetail ?? detail}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ToolBody({ entry }: { entry: TranscriptEntry }) {
+  const name = entry.toolName ?? "";
+  const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
+  if (
+    name === "Edit" ||
+    name === "MultiEdit" ||
+    name === "Write" ||
+    name === "ApplyPatch"
+  ) {
+    return <ToolDiffBody entry={entry} input={input} />;
+  }
+  if (name === "TodoWrite") {
+    return <ToolTodoBody input={input} />;
+  }
+  if (name === "Bash") {
+    return <ToolBashBody entry={entry} input={input} />;
+  }
+  if (name === "Read") {
+    return <ToolReadBody input={input} />;
+  }
+  return <ToolDefaultBody entry={entry} input={input} />;
+}
+
+function ToolDiffBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const filePath = (input?.file_path as string) ?? "";
+  // Edit: old_string + new_string. Write: content (treat as full add).
+  // MultiEdit: edits[]. ApplyPatch: patches/diff text.
+  let blocks: { kind: "ctx" | "del" | "add"; text: string }[] = [];
+  if ((entry.toolName === "Edit") && input) {
+    blocks = computeLineDiff(
+      String(input.old_string ?? ""),
+      String(input.new_string ?? ""),
+    );
+  } else if (entry.toolName === "Write" && input) {
+    blocks = String(input.content ?? "")
+      .split("\n")
+      .map((t) => ({ kind: "add" as const, text: t }));
+  } else if (entry.toolName === "MultiEdit" && Array.isArray(input?.edits)) {
+    for (const ed of input.edits as Array<Record<string, unknown>>) {
+      blocks.push({ kind: "ctx", text: "..." });
+      const sub = computeLineDiff(
+        String(ed.old_string ?? ""),
+        String(ed.new_string ?? ""),
+      );
+      blocks.push(...sub);
+    }
+  } else {
+    // Fallback to raw input dump.
+    return <ToolDefaultBody entry={entry} input={input} />;
+  }
+  return (
+    <div className="run-tool-body run-tool-diff">
+      {filePath && <div className="run-tool-diff-path">{filePath}</div>}
+      <pre className="run-tool-diff-pre">
+        {blocks.map((l, i) => (
+          <div key={i} className={`run-diff-line run-diff-${l.kind}`}>
+            <span className="run-diff-marker">
+              {l.kind === "del" ? "-" : l.kind === "add" ? "+" : " "}
+            </span>
+            <span className="run-diff-text">{l.text}</span>
+          </div>
+        ))}
+      </pre>
+      {entry.toolOutput && (
+        <details className="run-tool-output">
+          <summary>Output</summary>
+          <pre>{entry.toolOutput}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ToolTodoBody({ input }: { input: Record<string, unknown> | null }) {
+  const todos = (input?.todos as Array<Record<string, unknown>>) ?? [];
+  if (!todos.length) return <div className="run-tool-body">no todos</div>;
+  return (
+    <ul className="run-tool-body run-tool-todos">
+      {todos.map((t, i) => {
+        const status = String(t.status ?? "pending");
+        const content = String(t.content ?? t.activeForm ?? "");
+        return (
+          <li key={i} className={`run-tool-todo run-tool-todo-${status}`}>
+            <span className="run-tool-todo-marker" aria-hidden="true">
+              {status === "completed" ? "✓" : status === "in_progress" ? "→" : "○"}
+            </span>
+            <span className="run-tool-todo-text">{content}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ToolBashBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const command = String(input?.command ?? "");
+  return (
+    <div className="run-tool-body run-tool-bash">
+      <div className="run-tool-section-title">$ command</div>
+      <pre className="run-tool-bash-cmd">{command}</pre>
+      {entry.toolOutput && (
+        <>
+          <div className="run-tool-section-title">output</div>
+          <pre className="run-tool-bash-out">{entry.toolOutput}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ToolReadBody({ input }: { input: Record<string, unknown> | null }) {
+  const filePath = String(input?.file_path ?? "");
+  const offset = input?.offset != null ? String(input.offset) : "";
+  const limit = input?.limit != null ? String(input.limit) : "";
+  return (
+    <div className="run-tool-body run-tool-read">
+      <span className="run-tool-read-path">{filePath}</span>
+      {(offset || limit) && (
+        <span className="run-tool-read-meta">
+          {offset && `offset=${offset}`} {limit && `limit=${limit}`}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ToolDefaultBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const inputText = input
+    ? JSON.stringify(input, null, 2)
+    : (entry.toolInput ?? "");
+  return (
+    <div className="run-tool-body">
+      {inputText && (
+        <>
+          <div className="run-tool-section-title">input</div>
+          <pre className="run-tool-default-pre">{inputText}</pre>
+        </>
+      )}
+      {entry.toolOutput && (
+        <>
+          <div className="run-tool-section-title">output</div>
+          <pre className="run-tool-default-pre">{entry.toolOutput}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RunToolItem({
+  entry,
+  autoExpand,
+}: {
+  entry: TranscriptEntry;
+  autoExpand: boolean;
+}) {
+  const [expanded, setExpanded] = useState(autoExpand);
+  const cfg = getToolVisualConfig(entry);
+  const state = (entry.toolStatus ?? "completed") as string;
+  return (
+    <div
+      className="run-transcript-tool"
+      data-slot="tool-item"
+      data-kind="tool"
+      data-state={state}
+    >
+      <div
+        className="run-transcript-tool-connector"
+        data-slot="tool-item-connector"
+      >
+        <div
+          className="run-transcript-tool-dot"
+          data-slot="tool-item-dot"
+        />
+      </div>
+      <div className="run-transcript-tool-content">
+        <button
+          type="button"
+          className="run-transcript-tool-header"
+          data-slot="tool-item-header"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+        >
+          <span
+            className="run-transcript-tool-icon"
+            data-slot="tool-item-icon"
+          >
+            <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
+              <cfg.Icon size={14} strokeWidth={2} />
+            </span>
+          </span>
+          <span
+            className="run-transcript-tool-label"
+            data-slot="tool-item-label"
+          >
+            {entry.toolName ?? "tool"}
+          </span>
+          {state === "running" && (
+            <Loader2Icon
+              size={12}
+              className="run-spin run-tool-spinner"
+              aria-hidden="true"
+            />
+          )}
+          <span
+            className="run-transcript-tool-chevron"
+            data-slot="tool-item-chevron"
+          >
+            {expanded ? (
+              <ChevronUpIcon
+                size={14}
+                strokeWidth={2}
+                className="run-chevron-icon"
+              />
+            ) : (
+              <ChevronDownIcon
+                size={14}
+                strokeWidth={2}
+                className="run-chevron-icon"
+              />
+            )}
+          </span>
+        </button>
+        {expanded && <ToolBody entry={entry} />}
+      </div>
+    </div>
+  );
+}
+
+function RunToolGroup({
+  entries,
+  autoExpand,
+}: {
+  entries: TranscriptEntry[];
+  autoExpand: boolean;
+}) {
+  if (entries.length === 1) {
+    return (
+      <div className="run-transcript-tool-single" data-slot="tool-group-single">
+        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+      </div>
+    );
+  }
+  const [open, setOpen] = useState(autoExpand);
+  const errorCount = entries.filter(
+    (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
+  ).length;
+  const summary =
+    errorCount > 0
+      ? `${entries.length} tool calls · ${errorCount} error${errorCount === 1 ? "" : "s"}`
+      : `${entries.length} tool calls`;
+  return (
+    <div className="run-transcript-tools" data-slot="tool-group">
+      <button
+        type="button"
+        className="run-transcript-tools-header"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className="run-transcript-tools-icon">
+          <WrenchIcon size={14} strokeWidth={2} aria-hidden="true" />
+        </span>
+        <span className="run-transcript-tools-label">{summary}</span>
+        <span className="run-transcript-tools-chevron">
+          {open ? (
+            <ChevronUpIcon size={14} className="run-chevron-icon" />
+          ) : (
+            <ChevronDownIcon size={14} className="run-chevron-icon" />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="run-transcript-tools-body">
+          {entries.map((e) => (
+            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunMessages({
+  entries,
+  showThinking,
+  autoExpandTools,
+}: {
+  entries: TranscriptEntry[];
+  showThinking: boolean;
+  autoExpandTools: boolean;
+}) {
+  const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  return (
+    <div className="run-transcript run-transcript-claude" data-slot="root">
+      {groups.map((g: EntryGroup, idx: number) => {
+        if (g.kind === "tools") {
+          return (
+            <RunToolGroup
+              key={`tools-${g.entries[0].id}-${idx}`}
+              entries={g.entries}
+              autoExpand={autoExpandTools}
+            />
+          );
+        }
+        if (g.kind === "reasoning") {
+          return (
+            <RunReasoningBlock
+              key={g.entry.id}
+              entry={g.entry}
+              showThinking={showThinking}
+            />
+          );
+        }
+        if (g.kind === "meta") {
+          return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
+        }
+        return <RunMessageBubble key={g.entry.id} entry={g.entry} />;
+      })}
+    </div>
+  );
+}
+
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
-  const [prompt, setPrompt] = useState("");
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
+    loadStoredEntries(session.id),
+  );
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
+  const isClaude = isClaudeRunMode(session.mode);
+  const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
+  const [selectedModelId, setSelectedModelId] = useState<string>(modelOptions[0].id);
+  // Run timing — drives the streaming status pill's elapsed counter and the
+  // rotating action verb / animated dots. Both refresh on a single 250ms
+  // interval while running so the bar updates without a per-element timer.
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(() => Date.now());
+  // Context tokens used in the most recent assistant turn — updated via
+  // applyStdoutLine when an `assistant` or `result` event with usage info
+  // arrives. Drives the % ring in the composer footer.
+  const [tokensUsed, setTokensUsed] = useState(0);
+  // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
+  // and `slashIndex` drive filtering and keyboard selection.
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [slashIndex, setSlashIndex] = useState(0);
+  // @filename mention palette state. paths is lazily loaded from
+  // /api/sessions/{id}/files/walk on first `@` keystroke.
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionPaths, setMentionPaths] = useState<string[] | null>(null);
+  const mentionLoadedRef = useRef(false);
+  // Composer text mirror — used to know when the input has content (drives
+  // hint fade + clear-X visibility) without making the textarea controlled.
+  const [composerText, setComposerText] = useState("");
+  // Files-tab state — read-only browse of /workspace inside the session pod.
+  const [filesPath, setFilesPath] = useState<string>("");
+  const [filesEntries, setFilesEntries] = useState<FileEntry[] | null>(null);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [fileContentLoading, setFileContentLoading] = useState(false);
+  // Edit-mode bookkeeping for the file viewer.
+  const [fileDraft, setFileDraft] = useState<string | null>(null);
+  const [fileSaving, setFileSaving] = useState(false);
+  const [fileSaveError, setFileSaveError] = useState<string | null>(null);
+  // Auto-scroll bookkeeping — track whether the user has scrolled away from
+  // the bottom; if so, suppress auto-scroll on new entries and offer the
+  // floating "scroll to bottom" button.
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
+  // Composer attachments — uploaded to /workspace/.attachments and referenced
+  // in the prompt so Claude can Read them via tool use.
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [dragActive, setDragActive] = useState(false);
+  // Per-user prefs (persisted in localStorage; keyed by RUN_PREF_PREFIX).
+  const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
+  function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
+    setRunPrefs((p) => ({ ...p, [key]: value }));
+    try {
+      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
+    } catch {
+      /* ignore */
+    }
+  }
+  const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+  // Monotonic counter for entry ids — Date.now() collides during fast
+  // bursts (sub-ms) and React's key reconciler keeps a stable component
+  // tree only as long as keys are stable across renders.
+  const entryIdSeqRef = useRef(0);
+  function nextEntryId(prefix: string): string {
+    entryIdSeqRef.current += 1;
+    return `${prefix}-${session.id}-${entryIdSeqRef.current}`;
+  }
+
+  const slashFiltered = slashOpen ? filterSlashCommands(slashQuery) : [];
+  const mentionFiltered =
+    mentionOpen && mentionPaths
+      ? filterMentionPaths(mentionPaths, mentionQuery)
+      : [];
 
   useEffect(() => {
     return () => {
@@ -1605,6 +2681,541 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     return () => window.clearInterval(interval);
   }, [session.id, session.status, visible]);
 
+  // Tick `now` every 250ms while running. 250 is the LCM-ish for the dot
+  // animation (500ms cycle) and the elapsed counter (1s display step) —
+  // one timer drives both without per-element setIntervals.
+  useEffect(() => {
+    if (!running) return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [running]);
+
+  // Auto-scroll the transcript to the bottom when entries grow, unless
+  // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
+  // + wheel-detection behaviour.
+  useEffect(() => {
+    if (userScrolledUp) return;
+    const main = transcriptScrollRef.current;
+    if (!main) return;
+    main.scrollTop = main.scrollHeight;
+  }, [entries.length, userScrolledUp]);
+
+  // Detect user scroll-away from the bottom. Threshold of 24px so small
+  // overshoots (image loads) don't disable auto-scroll.
+  useEffect(() => {
+    const main = transcriptScrollRef.current;
+    if (!main) return;
+    const onScroll = () => {
+      const distanceFromBottom = main.scrollHeight - main.scrollTop - main.clientHeight;
+      setUserScrolledUp(distanceFromBottom > 24);
+    };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Persist transcript entries per-session in localStorage. Survives page
+  // refresh; restored on initial state via loadStoredEntries above.
+  useEffect(() => {
+    try {
+      if (entries.length > 0) {
+        localStorage.setItem(
+          RUN_STORAGE_PREFIX + session.id,
+          JSON.stringify(entries),
+        );
+      } else {
+        localStorage.removeItem(RUN_STORAGE_PREFIX + session.id);
+      }
+    } catch {
+      // Quota exceeded or storage unavailable — drop silently. Future
+      // backend replay would cover this case anyway.
+    }
+  }, [entries, session.id]);
+
+  // History replay — when localStorage is empty and the session is Active,
+  // fetch the most recent claude-code session JSONL from the pod and
+  // replay each event through applyClaudeEvent. Covers cross-browser /
+  // cleared-cache cases that localStorage can't.
+  const [historyAttempted, setHistoryAttempted] = useState(false);
+  // Toggled briefly when entries are restored (from localStorage OR backend
+  // history) so we can show a "Continuing previous conversation" hint.
+  const [continueHintVisible, setContinueHintVisible] = useState(false);
+  useEffect(() => {
+    // If we already had entries on mount (localStorage), surface a brief
+    // continue-hint and skip backend fetch.
+    if (historyAttempted) return;
+    if (entries.length > 0) {
+      setHistoryAttempted(true);
+      setContinueHintVisible(true);
+      const t = window.setTimeout(() => setContinueHintVisible(false), 3000);
+      return () => window.clearTimeout(t);
+    }
+    if (session.status !== "Active") return;
+    setHistoryAttempted(true);
+    void authedFetch(`/api/sessions/${session.id}/run/history`)
+      .then(async (res) => {
+        if (!res.ok) return "";
+        return await res.text();
+      })
+      .then((text) => {
+        if (!text) return;
+        const lines = text.split("\n");
+        let acc: TranscriptEntry[] = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (isJsonObject(ev)) {
+              acc = applyClaudeEvent(acc, ev);
+            }
+          } catch {
+            /* skip unparseable */
+          }
+        }
+        if (acc.length > 0) {
+          setEntries(acc);
+          setContinueHintVisible(true);
+          window.setTimeout(() => setContinueHintVisible(false), 3000);
+        }
+      })
+      .catch(() => {
+        /* no history is fine */
+      });
+  }, [session.id, session.status, historyAttempted, entries.length]);
+
+  // Files tab — fetch directory listing whenever the path changes or the
+  // user opens the tab on a ready session.
+  useEffect(() => {
+    if (activeTab !== "files" || session.status !== "Active") return;
+    let cancelled = false;
+    setFilesLoading(true);
+    setFilesError(null);
+    void authedFetch(
+      `/api/sessions/${session.id}/files?path=${encodeURIComponent(filesPath)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`${res.status} ${await res.text()}`);
+        }
+        return (await res.json()) as { path: string; entries: FileEntry[] };
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setFilesEntries(body.entries);
+        setFilesLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setFilesError(String(err.message ?? err));
+        setFilesEntries([]);
+        setFilesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, filesPath, session.id, session.status]);
+
+  // Selected-file content fetch.
+  useEffect(() => {
+    if (!selectedFile || selectedFile.text || selectedFile.binary) return;
+    // text empty + not binary == placeholder created by openFile; load it.
+    let cancelled = false;
+    setFileContentLoading(true);
+    void authedFetch(
+      `/api/sessions/${session.id}/files/content?path=${encodeURIComponent(selectedFile.path)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return (await res.json()) as SelectedFile;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setSelectedFile(body);
+        setFileContentLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFileContentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, session.id]);
+
+  function openFileEntry(name: string, type: FileEntry["type"]) {
+    const next = joinFilesPath(filesPath, name);
+    if (type === "dir") {
+      setFilesPath(next);
+      setSelectedFile(null);
+      setFileDraft(null);
+      setFileSaveError(null);
+      return;
+    }
+    // Trigger content fetch by setting a placeholder.
+    setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setFileDraft(null);
+    setFileSaveError(null);
+  }
+
+  async function uploadAttachment(file: File) {
+    const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const previewUrl = file.type.startsWith("image/")
+      ? URL.createObjectURL(file)
+      : undefined;
+    setAttachments((prev) => [
+      ...prev,
+      {
+        id,
+        name: file.name || "file",
+        path: "",
+        absPath: "",
+        size: file.size,
+        previewUrl,
+        status: "uploading",
+      },
+    ]);
+    try {
+      // Raw-body upload (orchestrator image doesn't ship python-multipart).
+      const res = await authedFetch(
+        `/api/sessions/${session.id}/files/upload?name=${encodeURIComponent(file.name)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/octet-stream",
+          },
+          body: file,
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as {
+        path: string;
+        abs_path: string;
+        name: string;
+        size: number;
+      };
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                path: body.path,
+                absPath: body.abs_path,
+                name: body.name,
+                status: "ready",
+              }
+            : a,
+        ),
+      );
+    } catch (err) {
+      setAttachments((prev) =>
+        prev.map((a) =>
+          a.id === id
+            ? {
+                ...a,
+                status: "error",
+                errorMsg: String((err as Error).message ?? err),
+              }
+            : a,
+        ),
+      );
+    }
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }
+
+  function handleAttachmentFiles(files: FileList | null) {
+    if (!files) return;
+    for (const f of Array.from(files)) {
+      // Be permissive on file type — Claude's Read tool handles many.
+      void uploadAttachment(f);
+    }
+  }
+
+  async function saveFileDraft() {
+    if (!selectedFile || fileDraft == null) return;
+    setFileSaving(true);
+    setFileSaveError(null);
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${session.id}/files/content?path=${encodeURIComponent(selectedFile.path)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: fileDraft }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as SelectedFile;
+      setSelectedFile(body);
+      setFileDraft(null);
+      // Re-fetch the listing in case size changed.
+      void authedFetch(
+        `/api/sessions/${session.id}/files?path=${encodeURIComponent(filesPath)}`,
+      )
+        .then(async (r) => {
+          if (!r.ok) return;
+          const listing = (await r.json()) as { entries: FileEntry[] };
+          setFilesEntries(listing.entries);
+        })
+        .catch(() => undefined);
+    } catch (err) {
+      setFileSaveError(String((err as Error).message ?? err));
+    } finally {
+      setFileSaving(false);
+    }
+  }
+
+  // When the session id changes (user picks a different session in the
+  // sidebar that re-mounts this HeadlessRun with a different id), reset
+  // entries to whatever's stored for that session.
+  useEffect(() => {
+    setEntries(loadStoredEntries(session.id));
+  }, [session.id]);
+
+  // sendByCtrlEnter — when on, plain Enter inserts a newline and only
+  // Ctrl/⌘+Enter submits. Implemented by intercepting at capture phase
+  // on the composer wrap so it runs before AI Elements' internal handler.
+  useEffect(() => {
+    const wrap = composerWrapRef.current;
+    if (!wrap) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      const ta = wrap.querySelector("textarea");
+      if (!ta || e.target !== ta) return;
+      if (slashOpen) return; // palette handler owns Enter
+      if (e.shiftKey) return; // newline regardless of mode
+      if (runPrefs.sendByCtrlEnter) {
+        // Plain Enter must NOT submit; let the textarea insert a newline.
+        if (!e.ctrlKey && !e.metaKey) {
+          e.stopPropagation();
+        }
+        // Ctrl/⌘+Enter submits — fall through to AI Elements' form submit.
+      } else {
+        // Default: plain Enter submits (AI Elements handles it).
+        // Ctrl/⌘+Enter also submits naturally.
+      }
+    };
+    wrap.addEventListener("keydown", onKey, true);
+    return () => wrap.removeEventListener("keydown", onKey, true);
+  }, [runPrefs.sendByCtrlEnter, slashOpen]);
+
+  // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
+  // Stop pill. Capture phase so it fires even if focus is on the textarea.
+  // Skips when the slash palette is open — Esc closes the palette in that
+  // case (handled below).
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !slashOpen) {
+        e.preventDefault();
+        cancelRun();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [running, slashOpen]);
+
+  // Slash- + mention-palette typing detection + composer-text mirror.
+  // Listens at the composer wrap; reads the textarea's value + cursor on
+  // every event to recompute the active trigger context AND keep
+  // `composerText` in sync. The mirror drives hint fade + clear-X
+  // visibility without making the textarea controlled (which would
+  // conflict with PromptInput's form).
+  useEffect(() => {
+    const wrap = composerWrapRef.current;
+    if (!wrap) return;
+    const recompute = () => {
+      const ta = wrap.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (!ta) {
+        setSlashOpen(false);
+        setMentionOpen(false);
+        setComposerText("");
+        return;
+      }
+      setComposerText(ta.value);
+      const slash = findSlashContext(ta);
+      const mention = findMentionContext(ta);
+      if (slash) {
+        setSlashOpen(true);
+        setSlashQuery((prev) => {
+          if (prev !== slash.query) setSlashIndex(0);
+          return slash.query;
+        });
+      } else {
+        setSlashOpen(false);
+      }
+      if (mention) {
+        setMentionOpen(true);
+        setMentionQuery((prev) => {
+          if (prev !== mention.query) setMentionIndex(0);
+          return mention.query;
+        });
+        // Lazy-load the workspace walk on first `@` keystroke.
+        if (!mentionLoadedRef.current) {
+          mentionLoadedRef.current = true;
+          void authedFetch(`/api/sessions/${session.id}/files/walk`)
+            .then(async (res) => {
+              if (!res.ok) throw new Error(`${res.status}`);
+              return (await res.json()) as { paths: string[] };
+            })
+            .then((b) => setMentionPaths(b.paths))
+            .catch(() => {
+              mentionLoadedRef.current = false; // allow retry
+            });
+        }
+      } else {
+        setMentionOpen(false);
+      }
+    };
+    wrap.addEventListener("input", recompute);
+    wrap.addEventListener("click", recompute);
+    // keyup is the trigger for cursor-position changes via arrow keys
+    // (e.g. left/right out of slash context). Filter to ignore the
+    // arrow keys we use for palette nav so they don't trigger a
+    // recompute mid-navigation.
+    const onKeyUp = (e: Event) => {
+      const ke = e as KeyboardEvent;
+      if (
+        ke.key === "ArrowDown" ||
+        ke.key === "ArrowUp" ||
+        ke.key === "Tab" ||
+        ke.key === "Enter"
+      ) {
+        return;
+      }
+      recompute();
+    };
+    wrap.addEventListener("keyup", onKeyUp);
+    return () => {
+      wrap.removeEventListener("input", recompute);
+      wrap.removeEventListener("click", recompute);
+      wrap.removeEventListener("keyup", onKeyUp);
+    };
+  }, [activeTab]);
+
+  // Slash-palette keyboard nav. Up/Down moves selection, Enter/Tab applies,
+  // Esc closes. Capture phase + stopPropagation so the textarea's own
+  // Enter-to-submit doesn't fire while the palette is open.
+  useEffect(() => {
+    if (!slashOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const filtered = filterSlashCommands(slashQuery);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashIndex((i) =>
+          filtered.length ? (i - 1 + filtered.length) % filtered.length : 0,
+        );
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        if (!filtered.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applySlashCommand(filtered[Math.min(slashIndex, filtered.length - 1)].name);
+        setSlashOpen(false);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSlashOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [slashOpen, slashQuery, slashIndex]);
+
+  // Mention-palette keyboard nav (mirror of slash).
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const filtered = mentionPaths
+        ? filterMentionPaths(mentionPaths, mentionQuery)
+        : [];
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionIndex((i) =>
+          filtered.length ? (i - 1 + filtered.length) % filtered.length : 0,
+        );
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        if (!filtered.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applyMentionPath(filtered[Math.min(mentionIndex, filtered.length - 1)]);
+        setMentionOpen(false);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [mentionOpen, mentionQuery, mentionIndex, mentionPaths]);
+
+  function applyMentionPath(relPath: string) {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const ctx = findMentionContext(ta);
+    const start = ctx?.start ?? ta.selectionStart ?? 0;
+    const cursor = ta.selectionStart ?? start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(cursor);
+    // Insert the absolute /workspace path so claude can pass it directly
+    // to the Read tool without re-resolving.
+    const insert = `/workspace/${relPath} `;
+    const newValue = before + insert + after;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, newValue);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    const newPos = start + insert.length;
+    ta.setSelectionRange(newPos, newPos);
+    ta.focus();
+  }
+
+  function applySlashCommand(name: string) {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const ctx = findSlashContext(ta);
+    const start = ctx?.start ?? ta.selectionStart ?? 0;
+    const cursor = ta.selectionStart ?? start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(cursor);
+    const insert = name + " ";
+    const newValue = before + insert + after;
+    // Native setter so React-controlled / form-managed textareas pick up
+    // the change instead of dropping it on the next render.
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, newValue);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    const newPos = start + insert.length;
+    ta.setSelectionRange(newPos, newPos);
+    ta.focus();
+  }
+
   function applyStdoutLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) return;
@@ -1613,15 +3224,31 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       providerEvent = JSON.parse(trimmed);
     } catch {
       setEntries((prev) =>
-        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", line),
+        appendMeta(prev, nextEntryId("raw-stdout"), "Output", line),
       );
       return;
     }
     if (!isJsonObject(providerEvent)) {
       setEntries((prev) =>
-        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", shortJson(providerEvent)),
+        appendMeta(prev, nextEntryId("raw-stdout"), "Output", shortJson(providerEvent)),
       );
       return;
+    }
+    // Track context-window usage from claude's stream-json events. The
+    // assistant message and the final result both carry a `usage` block;
+    // the result is the most accurate "final state" so prefer it.
+    const t = (providerEvent as JsonObject).type;
+    if (t === "assistant") {
+      const msg = (providerEvent as JsonObject).message;
+      if (isJsonObject(msg)) {
+        const u = (msg as JsonObject).usage as ClaudeUsage | undefined;
+        const total = totalContextTokens(u);
+        if (total > 0) setTokensUsed(total);
+      }
+    } else if (t === "result") {
+      const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
+      const total = totalContextTokens(u);
+      if (total > 0) setTokensUsed(total);
     }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
   }
@@ -1639,14 +3266,46 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     if (pending.trim()) applyStdoutLine(pending);
   }
 
-  function startRun() {
-    const trimmed = prompt.trim();
+  function cancelRun() {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setRunning(false);
+    setRunStatus((prev) => (prev === "running" ? "done" : prev));
+  }
+
+  function handleSubmit(message: PromptInputMessage) {
+    const trimmed = message.text.trim();
     if (!trimmed || running || session.status !== "Active") return;
+    // Wait until all attachments have finished uploading. If any errored
+    // out, surface it but still let the run go ahead with what's ready.
+    const ready = attachments.filter((a) => a.status === "ready");
+    const stillUploading = attachments.some((a) => a.status === "uploading");
+    if (stillUploading) return;
+    let composed = trimmed;
+    if (ready.length > 0) {
+      const lines = ready
+        .map((a) => `- ${a.absPath}`)
+        .join("\n");
+      composed = `${trimmed}\n\nAttachments (use the Read tool to load):\n${lines}`;
+    }
+    startRun(composed);
+    // Clear attachment state once they've been baked into the run.
+    setAttachments((prev) => {
+      for (const a of prev) {
+        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+      }
+      return [];
+    });
+  }
+
+  function startRun(trimmed: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
-    setEntries([
+    const followUp = entries.length > 0;
+    setEntries((prev) => [
+      ...prev,
       {
-        id: `user-${Date.now()}`,
+        id: nextEntryId("user"),
         kind: "message",
         role: "user",
         text: trimmed,
@@ -1655,13 +3314,26 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     ]);
     setRunStatus("running");
     setRunning(true);
+    setRunStartedAt(Date.now());
+    setNow(Date.now());
+    // The form clears the textarea internally on submit but doesn't
+    // always fire an input event in time, so my mirror lingers and the
+    // X-clear button stays visible. Force the mirror clean.
+    setComposerText("");
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/run`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ prompt: trimmed }));
+      ws.send(
+        JSON.stringify({
+          prompt: trimmed,
+          follow_up: followUp,
+          model: selectedModelId,
+          permission_mode: composerMode,
+        }),
+      );
     };
     ws.onmessage = (event) => {
       let msg: RunEvent;
@@ -1669,7 +3341,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         msg = JSON.parse(String(event.data));
       } catch {
         setEntries((prev) =>
-          appendMeta(prev, `websocket-message-${Date.now()}`, "websocket message", String(event.data)),
+          appendMeta(prev, nextEntryId("websocket-message"), "websocket message", String(event.data)),
         );
         return;
       }
@@ -1677,7 +3349,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         applyStdoutChunk(msg.data);
       } else if (msg.stream === "stderr" && msg.data) {
         setEntries((prev) =>
-          appendMeta(prev, `stderr-${Date.now()}`, "stderr", msg.data, "error"),
+          appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
@@ -1689,7 +3361,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         setRunStatus("error");
         setRunning(false);
         setEntries((prev) =>
-          appendMeta(prev, `run-error-${Date.now()}`, "run failed", msg.detail, "error"),
+          appendMeta(prev, nextEntryId("run-error"), "run failed", msg.detail, "error"),
         );
         ws.close();
       }
@@ -1698,58 +3370,850 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       setRunStatus("error");
       setRunning(false);
       setEntries((prev) =>
-        appendMeta(prev, `websocket-error-${Date.now()}`, "websocket error", undefined, "error"),
+        appendMeta(prev, nextEntryId("websocket-error"), "websocket error", undefined, "error"),
       );
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       flushStdoutBuffer();
       setRunning(false);
-      setRunStatus((prev) => (prev === "running" ? "done" : prev));
+      // 1000 = normal close, 1005 = no status (most cancel/done paths since
+      // we call ws.close() with no code), 1001 = going away (page nav).
+      // Anything else mid-run we surface as a connection error so the user
+      // knows to resend rather than waiting on a silent dropped run.
+      const abnormal =
+        event.code !== 1000 && event.code !== 1005 && event.code !== 1001;
+      // Use functional setter so we read the latest runStatus, not the
+      // closure value from when the WS was created.
+      setRunStatus((prev) => {
+        if (abnormal && prev === "running") {
+          setEntries((entries) =>
+            appendMeta(
+              entries,
+              nextEntryId("ws-close"),
+              "Connection lost",
+              `WebSocket closed with code ${event.code}${
+                event.reason ? ` — ${event.reason}` : ""
+              }. Resend to continue.`,
+              "error",
+            ),
+          );
+          return "error";
+        }
+        return prev === "running" ? "done" : prev;
+      });
     };
   }
 
+  const submitStatus =
+    runStatus === "running"
+      ? "streaming"
+      : runStatus === "error"
+        ? "error"
+        : undefined;
+
+  const provider: Provider = isClaude ? "anthropic" : "openai";
+  const modeLabel = MODE_LABELS[session.mode];
+  const ready = session.status === "Active";
+  const selectedModel =
+    modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+  const contextWindow = getContextWindow(selectedModel.id);
+  const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
+  const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
+
+  // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
+  // cloudcli's keyboard shortcut hint.
+  useEffect(() => {
+    if (activeTab !== "chat") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        // Open the trigger by clicking it — the dropdown manages its
+        // own open state internally via Radix.
+        const trigger = composerWrapRef.current?.parentElement?.querySelector(
+          ".run-provider-card",
+        ) as HTMLButtonElement | null;
+        trigger?.click();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTab]);
+
+  // Streaming-pill computeds — only meaningful while running.
+  const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
+  const elapsedLabel = formatStreamElapsed(elapsedMs);
+  const dotPhase = Math.floor(now / 500) % 3; // 0..2
+  const dots = ".".repeat(dotPhase + 1);
+  // Rotating verb cycles every 3s. Matches cloudcli's ClaudeStatus.
+  const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
+  const verb = STREAM_VERBS[verbIndex];
+
   return (
     <section className="run-panel">
-      <div className="run-composer">
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder={`Ask ${MODE_LABELS[session.mode]} to work in /workspace`}
-          disabled={running}
-          onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      <header className="run-header">
+        <div className="run-header-title">
+          <h2 className="run-header-name">{sessionDisplayName(session)}</h2>
+        </div>
+        <nav className="run-tabs" role="tablist" aria-label="Session views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "chat"}
+            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("chat")}
+            title="Conversation with the agent"
+          >
+            <MessageSquareIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Chat</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "shell"}
+            className={`run-tab${activeTab === "shell" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("shell")}
+            title="Interactive bash shell in the session pod"
+          >
+            <TerminalIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "shell" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Shell</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "files"}
+            className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
+            onClick={() => setActiveTab("files")}
+            title="Browse files in /workspace"
+          >
+            <FolderIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "files" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Files</span>
+          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="run-tab run-tab-icononly"
+                aria-label="Run settings"
+                title="Settings"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="run-settings-menu">
+              <DropdownMenuLabel>Composer</DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">
+                    Send with ⌘/Ctrl+Enter
+                  </span>
+                  {runPrefs.sendByCtrlEnter && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuLabel>Transcript</DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("showThinking", !runPrefs.showThinking);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Show reasoning</span>
+                  {runPrefs.showThinking && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("autoExpandTools", !runPrefs.autoExpandTools);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Auto-expand tools</span>
+                  {runPrefs.autoExpandTools && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </nav>
+      </header>
+
+      <main
+        className={`run-main run-main-${runStatus}`}
+        ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+      >
+        {activeTab === "shell" ? (
+          <div className="run-shell">
+            <Terminal
+              sessionId={session.id}
+              mode={session.mode}
+              status={session.status}
+              completionSoundEnabled={false}
+              completionSoundVolume={0}
+              visible={visible && activeTab === "shell"}
+            />
+          </div>
+        ) : activeTab === "files" ? (
+          <div className="run-files">
+            <div className="run-files-breadcrumb">
+              <button
+                type="button"
+                className="run-files-crumb"
+                onClick={() => {
+                  setFilesPath("");
+                  setSelectedFile(null);
+                }}
+              >
+                /workspace
+              </button>
+              {filesPath
+                .split("/")
+                .filter(Boolean)
+                .map((seg, i, arr) => {
+                  const target = arr.slice(0, i + 1).join("/");
+                  return (
+                    <span key={target} className="run-files-crumb-wrap">
+                      <span className="run-files-crumb-sep">/</span>
+                      <button
+                        type="button"
+                        className="run-files-crumb"
+                        onClick={() => {
+                          setFilesPath(target);
+                          setSelectedFile(null);
+                        }}
+                      >
+                        {seg}
+                      </button>
+                    </span>
+                  );
+                })}
+            </div>
+            <div className="run-files-body">
+              <div className="run-files-list">
+                {filesPath && (
+                  <button
+                    type="button"
+                    className="run-files-row"
+                    onClick={() => {
+                      setFilesPath(parentFilesPath(filesPath));
+                      setSelectedFile(null);
+                    }}
+                  >
+                    <ArrowUpFromLineIcon size={14} className="run-files-row-icon" aria-hidden="true" />
+                    <span className="run-files-row-name">..</span>
+                  </button>
+                )}
+                {filesLoading && (
+                  <div className="run-files-status">
+                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                    <span>Loading…</span>
+                  </div>
+                )}
+                {filesError && (
+                  <div className="run-files-status run-files-error">
+                    {filesError}
+                  </div>
+                )}
+                {!filesLoading &&
+                  !filesError &&
+                  filesEntries &&
+                  filesEntries.map((e) => {
+                    const Icon =
+                      e.type === "dir" ? FolderIcon : FileIcon;
+                    return (
+                      <button
+                        key={e.name}
+                        type="button"
+                        className={`run-files-row${
+                          selectedFile?.path === joinFilesPath(filesPath, e.name)
+                            ? " run-files-row-active"
+                            : ""
+                        }`}
+                        onClick={() => openFileEntry(e.name, e.type)}
+                      >
+                        <Icon
+                          size={14}
+                          className={`run-files-row-icon run-files-row-${e.type}`}
+                          aria-hidden="true"
+                        />
+                        <span className="run-files-row-name">{e.name}</span>
+                        {e.type === "file" && (
+                          <span className="run-files-row-size">
+                            {humanFileSize(e.size)}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                {!filesLoading &&
+                  !filesError &&
+                  filesEntries &&
+                  filesEntries.length === 0 &&
+                  !filesPath && (
+                    <div className="run-files-status">empty workspace</div>
+                  )}
+              </div>
+              <div className="run-files-viewer">
+                {!selectedFile ? (
+                  <div className="run-files-empty">
+                    <FolderOpenIcon size={28} aria-hidden="true" />
+                    <span>Select a file to preview</span>
+                  </div>
+                ) : fileContentLoading ? (
+                  <div className="run-files-status">
+                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                    <span>Loading…</span>
+                  </div>
+                ) : selectedFile.binary && isImagePath(selectedFile.path) ? (
+                  <div className="run-files-viewer-image-wrap">
+                    <img
+                      className="run-files-viewer-image"
+                      alt={selectedFile.path}
+                      src={`/api/sessions/${session.id}/files/raw?path=${encodeURIComponent(selectedFile.path)}`}
+                    />
+                  </div>
+                ) : selectedFile.binary ? (
+                  <div className="run-files-status">
+                    <FileIcon size={14} aria-hidden="true" />
+                    <span>
+                      Binary file ({humanFileSize(selectedFile.size)}) — preview
+                      not available.
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <div className="run-files-viewer-header">
+                      <span className="run-files-viewer-path">
+                        {selectedFile.path}
+                      </span>
+                      <div className="run-files-viewer-actions">
+                        {fileDraft != null && fileDraft !== selectedFile.text && (
+                          <>
+                            <button
+                              type="button"
+                              className="run-files-viewer-btn"
+                              disabled={fileSaving}
+                              onClick={() => {
+                                setFileDraft(null);
+                                setFileSaveError(null);
+                              }}
+                            >
+                              Reset
+                            </button>
+                            <button
+                              type="button"
+                              className="run-files-viewer-btn run-files-viewer-btn-primary"
+                              disabled={fileSaving}
+                              onClick={() => void saveFileDraft()}
+                            >
+                              {fileSaving ? "Saving…" : "Save"}
+                            </button>
+                          </>
+                        )}
+                        <span className="run-files-viewer-meta">
+                          {humanFileSize(selectedFile.size)}
+                          {selectedFile.truncated && " · truncated"}
+                        </span>
+                      </div>
+                    </div>
+                    {fileSaveError && (
+                      <div className="run-files-status run-files-error">
+                        {fileSaveError}
+                      </div>
+                    )}
+                    {/* Editable when not truncated. Truncated reads aren't
+                        safe to overwrite — would silently destroy the
+                        unread tail. Read-only highlighted view when the
+                        user hasn't started editing yet (fileDraft==null);
+                        switches to the textarea on first focus. */}
+                    {selectedFile.truncated ? (
+                      <div className="run-files-viewer-content">
+                        <Streamdown>
+                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
+                        </Streamdown>
+                      </div>
+                    ) : fileDraft == null ? (
+                      <div
+                        className="run-files-viewer-content run-files-viewer-readonly"
+                        onClick={() => setFileDraft(selectedFile.text)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setFileDraft(selectedFile.text);
+                          }
+                        }}
+                        title="Click to edit"
+                      >
+                        <Streamdown>
+                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
+                        </Streamdown>
+                      </div>
+                    ) : (
+                      <textarea
+                        className="run-files-viewer-content run-files-viewer-editor"
+                        value={fileDraft}
+                        onChange={(e) => setFileDraft(e.target.value)}
+                        spellCheck={false}
+                        autoFocus
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : !ready ? (
+          <div className="run-empty">
+            <Loader2Icon size={20} className="run-spin" aria-hidden="true" />
+            <span className="run-muted">waiting for session pod…</span>
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="run-empty run-empty-launchpad">
+            <h3 className="run-empty-title">Choose Your AI Assistant</h3>
+            <p className="run-empty-sub">Select a provider to start a new conversation</p>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button type="button" className="run-provider-card">
+                  <span className="run-provider-icon">
+                    <ProviderIcon provider={provider} />
+                  </span>
+                  <span className="run-provider-meta">
+                    <span className="run-provider-name">{selectedModel.label}</span>
+                    <span className="run-provider-sub">Click to change model</span>
+                  </span>
+                  <ChevronDownIcon className="run-provider-chevron" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="run-model-menu">
+                <DropdownMenuLabel>Model</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={selectedModelId}
+                  onValueChange={setSelectedModelId}
+                >
+                  {modelOptions.map((opt) => (
+                    <DropdownMenuRadioItem key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <p className="run-empty-status">
+              Ready to use {selectedModel.label}. Start typing your message below.
+            </p>
+            <p className="run-empty-kbd">
+              Press <kbd>⌘K</kbd> to switch model
+            </p>
+          </div>
+        ) : (
+          <>
+            {continueHintVisible && (
+              <div className="run-continue-hint" role="status">
+                Continuing previous conversation
+              </div>
+            )}
+            <RunMessages
+              entries={entries}
+              showThinking={runPrefs.showThinking}
+              autoExpandTools={runPrefs.autoExpandTools}
+            />
+          </>
+        )}
+      </main>
+
+      {/* Streaming status pill — pinned between transcript and composer
+          while the run is in flight. Provider icon, rotating verb +
+          animated dots, elapsed counter, Stop button with ESC hint. */}
+      {activeTab === "chat" && running && (
+        <div className="run-status-bar" role="status" aria-live="polite">
+          <span className="run-status-icon">
+            <ProviderIcon provider={provider} />
+          </span>
+          <span className="run-status-text">
+            <span className="run-status-verb">{verb}</span>
+            <span className="run-status-dots" aria-hidden="true">
+              {dots}
+            </span>
+          </span>
+          <span className="run-status-elapsed" title="elapsed">
+            {elapsedLabel}
+          </span>
+          <button
+            type="button"
+            className="run-status-stop"
+            onClick={cancelRun}
+            aria-label="Stop generating"
+          >
+            <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
+            <span>Stop</span>
+            <kbd className="run-status-kbd">ESC</kbd>
+          </button>
+        </div>
+      )}
+
+      {/* Floating scroll-to-bottom button — fades in when the transcript
+          has been scrolled up. Snaps the user back to the latest message
+          and re-enables auto-scroll. Always rendered so the opacity
+          transition reads cleanly; pointer-events handled in CSS. */}
+      {activeTab === "chat" && entries.length > 0 && (
+        <button
+          type="button"
+          className={`run-scroll-to-bottom${
+            userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
+          }`}
+          onClick={() => {
+            const main = transcriptScrollRef.current;
+            if (main) main.scrollTop = main.scrollHeight;
+            setUserScrolledUp(false);
+          }}
+          aria-label="Scroll to latest"
+        >
+          <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+        </button>
+      )}
+
+      {activeTab === "chat" && (
+        <footer
+          className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
+          ref={composerWrapRef}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!dragActive) setDragActive(true);
+          }}
+          onDragLeave={(e) => {
+            // dragleave fires on child crossings; only deactivate if
+            // we've left the wrap entirely.
+            if (e.currentTarget === e.target) setDragActive(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            handleAttachmentFiles(e.dataTransfer?.files ?? null);
+          }}
+          onPaste={(e) => {
+            // Pull image/file data out of the clipboard. Plain text
+            // continues to paste into the textarea naturally.
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            const fs: File[] = [];
+            for (const it of Array.from(items)) {
+              if (it.kind === "file") {
+                const f = it.getAsFile();
+                if (f) fs.push(f);
+              }
+            }
+            if (fs.length > 0) {
               e.preventDefault();
-              startRun();
+              for (const f of fs) void uploadAttachment(f);
             }
           }}
-        />
-        <button
-          className="run-submit"
-          onClick={startRun}
-          disabled={running || session.status !== "Active" || !prompt.trim()}
         >
-          {running ? "running" : "run"}
-        </button>
-      </div>
-      <div className={`run-output run-output-${runStatus}`}>
-        {session.status !== "Active" ? (
-          <span className="run-muted">waiting for session pod</span>
-        ) : entries.length ? (
-          <AgentTranscript
-            entries={entries}
-            classNames={transcriptClassNames}
-            isThinking={running}
-            renderMessageText={(entry) => <div>{entry.text}</div>}
-            renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
-            renderToolGroupIcon={() => <span className="run-tool-icon">tools</span>}
-            renderChevron={(expanded) => (
-              <span className="run-chevron">{expanded ? "hide" : "show"}</span>
-            )}
+          {dragActive && (
+            <div className="run-composer-drop-overlay" aria-hidden="true">
+              Drop to attach
+            </div>
+          )}
+          {attachments.length > 0 && (
+            <div className="run-composer-attachments">
+              {attachments.map((a) => (
+                <div
+                  key={a.id}
+                  className={`run-composer-chip run-composer-chip-${a.status}`}
+                  title={a.errorMsg ?? a.name}
+                >
+                  {a.previewUrl ? (
+                    <img
+                      className="run-composer-chip-thumb"
+                      src={a.previewUrl}
+                      alt=""
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <FileIcon size={14} aria-hidden="true" />
+                  )}
+                  <span className="run-composer-chip-name">{a.name}</span>
+                  {a.status === "uploading" && (
+                    <Loader2Icon size={12} className="run-spin" aria-hidden="true" />
+                  )}
+                  <button
+                    type="button"
+                    className="run-composer-chip-remove"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      removeAttachment(a.id);
+                    }}
+                    aria-label={`Remove ${a.name}`}
+                  >
+                    <XIcon size={11} aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              handleAttachmentFiles(e.target.files);
+              // Reset so the same file can be reselected later.
+              e.target.value = "";
+            }}
           />
-        ) : (
-          <span className="run-muted">ready</span>
-        )}
-      </div>
+          {/* Slash-command palette — opens above the composer when the
+              user types `/` at a word boundary. Up/Down navigates,
+              Enter/Tab inserts, Esc closes. Backed by SLASH_COMMANDS
+              today; project-scoped + user-defined commands TBD. */}
+          {slashOpen && slashFiltered.length > 0 && (
+            <div className="run-slash-palette" role="listbox" aria-label="Slash commands">
+              <div className="run-slash-palette-label">Slash commands</div>
+              {slashFiltered.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  role="option"
+                  aria-selected={i === slashIndex}
+                  className={`run-slash-item${i === slashIndex ? " run-slash-item-active" : ""}`}
+                  onMouseDown={(e) => {
+                    // mousedown not click — click would fire after blur of
+                    // the textarea, which closes the palette via the
+                    // input handler.
+                    e.preventDefault();
+                    applySlashCommand(cmd.name);
+                    setSlashOpen(false);
+                  }}
+                  onMouseEnter={() => setSlashIndex(i)}
+                >
+                  <span className="run-slash-name">{cmd.name}</span>
+                  <span className="run-slash-desc">{cmd.desc}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {mentionOpen && (
+            <div className="run-slash-palette" role="listbox" aria-label="File mentions">
+              <div className="run-slash-palette-label">
+                {mentionPaths == null ? "Loading files…" : "Files (@)"}
+              </div>
+              {mentionPaths != null && mentionFiltered.length === 0 && (
+                <div className="run-slash-empty">no matches</div>
+              )}
+              {mentionFiltered.map((p, i) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIndex}
+                  className={`run-slash-item${i === mentionIndex ? " run-slash-item-active" : ""}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyMentionPath(p);
+                    setMentionOpen(false);
+                  }}
+                  onMouseEnter={() => setMentionIndex(i)}
+                >
+                  <span className="run-slash-name run-mention-path">
+                    {p.split("/").pop()}
+                  </span>
+                  <span className="run-slash-desc run-mention-dir">{p}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <PromptInput onSubmit={handleSubmit} className="run-composer">
+            <PromptInputTextarea
+              className="run-composer-textarea"
+              placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
+              disabled={!ready}
+            />
+            <PromptInputFooter className="run-composer-footer">
+              <PromptInputTools className="run-composer-tools">
+                {/* Image-attach button — opens the hidden file input.
+                    Drag-and-drop and clipboard paste are wired
+                    separately on the composer wrap. */}
+                <button
+                  type="button"
+                  className="run-composer-icon-btn"
+                  aria-label="Attach files"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                </button>
+                {/* Permission-mode dropdown — five cloudcli-equivalent
+                    modes. Backend wire-through: `acceptEdits`/`auto`/
+                    `bypassPermissions` map to `claude -p
+                    --dangerously-skip-permissions`; `plan` is rendered
+                    as a prompt prefix (Claude's headless mode doesn't
+                    have a CLI flag for plan today); `default` is the
+                    no-flag baseline. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="run-mode-pill run-mode-pill-button"
+                      aria-label="Permission mode"
+                    >
+                      <span
+                        className="run-mode-dot"
+                        aria-hidden="true"
+                        style={{ background: PERMISSION_MODE_INFO[composerMode].dotColor }}
+                      />
+                      {PERMISSION_MODE_INFO[composerMode].label}
+                      <ChevronDownIcon
+                        className="run-mode-chevron"
+                        aria-hidden="true"
+                      />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="top"
+                    align="start"
+                    className="run-mode-menu"
+                  >
+                    {(Object.keys(PERMISSION_MODE_INFO) as RunComposerMode[]).map(
+                      (modeKey) => {
+                        const info = PERMISSION_MODE_INFO[modeKey];
+                        return (
+                          <DropdownMenuItem
+                            key={modeKey}
+                            onSelect={() => setComposerMode(modeKey)}
+                          >
+                            <span className="run-mode-menu-row">
+                              <span className="run-mode-menu-meta">
+                                <span
+                                  className="run-mode-menu-dot"
+                                  aria-hidden="true"
+                                  style={{ background: info.dotColor }}
+                                />
+                                <span className="run-mode-menu-label">
+                                  {info.label}
+                                </span>
+                                <span className="run-mode-menu-desc">
+                                  {info.desc}
+                                </span>
+                              </span>
+                              {composerMode === modeKey && (
+                                <CheckIcon
+                                  className="run-mode-menu-check"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </span>
+                          </DropdownMenuItem>
+                        );
+                      },
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span
+                  className="run-usage-ring"
+                  aria-label={`Context usage: ${usagePct.toFixed(1)}%`}
+                  title={`${tokensUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
+                  data-level={usageLevel}
+                >
+                  <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="13"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeOpacity="0.18"
+                      strokeWidth="2.5"
+                    />
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="13"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
+                      transform="rotate(-90 16 16)"
+                    />
+                  </svg>
+                  <span className="run-usage-ring-text">
+                    {usagePct.toFixed(usagePct < 10 ? 1 : 0)}%
+                  </span>
+                </span>
+              </PromptInputTools>
+              <span
+                className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
+              >
+                {runPrefs.sendByCtrlEnter
+                  ? "⌘/Ctrl+Enter to send · Enter for new line · / for slash commands"
+                  : "Enter to send · Shift+Enter for new line · / for slash commands"}
+              </span>
+              {composerText.length > 0 && (
+                <button
+                  type="button"
+                  className="run-composer-clear"
+                  aria-label="Clear input"
+                  onMouseDown={(e) => {
+                    // mousedown so the button doesn't blur the textarea
+                    // before the click reaches it (which would also
+                    // close the slash palette via blur).
+                    e.preventDefault();
+                    const wrap = composerWrapRef.current;
+                    const ta = wrap?.querySelector("textarea") as
+                      | HTMLTextAreaElement
+                      | null;
+                    if (!ta) return;
+                    const setter = Object.getOwnPropertyDescriptor(
+                      window.HTMLTextAreaElement.prototype,
+                      "value",
+                    )?.set;
+                    setter?.call(ta, "");
+                    ta.dispatchEvent(new Event("input", { bubbles: true }));
+                    ta.focus();
+                  }}
+                >
+                  <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                </button>
+              )}
+              <PromptInputSubmit
+                className="run-submit-btn"
+                status={submitStatus}
+                onStop={cancelRun}
+                disabled={!ready}
+              >
+                {/* When idle, force the cloudcli-style paper-plane icon.
+                    When streaming/error, fall through to AI Elements'
+                    built-in Spinner/Stop/X (children is undefined). */}
+                {submitStatus ? undefined : (
+                  <SendHorizontalIcon className="run-submit-icon" aria-hidden="true" />
+                )}
+              </PromptInputSubmit>
+            </PromptInputFooter>
+          </PromptInput>
+        </footer>
+      )}
     </section>
   );
 }
@@ -1763,6 +4227,19 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+
+  // Reflect the active session in the URL so reloads land back on it.
+  // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
+  // than wrapping setActive so all call sites benefit.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (active) {
+      url.searchParams.set("session", active);
+    } else {
+      url.searchParams.delete("session");
+    }
+    window.history.replaceState({}, "", url.toString());
+  }, [active]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   const [rolloutTimers, setRolloutTimers] = useState<Record<string, RolloutTimer>>({});
   const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});

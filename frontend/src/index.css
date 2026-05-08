@@ -1,3 +1,12 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+/*
+ ---break---
+ */
+@custom-variant dark (&:is(.dark *));
+
 /*
  * Design tokens grounded in OpenWebUI's source:
  *   - src/tailwind.css (oklch gray scale, font stack)
@@ -67,7 +76,8 @@
 
   /* Accents — unified hue. accent + accent-soft + subscription chip share the
      same blue at different intensities. Cyan stays reserved for remote-control. */
-  --accent: #4f8cf7;
+  --accent:
+    oklch(0.97 0 0);
   --accent-soft: rgba(79, 140, 247, 0.14);
   --accent-fg: #b9d2fb;
   --unread: #4f8cf7;
@@ -147,6 +157,68 @@
   font-size: var(--text-sm);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  --background:
+    oklch(1 0 0);
+  --foreground:
+    oklch(0.145 0 0);
+  --card:
+    oklch(1 0 0);
+  --card-foreground:
+    oklch(0.145 0 0);
+  --popover:
+    oklch(1 0 0);
+  --popover-foreground:
+    oklch(0.145 0 0);
+  --primary:
+    oklch(0.205 0 0);
+  --primary-foreground:
+    oklch(0.985 0 0);
+  --secondary:
+    oklch(0.97 0 0);
+  --secondary-foreground:
+    oklch(0.205 0 0);
+  --muted:
+    oklch(0.97 0 0);
+  --muted-foreground:
+    oklch(0.556 0 0);
+  --accent-foreground:
+    oklch(0.205 0 0);
+  --destructive:
+    oklch(0.577 0.245 27.325);
+  --border:
+    oklch(0.922 0 0);
+  --input:
+    oklch(0.922 0 0);
+  --ring:
+    oklch(0.708 0 0);
+  --chart-1:
+    oklch(0.87 0 0);
+  --chart-2:
+    oklch(0.556 0 0);
+  --chart-3:
+    oklch(0.439 0 0);
+  --chart-4:
+    oklch(0.371 0 0);
+  --chart-5:
+    oklch(0.269 0 0);
+  --radius:
+    0.625rem;
+  --sidebar:
+    oklch(0.985 0 0);
+  --sidebar-foreground:
+    oklch(0.145 0 0);
+  --sidebar-primary:
+    oklch(0.205 0 0);
+  --sidebar-primary-foreground:
+    oklch(0.985 0 0);
+  --sidebar-accent:
+    oklch(0.97 0 0);
+  --sidebar-accent-foreground:
+    oklch(0.205 0 0);
+  --sidebar-border:
+    oklch(0.922 0 0);
+  --sidebar-ring:
+    oklch(0.708 0 0);
 }
 
 *,
@@ -1565,18 +1637,1769 @@ button:disabled {
 
 .run-panel {
   height: 100%;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: var(--space-3);
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--bg-base, #0a0a0a);
+  font-family: var(--font-primary);
+  position: relative;
+}
+
+/* Header bar — session title left, tab nav right. */
+.run-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-soft, rgba(255, 255, 255, 0.08));
+  flex: 0 0 auto;
+}
+
+.run-header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.run-header-name {
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.run-header-sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.run-tabs {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.run-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-md, 0.5rem);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast, 120ms) ease,
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-tab:hover:not(.run-tab-active) {
+  color: var(--text-body);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.run-tab-active {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-soft, rgba(255, 255, 255, 0.12));
+}
+
+.run-tab-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Icon-only variant (gear) — same shape, no label. */
+.run-tab-icononly {
+  padding: 0.45rem 0.5rem;
+  margin-left: 0.2rem;
+}
+
+/* Settings menu — wider rows for label + check. */
+.run-settings-menu {
+  min-width: 18rem;
+}
+
+.run-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.6rem;
+}
+
+.run-settings-label {
+  font-family: var(--font-primary);
+}
+
+.run-settings-check {
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent, #2563eb);
+  flex: 0 0 auto;
+}
+
+/* Main content area — empty state or transcript. */
+.run-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6) var(--space-4);
+  gap: var(--space-3);
+}
+
+.run-empty-launchpad {
+  gap: var(--space-3);
+}
+
+.run-empty-title {
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-2xl);
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.run-empty-sub {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.run-provider-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-top: var(--space-3);
+  width: min(28rem, 90%);
+  border-radius: var(--radius-lg, 0.75rem);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
+}
+
+.run-provider-card:hover:not(:disabled) {
+  border-color: var(--accent, rgba(120, 160, 255, 0.4));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+
+.run-provider-card:disabled {
+  cursor: default;
+}
+
+.run-provider-icon {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-provider-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.run-provider-name {
+  font-weight: 600;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+}
+
+.run-provider-sub {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.run-provider-chevron {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted);
+}
+
+.run-empty-status {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 32rem;
+}
+
+.run-empty-kbd {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.run-empty-kbd kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
+/* Composer footer at the bottom of the chat pane. */
+.run-composer-wrap {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-5) var(--space-5);
+  position: relative;
+}
+
+/* Drag-active outline + overlay on the composer wrap. */
+.run-composer-wrap-drag .run-composer {
+  outline: 2px dashed rgba(96, 165, 250, 0.6);
+  outline-offset: 2px;
+}
+
+.run-composer-drop-overlay {
+  position: absolute;
+  inset: var(--space-3) var(--space-5) var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.85rem;
+  background: rgba(37, 99, 235, 0.18);
+  border: 2px dashed rgba(96, 165, 250, 0.6);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Attachment chips — render above the composer textarea. */
+.run-composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.run-composer-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.45rem 0.25rem 0.3rem;
+  border-radius: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+}
+
+.run-composer-chip-uploading {
+  opacity: 0.85;
+}
+
+.run-composer-chip-error {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
+.run-composer-chip-thumb {
+  width: 1.4rem;
+  height: 1.4rem;
+  object-fit: cover;
+  border-radius: 0.3rem;
+}
+
+.run-composer-chip-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-composer-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 0.25rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.run-composer-chip-remove:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+}
+
+/* Slash-command palette — anchored above the composer. Width matches
+   the composer; visually grouped with it via shared horizontal padding
+   on the wrap. */
+.run-slash-palette {
+  position: absolute;
+  left: var(--space-5);
+  right: var(--space-5);
+  bottom: calc(100% - var(--space-3));
+  max-height: 18rem;
+  overflow-y: auto;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(15, 17, 21, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  z-index: 20;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.run-slash-palette-label {
+  padding: 0.4rem 0.65rem 0.3rem;
+  font-family: var(--font-primary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.run-slash-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.45rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-slash-item:hover,
+.run-slash-item-active {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-slash-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: #93c5fd;
+  font-size: var(--text-sm);
+}
+
+.run-slash-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-slash-empty {
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.run-mention-path {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.run-mention-dir {
+  font-family: var(--font-mono);
 }
 
 .run-composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-2);
   align-items: stretch;
+  border-radius: var(--radius-lg, 0.75rem);
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  background: rgba(255, 255, 255, 0.02);
+  padding: var(--space-2);
+}
+
+.run-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: var(--text-xs);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.run-mode-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.55);
+}
+
+.run-composer-hint {
+  flex: 1 1 auto;
+  text-align: right;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  padding: 0 var(--space-3);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity var(--motion-fast, 180ms) ease;
+}
+
+/* Fades out once the composer has any content. */
+.run-composer-hint-faded {
+  opacity: 0.32;
+}
+
+/* Clear-input X — sits between the hint and the send button. */
+.run-composer-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-composer-clear:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+/* Floating "scroll to latest" button — pinned bottom-right of the chat
+   pane while the user is scrolled away from the bottom. Uses opacity +
+   translate transition so it fades in/out instead of snapping. */
+.run-scroll-to-bottom {
+  position: absolute;
+  right: calc(var(--space-5) + 0.5rem);
+  bottom: 6.5rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 17, 21, 0.92);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  transform: translateY(0);
+  opacity: 1;
+  transition:
+    opacity var(--motion-base, 200ms) ease,
+    transform var(--motion-base, 200ms) ease,
+    background var(--motion-fast, 140ms) ease,
+    border-color var(--motion-fast, 140ms) ease;
+}
+
+.run-scroll-to-bottom-hidden {
+  opacity: 0;
+  transform: translateY(0.4rem);
+  pointer-events: none;
+}
+
+.run-scroll-to-bottom:hover {
+  background: rgba(30, 33, 39, 0.96);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Composer textarea — taller, more breathing room. Auto-grows with
+   content (CSS field-sizing-content from AI Elements) up to max-h. */
+.run-composer-textarea {
+  min-height: 3rem !important;
+  max-height: 14rem !important;
+  padding: 0.75rem 1rem !important;
+  font-family: var(--font-primary) !important;
+  font-size: var(--text-sm) !important;
+  color: var(--text-primary) !important;
+  background: transparent !important;
+  border: none !important;
+  line-height: 1.5;
+  overflow-y: auto;
+}
+
+.run-composer-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.32);
+}
+
+.run-composer-textarea:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Composer footer row — image attach, mode pill, usage circle, comments,
+   hint, send button. Match cloudcli's flex layout left-to-right. */
+.run-composer-footer {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+}
+
+.run-composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.run-composer-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease, color var(--motion-fast, 120ms) ease;
+}
+
+.run-composer-icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.run-composer-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.run-composer-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+/* Context usage ring — driven by stream-json `usage` events. SVG arc
+   tracks live percentage; color tier shifts at 50%/75% to mirror
+   cloudcli's tokenUsagePie. */
+.run-usage-ring {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  color: #60a5fa;
+}
+
+.run-usage-ring[data-level="mid"]  { color: #fbbf24; }
+.run-usage-ring[data-level="high"] { color: #f87171; }
+
+.run-usage-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.run-usage-ring-text {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--text-body);
+  letter-spacing: 0.02em;
+  z-index: 1;
+}
+
+/* Comment badge — placeholder slot for thread/notes count. */
+.run-comments-badge {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.run-comments-icon {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.run-comments-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #2563eb;
+  color: white;
+  font-family: var(--font-primary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Send button — cloudcli's distinctive blue square w/ paper-plane. */
+.run-submit-btn {
+  width: 2.25rem !important;
+  height: 2.25rem !important;
+  min-width: 2.25rem !important;
+  border-radius: 0.5rem !important;
+  background: #2563eb !important;
+  color: white !important;
+  border: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    transform var(--motion-fast, 120ms) ease;
+  flex: 0 0 auto;
+}
+
+.run-submit-btn:hover:not(:disabled) {
+  background: #1d4ed8 !important;
+}
+
+.run-submit-btn:disabled {
+  background: rgba(37, 99, 235, 0.45) !important;
+  cursor: default;
+}
+
+.run-submit-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Mode pill rendered as a dropdown trigger — keep the pill look; add
+   the chevron + button affordances. */
+.run-mode-pill-button {
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: var(--font-primary);
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-mode-pill-button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.run-mode-chevron {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-left: 0.15rem;
+  color: var(--text-muted);
+}
+
+/* Permission-mode menu — wider to fit description text under the label. */
+.run-mode-menu {
+  min-width: 18rem;
+}
+
+.run-mode-menu-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.5rem;
+}
+
+.run-mode-menu-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 0.1rem 0.55rem;
+  align-items: center;
+}
+
+.run-mode-menu-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+}
+
+.run-mode-menu-label {
+  font-family: var(--font-primary);
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.run-mode-menu-desc {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.run-mode-menu-check {
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent, #2563eb);
+  align-self: center;
+}
+
+/* Model picker dropdown — rendered from the provider card. */
+.run-model-menu {
+  min-width: 16rem;
+}
+
+/* Shell tab content — Terminal uses position:absolute;inset:0 so it
+   needs a positioned ancestor or it escapes to the document. */
+.run-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  background: var(--bg-base, #0a0a0a);
+}
+
+/* Files tab — split view: entry list on the left, file preview on right. */
+.run-files {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-primary);
+}
+
+.run-files-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+.run-files-crumb {
+  display: inline-block;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.3rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-files-crumb:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.run-files-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.run-files-crumb-sep {
+  color: var(--text-muted);
+  padding: 0 0.1rem;
+}
+
+.run-files-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18rem 1fr;
+}
+
+.run-files-list {
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  overflow-y: auto;
+  padding: 0.4rem 0.4rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-height: 0;
+}
+
+.run-files-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-files-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.run-files-row-active {
+  background: rgba(96, 165, 250, 0.1);
+}
+
+.run-files-row-icon {
+  color: var(--text-muted);
+}
+
+.run-files-row-dir {
+  color: #fbbf24;
+}
+
+.run-files-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-files-row-size {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.run-files-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.run-files-error {
+  color: #f87171;
+}
+
+.run-spin {
+  animation: run-spin 1s linear infinite;
+}
+
+@keyframes run-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.run-files-viewer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.run-files-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.run-files-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+}
+
+.run-files-viewer-path {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-files-viewer-meta {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.run-files-viewer-content {
+  margin: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.85rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--text-body);
+  background: var(--bg-base, #0a0a0a);
+  white-space: pre;
+}
+
+/* Read-only viewer wraps a Streamdown code-block. Reset the pre styles
+   the markdown renderer adds so the block fills the viewer pane. */
+.run-files-viewer-readonly {
+  white-space: normal;
+  cursor: text;
+}
+
+.run-files-viewer-readonly pre,
+.run-files-viewer-readonly [data-streamdown="code-block"] {
+  margin: 0;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.run-files-viewer-image-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background:
+    repeating-conic-gradient(rgba(255, 255, 255, 0.025) 0% 25%, transparent 0% 50%) 50% / 16px 16px,
+    var(--bg-base, #0a0a0a);
+}
+
+.run-files-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.4rem;
+}
+
+textarea.run-files-viewer-editor {
+  border: none;
+  resize: none;
+  outline: none;
+  white-space: pre;
+  width: 100%;
+  display: block;
+  tab-size: 2;
+}
+
+textarea.run-files-viewer-editor:focus {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.run-files-viewer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-files-viewer-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.65rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-files-viewer-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.run-files-viewer-btn-primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
+.run-files-viewer-btn-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.run-files-viewer-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Streaming status bar — sits between transcript and composer while the
+   run is in flight. Matches cloudcli's ClaudeStatus shape: provider icon
+   on the left, rotating action verb + animated dots, elapsed counter on
+   the right, destructive Stop pill with ESC kbd hint. Hidden when idle. */
+.run-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0 var(--space-5) var(--space-2);
+  padding: 0.55rem 0.75rem 0.55rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.08), rgba(52, 211, 153, 0.03));
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04);
+  animation: run-status-pulse 2.4s ease-in-out infinite;
+}
+
+/* Brief banner shown above the transcript when entries are restored from
+   localStorage on mount or from the backend history endpoint. Auto-fades
+   after 3s via React state. */
+.run-continue-hint {
+  align-self: center;
+  margin: var(--space-3) auto var(--space-2);
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  animation: run-continue-hint-fade 3s ease-out forwards;
+}
+
+@keyframes run-continue-hint-fade {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  10%  { opacity: 1; transform: translateY(0); }
+  85%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes run-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
+  50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
+}
+
+.run-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.run-status-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.05rem;
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-status-verb {
+  letter-spacing: 0.01em;
+}
+
+.run-status-dots {
+  display: inline-block;
+  width: 1.5em;
+  text-align: left;
+  color: rgba(255, 255, 255, 0.6);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-status-elapsed {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  padding: 0 0.25rem;
+}
+
+.run-status-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(239, 68, 68, 0.38);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fecaca;
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-status-stop:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.55);
+  color: #fee2e2;
+}
+
+.run-status-stop-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: currentColor;
+}
+
+.run-status-kbd {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  margin-left: 0.15rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
+/* Per-message footer — timestamp + copy button, hover-revealed. */
+.run-msg-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  font-family: var(--font-primary);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--motion-fast, 140ms) ease;
+}
+
+.run-transcript-message:hover .run-msg-footer,
+.run-transcript-message:focus-within .run-msg-footer {
+  opacity: 1;
+}
+
+.run-msg-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.run-msg-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border-radius: 0.3rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease, color var(--motion-fast, 100ms) ease;
+}
+
+.run-msg-copy:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+/* Reasoning accordion — collapsible thinking block. */
+.run-reasoning {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: start;
+  max-width: min(48rem, 86%);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border-radius: 0.625rem;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.run-reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+}
+
+.run-reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-reasoning-chevron {
+  margin-left: auto;
+  transition: transform var(--motion-fast, 140ms) ease;
+}
+
+.run-reasoning[open] .run-reasoning-chevron {
+  transform: rotate(180deg);
+}
+
+.run-reasoning-body {
+  padding: 0.5rem 0.85rem 0.7rem;
+  font-size: 0.78rem;
+  color: var(--text-body);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Meta entries — info pill or red error box. */
+.run-meta {
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+}
+
+.run-meta-error {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+  color: #fecaca;
+}
+
+.run-meta-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.1rem;
+}
+
+.run-meta-body {
+  min-width: 0;
+}
+
+.run-meta-title {
+  font-weight: 500;
+}
+
+.run-meta-detail {
+  margin: 0.3rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Tool-call cards — cloudcli-flavored. Per-tool color stripe on the
+   left, Lucide icon in matching hue, hover-able expandable header. */
+.run-transcript-tool-single {
+  margin: 0;
+}
+
+.run-transcript-tools {
+  border-radius: 0.625rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.run-transcript-tools-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255, 255, 255, 0.03);
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.run-transcript-tools-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+}
+
+.run-transcript-tools-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-transcript-tools-chevron {
+  color: var(--text-muted);
+  display: inline-flex;
+}
+
+.run-transcript-tools-body > * {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* Tool item — single row with left status connector + content header. */
+.run-transcript-tool {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0.5rem;
+  align-items: stretch;
+  padding: 0.4rem 0.5rem 0.4rem 0;
+}
+
+.run-transcript-tool-connector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-transcript-tool-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+
+.run-transcript-tool[data-state="running"] .run-transcript-tool-dot {
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+  animation: run-tool-dot-pulse 1.4s ease-in-out infinite;
+}
+
+.run-transcript-tool[data-state="completed"] .run-transcript-tool-dot {
+  background: #60a5fa;
+}
+
+.run-transcript-tool[data-state="failed"] .run-transcript-tool-dot,
+.run-transcript-tool[data-state="error"] .run-transcript-tool-dot {
+  background: #ef4444;
+}
+
+@keyframes run-tool-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+.run-transcript-tool-content {
+  min-width: 0;
+  width: 100%;
+  display: block;
+  /* Keep the content in the second grid column even if other children
+     (e.g. the connector) are display:none in legacy modes. */
+  grid-column: 2;
+}
+
+.run-transcript-tool-header {
+  display: flex !important;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  min-height: auto;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-transcript-tool-header:hover {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.run-transcript-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 0.35rem;
+  flex: 0 0 auto;
+}
+
+.run-tool-icon-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-tool-group-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+/* Per-tool color stripes — applied to the icon span inside the header. */
+.tool-color-bash    { background: rgba(52, 211, 153, 0.14); color: #34d399; }
+.tool-color-read    { background: rgba(96, 165, 250, 0.14); color: #60a5fa; }
+.tool-color-edit    { background: rgba(251, 191, 36, 0.14); color: #fbbf24; }
+.tool-color-search  { background: rgba(96, 165, 250, 0.14); color: #93c5fd; }
+.tool-color-todo    { background: rgba(167, 139, 250, 0.14); color: #a78bfa; }
+.tool-color-task    { background: rgba(192, 132, 252, 0.14); color: #c084fc; }
+.tool-color-plan    { background: rgba(129, 140, 248, 0.14); color: #818cf8; }
+.tool-color-mcp     { background: rgba(244, 114, 182, 0.14); color: #f472b6; }
+.tool-color-default { background: rgba(255, 255, 255, 0.06);  color: rgba(255, 255, 255, 0.65); }
+
+.run-transcript-tool-label {
+  flex: 1 1 auto !important;
+  flex-basis: auto !important;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.run-transcript-tool-chevron {
+  color: var(--text-muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.run-chevron-icon {
+  color: var(--text-muted);
+}
+
+.run-transcript-tool-body {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-body);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.run-transcript-tool-body .run-transcript-code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.run-transcript-tool-body .run-transcript-code-muted {
+  color: var(--text-muted);
+}
+
+.run-transcript-tool-section-title,
+.run-tool-section-title {
+  font-family: var(--font-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+}
+
+.run-tool-section-title:not(:first-child) {
+  margin-top: 0.6rem;
+}
+
+/* Diff body — Edit/Write/MultiEdit/ApplyPatch. */
+.run-tool-diff {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.run-tool-diff-path {
+  color: var(--text-muted);
+  margin-bottom: 0.4rem;
+  word-break: break-all;
+}
+
+.run-tool-diff-pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+  display: flex;
+  flex-direction: column;
+}
+
+.run-diff-line {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.4rem;
+  line-height: 1.45;
+}
+
+.run-diff-marker {
+  width: 0.8rem;
+  flex: 0 0 auto;
+  text-align: right;
+  user-select: none;
+  color: var(--text-muted);
+}
+
+.run-diff-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-diff-ctx {
+  background: transparent;
+  color: var(--text-body);
+}
+
+.run-diff-add {
+  background: rgba(52, 211, 153, 0.10);
+  color: #a7f3d0;
+}
+
+.run-diff-add .run-diff-marker {
+  color: #34d399;
+}
+
+.run-diff-del {
+  background: rgba(248, 113, 113, 0.10);
+  color: #fecaca;
+}
+
+.run-diff-del .run-diff-marker {
+  color: #f87171;
+}
+
+/* Output dump under a diff (when present). */
+.run-tool-output {
+  margin-top: 0.6rem;
+}
+
+.run-tool-output > summary {
+  cursor: pointer;
+  font-family: var(--font-primary);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  list-style: none;
+}
+
+.run-tool-output > summary::-webkit-details-marker { display: none; }
+
+.run-tool-output > summary::before {
+  content: "▸ ";
+  color: var(--text-muted);
+}
+
+.run-tool-output[open] > summary::before {
+  content: "▾ ";
+}
+
+.run-tool-output pre {
+  margin: 0.3rem 0 0;
+  padding: 0.55rem 0.75rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  max-height: 16rem;
+  overflow: auto;
+}
+
+/* Bash body — command + output. */
+.run-tool-bash-cmd {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: rgba(0, 0, 0, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: #a7f3d0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-tool-bash-out {
+  margin: 0.3rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.4rem;
+  background: rgba(0, 0, 0, 0.3);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16rem;
+  overflow: auto;
+  color: var(--text-body);
+}
+
+/* Read tool body — a tight one-line. */
+.run-tool-read {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.run-tool-read-path {
+  color: #93c5fd;
+  word-break: break-all;
+}
+
+.run-tool-read-meta {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+/* Todo list. */
+.run-tool-todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-tool-todo {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.55rem;
+  padding: 0.25rem 0;
+  font-size: 0.82rem;
+}
+
+.run-tool-todo-marker {
+  font-family: var(--font-mono);
+  width: 1rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.run-tool-todo-completed .run-tool-todo-marker {
+  color: #34d399;
+}
+
+.run-tool-todo-completed .run-tool-todo-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.run-tool-todo-in_progress .run-tool-todo-marker {
+  color: #60a5fa;
+}
+
+.run-tool-default-pre {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.run-tool-spinner {
+  margin-left: 0.2rem;
+  color: #34d399;
 }
 
 .run-composer textarea {
@@ -1642,36 +3465,132 @@ button:disabled {
 
 .run-transcript {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: var(--space-3);
   font-family: var(--font-primary);
   font-size: var(--text-sm);
-  line-height: 1.45;
+  line-height: 1.55;
   white-space: normal;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.run-transcript-divider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.run-transcript-divider-line {
+  height: 1px;
+  background: var(--border-subtle);
 }
 
 .run-transcript-message {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: 1.7rem minmax(0, 1fr) 1.7rem;
+  column-gap: 0.55rem;
+  row-gap: 0.2rem;
+  align-items: start;
+}
+
+/* Avatars — pseudo-elements pinned to the edge column opposite the
+   bubble. User stays right (blue "U"), assistant stays left (orange
+   star ASCII; SVG would be nicer but pseudo-only works for content
+   strings without inline SVG plumbing). */
+.run-transcript-message::before,
+.run-transcript-message::after {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.run-transcript-message[data-variant="user"]::before {
+  content: none;
+}
+
+.run-transcript-message[data-variant="user"]::after {
+  content: "U";
+  grid-column: 3;
+  grid-row: 1;
+  background: rgba(37, 99, 235, 0.16);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.run-transcript-message[data-variant="assistant"]::before {
+  content: "✶";
+  grid-column: 1;
+  grid-row: 1;
+  background: rgba(249, 115, 22, 0.14);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.run-transcript-message[data-variant="assistant"]::after {
+  content: none;
+}
+
+.run-transcript-message[data-variant="error"]::before,
+.run-transcript-message[data-variant="tool"]::before {
+  content: "!";
+  grid-column: 1;
+  grid-row: 1;
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.4);
 }
 
 .run-transcript-message-content {
-  max-width: min(52rem, 100%);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
+  max-width: min(48rem, 86%);
+  border-radius: 0.875rem;
+  padding: 0.75rem 1rem;
   overflow-wrap: anywhere;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
 }
 
 .run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
+  grid-column: 2;
+  grid-row: 1;
   justify-self: end;
-  background: rgba(93, 190, 165, 0.14);
-  color: var(--text-primary);
+  background: #1d4ed8;
+  color: #f5f8ff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
+  grid-column: 2;
+  grid-row: 1;
   justify-self: start;
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Claude assistant variant — same shell as the generic assistant bubble.
+   The earlier "transparent / borderless" override was a holdover from
+   the prior prose-style transcript and isn't what the cloudcli-shape
+   pane wants. */
+.run-transcript-claude [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  padding: 0.75rem 1rem;
 }
 
 .run-transcript-message-text {
@@ -1679,11 +3598,20 @@ button:disabled {
   gap: var(--space-2);
 }
 
+.run-transcript-tool-single {
+  min-width: 0;
+}
+
 .run-transcript-tools {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.025);
   overflow: hidden;
+}
+
+.run-transcript-claude .run-transcript-tools {
+  border-color: rgba(216, 190, 140, 0.26);
+  background: rgba(216, 190, 140, 0.045);
 }
 
 .run-transcript-tools-header,
@@ -1696,21 +3624,67 @@ button:disabled {
   color: var(--text-secondary);
 }
 
+.run-transcript-tools-header,
+.run-transcript-tool-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.run-transcript-tools-icon,
+.run-transcript-tool-icon {
+  display: inline-flex;
+  min-width: 2.25rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.run-transcript-tools-label,
+.run-transcript-tool-label {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.run-transcript-tools-chevron,
+.run-transcript-tool-chevron {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 .run-transcript-tools-body {
   display: grid;
   gap: var(--space-2);
   padding: 0 var(--space-3) var(--space-3);
 }
 
-.run-transcript-tool {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--gray-950);
+/* Legacy tool-row styling (border + bg) replaced by the per-tool
+   styled cards above. The connector is intentionally visible now (it
+   carries the colored status dot), so the older `display: none`
+   override has been removed. */
+.run-transcript-tool.failed {
+  border-color: rgba(255, 102, 102, 0.36);
 }
 
 .run-transcript-tool-body {
   border-top: 1px solid var(--border-subtle);
   padding: var(--space-3);
+}
+
+.run-transcript-tool-section + .run-transcript-tool-section {
+  margin-top: var(--space-3);
+}
+
+.run-transcript-tool-section-title {
+  margin-bottom: var(--space-1);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: lowercase;
 }
 
 .run-transcript-code,
@@ -1742,6 +3716,12 @@ button:disabled {
 .run-transcript [data-severity="error"],
 .run-transcript-error {
   color: var(--status-error-fg);
+}
+
+.run-transcript-thinking {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .run-tool-icon,
@@ -1785,4 +3765,176 @@ button:disabled {
 
 .terminal-waiting-time {
   color: var(--text);
+}
+
+/*
+ ---break---
+ */
+
+@theme inline {
+  --font-heading:
+    var(--font-sans);
+  --font-sans:
+    'Geist Variable', sans-serif;
+  --color-sidebar-ring:
+    var(--sidebar-ring);
+  --color-sidebar-border:
+    var(--sidebar-border);
+  --color-sidebar-accent-foreground:
+    var(--sidebar-accent-foreground);
+  --color-sidebar-accent:
+    var(--sidebar-accent);
+  --color-sidebar-primary-foreground:
+    var(--sidebar-primary-foreground);
+  --color-sidebar-primary:
+    var(--sidebar-primary);
+  --color-sidebar-foreground:
+    var(--sidebar-foreground);
+  --color-sidebar:
+    var(--sidebar);
+  --color-chart-5:
+    var(--chart-5);
+  --color-chart-4:
+    var(--chart-4);
+  --color-chart-3:
+    var(--chart-3);
+  --color-chart-2:
+    var(--chart-2);
+  --color-chart-1:
+    var(--chart-1);
+  --color-ring:
+    var(--ring);
+  --color-input:
+    var(--input);
+  --color-border:
+    var(--border);
+  --color-destructive:
+    var(--destructive);
+  --color-accent-foreground:
+    var(--accent-foreground);
+  --color-accent:
+    var(--accent);
+  --color-muted-foreground:
+    var(--muted-foreground);
+  --color-muted:
+    var(--muted);
+  --color-secondary-foreground:
+    var(--secondary-foreground);
+  --color-secondary:
+    var(--secondary);
+  --color-primary-foreground:
+    var(--primary-foreground);
+  --color-primary:
+    var(--primary);
+  --color-popover-foreground:
+    var(--popover-foreground);
+  --color-popover:
+    var(--popover);
+  --color-card-foreground:
+    var(--card-foreground);
+  --color-card:
+    var(--card);
+  --color-foreground:
+    var(--foreground);
+  --color-background:
+    var(--background);
+  --radius-sm:
+    calc(var(--radius) * 0.6);
+  --radius-md:
+    calc(var(--radius) * 0.8);
+  --radius-lg:
+    var(--radius);
+  --radius-xl:
+    calc(var(--radius) * 1.4);
+  --radius-2xl:
+    calc(var(--radius) * 1.8);
+  --radius-3xl:
+    calc(var(--radius) * 2.2);
+  --radius-4xl:
+    calc(var(--radius) * 2.6);
+}
+
+/*
+ ---break---
+ */
+
+.dark {
+  --background:
+    oklch(0.145 0 0);
+  --foreground:
+    oklch(0.985 0 0);
+  --card:
+    oklch(0.205 0 0);
+  --card-foreground:
+    oklch(0.985 0 0);
+  --popover:
+    oklch(0.205 0 0);
+  --popover-foreground:
+    oklch(0.985 0 0);
+  --primary:
+    oklch(0.922 0 0);
+  --primary-foreground:
+    oklch(0.205 0 0);
+  --secondary:
+    oklch(0.269 0 0);
+  --secondary-foreground:
+    oklch(0.985 0 0);
+  --muted:
+    oklch(0.269 0 0);
+  --muted-foreground:
+    oklch(0.708 0 0);
+  --accent:
+    oklch(0.269 0 0);
+  --accent-foreground:
+    oklch(0.985 0 0);
+  --destructive:
+    oklch(0.704 0.191 22.216);
+  --border:
+    oklch(1 0 0 / 10%);
+  --input:
+    oklch(1 0 0 / 15%);
+  --ring:
+    oklch(0.556 0 0);
+  --chart-1:
+    oklch(0.87 0 0);
+  --chart-2:
+    oklch(0.556 0 0);
+  --chart-3:
+    oklch(0.439 0 0);
+  --chart-4:
+    oklch(0.371 0 0);
+  --chart-5:
+    oklch(0.269 0 0);
+  --sidebar:
+    oklch(0.205 0 0);
+  --sidebar-foreground:
+    oklch(0.985 0 0);
+  --sidebar-primary:
+    oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground:
+    oklch(0.985 0 0);
+  --sidebar-accent:
+    oklch(0.269 0 0);
+  --sidebar-accent-foreground:
+    oklch(0.985 0 0);
+  --sidebar-border:
+    oklch(1 0 0 / 10%);
+  --sidebar-ring:
+    oklch(0.556 0 0);
+}
+
+/*
+ ---break---
+ */
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }
