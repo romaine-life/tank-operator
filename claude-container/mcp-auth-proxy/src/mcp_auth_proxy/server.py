@@ -48,18 +48,20 @@ TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
-# Port allocation (next free: 9996):
+# Port allocation (next free: 9997):
 #   9991 — mcp-azure-personal
 #   9992 — mcp-github
 #   9993 — mcp-k8s
 #   9994 — mcp-argocd
 #   9995 — mcp-glimmung
+#   9996 — mcp-tank-operator
 LISTENERS: list[tuple[int, str]] = [
     (9991, "http://mcp-azure-personal.mcp-azure.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
     (9993, "http://mcp-k8s.mcp-k8s.svc:80"),
     (9994, "http://mcp-argocd.mcp-argocd.svc:80"),
     (9995, "http://mcp-glimmung.mcp-glimmung.svc:80"),
+    (9996, "http://mcp-tank-operator.mcp-tank-operator.svc:80"),
 ]
 
 # Headers we strip from the inbound request before forwarding. Host is

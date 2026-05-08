@@ -23,6 +23,10 @@
     "platform": {
       "command": "platform-mcp"
     },
+    "tank-operator": {
+      "type": "http",
+      "url": "http://127.0.0.1:9996/"
+    },
     "tank": {
       "command": "mcp-tank"
     }

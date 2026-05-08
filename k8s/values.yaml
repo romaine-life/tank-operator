@@ -142,6 +142,15 @@ github:
 host:
   email: nelson@romaine.life
 
+# Comma-separated "namespace/serviceaccount" pairs that may call the
+# /api/internal/* endpoints. The default covers mcp-github and mcp-tank-operator;
+# extend here when adding future in-cluster MCP servers that need the
+# resolve-caller or internal-session APIs.
+internalApi:
+  allowedSubjects: "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator"
+  # Public hostname used to build session URLs returned by internal session endpoints.
+  tankUiHost: "https://tank.romaine.life"
+
 externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore

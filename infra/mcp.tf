@@ -82,3 +82,25 @@ resource "azurerm_cosmosdb_sql_role_assignment" "mcp_azure_personal_tank_operato
   principal_id        = module.mcp_azure_personal.managed_identity_principal_id
   scope               = azurerm_cosmosdb_account.tank_operator.id
 }
+
+# ----------------------------------------------------------------------------
+# mcp-tank-operator: thin shim — session CRUD on behalf of caller pod IP
+# ----------------------------------------------------------------------------
+# This server only calls the tank-operator orchestrator HTTP API
+# (/api/internal/sessions/*) — no Azure surface, so no role_assignments.
+# It does need a UAMI so the federated credential for GitHub Actions CI
+# (docker build → ACR push) is wired through the standard module.
+
+module "mcp_tank_operator" {
+  source = "./mcp-server"
+
+  name                     = "tank-operator"
+  resource_group_name      = data.azurerm_resource_group.main.name
+  resource_group_location  = data.azurerm_resource_group.main.location
+  key_vault_id             = data.azurerm_key_vault.main.id
+  aks_oidc_issuer_url      = local.aks_oidc_issuer_url
+  aks_namespace            = "mcp-tank-operator"
+  aks_service_account_name = "mcp-tank-operator"
+
+  role_assignments = {}
+}
