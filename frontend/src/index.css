@@ -3019,7 +3019,66 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message {
   display: grid;
-  gap: var(--space-1);
+  grid-template-columns: 1.7rem minmax(0, 1fr) 1.7rem;
+  column-gap: 0.55rem;
+  row-gap: 0.2rem;
+  align-items: start;
+}
+
+/* Avatars — pseudo-elements pinned to the edge column opposite the
+   bubble. User stays right (blue "U"), assistant stays left (orange
+   star ASCII; SVG would be nicer but pseudo-only works for content
+   strings without inline SVG plumbing). */
+.run-transcript-message::before,
+.run-transcript-message::after {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.run-transcript-message[data-variant="user"]::before {
+  content: none;
+}
+
+.run-transcript-message[data-variant="user"]::after {
+  content: "U";
+  grid-column: 3;
+  grid-row: 1;
+  background: rgba(37, 99, 235, 0.16);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+.run-transcript-message[data-variant="assistant"]::before {
+  content: "✶";
+  grid-column: 1;
+  grid-row: 1;
+  background: rgba(249, 115, 22, 0.14);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.run-transcript-message[data-variant="assistant"]::after {
+  content: none;
+}
+
+.run-transcript-message[data-variant="error"]::before,
+.run-transcript-message[data-variant="tool"]::before {
+  content: "!";
+  grid-column: 1;
+  grid-row: 1;
+  background: rgba(239, 68, 68, 0.16);
+  color: #fca5a5;
+  border: 1px solid rgba(248, 113, 113, 0.4);
 }
 
 .run-transcript-message-content {
@@ -3031,6 +3090,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
+  grid-column: 2;
+  grid-row: 1;
   justify-self: end;
   background: #1d4ed8;
   color: #f5f8ff;
@@ -3038,6 +3099,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
+  grid-column: 2;
+  grid-row: 1;
   justify-self: start;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);

@@ -2479,6 +2479,10 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     setRunning(true);
     setRunStartedAt(Date.now());
     setNow(Date.now());
+    // The form clears the textarea internally on submit but doesn't
+    // always fire an input event in time, so my mirror lingers and the
+    // X-clear button stays visible. Force the mirror clean.
+    setComposerText("");
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/run`;
