@@ -43,7 +43,6 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
-  MessageSquareIcon,
   PlugIcon,
   SearchIcon,
   SendHorizontalIcon,
@@ -79,7 +78,7 @@ type DefaultSessionMode = Extract<
   | "pi_subscription"
 >;
 type Provider = "anthropic" | "openai" | "pi";
-type SessionInteraction = "terminal" | "run";
+type SessionInteraction = "terminal" | "run" | "newterm";
 
 interface Session {
   id: string;
@@ -142,12 +141,20 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
 
 const PROVIDER_INTERACTION_MODES: Record<
   Provider,
-  Record<SessionInteraction, DefaultSessionMode | null>
+  Partial<Record<SessionInteraction, DefaultSessionMode | null>>
 > = {
-  anthropic: { terminal: "subscription", run: "subscription_headless" },
-  openai: { terminal: "codex_subscription", run: "codex_headless" },
-  pi: { terminal: "pi_subscription", run: null },
+  anthropic: { terminal: "subscription", run: "subscription_headless", newterm: "subscription_headless" },
+  openai: { terminal: "codex_subscription", run: "codex_headless", newterm: "codex_headless" },
+  pi: { terminal: "pi_subscription", run: null, newterm: null },
 };
+
+const INTERACTION_LABELS: Record<SessionInteraction, string> = {
+  terminal: "terminal",
+  run: "gui",
+  newterm: "newterm",
+};
+
+const INTERACTION_OPTIONS: SessionInteraction[] = ["terminal", "run", "newterm"];
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
@@ -431,6 +438,8 @@ const DEMO_LANDING_LINES = [
 ];
 
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
+const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
+const SESSION_INITIAL_TAB_KEY_PREFIX = "tank.sessionTab:";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
@@ -463,6 +472,35 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
   } catch {
     // Preference persistence is best-effort; session creation should continue.
   }
+}
+
+function readDefaultInteraction(): SessionInteraction {
+  try {
+    const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
+    if (stored === "terminal" || stored === "run" || stored === "newterm") return stored;
+  } catch {}
+  // Back-compat: derive from stored session mode.
+  const mode = readDefaultSessionMode();
+  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
+}
+
+function writeDefaultInteraction(interaction: SessionInteraction): void {
+  try {
+    localStorage.setItem(DEFAULT_INTERACTION_KEY, interaction);
+  } catch {}
+}
+
+function readSessionInitialTab(id: string): "chat" | "shell" {
+  try {
+    if (localStorage.getItem(SESSION_INITIAL_TAB_KEY_PREFIX + id) === "shell") return "shell";
+  } catch {}
+  return "chat";
+}
+
+function writeSessionInitialTab(id: string, tab: "chat" | "shell"): void {
+  try {
+    localStorage.setItem(SESSION_INITIAL_TAB_KEY_PREFIX + id, tab);
+  } catch {}
 }
 
 function readCompletionSoundEnabled(): boolean {
@@ -576,9 +614,6 @@ const CODEX_ROLLOUT_SUBMIT_DELAY_MS = 200;
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
-function sessionInteraction(mode: SessionMode): SessionInteraction {
-  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
-}
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
   return (
@@ -2656,7 +2691,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   );
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [activeTab, setActiveTab] = useState<RunTab>(() => readSessionInitialTab(session.id));
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3535,36 +3570,6 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === "chat"}
-            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
-            onClick={() => setActiveTab("chat")}
-            title="Conversation with the agent"
-          >
-            <MessageSquareIcon
-              className="run-tab-icon"
-              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
-              aria-hidden="true"
-            />
-            <span>Chat</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "shell"}
-            className={`run-tab${activeTab === "shell" ? " run-tab-active" : ""}`}
-            onClick={() => setActiveTab("shell")}
-            title="Interactive bash shell in the session pod"
-          >
-            <TerminalIcon
-              className="run-tab-icon"
-              strokeWidth={activeTab === "shell" ? 2.4 : 1.8}
-              aria-hidden="true"
-            />
-            <span>Shell</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
             aria-selected={activeTab === "files"}
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("files")}
@@ -4327,7 +4332,10 @@ export function App() {
   // touched don't open a WS — same opt-in semantic the old tab list had.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [defaultInteraction, setDefaultInteraction] =
+    useState<SessionInteraction>(readDefaultInteraction);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [draggingSessionId, setDraggingSessionId] = useState<string | null>(null);
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
@@ -4363,21 +4371,23 @@ export function App() {
       });
   }, []);
 
-  // Close any open dropdown on an outside click. Both menus use a `data-menu`
+  // Close any open dropdown on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
   useEffect(() => {
-    if (!modeMenuOpen && !profileMenuOpen) return;
+    if (!modeMenuOpen && !profileMenuOpen && !interactionMenuOpen) return;
     const close = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       const root = target?.closest("[data-menu]") as HTMLElement | null;
       if (root?.dataset.menu === "mode") return;
       if (root?.dataset.menu === "profile") return;
+      if (root?.dataset.menu === "interaction") return;
       setModeMenuOpen(false);
       setProfileMenuOpen(false);
+      setInteractionMenuOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [modeMenuOpen, profileMenuOpen]);
+  }, [modeMenuOpen, profileMenuOpen, interactionMenuOpen]);
 
   async function refresh() {
     try {
@@ -4632,6 +4642,9 @@ export function App() {
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = await res.json();
+      if (HEADLESS_MODES.has(mode) && defaultInteraction === "newterm") {
+        writeSessionInitialTab(created.id, "shell");
+      }
       await refresh();
       activate(created.id);
       startEditing(created.id, created.name);
@@ -4643,18 +4656,20 @@ export function App() {
   }
 
   function setDefaultProvider(provider: Provider) {
-    const mode = defaultModeFor(provider, sessionInteraction(defaultSessionMode));
+    const mode = defaultModeFor(provider, defaultInteraction);
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
     setModeMenuOpen(false);
   }
 
-  function toggleDefaultInteraction() {
+  function selectDefaultInteraction(interaction: SessionInteraction) {
     const provider = MODE_MENU_ICONS[defaultSessionMode];
-    const nextInteraction = sessionInteraction(defaultSessionMode) === "run" ? "terminal" : "run";
-    const mode = defaultModeFor(provider, nextInteraction);
+    const mode = defaultModeFor(provider, interaction);
+    setDefaultInteraction(interaction);
+    writeDefaultInteraction(interaction);
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
+    setInteractionMenuOpen(false);
   }
 
   function updateCompletionSoundEnabled(enabled: boolean) {
@@ -4872,23 +4887,34 @@ export function App() {
               </span>
               <IconChevronDown className="new-row-provider-chevron" />
             </button>
-            <button
-              className="new-row-interaction-toggle"
-              onClick={toggleDefaultInteraction}
-              disabled={busy || MODE_MENU_ICONS[defaultSessionMode] === "pi"}
-              aria-label={`Use ${
-                sessionInteraction(defaultSessionMode) === "run" ? "terminal" : "run"
-              } interaction`}
-              title={
-                MODE_MENU_ICONS[defaultSessionMode] === "pi"
-                  ? "Pi only supports terminal sessions"
-                  : sessionInteraction(defaultSessionMode) === "run"
-                    ? "switch to terminal interaction"
-                    : "switch to run interaction"
-              }
-            >
-              {sessionInteraction(defaultSessionMode)}
-            </button>
+            <div className="new-row-interaction-container" data-menu="interaction">
+              <button
+                className={`new-row-interaction-toggle${interactionMenuOpen ? " is-open" : ""}`}
+                onClick={() => setInteractionMenuOpen((v) => !v)}
+                disabled={busy}
+                aria-label="choose interaction"
+                aria-expanded={interactionMenuOpen}
+              >
+                {INTERACTION_LABELS[defaultInteraction]}
+                <IconChevronDown className="new-row-interaction-chevron" />
+              </button>
+              {interactionMenuOpen && (
+                <ul className="dropdown dropdown-interaction" role="menu">
+                  {INTERACTION_OPTIONS.map((interaction) => (
+                    <li key={interaction}>
+                      <button
+                        onClick={() => selectDefaultInteraction(interaction)}
+                        disabled={busy || (interaction !== "terminal" && MODE_MENU_ICONS[defaultSessionMode] === "pi")}
+                        aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
+                        className={defaultInteraction === interaction ? "is-selected" : undefined}
+                      >
+                        {INTERACTION_LABELS[interaction]}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <div className="new-row-action-group" role="group" aria-label="session actions">
               <button
                 className="new-row-action"
@@ -4918,7 +4944,7 @@ export function App() {
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {PROVIDERS.map((provider) => {
-                  const mode = defaultModeFor(provider, sessionInteraction(defaultSessionMode));
+                  const mode = defaultModeFor(provider, defaultInteraction);
                   return (
                     <li key={provider}>
                     <button
