@@ -2276,6 +2276,227 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* Tool-call cards — cloudcli-flavored. Per-tool color stripe on the
+   left, Lucide icon in matching hue, hover-able expandable header. */
+.run-transcript-tool-single {
+  margin: 0;
+}
+
+.run-transcript-tools {
+  border-radius: 0.625rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.run-transcript-tools-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.85rem;
+  background: rgba(255, 255, 255, 0.03);
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.run-transcript-tools-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+}
+
+.run-transcript-tools-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-transcript-tools-chevron {
+  color: var(--text-muted);
+  display: inline-flex;
+}
+
+.run-transcript-tools-body > * {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+/* Tool item — single row with left status connector + content header. */
+.run-transcript-tool {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  gap: 0.5rem;
+  align-items: stretch;
+  padding: 0.4rem 0.5rem 0.4rem 0;
+}
+
+.run-transcript-tool-connector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-transcript-tool-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+}
+
+.run-transcript-tool[data-state="running"] .run-transcript-tool-dot {
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+  animation: run-tool-dot-pulse 1.4s ease-in-out infinite;
+}
+
+.run-transcript-tool[data-state="completed"] .run-transcript-tool-dot {
+  background: #60a5fa;
+}
+
+.run-transcript-tool[data-state="failed"] .run-transcript-tool-dot,
+.run-transcript-tool[data-state="error"] .run-transcript-tool-dot {
+  background: #ef4444;
+}
+
+@keyframes run-tool-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+.run-transcript-tool-content {
+  min-width: 0;
+  width: 100%;
+  display: block;
+  /* Keep the content in the second grid column even if other children
+     (e.g. the connector) are display:none in legacy modes. */
+  grid-column: 2;
+}
+
+.run-transcript-tool-header {
+  display: flex !important;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-align: left;
+  min-height: auto;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-transcript-tool-header:hover {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.run-transcript-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 0.35rem;
+  flex: 0 0 auto;
+}
+
+.run-tool-icon-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-tool-group-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+/* Per-tool color stripes — applied to the icon span inside the header. */
+.tool-color-bash    { background: rgba(52, 211, 153, 0.14); color: #34d399; }
+.tool-color-read    { background: rgba(96, 165, 250, 0.14); color: #60a5fa; }
+.tool-color-edit    { background: rgba(251, 191, 36, 0.14); color: #fbbf24; }
+.tool-color-search  { background: rgba(96, 165, 250, 0.14); color: #93c5fd; }
+.tool-color-todo    { background: rgba(167, 139, 250, 0.14); color: #a78bfa; }
+.tool-color-task    { background: rgba(192, 132, 252, 0.14); color: #c084fc; }
+.tool-color-plan    { background: rgba(129, 140, 248, 0.14); color: #818cf8; }
+.tool-color-mcp     { background: rgba(244, 114, 182, 0.14); color: #f472b6; }
+.tool-color-default { background: rgba(255, 255, 255, 0.06);  color: rgba(255, 255, 255, 0.65); }
+
+.run-transcript-tool-label {
+  flex: 1 1 auto !important;
+  flex-basis: auto !important;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.run-transcript-tool-chevron {
+  color: var(--text-muted);
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.run-chevron-icon {
+  color: var(--text-muted);
+}
+
+.run-transcript-tool-body {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.25);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--text-body);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.run-transcript-tool-body .run-transcript-code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-primary);
+}
+
+.run-transcript-tool-body .run-transcript-code-muted {
+  color: var(--text-muted);
+}
+
+.run-transcript-tool-section-title {
+  font-family: var(--font-primary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+}
+
 .run-composer textarea {
   min-height: 7rem;
   max-height: 14rem;
@@ -2473,22 +2694,12 @@ button:disabled {
   padding: 0 var(--space-3) var(--space-3);
 }
 
-.run-transcript-tool {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  background: var(--gray-950);
-}
-
+/* Legacy tool-row styling (border + bg) replaced by the per-tool
+   styled cards above. The connector is intentionally visible now (it
+   carries the colored status dot), so the older `display: none`
+   override has been removed. */
 .run-transcript-tool.failed {
   border-color: rgba(255, 102, 102, 0.36);
-}
-
-.run-transcript-tool-connector {
-  display: none;
-}
-
-.run-transcript-tool-content {
-  min-width: 0;
 }
 
 .run-transcript-tool-body {

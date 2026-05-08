@@ -27,14 +27,24 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  BotIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronUpIcon,
+  ClipboardListIcon,
+  FileTextIcon,
   FolderIcon,
   ImageIcon,
+  ListChecksIcon,
   MessageSquareIcon,
+  PlugIcon,
+  SearchIcon,
   SendHorizontalIcon,
   SquareIcon,
+  SquarePenIcon,
   TerminalIcon,
+  WrenchIcon,
+  type LucideIcon,
 } from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
@@ -1611,14 +1621,40 @@ function getRunToolGroupSummary(entries: TranscriptEntry[], mode: SessionMode): 
   return `${eventCount} Event${eventCount === 1 ? "" : "s"}`;
 }
 
-function getRunToolItemIcon(entry: TranscriptEntry): string {
-  if (entry.kind === "reasoning") return "think";
-  if (entry.kind === "meta") return entry.meta?.severity === "error" ? "error" : "info";
+interface ToolVisualConfig {
+  Icon: LucideIcon;
+  /** CSS class added to the icon span — drives the color stripe + icon hue. */
+  colorClass: string;
+}
+
+/** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
+function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
-  if (name === "Bash" || name === "command" || name.includes("bash")) return "$";
-  if (name === "Read" || name === "Write" || name === "Edit" || name === "MultiEdit") return "file";
-  if (name.includes("mcp")) return "mcp";
-  return "tool";
+  if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
+    return { Icon: TerminalIcon, colorClass: "tool-color-bash" };
+  }
+  if (name === "Read") {
+    return { Icon: FileTextIcon, colorClass: "tool-color-read" };
+  }
+  if (name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch") {
+    return { Icon: SquarePenIcon, colorClass: "tool-color-edit" };
+  }
+  if (name === "Glob" || name === "Grep") {
+    return { Icon: SearchIcon, colorClass: "tool-color-search" };
+  }
+  if (name === "TodoWrite" || name === "Todo") {
+    return { Icon: ListChecksIcon, colorClass: "tool-color-todo" };
+  }
+  if (name === "Task" || name === "Agent") {
+    return { Icon: BotIcon, colorClass: "tool-color-task" };
+  }
+  if (name === "ExitPlanMode" || name === "EnterPlanMode") {
+    return { Icon: ClipboardListIcon, colorClass: "tool-color-plan" };
+  }
+  if (name.toLowerCase().includes("mcp")) {
+    return { Icon: PlugIcon, colorClass: "tool-color-mcp" };
+  }
+  return { Icon: WrenchIcon, colorClass: "tool-color-default" };
 }
 
 const transcriptClassNames = {
@@ -2173,11 +2209,26 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
               <Streamdown>{entry.text ?? ""}</Streamdown>
             )}
             renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
-            renderToolItemIcon={(entry) => <span>{getRunToolItemIcon(entry)}</span>}
-            renderToolGroupIcon={() => <span className="run-tool-icon">{isClaudeRunMode(session.mode) ? "claude" : "tools"}</span>}
-            renderChevron={(expanded) => (
-              <span className="run-chevron">{expanded ? "less" : "more"}</span>
+            renderToolItemIcon={(entry) => {
+              const cfg = getToolVisualConfig(entry);
+              return (
+                <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
+                  <cfg.Icon size={14} strokeWidth={2} />
+                </span>
+              );
+            }}
+            renderToolGroupIcon={() => (
+              <span className="run-tool-group-glyph" aria-hidden="true">
+                <WrenchIcon size={14} strokeWidth={2} />
+              </span>
             )}
+            renderChevron={(expanded) =>
+              expanded ? (
+                <ChevronUpIcon size={14} strokeWidth={2} className="run-chevron-icon" />
+              ) : (
+                <ChevronDownIcon size={14} strokeWidth={2} className="run-chevron-icon" />
+              )
+            }
             renderThinkingState={() => null}
           />
         )}
