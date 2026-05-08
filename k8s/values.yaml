@@ -34,11 +34,6 @@ session:
   idleTimeoutSeconds: 604800
   reaperIntervalSeconds: 60
 
-terminalProxy:
-  configMap: tank-terminal-proxy
-  image: quay.io/brancz/kube-rbac-proxy:v0.22.0
-  terminaldPort: 7680
-  proxyPort: 7681
 
 ingress:
   hostname: tank.romaine.life

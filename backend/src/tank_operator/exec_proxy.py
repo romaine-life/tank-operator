@@ -1,15 +1,4 @@
-"""Terminal bridge helpers.
-
-One-shot file/capture helpers still use Kubernetes pods/exec. The interactive
-browser terminal does not: it proxies to the pod-local terminald WebSocket
-through kube-rbac-proxy, avoiding a long-lived apiserver exec stream.
-
-Frontend protocol (kept deliberately small):
-- Text frames are stdin (utf-8 keystrokes from xterm.js).
-- A text frame parsing as JSON `{"resize": [cols, rows]}` is a terminal
-  resize control message instead of stdin.
-- Server emits raw terminal bytes from the pod.
-"""
+"""One-shot exec helpers for Kubernetes pods."""
 
 from __future__ import annotations
 
@@ -37,7 +26,6 @@ EXEC_COMMAND = ["bash", "/opt/tank/bootstrap.sh"]
 # apiserver requires container= when more than one is present, otherwise
 # pods/exec returns 400 "a container name must be specified".
 SESSION_CONTAINER = "claude"
-SERVICE_ACCOUNT_TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 STDIN_CHANNEL = 0
 STDOUT_CHANNEL = 1
@@ -50,8 +38,7 @@ async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> byt
     """Run a one-shot command in `pod_name` and return its stdout as bytes.
 
     Used for short, read-only operations (e.g. `cat /some/file`) where the
-    caller needs the bytes back as a single buffer. For interactive long-
-    lived streams (TTY shells), use `bridge` instead.
+    caller needs the bytes back as a single buffer.
 
     Raises RuntimeError if the K8s exec error channel reports a non-Success
     status (typical when the command exits non-zero, e.g. cat on a missing
@@ -351,102 +338,3 @@ async def exec_stream_to_websocket(
     await browser.send_json({"status": "done"})
 
 
-async def bridge(browser: WebSocket, pod_ip: str, terminal_port: int) -> None:
-    token = _service_account_token()
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    url = f"ws://{pod_ip}:{terminal_port}/session"
-    async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(
-            url, headers=headers, heartbeat=30
-        ) as terminal_ws:
-            await _pump(browser, terminal_ws)
-
-
-def _service_account_token() -> str | None:
-    try:
-        with open(SERVICE_ACCOUNT_TOKEN, encoding="utf-8") as f:
-            return f.read().strip()
-    except OSError:
-        # Local dev without in-cluster auth; kube-rbac-proxy will reject if
-        # the target actually requires Kubernetes auth.
-        return None
-
-
-async def _pump(
-    browser: WebSocket, terminal_ws: aiohttp.ClientWebSocketResponse
-) -> None:
-    async def send_terminal(payload: bytes | str) -> None:
-        if isinstance(payload, str):
-            await terminal_ws.send_str(payload)
-        else:
-            await terminal_ws.send_bytes(payload)
-
-    async def browser_to_pod() -> None:
-        try:
-            while True:
-                msg = await browser.receive()
-                msg_type = msg.get("type")
-                if msg_type == "websocket.disconnect":
-                    return
-                if msg_type != "websocket.receive":
-                    continue
-
-                text = msg.get("text")
-                if text is not None:
-                    # Control frames look like JSON; everything else is raw
-                    # stdin from xterm.js. Recognized: {"resize":[c,r]} for
-                    # PTY size changes, {"ping":...} as a no-op heartbeat the
-                    # browser sends every ~30s so Envoy's idle stream timeout
-                    # (default 5min) doesn't cut a quiet WS — which would also
-                    # let the orchestrator's idle reaper delete the pod.
-                    if text and text[0] == "{":
-                        try:
-                            ctrl = json.loads(text)
-                        except ValueError:
-                            ctrl = None
-                        if isinstance(ctrl, dict):
-                            if "resize" in ctrl:
-                                cols, rows = ctrl["resize"]
-                                await send_terminal(
-                                    json.dumps({"resize": [int(cols), int(rows)]})
-                                )
-                                continue
-                            if "ping" in ctrl:
-                                await send_terminal(text)
-                                continue
-                    await send_terminal(text)
-                else:
-                    data = msg.get("bytes")
-                    if data:
-                        await send_terminal(data)
-        except WebSocketDisconnect:
-            return
-        except Exception:
-            log.exception("browser → terminal loop crashed")
-
-    async def terminal_to_browser() -> None:
-        try:
-            async for wsmsg in terminal_ws:
-                if wsmsg.type == aiohttp.WSMsgType.BINARY:
-                    await browser.send_bytes(wsmsg.data)
-                elif wsmsg.type == aiohttp.WSMsgType.TEXT:
-                    await browser.send_text(wsmsg.data)
-                elif wsmsg.type in (
-                    aiohttp.WSMsgType.CLOSE,
-                    aiohttp.WSMsgType.CLOSED,
-                    aiohttp.WSMsgType.ERROR,
-                ):
-                    return
-        except Exception:
-            log.exception("terminal → browser loop crashed")
-
-    tasks = {
-        asyncio.create_task(browser_to_pod()),
-        asyncio.create_task(terminal_to_browser()),
-    }
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    for task in done:
-        task.result()

@@ -40,7 +40,6 @@ from .credentials_seed import (
     harvest_codex_and_save,
 )
 from .exec_proxy import (
-    bridge,
     exec_capture,
     exec_launch_detached,
     exec_stream_to_websocket,
@@ -60,7 +59,6 @@ from .sessions import (
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
-    SessionTerminalUnavailable,
 )
 
 session_registry = SessionRegistryStore()
@@ -104,12 +102,6 @@ class LoginResponse(BaseModel):
     token: str
     user: dict[str, str]
 
-
-class TerminalDebugBody(BaseModel):
-    event: str
-    session_id: str | None = None
-    mode: str | None = None
-    payload: dict[str, Any] = {}
 
 
 MAX_HEADLESS_PROMPT_BYTES = int(
@@ -258,21 +250,6 @@ async def me(user: User = Depends(current_user)) -> dict:
         "installation_id": profile.installation_id,
     }
 
-
-@app.post("/api/debug/terminal")
-async def terminal_debug(
-    body: TerminalDebugBody,
-    user: User = Depends(current_user),
-) -> dict[str, str]:
-    log.info(
-        "terminal debug event=%s user=%s session=%s mode=%s payload=%s",
-        body.event,
-        user.email,
-        body.session_id,
-        body.mode,
-        body.payload,
-    )
-    return {"status": "ok"}
 
 
 # ----------------------------------------------------------------------------
@@ -963,43 +940,6 @@ async def paste_image(
         )
     return {"path": path}
 
-
-@app.websocket("/api/sessions/{session_id}/exec")
-async def session_exec(ws: WebSocket, session_id: str) -> None:
-    # Accept up front so we can send a close frame the browser can read
-    # (`reason` is dropped by Starlette/most browsers when close is called
-    # before accept — the tab just sees code 1006, no detail).
-    await ws.accept()
-    try:
-        user = current_user_ws(ws)
-    except HTTPException as e:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.detail)
-        return
-
-    try:
-        pod_ip, terminal_port = await sessions.get_terminal_endpoint(
-            owner=user.email, session_id=session_id
-        )
-    except SessionNotOwned:
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
-        return
-    except SessionNotFound:
-        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
-        return
-    except SessionTerminalUnavailable:
-        await ws.close(
-            code=status.WS_1011_INTERNAL_ERROR, reason="session needs restart"
-        )
-        return
-    except PodNotReady:
-        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
-        return
-
-    async with sessions.track_ws(session_id):
-        try:
-            await bridge(ws, pod_ip=pod_ip, terminal_port=terminal_port)
-        except WebSocketDisconnect:
-            pass
 
 
 class SpawnRunSessionBody(BaseModel):

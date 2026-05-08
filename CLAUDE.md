@@ -12,7 +12,7 @@ Web frontend over a thin K8s orchestrator that spawns ephemeral session pods on 
 
 ## Stack
 
-FastAPI + kubernetes-asyncio backend, Vite + React + xterm.js frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Pods).
+FastAPI + kubernetes-asyncio backend, Vite + React frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Pods).
 
 ## Container build verification
 
@@ -44,13 +44,13 @@ into a monolith.
 
 **Per-user profile store: Cosmos DB (SQL API), serverless** — `infra/cosmos.tf` provisions one account, one database, one `profiles` container partitioned on `/email`. Backend at `backend/src/tank_operator/profiles.py`. Auth is workload identity (the same `claude-credentials-refresher-identity` UAMI that already writes KV); `local_authentication_disabled = true` on the account so there's no key-based parallel surface to rotate. A profile row is auto-created on `/api/auth/microsoft/login` and exposed at `/api/auth/me`. The store boots in degraded "stub" mode if `COSMOS_ENDPOINT` is unset (first-install ordering before tofu has applied) — login still works, profile fields are null.
 
-## Terminal
+## Session UI
 
-In-house xterm.js + K8s pods/exec bridge (`backend/src/tank_operator/exec_proxy.py`) with `CLAUDE_CODE_NO_FLICKER=1` set in Claude-mode session pod env to enable Claude Code's alt-screen-buffer renderer (works around the Ink redraw leak in `anthropics/claude-code#49086` and `#29937` — source of the ghost-text and post-resize collision symptoms). The bridge does meaningful work beyond byte-shuffling: bootstrap shell that seeds agent state to skip onboarding prompts (lives in the selected session image at `/opt/tank/bootstrap.sh` per `claude-container/tank-bootstrap.sh` — keeps the apiserver exec URL small), tmux session for reconnect survival, MCP bearer token export from the projected SA token, mode-aware credential setup. Claude, Codex, and Pi sessions use separate SHA-pinned images (`session.image`, `session.codexImage`, and `session.piImage`) built from the same Dockerfile with agent-specific CLIs and support packages baked in, so startup does not fetch skills/extensions at runtime. ttyd-in-pod is a viable alternative — defer until/unless the in-house bridge proves to need protocol features ttyd has and we don't.
+The browser renders sessions via the `HeadlessRun` React component (`frontend/src/App.tsx`), which displays the agent transcript as ANSI-styled HTML. There is no interactive xterm.js terminal in the browser. The session is driven by `tank-terminald` running inside the session pod — it manages the PTY and executes `bootstrap.sh`, which seeds agent state (MCP tokens, credentials, mode-specific setup). The bootstrap script lives in the session image at `/opt/tank/bootstrap.sh`.
 
-**Session pods are multi-container** (`claude` + `mcp-auth-proxy` sidecar). Any `pods/exec` call against them MUST pass `container="claude"` — the apiserver returns 400 "a container name must be specified" otherwise, which surfaces to the browser as a 1006 reconnect loop. Same gotcha for ad-hoc `kubectl exec` debugging: use `-c claude`.
+Claude, Codex, and Pi sessions use separate SHA-pinned images (`session.image`, `session.codexImage`, and `session.piImage`) built from the same Dockerfile with agent-specific CLIs and support packages baked in, so startup does not fetch skills/extensions at runtime.
 
-The browser xterm.js terminal is *the* route, not a demo surface. SSH / VS Code Remote attach are not on the roadmap as alternatives. Rendering glitches matter because users can't route around them.
+**Session pods are multi-container** (`claude` + `mcp-auth-proxy` sidecar). Any `pods/exec` call against them MUST pass `container="claude"` — the apiserver returns 400 "a container name must be specified" otherwise. Same gotcha for ad-hoc `kubectl exec` debugging: use `-c claude`.
 
 ## Auth flow
 

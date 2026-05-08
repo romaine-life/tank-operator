@@ -31,14 +31,7 @@ PI_SESSION_IMAGE = os.environ.get(
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
 SESSION_CONFIGMAP = os.environ.get("SESSION_CONFIGMAP", "tank-session-config")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
-TERMINAL_PROXY_CONFIGMAP = os.environ.get(
-    "TERMINAL_PROXY_CONFIGMAP", "tank-terminal-proxy"
-)
 TERMINALD_PORT = int(os.environ.get("TERMINALD_PORT", "7680"))
-TERMINAL_PROXY_PORT = int(os.environ.get("TERMINAL_PROXY_PORT", "7681"))
-TERMINAL_PROXY_IMAGE = os.environ.get(
-    "TERMINAL_PROXY_IMAGE", "quay.io/brancz/kube-rbac-proxy:v0.22.0"
-)
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
 # Session pods reach it via a hostAlias mapping platform.claude.com to this
 # Service's ClusterIP — hostAliases requires an IP, not a DNS name, so we
@@ -88,9 +81,6 @@ class SessionNotFound(Exception):
 class SessionNotOwned(Exception):
     pass
 
-
-class SessionTerminalUnavailable(Exception):
-    pass
 
 
 class PodNotReady(Exception):
@@ -380,27 +370,6 @@ class SessionManager:
                 "fsGroup": 1000,
             },
             "containers": [
-                {
-                    "name": "terminal-proxy",
-                    "image": TERMINAL_PROXY_IMAGE,
-                    "imagePullPolicy": "IfNotPresent",
-                    "args": [
-                        f"--insecure-listen-address=0.0.0.0:{TERMINAL_PROXY_PORT}",
-                        f"--upstream=http://127.0.0.1:{TERMINALD_PORT}/",
-                        "--config-file=/etc/kube-rbac-proxy/config.yaml",
-                        "--v=2",
-                    ],
-                    "ports": [
-                        {"name": "terminal", "containerPort": TERMINAL_PROXY_PORT},
-                    ],
-                    "volumeMounts": [
-                        {
-                            "name": "terminal-proxy-config",
-                            "mountPath": "/etc/kube-rbac-proxy",
-                            "readOnly": True,
-                        }
-                    ],
-                },
                 # Sidecar: localhost reverse proxy that injects fresh SA-token
                 # bearer auth into outbound HTTP MCP calls. Same image as the
                 # main container, different command. Required because the
@@ -463,18 +432,6 @@ class SessionManager:
                                 (glimmung_context or {}).get("validation_url") or ""
                             ),
                         },
-                        # Force claude (and anything else using the
-                        # `supports-hyperlinks` npm lib) to emit OSC 8
-                        # hyperlinks. The library's terminal-sniff list
-                        # doesn't recognise xterm.js, so without this
-                        # claude falls back to plain text URLs and we'd
-                        # have to detect wrapped URLs heuristically in
-                        # frontend/src/wrappedLinkProvider.ts. With OSC 8
-                        # the terminal gets explicit "this byte range is
-                        # one link" markers regardless of newlines or
-                        # auto-wrap, and xterm.js's built-in OSC 8
-                        # support renders them natively.
-                        {"name": "FORCE_HYPERLINK", "value": "1"},
                         # Orchestrator URL + per-pod session JWT so the
                         # in-pod mcp-tank stdio server can call back as the
                         # owning user. The JWT is bound to `owner` via the
@@ -484,16 +441,7 @@ class SessionManager:
                         {"name": "TANK_OPERATOR_URL", "value": TANK_OPERATOR_URL},
                         {"name": "TANK_API_TOKEN", "value": api_token or ""},
                         {"name": "TANK_SESSION_ID", "value": session_id},
-                        # Switch claude's TUI to the alternate-screen-buffer
-                        # renderer (vim/htop-style) instead of the default
-                        # in-place redraw. Fixes the documented Ink
-                        # SIGWINCH redraw-leak (anthropics/claude-code#49086)
-                        # and full-buffer redraw drift (#29937) — both of
-                        # which manifest as ghost lines and post-resize text
-                        # collisions in xterm.js, since xterm.js is the same
-                        # rendering-throughput-bound consumer class as the
-                        # VS Code integrated terminal that the docs call out.
-                        {"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
+
                     ],
                     "envFrom": [
                         {"secretRef": {"name": GITHUB_APP_SECRET}},
@@ -503,10 +451,6 @@ class SessionManager:
             ],
             "volumes": [
                 _session_config_volume(),
-                {
-                    "name": "terminal-proxy-config",
-                    "configMap": {"name": TERMINAL_PROXY_CONFIGMAP},
-                },
             ],
         }
         # OAuth gateway plumbing: add a hostAlias so platform.claude.com
@@ -780,12 +724,9 @@ class SessionManager:
             return [
                 _session_info_from_pod(owner, p)
                 for p in pods.items
-                if _pod_has_container(p, "terminal-proxy")
             ]
 
         for session_id, pod in pods_by_id.items():
-            if not _pod_has_container(pod, "terminal-proxy"):
-                continue
             if await self._registry.get(owner, session_id) is not None:
                 continue
             await self._registry.upsert(
@@ -892,20 +833,6 @@ class SessionManager:
             pod = await self._read_owned_pod(owner, session_id)
             if _pod_ready(pod):
                 return pod.metadata.name
-            await asyncio.sleep(1)
-        raise PodNotReady(session_id)
-
-    async def get_terminal_endpoint(
-        self, owner: str, session_id: str, timeout: float = 90.0
-    ) -> tuple[str, int]:
-        """Return the current session pod IP and terminal proxy port."""
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
-            pod = await self._read_owned_pod(owner, session_id)
-            if _pod_ready(pod) and pod.status and pod.status.pod_ip:
-                if not _pod_has_container(pod, "terminal-proxy"):
-                    raise SessionTerminalUnavailable(session_id)
-                return pod.status.pod_ip, TERMINAL_PROXY_PORT
             await asyncio.sleep(1)
         raise PodNotReady(session_id)
 
@@ -1034,12 +961,6 @@ class SessionManager:
         for pod in pods.items:
             session_id = pod.metadata.labels.get("tank-operator/session-id")
             if not session_id:
-                continue
-            if not _pod_has_container(pod, "terminal-proxy"):
-                # Pre-terminald sessions cannot prove liveness through the
-                # browser websocket anymore. Leave them for explicit deletion
-                # so kubectl-attached users are not disconnected by the reaper.
-                self._activity[session_id] = now
                 continue
             if self._ws_count.get(session_id, 0) > 0:
                 # Live connection — keep the activity clock current.
@@ -1171,7 +1092,3 @@ def _pod_ready(pod: Any) -> bool:
     statuses = pod.status.container_statuses or []
     return bool(statuses) and all(cs.ready for cs in statuses)
 
-
-def _pod_has_container(pod: Any, name: str) -> bool:
-    spec = getattr(pod, "spec", None)
-    return any(c.name == name for c in (getattr(spec, "containers", None) or []))

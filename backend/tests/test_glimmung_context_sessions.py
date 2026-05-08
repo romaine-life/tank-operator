@@ -131,46 +131,43 @@ def test_session_config_is_mounted_from_configmap() -> None:
         and mount["mountPath"] == "/workspace/.mcp.json"
         for mount in proxy["volumeMounts"]
     )
-    terminal_proxy = next(
-        c for c in _pod_spec(manifest)["containers"] if c["name"] == "terminal-proxy"
-    )
-    assert any(port["name"] == "terminal" for port in terminal_proxy["ports"])
-    assert any(
+    container_names = [c["name"] for c in _pod_spec(manifest)["containers"]]
+    assert "terminal-proxy" not in container_names
+    assert not any(
         volume["name"] == "terminal-proxy-config"
         for volume in _pod_spec(manifest)["volumes"]
     )
 
 
-def test_idle_reaper_leaves_legacy_session_pods() -> None:
+def test_idle_reaper_reaps_all_idle_session_pods() -> None:
     manager = _ReaperSessionManager(
         [
-            _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
-            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+            _session_pod("pod-a", ["mcp-auth-proxy", "claude"]),
+            _session_pod("pod-b", ["mcp-auth-proxy", "claude"]),
         ]
     )
-    manager._activity = {"legacy": -10_000, "terminald": -10_000}
+    manager._activity = {"pod-a": -10_000, "pod-b": -10_000}
 
     asyncio.run(manager._reap_idle())
 
-    assert manager.deleted == ["session-terminald"]
-    assert "legacy" in manager._activity
+    assert sorted(manager.deleted) == ["session-pod-a", "session-pod-b"]
 
 
-def test_session_list_uses_registry_and_adopts_only_terminald_pods() -> None:
+def test_session_list_uses_registry_and_adopts_all_pods() -> None:
     registry = SessionRegistryStore()
     manager = _ReaperSessionManager(
         [
-            _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
-            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+            _session_pod("pod-a", ["mcp-auth-proxy", "claude"]),
+            _session_pod("pod-b", ["mcp-auth-proxy", "claude"]),
         ],
         registry=registry,
     )
 
     listed = asyncio.run(manager.list(owner="operator@example.test"))
 
-    assert [session.id for session in listed] == ["terminald"]
-    assert asyncio.run(registry.get("operator@example.test", "legacy")) is None
-    assert asyncio.run(registry.get("operator@example.test", "terminald")) is not None
+    assert sorted(session.id for session in listed) == ["pod-a", "pod-b"]
+    assert asyncio.run(registry.get("operator@example.test", "pod-a")) is not None
+    assert asyncio.run(registry.get("operator@example.test", "pod-b")) is not None
 
 
 def test_session_registry_scope_isolates_environments() -> None:

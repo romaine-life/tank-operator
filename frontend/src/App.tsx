@@ -54,10 +54,18 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
-import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
+
+const ANSI_STANDARD_OVERRIDES: Record<number, string> = {
+  1: "#d77757",
+  9: "#d77757",
+  13: "#f9b18f",
+};
+const ANSI_256_OVERRIDES: Record<number, string> = {
+  174: "#d77757",
+  211: "#f9b18f",
+};
 
 type SessionMode =
   | "api_key"
@@ -78,7 +86,7 @@ type DefaultSessionMode = Extract<
   | "pi_subscription"
 >;
 type Provider = "anthropic" | "openai" | "pi";
-type SessionInteraction = "terminal" | "run" | "newterm";
+type SessionInteraction = "terminal" | "run";
 
 interface Session {
   id: string;
@@ -143,18 +151,17 @@ const PROVIDER_INTERACTION_MODES: Record<
   Provider,
   Partial<Record<SessionInteraction, DefaultSessionMode | null>>
 > = {
-  anthropic: { terminal: "subscription", run: "subscription_headless", newterm: "subscription_headless" },
-  openai: { terminal: "codex_subscription", run: "codex_headless", newterm: "codex_headless" },
-  pi: { terminal: "pi_subscription", run: null, newterm: null },
+  anthropic: { terminal: "subscription_headless", run: "subscription_headless" },
+  openai: { terminal: "codex_headless", run: "codex_headless" },
+  pi: { terminal: "pi_subscription", run: null },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
   terminal: "terminal",
   run: "gui",
-  newterm: "newterm",
 };
 
-const INTERACTION_OPTIONS: SessionInteraction[] = ["terminal", "run", "newterm"];
+const INTERACTION_OPTIONS: SessionInteraction[] = ["terminal", "run"];
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
@@ -439,7 +446,6 @@ const DEMO_LANDING_LINES = [
 
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
-const SESSION_INITIAL_TAB_KEY_PREFIX = "tank.sessionTab:";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
@@ -477,11 +483,9 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
 function readDefaultInteraction(): SessionInteraction {
   try {
     const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
-    if (stored === "terminal" || stored === "run" || stored === "newterm") return stored;
+    if (stored === "terminal" || stored === "run") return stored;
   } catch {}
-  // Back-compat: derive from stored session mode.
-  const mode = readDefaultSessionMode();
-  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
+  return "run";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
@@ -490,18 +494,6 @@ function writeDefaultInteraction(interaction: SessionInteraction): void {
   } catch {}
 }
 
-function readSessionInitialTab(id: string): "chat" | "shell" {
-  try {
-    if (localStorage.getItem(SESSION_INITIAL_TAB_KEY_PREFIX + id) === "shell") return "shell";
-  } catch {}
-  return "chat";
-}
-
-function writeSessionInitialTab(id: string, tab: "chat" | "shell"): void {
-  try {
-    localStorage.setItem(SESSION_INITIAL_TAB_KEY_PREFIX + id, tab);
-  } catch {}
-}
 
 function readCompletionSoundEnabled(): boolean {
   try {
@@ -597,21 +589,6 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CODEX_MODES = new Set<SessionMode>([
-  "codex_subscription",
-  "codex_headless",
-  "codex_config",
-]);
-const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
-const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
-const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
-const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
-const ROLLOUT_MODES = new Set<SessionMode>([
-  ...CLAUDE_ROLLOUT_MODES,
-  ...CODEX_ROLLOUT_MODES,
-]);
-const CODEX_ROLLOUT_SUBMIT_DELAY_MS = 200;
-const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
 
@@ -641,10 +618,6 @@ type GlimmungLaunchContext = {
   validation_url: string | null;
 };
 
-type RolloutTimer = {
-  startedAtMs: number;
-  stoppedAtMs: number | null;
-};
 
 const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
 
@@ -717,17 +690,6 @@ function formatBootTime(ms: number): string {
   return formatRuntime(ms);
 }
 
-function formatRolloutElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 100) return `${seconds}s`;
-  if (seconds < 60 * 60) {
-    const minutes = Math.floor(seconds / 60);
-    const remaining = seconds % 60;
-    return `${minutes}:${String(remaining).padStart(2, "0")}`;
-  }
-  const hours = Math.floor(seconds / 3600);
-  return `${hours}h`;
-}
 
 function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
   if (!session.created_at) return null;
@@ -970,16 +932,6 @@ function IconClose() {
   );
 }
 
-function IconExternal() {
-  return (
-    <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
-         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M10 3h3v3" />
-      <path d="M13 3 8 8" />
-      <path d="M11.5 9V13H3V4.5h4" />
-    </svg>
-  );
-}
 
 function IconReload() {
   return (
@@ -1013,27 +965,6 @@ function ModeChip({ mode }: { mode: SessionMode }) {
   );
 }
 
-function TankIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 64 64"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      focusable="false"
-      aria-hidden="true"
-    >
-      <rect x="8" y="28" width="40" height="14" rx="3" />
-      <circle cx="16" cy="46" r="5" />
-      <circle cx="40" cy="46" r="5" />
-      <line x1="48" y1="32" x2="58" y2="32" />
-      <rect x="22" y="20" width="14" height="8" rx="1.5" />
-    </svg>
-  );
-}
 
 function initials(user: SessionUser): string {
   const source = (user.name || user.email || "?").trim();
@@ -1295,19 +1226,6 @@ function DemoLanding() {
                   </div>
                   <div className="session-row-bottom">
                     <ModeChip mode={s.mode} />
-                    {s.mode === "subscription" && (
-                      <span className="session-action session-remote is-icon" title="remote control">
-                        <IconExternal />
-                      </span>
-                    )}
-                    {ROLLOUT_MODES.has(s.mode) && (
-                      <span
-                        className="session-action session-rollout is-icon"
-                        title={CODEX_ROLLOUT_MODES.has(s.mode) ? "type $rollout into this Codex session" : "type /rollout into this Claude session"}
-                      >
-                        <TankIcon className="session-action-tank-icon" />
-                      </span>
-                    )}
                   </div>
                 </li>
               );
@@ -1691,7 +1609,7 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "shell" | "files";
+type RunTab = "chat" | "files";
 
 interface ComposerAttachment {
   id: string; // local-only id for keying
@@ -2714,7 +2632,7 @@ function HeadlessRun({
   // Mirrors cloudcli's ClaudeStatus idle state: persists last status text
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<RunTab>(() => readSessionInitialTab(session.id));
+  const [activeTab, setActiveTab] = useState<RunTab>("chat");
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3761,18 +3679,7 @@ function HeadlessRun({
         className={`run-main run-main-${runStatus}`}
         ref={transcriptScrollRef as React.RefObject<HTMLElement>}
       >
-        {activeTab === "shell" ? (
-          <div className="run-shell">
-            <Terminal
-              sessionId={session.id}
-              mode={session.mode}
-              status={session.status}
-              completionSoundEnabled={false}
-              completionSoundVolume={0}
-              visible={visible && activeTab === "shell"}
-            />
-          </div>
-        ) : activeTab === "files" ? (
+        {activeTab === "files" ? (
           <div className="run-files">
             <div className="run-files-breadcrumb">
               <button
@@ -4448,8 +4355,6 @@ export function App() {
     window.history.replaceState({}, "", url.toString());
   }, [active]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
-  const [rolloutTimers, setRolloutTimers] = useState<Record<string, RolloutTimer>>({});
-  const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
   // Sessions whose Terminal stays mounted (so the WS keeps draining and
   // scrollback survives switching). A session is mounted the first time it
   // becomes active and unmounts only on deletion. Sessions you haven't
@@ -4474,10 +4379,6 @@ export function App() {
   // or cancel. Triggered by clicking the session name.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
-  // One Terminal handle per session — populated by Terminal's forwardRef
-  // callback. Used by the inline "remote control" button to inject the
-  // /remote-control slash command into the live WS.
-  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
@@ -4531,11 +4432,9 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    const hasRunningRolloutTimer = Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null);
-    const tickMs = hasRunningRolloutTimer ? 1000 : SESSION_RUNTIME_TICK_MS;
-    const t = setInterval(() => setNowMs(Date.now()), tickMs);
+    const t = setInterval(() => setNowMs(Date.now()), SESSION_RUNTIME_TICK_MS);
     return () => clearInterval(t);
-  }, [user, rolloutTimers]);
+  }, [user]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
@@ -4605,61 +4504,8 @@ export function App() {
       });
       return changed ? next : prev;
     });
-    setRolloutTimers((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      let changed = false;
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([id]) => {
-          const keep = existing.has(id);
-          if (!keep) changed = true;
-          return keep;
-        })
-      ) as Record<string, RolloutTimer>;
-      return changed ? next : prev;
-    });
-    setAgentActivityBySession((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([id]) => existing.has(id))
-      ) as Record<string, AgentActivity>;
-      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-    });
   }, [sessions, active, closingIds]);
 
-  useEffect(() => {
-    if (Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null)) {
-      setNowMs(Date.now());
-    }
-  }, [rolloutTimers]);
-
-  function rolloutTimerLabel(sessionId: string): string | null {
-    const timer = rolloutTimers[sessionId];
-    if (!timer) return null;
-    return formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
-  }
-
-  function rolloutTimerTitle(sessionId: string, mode: SessionMode): string {
-    const timer = rolloutTimers[sessionId];
-    const action = CODEX_ROLLOUT_MODES.has(mode)
-      ? "type $rollout into this Codex session"
-      : "type /rollout into this Claude session";
-    if (!timer) return action;
-    const elapsed = formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
-    return timer.stoppedAtMs == null
-      ? `rollout running for ${elapsed}`
-      : `rollout finished in ${elapsed}`;
-  }
-
-  function stopRolloutTimer(sessionId: string) {
-    setRolloutTimers((prev) => {
-      const timer = prev[sessionId];
-      if (!timer || timer.stoppedAtMs != null) return prev;
-      return {
-        ...prev,
-        [sessionId]: { ...timer, stoppedAtMs: Date.now() },
-      };
-    });
-  }
 
   useEffect(() => {
     const target = initialSessionId.current;
@@ -4680,7 +4526,6 @@ export function App() {
       event.stopPropagation();
       setActive(nextId);
       setMounted((prev) => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
-      focusTerminalAfterRender(nextId);
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
@@ -4689,21 +4534,6 @@ export function App() {
   function activate(id: string) {
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-  }
-
-  function focusTerminalAfterRender(id: string, attempts = 6) {
-    window.requestAnimationFrame(() => {
-      const focused = terminalRefs.current.get(id)?.focus() ?? false;
-      if (!focused && attempts > 1) {
-        window.setTimeout(() => focusTerminalAfterRender(id, attempts - 1), 25);
-      }
-    });
-  }
-
-  function setAgentActivity(sessionId: string, activity: AgentActivity) {
-    setAgentActivityBySession((prev) =>
-      prev[sessionId] === activity ? prev : { ...prev, [sessionId]: activity }
-    );
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
@@ -4766,9 +4596,6 @@ export function App() {
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = await res.json();
-      if (HEADLESS_MODES.has(mode) && defaultInteraction === "newterm") {
-        writeSessionInitialTab(created.id, "shell");
-      }
       await refresh();
       activate(created.id);
       startEditing(created.id, created.name);
@@ -4859,7 +4686,6 @@ export function App() {
       next.delete(id);
       return next;
     });
-    terminalRefs.current.delete(id);
     setEditingId((prev) => (prev === id ? null : prev));
     setActive((prev) => {
       if (prev !== id) return prev;
@@ -4909,30 +4735,6 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }
-
-  function startRemoteControl(id: string) {
-    // \r is what the terminal would send for the Enter key, so claude
-    // submits the line. Slash commands are evaluated client-side by the
-    // claude TUI, so this needs no orchestrator round-trip.
-    terminalRefs.current.get(id)?.sendInput("/remote-control\r");
-  }
-
-  function startRollout(id: string, mode: SessionMode) {
-    const startedAtMs = Date.now();
-    setNowMs(startedAtMs);
-    setRolloutTimers((prev) => ({
-      ...prev,
-      [id]: { startedAtMs, stoppedAtMs: null },
-    }));
-    const terminal = terminalRefs.current.get(id);
-    if (!terminal) return;
-    if (!CODEX_ROLLOUT_MODES.has(mode)) {
-      terminal.sendInput("/rollout\r");
-      return;
-    }
-    terminal.sendInput("$rollout ");
-    window.setTimeout(() => terminal.sendInput("\r"), CODEX_ROLLOUT_SUBMIT_DELAY_MS);
   }
 
   async function saveCredentials(id: string) {
@@ -5028,7 +4830,7 @@ export function App() {
                     <li key={interaction}>
                       <button
                         onClick={() => selectDefaultInteraction(interaction)}
-                        disabled={busy || (interaction !== "terminal" && MODE_MENU_ICONS[defaultSessionMode] === "pi")}
+                        disabled={busy || (interaction === "run" && MODE_MENU_ICONS[defaultSessionMode] === "pi")}
                         aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
                         className={defaultInteraction === interaction ? "is-selected" : undefined}
                       >
@@ -5100,19 +4902,10 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const agentActivity = isLive && AGENT_ACTIVITY_MODES.has(s.mode)
-                ? agentActivityBySession[s.id] ?? "waiting"
-                : null;
-              const statusDotClass = agentActivity
-                ? `status-dot status-codex-${agentActivity}`
-                : `status-dot status-${s.status.toLowerCase()}`;
-              const statusLabel = agentActivity
-                ? `${MODE_LABELS[s.mode]} ${agentActivity}`
-                : s.status;
+              const statusDotClass = `status-dot status-${s.status.toLowerCase()}`;
+              const statusLabel = s.status;
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
-              const rolloutLabel = rolloutTimerLabel(s.id);
-              const isRolloutTiming = Boolean(rolloutLabel);
               return (
                 <li
                   key={s.id}
@@ -5203,33 +4996,6 @@ export function App() {
                   <div className="session-row-bottom">
                     <ModeChip mode={s.mode} />
                     {isClosing && <span className="session-closing-chip">closing</span>}
-                    {s.mode === "subscription" && isLive && (
-                      <button
-                        className="session-action session-remote is-icon"
-                        onClick={(e) => { e.stopPropagation(); startRemoteControl(s.id); }}
-                        disabled={isClosing}
-                        title="type /remote-control into this session — claude will print a https://claude.ai/code/session_… URL you can open"
-                        aria-label="open remote control link"
-                      >
-                        <IconExternal />
-                      </button>
-                    )}
-                    {ROLLOUT_MODES.has(s.mode) && isLive && (
-                      <button
-                        className={`session-action session-rollout is-icon${isRolloutTiming ? " is-clicked is-timing" : ""}`}
-                        onClick={(e) => { e.stopPropagation(); startRollout(s.id, s.mode); }}
-                        disabled={isClosing}
-                        title={rolloutTimerTitle(s.id, s.mode)}
-                        aria-label="start rollout"
-                      >
-                        <TankIcon className="session-action-tank-icon" />
-                        {rolloutLabel && (
-                          <span className="session-rollout-timer" aria-hidden="true">
-                            {rolloutLabel}
-                          </span>
-                        )}
-                      </button>
-                    )}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"
@@ -5338,35 +5104,15 @@ export function App() {
           <div className="terminals">
             {sessions
               .filter((s) => mounted.has(s.id))
-              .map((s) =>
-                HEADLESS_MODES.has(s.mode) ? (
-                  <div
-                    key={s.id}
-                    className="run-body"
-                    hidden={active !== s.id}
-                  >
-                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} />
-                  </div>
-                ) : (
-                  <Terminal
-                    key={s.id}
-                    ref={(h) => {
-                      if (h) terminalRefs.current.set(s.id, h);
-                      else terminalRefs.current.delete(s.id);
-                    }}
-                    sessionId={s.id}
-                    mode={s.mode}
-                    status={s.status}
-                    bootLabel={sessionBootLabel(s, nowMs)}
-                    bootTitle={sessionBootTitle(s, nowMs)}
-                    completionSoundEnabled={completionSoundEnabled}
-                    completionSoundVolume={completionSoundVolume}
-                    visible={active === s.id}
-                    onAgentActivityChange={setAgentActivity}
-                    onAgentCompletion={stopRolloutTimer}
-                  />
-                )
-              )}
+              .map((s) => (
+                <div
+                  key={s.id}
+                  className="run-body"
+                  hidden={active !== s.id}
+                >
+                  <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} />
+                </div>
+              ))}
           </div>
         )}
       </main>

@@ -1376,7 +1376,7 @@ button:disabled {
   padding: var(--space-2);
   background: #171717;
   color: #e4e4e4;
-  font-family: ui-monospace, "Cascadia Code", "Consolas", "Symbols Nerd Font Mono", monospace;
+  font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
   font-size: 13px;
   line-height: 1.2;
   white-space: pre;
@@ -3867,41 +3867,6 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-}
-
-.terminal-body,
-.terminal-waiting {
-  position: absolute;
-  inset: 0;
-}
-
-.terminal-body {
-  padding: var(--space-2);
-  overflow: hidden;
-}
-
-.terminal-body .xterm-viewport {
-  scrollbar-width: none;
-}
-
-.terminal-body .xterm-viewport::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.terminal-waiting {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.terminal-waiting-time {
-  color: var(--text);
 }
 
 /*
