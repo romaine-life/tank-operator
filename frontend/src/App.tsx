@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import { AgentTranscript } from "@sandbox-agent/react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
 import { Streamdown } from "streamdown";
 import {
@@ -26,18 +25,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  AlertCircleIcon,
   ArrowDownIcon,
   ArrowUpFromLineIcon,
   BotIcon,
+  BrainIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   ClipboardListIcon,
+  CopyIcon,
   FileIcon,
   FileTextIcon,
   FolderIcon,
   FolderOpenIcon,
   ImageIcon,
+  InfoIcon,
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
@@ -1614,18 +1617,8 @@ function isClaudeRunMode(mode: SessionMode): boolean {
   return mode === "subscription_headless";
 }
 
-function getRunToolGroupSummary(entries: TranscriptEntry[], mode: SessionMode): string {
-  const toolCount = entries.filter((entry) => entry.kind === "tool").length;
-  const errorCount = entries.filter((entry) => entry.kind === "meta" && entry.meta?.severity === "error").length;
-  const eventCount = entries.length;
-  if (isClaudeRunMode(mode)) {
-    if (toolCount > 0 && errorCount > 0) return `${toolCount} tool${toolCount === 1 ? "" : "s"} · ${errorCount} error${errorCount === 1 ? "" : "s"}`;
-    if (toolCount > 0) return `${toolCount} Claude tool${toolCount === 1 ? "" : "s"}`;
-    if (errorCount > 0) return `${errorCount} Claude error${errorCount === 1 ? "" : "s"}`;
-    return `${eventCount} Claude event${eventCount === 1 ? "" : "s"}`;
-  }
-  return `${eventCount} Event${eventCount === 1 ? "" : "s"}`;
-}
+// (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
+// summary computation now that AgentTranscript is unused.)
 
 interface ToolVisualConfig {
   Icon: LucideIcon;
@@ -1663,41 +1656,8 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   return { Icon: WrenchIcon, colorClass: "tool-color-default" };
 }
 
-const transcriptClassNames = {
-  root: "run-transcript",
-  divider: "run-transcript-divider",
-  dividerLine: "run-transcript-divider-line",
-  dividerText: "run-transcript-divider-text",
-  message: "run-transcript-message",
-  messageContent: "run-transcript-message-content",
-  messageText: "run-transcript-message-text",
-  toolGroupSingle: "run-transcript-tool-single",
-  toolGroupContainer: "run-transcript-tools",
-  toolGroupHeader: "run-transcript-tools-header",
-  toolGroupIcon: "run-transcript-tools-icon",
-  toolGroupLabel: "run-transcript-tools-label",
-  toolGroupChevron: "run-transcript-tools-chevron",
-  toolGroupBody: "run-transcript-tools-body",
-  toolItem: "run-transcript-tool",
-  toolItemConnector: "run-transcript-tool-connector",
-  toolItemDot: "run-transcript-tool-dot",
-  toolItemLine: "run-transcript-tool-line",
-  toolItemContent: "run-transcript-tool-content",
-  toolItemHeader: "run-transcript-tool-header",
-  toolItemIcon: "run-transcript-tool-icon",
-  toolItemLabel: "run-transcript-tool-label",
-  toolItemSpinner: "run-transcript-tool-spinner",
-  toolItemChevron: "run-transcript-tool-chevron",
-  toolItemBody: "run-transcript-tool-body",
-  toolSection: "run-transcript-tool-section",
-  toolSectionTitle: "run-transcript-tool-section-title",
-  toolCode: "run-transcript-code",
-  toolCodeMuted: "run-transcript-code-muted",
-  meta: "run-transcript-meta",
-  error: "run-transcript-error",
-  thinkingRow: "run-transcript-thinking",
-  thinkingIndicator: "run-transcript-thinking-indicator",
-};
+// (formerly: transcriptClassNames slot map for AgentTranscript — gone
+// now that the inline RunMessages renderer owns class names directly.)
 
 type RunTab = "chat" | "shell" | "files";
 
@@ -2071,6 +2031,551 @@ function loadStoredEntries(sessionId: string): TranscriptEntry[] {
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Inline message renderer. Replaces AgentTranscript so we can ship per-tool
+// body renderers (diff viewer, todo list, bash, etc), per-message copy
+// buttons, timestamps, reasoning accordions, and a proper error box —
+// none of which the library exposes via render-prop slots. The CSS class
+// names match the AgentTranscript slot map so the existing message /
+// avatar / tool styling continues to apply.
+
+type EntryGroup =
+  | { kind: "message" | "reasoning" | "meta"; entry: TranscriptEntry }
+  | { kind: "tools"; entries: TranscriptEntry[] };
+
+function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
+  const groups: EntryGroup[] = [];
+  let bucket: TranscriptEntry[] = [];
+  const flush = () => {
+    if (bucket.length) {
+      groups.push({ kind: "tools", entries: bucket });
+      bucket = [];
+    }
+  };
+  for (const e of entries) {
+    if (e.kind === "tool") {
+      bucket.push(e);
+      continue;
+    }
+    flush();
+    if (e.kind === "message") groups.push({ kind: "message", entry: e });
+    else if (e.kind === "reasoning") groups.push({ kind: "reasoning", entry: e });
+    else groups.push({ kind: "meta", entry: e });
+  }
+  flush();
+  return groups;
+}
+
+function tryParseJson(s: string | undefined): unknown {
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+
+function formatMessageTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+/** Simple LCS-based line diff. Returns lines marked context/del/add. */
+function computeLineDiff(
+  oldStr: string,
+  newStr: string,
+): { kind: "ctx" | "del" | "add"; text: string }[] {
+  const a = oldStr.split("\n");
+  const b = newStr.split("\n");
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array(n + 1).fill(0),
+  );
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out: { kind: "ctx" | "del" | "add"; text: string }[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push({ kind: "ctx", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ kind: "del", text: a[i] });
+      i++;
+    } else {
+      out.push({ kind: "add", text: b[j] });
+      j++;
+    }
+  }
+  while (i < m) out.push({ kind: "del", text: a[i++] });
+  while (j < n) out.push({ kind: "add", text: b[j++] });
+  return out;
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="run-msg-copy"
+      title="Copy"
+      aria-label={copied ? "Copied" : "Copy message"}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon size={12} aria-hidden="true" />
+      ) : (
+        <CopyIcon size={12} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
+  const variant = entry.role === "user" ? "user" : "assistant";
+  const text = entry.text ?? "";
+  const time = formatMessageTime(entry.time);
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant={variant}
+      data-role={variant}
+      data-kind="message"
+    >
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
+        <div className="run-transcript-message-text" data-slot="message-text">
+          <Streamdown>{text}</Streamdown>
+        </div>
+        <div className="run-msg-footer">
+          {time && <span className="run-msg-time">{time}</span>}
+          <CopyButton text={text} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunReasoningBlock({
+  entry,
+  showThinking,
+}: {
+  entry: TranscriptEntry;
+  showThinking: boolean;
+}) {
+  if (!showThinking) return null;
+  const text = entry.reasoning?.text ?? entry.text ?? "";
+  if (!text.trim()) return null;
+  return (
+    <details className="run-reasoning">
+      <summary className="run-reasoning-summary">
+        <BrainIcon size={14} aria-hidden="true" />
+        <span>Reasoning</span>
+        <ChevronDownIcon size={12} className="run-reasoning-chevron" aria-hidden="true" />
+      </summary>
+      <div className="run-reasoning-body">
+        <Streamdown>{text}</Streamdown>
+      </div>
+    </details>
+  );
+}
+
+function RunMetaBlock({ entry }: { entry: TranscriptEntry }) {
+  const isError = entry.meta?.severity === "error";
+  const title = entry.meta?.title ?? entry.text ?? "";
+  const detail = entry.meta?.detail;
+  // JSON pretty-print fallback for detail strings that look like JSON.
+  let prettyDetail: string | null = null;
+  if (detail) {
+    try {
+      const parsed = JSON.parse(detail);
+      prettyDetail = JSON.stringify(parsed, null, 2);
+    } catch {
+      prettyDetail = null;
+    }
+  }
+  return (
+    <div className={`run-meta${isError ? " run-meta-error" : ""}`}>
+      <span className="run-meta-icon">
+        {isError ? (
+          <AlertCircleIcon size={14} aria-hidden="true" />
+        ) : (
+          <InfoIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <div className="run-meta-body">
+        <div className="run-meta-title">{title}</div>
+        {detail && (
+          <pre className="run-meta-detail">{prettyDetail ?? detail}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ToolBody({ entry }: { entry: TranscriptEntry }) {
+  const name = entry.toolName ?? "";
+  const input = tryParseJson(entry.toolInput) as Record<string, unknown> | null;
+  if (
+    name === "Edit" ||
+    name === "MultiEdit" ||
+    name === "Write" ||
+    name === "ApplyPatch"
+  ) {
+    return <ToolDiffBody entry={entry} input={input} />;
+  }
+  if (name === "TodoWrite") {
+    return <ToolTodoBody input={input} />;
+  }
+  if (name === "Bash") {
+    return <ToolBashBody entry={entry} input={input} />;
+  }
+  if (name === "Read") {
+    return <ToolReadBody input={input} />;
+  }
+  return <ToolDefaultBody entry={entry} input={input} />;
+}
+
+function ToolDiffBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const filePath = (input?.file_path as string) ?? "";
+  // Edit: old_string + new_string. Write: content (treat as full add).
+  // MultiEdit: edits[]. ApplyPatch: patches/diff text.
+  let blocks: { kind: "ctx" | "del" | "add"; text: string }[] = [];
+  if ((entry.toolName === "Edit") && input) {
+    blocks = computeLineDiff(
+      String(input.old_string ?? ""),
+      String(input.new_string ?? ""),
+    );
+  } else if (entry.toolName === "Write" && input) {
+    blocks = String(input.content ?? "")
+      .split("\n")
+      .map((t) => ({ kind: "add" as const, text: t }));
+  } else if (entry.toolName === "MultiEdit" && Array.isArray(input?.edits)) {
+    for (const ed of input.edits as Array<Record<string, unknown>>) {
+      blocks.push({ kind: "ctx", text: "..." });
+      const sub = computeLineDiff(
+        String(ed.old_string ?? ""),
+        String(ed.new_string ?? ""),
+      );
+      blocks.push(...sub);
+    }
+  } else {
+    // Fallback to raw input dump.
+    return <ToolDefaultBody entry={entry} input={input} />;
+  }
+  return (
+    <div className="run-tool-body run-tool-diff">
+      {filePath && <div className="run-tool-diff-path">{filePath}</div>}
+      <pre className="run-tool-diff-pre">
+        {blocks.map((l, i) => (
+          <div key={i} className={`run-diff-line run-diff-${l.kind}`}>
+            <span className="run-diff-marker">
+              {l.kind === "del" ? "-" : l.kind === "add" ? "+" : " "}
+            </span>
+            <span className="run-diff-text">{l.text}</span>
+          </div>
+        ))}
+      </pre>
+      {entry.toolOutput && (
+        <details className="run-tool-output">
+          <summary>Output</summary>
+          <pre>{entry.toolOutput}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ToolTodoBody({ input }: { input: Record<string, unknown> | null }) {
+  const todos = (input?.todos as Array<Record<string, unknown>>) ?? [];
+  if (!todos.length) return <div className="run-tool-body">no todos</div>;
+  return (
+    <ul className="run-tool-body run-tool-todos">
+      {todos.map((t, i) => {
+        const status = String(t.status ?? "pending");
+        const content = String(t.content ?? t.activeForm ?? "");
+        return (
+          <li key={i} className={`run-tool-todo run-tool-todo-${status}`}>
+            <span className="run-tool-todo-marker" aria-hidden="true">
+              {status === "completed" ? "✓" : status === "in_progress" ? "→" : "○"}
+            </span>
+            <span className="run-tool-todo-text">{content}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function ToolBashBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const command = String(input?.command ?? "");
+  return (
+    <div className="run-tool-body run-tool-bash">
+      <div className="run-tool-section-title">$ command</div>
+      <pre className="run-tool-bash-cmd">{command}</pre>
+      {entry.toolOutput && (
+        <>
+          <div className="run-tool-section-title">output</div>
+          <pre className="run-tool-bash-out">{entry.toolOutput}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ToolReadBody({ input }: { input: Record<string, unknown> | null }) {
+  const filePath = String(input?.file_path ?? "");
+  const offset = input?.offset != null ? String(input.offset) : "";
+  const limit = input?.limit != null ? String(input.limit) : "";
+  return (
+    <div className="run-tool-body run-tool-read">
+      <span className="run-tool-read-path">{filePath}</span>
+      {(offset || limit) && (
+        <span className="run-tool-read-meta">
+          {offset && `offset=${offset}`} {limit && `limit=${limit}`}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ToolDefaultBody({
+  entry,
+  input,
+}: {
+  entry: TranscriptEntry;
+  input: Record<string, unknown> | null;
+}) {
+  const inputText = input
+    ? JSON.stringify(input, null, 2)
+    : (entry.toolInput ?? "");
+  return (
+    <div className="run-tool-body">
+      {inputText && (
+        <>
+          <div className="run-tool-section-title">input</div>
+          <pre className="run-tool-default-pre">{inputText}</pre>
+        </>
+      )}
+      {entry.toolOutput && (
+        <>
+          <div className="run-tool-section-title">output</div>
+          <pre className="run-tool-default-pre">{entry.toolOutput}</pre>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RunToolItem({
+  entry,
+  autoExpand,
+}: {
+  entry: TranscriptEntry;
+  autoExpand: boolean;
+}) {
+  const [expanded, setExpanded] = useState(autoExpand);
+  const cfg = getToolVisualConfig(entry);
+  const state = (entry.toolStatus ?? "completed") as string;
+  return (
+    <div
+      className="run-transcript-tool"
+      data-slot="tool-item"
+      data-kind="tool"
+      data-state={state}
+    >
+      <div
+        className="run-transcript-tool-connector"
+        data-slot="tool-item-connector"
+      >
+        <div
+          className="run-transcript-tool-dot"
+          data-slot="tool-item-dot"
+        />
+      </div>
+      <div className="run-transcript-tool-content">
+        <button
+          type="button"
+          className="run-transcript-tool-header"
+          data-slot="tool-item-header"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+        >
+          <span
+            className="run-transcript-tool-icon"
+            data-slot="tool-item-icon"
+          >
+            <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
+              <cfg.Icon size={14} strokeWidth={2} />
+            </span>
+          </span>
+          <span
+            className="run-transcript-tool-label"
+            data-slot="tool-item-label"
+          >
+            {entry.toolName ?? "tool"}
+          </span>
+          {state === "running" && (
+            <Loader2Icon
+              size={12}
+              className="run-spin run-tool-spinner"
+              aria-hidden="true"
+            />
+          )}
+          <span
+            className="run-transcript-tool-chevron"
+            data-slot="tool-item-chevron"
+          >
+            {expanded ? (
+              <ChevronUpIcon
+                size={14}
+                strokeWidth={2}
+                className="run-chevron-icon"
+              />
+            ) : (
+              <ChevronDownIcon
+                size={14}
+                strokeWidth={2}
+                className="run-chevron-icon"
+              />
+            )}
+          </span>
+        </button>
+        {expanded && <ToolBody entry={entry} />}
+      </div>
+    </div>
+  );
+}
+
+function RunToolGroup({
+  entries,
+  autoExpand,
+}: {
+  entries: TranscriptEntry[];
+  autoExpand: boolean;
+}) {
+  if (entries.length === 1) {
+    return (
+      <div className="run-transcript-tool-single" data-slot="tool-group-single">
+        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+      </div>
+    );
+  }
+  const [open, setOpen] = useState(autoExpand);
+  const errorCount = entries.filter(
+    (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
+  ).length;
+  const summary =
+    errorCount > 0
+      ? `${entries.length} tool calls · ${errorCount} error${errorCount === 1 ? "" : "s"}`
+      : `${entries.length} tool calls`;
+  return (
+    <div className="run-transcript-tools" data-slot="tool-group">
+      <button
+        type="button"
+        className="run-transcript-tools-header"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+      >
+        <span className="run-transcript-tools-icon">
+          <WrenchIcon size={14} strokeWidth={2} aria-hidden="true" />
+        </span>
+        <span className="run-transcript-tools-label">{summary}</span>
+        <span className="run-transcript-tools-chevron">
+          {open ? (
+            <ChevronUpIcon size={14} className="run-chevron-icon" />
+          ) : (
+            <ChevronDownIcon size={14} className="run-chevron-icon" />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="run-transcript-tools-body">
+          {entries.map((e) => (
+            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RunMessages({
+  entries,
+  showThinking,
+  autoExpandTools,
+}: {
+  entries: TranscriptEntry[];
+  showThinking: boolean;
+  autoExpandTools: boolean;
+}) {
+  const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  return (
+    <div className="run-transcript run-transcript-claude" data-slot="root">
+      {groups.map((g: EntryGroup, idx: number) => {
+        if (g.kind === "tools") {
+          return (
+            <RunToolGroup
+              key={`tools-${g.entries[0].id}-${idx}`}
+              entries={g.entries}
+              autoExpand={autoExpandTools}
+            />
+          );
+        }
+        if (g.kind === "reasoning") {
+          return (
+            <RunReasoningBlock
+              key={g.entry.id}
+              entry={g.entry}
+              showThinking={showThinking}
+            />
+          );
+        }
+        if (g.kind === "meta") {
+          return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
+        }
+        return <RunMessageBubble key={g.entry.id} entry={g.entry} />;
+      })}
+    </div>
+  );
 }
 
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
@@ -3250,37 +3755,10 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             </p>
           </div>
         ) : (
-          <AgentTranscript
+          <RunMessages
             entries={entries}
-            className={isClaudeRunMode(session.mode) ? "run-transcript-claude" : "run-transcript-codex"}
-            classNames={transcriptClassNames}
-            isThinking={running}
-            getToolGroupSummary={(toolEntries) => getRunToolGroupSummary(toolEntries, session.mode)}
-            renderMessageText={(entry) => (
-              <Streamdown>{entry.text ?? ""}</Streamdown>
-            )}
-            renderInlinePendingIndicator={() => <span className="run-pending">...</span>}
-            renderToolItemIcon={(entry) => {
-              const cfg = getToolVisualConfig(entry);
-              return (
-                <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
-                  <cfg.Icon size={14} strokeWidth={2} />
-                </span>
-              );
-            }}
-            renderToolGroupIcon={() => (
-              <span className="run-tool-group-glyph" aria-hidden="true">
-                <WrenchIcon size={14} strokeWidth={2} />
-              </span>
-            )}
-            renderChevron={(expanded) =>
-              expanded ? (
-                <ChevronUpIcon size={14} strokeWidth={2} className="run-chevron-icon" />
-              ) : (
-                <ChevronDownIcon size={14} strokeWidth={2} className="run-chevron-icon" />
-              )
-            }
-            renderThinkingState={() => null}
+            showThinking={runPrefs.showThinking}
+            autoExpandTools={runPrefs.autoExpandTools}
           />
         )}
       </main>
