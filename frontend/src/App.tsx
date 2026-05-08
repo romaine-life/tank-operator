@@ -43,7 +43,6 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
-  MessageSquareIcon,
   PlugIcon,
   SearchIcon,
   SendHorizontalIcon,
@@ -615,9 +614,6 @@ const CODEX_ROLLOUT_SUBMIT_DELAY_MS = 200;
 const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
-function sessionInteraction(mode: SessionMode): SessionInteraction {
-  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
-}
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
   return (
