@@ -2155,11 +2155,16 @@ button:disabled {
 
 .run-transcript {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: var(--space-3);
   font-family: var(--font-primary);
   font-size: var(--text-sm);
-  line-height: 1.45;
+  line-height: 1.55;
   white-space: normal;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .run-transcript-divider {
@@ -2183,29 +2188,36 @@ button:disabled {
 }
 
 .run-transcript-message-content {
-  max-width: min(52rem, 100%);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
+  max-width: min(48rem, 86%);
+  border-radius: 0.875rem;
+  padding: 0.75rem 1rem;
   overflow-wrap: anywhere;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
 }
 
 .run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
   justify-self: end;
-  background: rgba(93, 190, 165, 0.14);
-  color: var(--text-primary);
+  background: #1d4ed8;
+  color: #f5f8ff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
   justify-self: start;
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+/* Claude assistant variant — same shell as the generic assistant bubble.
+   The earlier "transparent / borderless" override was a holdover from
+   the prior prose-style transcript and isn't what the cloudcli-shape
+   pane wants. */
 .run-transcript-claude [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
-  border-color: transparent;
-  background: transparent;
-  padding: var(--space-1) 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  padding: 0.75rem 1rem;
 }
 
 .run-transcript-message-text {
