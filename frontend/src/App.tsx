@@ -44,6 +44,7 @@ import {
   PlugIcon,
   SearchIcon,
   SendHorizontalIcon,
+  SettingsIcon,
   SquareIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -1863,20 +1864,21 @@ const SLASH_COMMANDS: SlashCommand[] = [
 ];
 
 /**
- * Walks backwards from the cursor to find an active slash context: a `/`
- * at the start of the textarea or after whitespace, with no whitespace
- * between it and the cursor. Returns the start offset of the slash and
- * the typed query (without the leading slash). Null if not in a slash
- * context.
+ * Walks backwards from the cursor to find an active trigger context:
+ * `/` for slash-commands or `@` for file-mention. The trigger must be
+ * at the start of the textarea or follow whitespace, and there must be
+ * no whitespace between it and the cursor. Returns the start offset
+ * and the typed query (sans leading trigger). Null if not in context.
  */
-function findSlashContext(
+function findTriggerContext(
   textarea: HTMLTextAreaElement,
+  trigger: "/" | "@",
 ): { start: number; query: string } | null {
   const value = textarea.value;
   const cursor = textarea.selectionStart ?? 0;
   for (let i = cursor - 1; i >= 0; i--) {
     const c = value[i];
-    if (c === "/") {
+    if (c === trigger) {
       if (i === 0 || /\s/.test(value[i - 1])) {
         return { start: i, query: value.slice(i + 1, cursor) };
       }
@@ -1885,6 +1887,36 @@ function findSlashContext(
     if (/\s/.test(c)) return null;
   }
   return null;
+}
+
+function findSlashContext(
+  textarea: HTMLTextAreaElement,
+): { start: number; query: string } | null {
+  return findTriggerContext(textarea, "/");
+}
+
+function findMentionContext(
+  textarea: HTMLTextAreaElement,
+): { start: number; query: string } | null {
+  return findTriggerContext(textarea, "@");
+}
+
+/** Loose fuzzy filter — substring match against the path's lowercased
+ *  full string OR basename. Order is: basename matches first, then full
+ *  path. Capped to keep the menu tractable. */
+function filterMentionPaths(paths: string[], query: string, limit = 30): string[] {
+  if (!query) return paths.slice(0, limit);
+  const q = query.toLowerCase();
+  const basenameMatches: string[] = [];
+  const fullMatches: string[] = [];
+  for (const p of paths) {
+    const lower = p.toLowerCase();
+    const base = lower.slice(lower.lastIndexOf("/") + 1);
+    if (base.includes(q)) basenameMatches.push(p);
+    else if (lower.includes(q)) fullMatches.push(p);
+    if (basenameMatches.length + fullMatches.length >= limit * 2) break;
+  }
+  return [...basenameMatches, ...fullMatches].slice(0, limit);
 }
 
 function filterSlashCommands(query: string): SlashCommand[] {
@@ -1911,6 +1943,37 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5-5", label: "Codex · GPT-5.5" },
   { id: "gpt-5", label: "Codex · GPT-5" },
 ];
+
+// Per-user run-pane preferences. localStorage-backed, shared across all
+// sessions in this browser. Keys mirror cloudcli's QuickSettings.
+const RUN_PREF_PREFIX = "tank-run-pref-";
+
+interface RunPrefs {
+  sendByCtrlEnter: boolean;
+  showThinking: boolean;
+  autoExpandTools: boolean;
+}
+
+const DEFAULT_RUN_PREFS: RunPrefs = {
+  sendByCtrlEnter: false,
+  showThinking: true,
+  autoExpandTools: false,
+};
+
+function loadRunPrefs(): RunPrefs {
+  const out = { ...DEFAULT_RUN_PREFS };
+  try {
+    for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
+      if (raw === "true" || raw === "false") {
+        out[key] = raw === "true";
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
 
 // localStorage key for persisting a single run's transcript entries.
 // Backend-side persistence (replay JSONL from
@@ -1955,6 +2018,13 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
+  // @filename mention palette state. paths is lazily loaded from
+  // /api/sessions/{id}/files/walk on first `@` keystroke.
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionPaths, setMentionPaths] = useState<string[] | null>(null);
+  const mentionLoadedRef = useRef(false);
   // Composer text mirror — used to know when the input has content (drives
   // hint fade + clear-X visibility) without making the textarea controlled.
   const [composerText, setComposerText] = useState("");
@@ -1977,13 +2047,35 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   // in the prompt so Claude can Read them via tool use.
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  // Per-user prefs (persisted in localStorage; keyed by RUN_PREF_PREFIX).
+  const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
+  function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
+    setRunPrefs((p) => ({ ...p, [key]: value }));
+    try {
+      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
+    } catch {
+      /* ignore */
+    }
+  }
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+  // Monotonic counter for entry ids — Date.now() collides during fast
+  // bursts (sub-ms) and React's key reconciler keeps a stable component
+  // tree only as long as keys are stable across renders.
+  const entryIdSeqRef = useRef(0);
+  function nextEntryId(prefix: string): string {
+    entryIdSeqRef.current += 1;
+    return `${prefix}-${session.id}-${entryIdSeqRef.current}`;
+  }
 
   const slashFiltered = slashOpen ? filterSlashCommands(slashQuery) : [];
+  const mentionFiltered =
+    mentionOpen && mentionPaths
+      ? filterMentionPaths(mentionPaths, mentionQuery)
+      : [];
 
   useEffect(() => {
     return () => {
@@ -2253,6 +2345,33 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     setEntries(loadStoredEntries(session.id));
   }, [session.id]);
 
+  // sendByCtrlEnter — when on, plain Enter inserts a newline and only
+  // Ctrl/⌘+Enter submits. Implemented by intercepting at capture phase
+  // on the composer wrap so it runs before AI Elements' internal handler.
+  useEffect(() => {
+    const wrap = composerWrapRef.current;
+    if (!wrap) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      const ta = wrap.querySelector("textarea");
+      if (!ta || e.target !== ta) return;
+      if (slashOpen) return; // palette handler owns Enter
+      if (e.shiftKey) return; // newline regardless of mode
+      if (runPrefs.sendByCtrlEnter) {
+        // Plain Enter must NOT submit; let the textarea insert a newline.
+        if (!e.ctrlKey && !e.metaKey) {
+          e.stopPropagation();
+        }
+        // Ctrl/⌘+Enter submits — fall through to AI Elements' form submit.
+      } else {
+        // Default: plain Enter submits (AI Elements handles it).
+        // Ctrl/⌘+Enter also submits naturally.
+      }
+    };
+    wrap.addEventListener("keydown", onKey, true);
+    return () => wrap.removeEventListener("keydown", onKey, true);
+  }, [runPrefs.sendByCtrlEnter, slashOpen]);
+
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
   // Stop pill. Capture phase so it fires even if focus is on the textarea.
   // Skips when the slash palette is open — Esc closes the palette in that
@@ -2269,11 +2388,12 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [running, slashOpen]);
 
-  // Slash-palette typing detection + composer-text mirror. Listens at the
-  // composer wrap; reads the textarea's value + cursor on every event to
-  // recompute the active slash context AND keep `composerText` in sync.
-  // The mirror drives hint fade + clear-X visibility without making the
-  // textarea controlled (which would conflict with PromptInput's form).
+  // Slash- + mention-palette typing detection + composer-text mirror.
+  // Listens at the composer wrap; reads the textarea's value + cursor on
+  // every event to recompute the active trigger context AND keep
+  // `composerText` in sync. The mirror drives hint fade + clear-X
+  // visibility without making the textarea controlled (which would
+  // conflict with PromptInput's form).
   useEffect(() => {
     const wrap = composerWrapRef.current;
     if (!wrap) return;
@@ -2281,19 +2401,43 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       const ta = wrap.querySelector("textarea") as HTMLTextAreaElement | null;
       if (!ta) {
         setSlashOpen(false);
+        setMentionOpen(false);
         setComposerText("");
         return;
       }
       setComposerText(ta.value);
-      const ctx = findSlashContext(ta);
-      if (ctx) {
+      const slash = findSlashContext(ta);
+      const mention = findMentionContext(ta);
+      if (slash) {
         setSlashOpen(true);
         setSlashQuery((prev) => {
-          if (prev !== ctx.query) setSlashIndex(0);
-          return ctx.query;
+          if (prev !== slash.query) setSlashIndex(0);
+          return slash.query;
         });
       } else {
         setSlashOpen(false);
+      }
+      if (mention) {
+        setMentionOpen(true);
+        setMentionQuery((prev) => {
+          if (prev !== mention.query) setMentionIndex(0);
+          return mention.query;
+        });
+        // Lazy-load the workspace walk on first `@` keystroke.
+        if (!mentionLoadedRef.current) {
+          mentionLoadedRef.current = true;
+          void authedFetch(`/api/sessions/${session.id}/files/walk`)
+            .then(async (res) => {
+              if (!res.ok) throw new Error(`${res.status}`);
+              return (await res.json()) as { paths: string[] };
+            })
+            .then((b) => setMentionPaths(b.paths))
+            .catch(() => {
+              mentionLoadedRef.current = false; // allow retry
+            });
+        }
+      } else {
+        setMentionOpen(false);
       }
     };
     wrap.addEventListener("input", recompute);
@@ -2355,6 +2499,63 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [slashOpen, slashQuery, slashIndex]);
 
+  // Mention-palette keyboard nav (mirror of slash).
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const filtered = mentionPaths
+        ? filterMentionPaths(mentionPaths, mentionQuery)
+        : [];
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionIndex((i) =>
+          filtered.length ? (i - 1 + filtered.length) % filtered.length : 0,
+        );
+      } else if (e.key === "Enter" || e.key === "Tab") {
+        if (!filtered.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        applyMentionPath(filtered[Math.min(mentionIndex, filtered.length - 1)]);
+        setMentionOpen(false);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMentionOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [mentionOpen, mentionQuery, mentionIndex, mentionPaths]);
+
+  function applyMentionPath(relPath: string) {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const ctx = findMentionContext(ta);
+    const start = ctx?.start ?? ta.selectionStart ?? 0;
+    const cursor = ta.selectionStart ?? start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(cursor);
+    // Insert the absolute /workspace path so claude can pass it directly
+    // to the Read tool without re-resolving.
+    const insert = `/workspace/${relPath} `;
+    const newValue = before + insert + after;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, newValue);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    const newPos = start + insert.length;
+    ta.setSelectionRange(newPos, newPos);
+    ta.focus();
+  }
+
   function applySlashCommand(name: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -2387,13 +2588,13 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       providerEvent = JSON.parse(trimmed);
     } catch {
       setEntries((prev) =>
-        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", line),
+        appendMeta(prev, nextEntryId("raw-stdout"), "Output", line),
       );
       return;
     }
     if (!isJsonObject(providerEvent)) {
       setEntries((prev) =>
-        appendMeta(prev, `raw-stdout-${Date.now()}`, "Output", shortJson(providerEvent)),
+        appendMeta(prev, nextEntryId("raw-stdout"), "Output", shortJson(providerEvent)),
       );
       return;
     }
@@ -2468,7 +2669,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     setEntries((prev) => [
       ...prev,
       {
-        id: `user-${Date.now()}`,
+        id: nextEntryId("user"),
         kind: "message",
         role: "user",
         text: trimmed,
@@ -2504,7 +2705,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         msg = JSON.parse(String(event.data));
       } catch {
         setEntries((prev) =>
-          appendMeta(prev, `websocket-message-${Date.now()}`, "websocket message", String(event.data)),
+          appendMeta(prev, nextEntryId("websocket-message"), "websocket message", String(event.data)),
         );
         return;
       }
@@ -2512,7 +2713,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         applyStdoutChunk(msg.data);
       } else if (msg.stream === "stderr" && msg.data) {
         setEntries((prev) =>
-          appendMeta(prev, `stderr-${Date.now()}`, "stderr", msg.data, "error"),
+          appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
@@ -2524,7 +2725,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         setRunStatus("error");
         setRunning(false);
         setEntries((prev) =>
-          appendMeta(prev, `run-error-${Date.now()}`, "run failed", msg.detail, "error"),
+          appendMeta(prev, nextEntryId("run-error"), "run failed", msg.detail, "error"),
         );
         ws.close();
       }
@@ -2533,7 +2734,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       setRunStatus("error");
       setRunning(false);
       setEntries((prev) =>
-        appendMeta(prev, `websocket-error-${Date.now()}`, "websocket error", undefined, "error"),
+        appendMeta(prev, nextEntryId("websocket-error"), "websocket error", undefined, "error"),
       );
     };
     ws.onclose = () => {
@@ -2608,6 +2809,63 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             <FolderIcon className="run-tab-icon" aria-hidden="true" />
             <span>Files</span>
           </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="run-tab run-tab-icononly"
+                aria-label="Run settings"
+                title="Settings"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="run-settings-menu">
+              <DropdownMenuLabel>Composer</DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">
+                    Send with ⌘/Ctrl+Enter
+                  </span>
+                  {runPrefs.sendByCtrlEnter && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuLabel>Transcript</DropdownMenuLabel>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("showThinking", !runPrefs.showThinking);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Show reasoning</span>
+                  {runPrefs.showThinking && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setRunPref("autoExpandTools", !runPrefs.autoExpandTools);
+                }}
+              >
+                <span className="run-settings-row">
+                  <span className="run-settings-label">Auto-expand tools</span>
+                  {runPrefs.autoExpandTools && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </nav>
       </header>
 
@@ -3048,6 +3306,36 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
               ))}
             </div>
           )}
+          {mentionOpen && (
+            <div className="run-slash-palette" role="listbox" aria-label="File mentions">
+              <div className="run-slash-palette-label">
+                {mentionPaths == null ? "Loading files…" : "Files (@)"}
+              </div>
+              {mentionPaths != null && mentionFiltered.length === 0 && (
+                <div className="run-slash-empty">no matches</div>
+              )}
+              {mentionFiltered.map((p, i) => (
+                <button
+                  key={p}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIndex}
+                  className={`run-slash-item${i === mentionIndex ? " run-slash-item-active" : ""}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    applyMentionPath(p);
+                    setMentionOpen(false);
+                  }}
+                  onMouseEnter={() => setMentionIndex(i)}
+                >
+                  <span className="run-slash-name run-mention-path">
+                    {p.split("/").pop()}
+                  </span>
+                  <span className="run-slash-desc run-mention-dir">{p}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <PromptInput onSubmit={handleSubmit} className="run-composer">
             <PromptInputTextarea
               className="run-composer-textarea"
@@ -3169,7 +3457,9 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
               <span
                 className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
               >
-                Enter to send · Shift+Enter for new line · / for slash commands
+                {runPrefs.sendByCtrlEnter
+                  ? "⌘/Ctrl+Enter to send · Enter for new line · / for slash commands"
+                  : "Enter to send · Shift+Enter for new line · / for slash commands"}
               </span>
               {composerText.length > 0 && (
                 <button

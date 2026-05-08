@@ -629,6 +629,71 @@ async def upload_session_file(
     )
 
 
+class FileWalkResponse(BaseModel):
+    paths: list[str]
+    truncated: bool
+
+
+MAX_WALK_RESULTS = 5000
+
+
+@app.get("/api/sessions/{session_id}/files/walk", response_model=FileWalkResponse)
+async def walk_session_files(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> FileWalkResponse:
+    """Recursive walk of /workspace; returns relative file paths capped at
+    MAX_WALK_RESULTS. Powers `@filename` mention autocomplete in the
+    composer.
+    """
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    walk_script = (
+        "import os, json, sys\n"
+        f"limit = {MAX_WALK_RESULTS}\n"
+        "root = sys.argv[1]\n"
+        "out = []\n"
+        "trunc = False\n"
+        "for dirpath, dirs, files in os.walk(root):\n"
+        # Skip dot-dirs (node_modules etc), but keep .attachments visible.
+        "    dirs[:] = [d for d in dirs if d == '.attachments' or not d.startswith('.')]\n"
+        "    dirs[:] = [d for d in dirs if d not in ('node_modules', '.git', 'dist', 'build', '__pycache__', '.venv')]\n"
+        "    for name in files:\n"
+        "        if name.startswith('.') and not dirpath.endswith('/.attachments'):\n"
+        "            continue\n"
+        "        rel = os.path.relpath(os.path.join(dirpath, name), root)\n"
+        "        out.append(rel)\n"
+        "        if len(out) >= limit:\n"
+        "            trunc = True\n"
+        "            break\n"
+        "    if trunc:\n"
+        "        break\n"
+        "print(json.dumps({'paths': out, 'truncated': trunc}))\n"
+    )
+    cmd = ["python3", "-c", walk_script, WORKSPACE_ROOT]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"walk failed: {exc}")
+    import json as _json
+    try:
+        body = _json.loads(out.decode("utf-8", errors="replace") or "{}")
+    except _json.JSONDecodeError:
+        body = {"paths": [], "truncated": False}
+    return FileWalkResponse(
+        paths=list(body.get("paths") or []),
+        truncated=bool(body.get("truncated")),
+    )
+
+
 @app.put("/api/sessions/{session_id}/files/content", response_model=FileContent)
 async def put_session_file_content(
     session_id: str,

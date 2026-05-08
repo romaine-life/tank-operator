@@ -1719,6 +1719,36 @@ button:disabled {
   height: 1rem;
 }
 
+/* Icon-only variant (gear) — same shape, no label. */
+.run-tab-icononly {
+  padding: 0.45rem 0.5rem;
+  margin-left: 0.2rem;
+}
+
+/* Settings menu — wider rows for label + check. */
+.run-settings-menu {
+  min-width: 18rem;
+}
+
+.run-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.6rem;
+}
+
+.run-settings-label {
+  font-family: var(--font-primary);
+}
+
+.run-settings-check {
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent, #2563eb);
+  flex: 0 0 auto;
+}
+
 /* Main content area — empty state or transcript. */
 .run-main {
   flex: 1 1 auto;
@@ -1987,6 +2017,21 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.run-slash-empty {
+  padding: 0.5rem 0.65rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.run-mention-path {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.run-mention-dir {
+  font-family: var(--font-mono);
 }
 
 .run-composer {
