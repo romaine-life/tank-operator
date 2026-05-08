@@ -32,7 +32,6 @@ import {
   BrainIcon,
   CheckIcon,
   ChevronDownIcon,
-  ClockIcon,
   ChevronUpIcon,
   ClipboardListIcon,
   CopyIcon,
@@ -2257,7 +2256,6 @@ function RunMessageBubble({
             {showTimestamps && time && (
               <span className="run-msg-timing-row">
                 {time}
-                <ClockIcon size={9} aria-hidden="true" />
               </span>
             )}
           </div>
