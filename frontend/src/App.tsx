@@ -1786,8 +1786,28 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5", label: "Codex · GPT-5" },
 ];
 
+// localStorage key for persisting a single run's transcript entries.
+// Backend-side persistence (replay JSONL from
+// ~/.claude/projects/<encoded-cwd>/<session>.jsonl in the session pod)
+// is a follow-up; localStorage is sufficient for refresh-survives-tab
+// and same-browser cross-tab.
+const RUN_STORAGE_PREFIX = "tank-run-entries-";
+
+function loadStoredEntries(sessionId: string): TranscriptEntry[] {
+  try {
+    const raw = localStorage.getItem(RUN_STORAGE_PREFIX + sessionId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as TranscriptEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function HeadlessRun({ session, visible }: { session: Session; visible: boolean }) {
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
+    loadStoredEntries(session.id),
+  );
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
@@ -1838,6 +1858,31 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [running]);
+
+  // Persist transcript entries per-session in localStorage. Survives page
+  // refresh; restored on initial state via loadStoredEntries above.
+  useEffect(() => {
+    try {
+      if (entries.length > 0) {
+        localStorage.setItem(
+          RUN_STORAGE_PREFIX + session.id,
+          JSON.stringify(entries),
+        );
+      } else {
+        localStorage.removeItem(RUN_STORAGE_PREFIX + session.id);
+      }
+    } catch {
+      // Quota exceeded or storage unavailable — drop silently. Future
+      // backend replay would cover this case anyway.
+    }
+  }, [entries, session.id]);
+
+  // When the session id changes (user picks a different session in the
+  // sidebar that re-mounts this HeadlessRun with a different id), reset
+  // entries to whatever's stored for that session.
+  useEffect(() => {
+    setEntries(loadStoredEntries(session.id));
+  }, [session.id]);
 
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
   // Stop pill. Capture phase so it fires even if focus is on the textarea.
@@ -2420,6 +2465,19 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+
+  // Reflect the active session in the URL so reloads land back on it.
+  // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
+  // than wrapping setActive so all call sites benefit.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (active) {
+      url.searchParams.set("session", active);
+    } else {
+      url.searchParams.delete("session");
+    }
+    window.history.replaceState({}, "", url.toString());
+  }, [active]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   const [rolloutTimers, setRolloutTimers] = useState<Record<string, RolloutTimer>>({});
   const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
