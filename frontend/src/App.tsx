@@ -2197,12 +2197,14 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-const RunContext = createContext<{ sendStdin: (text: string) => void }>({
+const RunContext = createContext<{ sendStdin: (text: string) => void; user: SessionUser | null }>({
   sendStdin: () => {},
+  user: null,
 });
 
 function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
   const variant = entry.role === "user" ? "user" : "assistant";
+  const { user } = useContext(RunContext);
   const text = entry.text ?? "";
   const time = formatMessageTime(entry.time);
   return (
@@ -2225,6 +2227,11 @@ function RunMessageBubble({ entry }: { entry: TranscriptEntry }) {
           <CopyButton text={text} />
         </div>
       </div>
+      {variant === "user" && user && (
+        <span className="run-msg-avatar">
+          <Avatar user={user} />
+        </span>
+      )}
     </div>
   );
 }
@@ -2697,10 +2704,12 @@ function HeadlessRun({
   session,
   visible,
   onRename,
+  user,
 }: {
   session: Session;
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
+  user: SessionUser;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     loadStoredEntries(session.id),
@@ -3639,7 +3648,7 @@ function HeadlessRun({
   };
 
   return (
-    <RunContext.Provider value={{ sendStdin }}>
+    <RunContext.Provider value={{ sendStdin, user }}>
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
@@ -5345,7 +5354,7 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} />
+                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} user={user!} />
                   </div>
                 ) : (
                   <Terminal

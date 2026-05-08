@@ -3637,10 +3637,8 @@ textarea.run-files-viewer-editor:focus {
   align-items: start;
 }
 
-/* Avatars — pseudo-elements pinned to the edge column opposite the
-   bubble. User stays right (blue "U"), assistant stays left (orange
-   star ASCII; SVG would be nicer but pseudo-only works for content
-   strings without inline SVG plumbing). */
+/* Avatars — pseudo-elements for the assistant icon (left column);
+   user avatar is a real element (.run-msg-avatar) in column 3. */
 .run-transcript-message::before,
 .run-transcript-message::after {
   width: 1.7rem;
@@ -3660,12 +3658,21 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript-message[data-variant="user"]::after {
-  content: "U";
+  content: none;
+}
+
+.run-msg-avatar {
   grid-column: 3;
   grid-row: 1;
-  background: rgba(37, 99, 235, 0.16);
-  color: #93c5fd;
-  border: 1px solid rgba(96, 165, 250, 0.35);
+  width: 1.7rem;
+  height: 1.7rem;
+  flex-shrink: 0;
+}
+
+.run-msg-avatar .avatar {
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.72rem;
 }
 
 .run-transcript-message[data-variant="assistant"]::before {
