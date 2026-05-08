@@ -137,9 +137,10 @@ spec:
               EOF
               cat /agent-config/prompt.md /tmp/issue-context.md > /tmp/agent-input.md
 
-              cat /tmp/agent-input.md | claude \
+              claude \
                 --print \
                 --dangerously-skip-permissions \
+                < /tmp/agent-input.md \
                 2>&1 | tee /tmp/claude-stream.log
 
               git add -A
