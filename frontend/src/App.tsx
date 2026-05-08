@@ -832,11 +832,8 @@ function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
   return null;
 }
 
-function isSessionShortcutEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.closest(".xterm")) return false;
-  if (target.closest("input, textarea, select")) return true;
-  return target.isContentEditable;
+function isSessionShortcutEditableTarget(_target: EventTarget | null): boolean {
+  return false;
 }
 
 function adjacentSessionId(
