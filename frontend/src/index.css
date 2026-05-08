@@ -2731,6 +2731,30 @@ textarea.run-files-viewer-editor:focus {
   animation: run-status-pulse 2.4s ease-in-out infinite;
 }
 
+/* Brief banner shown above the transcript when entries are restored from
+   localStorage on mount or from the backend history endpoint. Auto-fades
+   after 3s via React state. */
+.run-continue-hint {
+  align-self: center;
+  margin: var(--space-3) auto var(--space-2);
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  animation: run-continue-hint-fade 3s ease-out forwards;
+}
+
+@keyframes run-continue-hint-fade {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  10%  { opacity: 1; transform: translateY(0); }
+  85%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 @keyframes run-status-pulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }

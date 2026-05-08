@@ -2731,6 +2731,57 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     }
   }, [entries, session.id]);
 
+  // History replay — when localStorage is empty and the session is Active,
+  // fetch the most recent claude-code session JSONL from the pod and
+  // replay each event through applyClaudeEvent. Covers cross-browser /
+  // cleared-cache cases that localStorage can't.
+  const [historyAttempted, setHistoryAttempted] = useState(false);
+  // Toggled briefly when entries are restored (from localStorage OR backend
+  // history) so we can show a "Continuing previous conversation" hint.
+  const [continueHintVisible, setContinueHintVisible] = useState(false);
+  useEffect(() => {
+    // If we already had entries on mount (localStorage), surface a brief
+    // continue-hint and skip backend fetch.
+    if (historyAttempted) return;
+    if (entries.length > 0) {
+      setHistoryAttempted(true);
+      setContinueHintVisible(true);
+      const t = window.setTimeout(() => setContinueHintVisible(false), 3000);
+      return () => window.clearTimeout(t);
+    }
+    if (session.status !== "Active") return;
+    setHistoryAttempted(true);
+    void authedFetch(`/api/sessions/${session.id}/run/history`)
+      .then(async (res) => {
+        if (!res.ok) return "";
+        return await res.text();
+      })
+      .then((text) => {
+        if (!text) return;
+        const lines = text.split("\n");
+        let acc: TranscriptEntry[] = [];
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (isJsonObject(ev)) {
+              acc = applyClaudeEvent(acc, ev);
+            }
+          } catch {
+            /* skip unparseable */
+          }
+        }
+        if (acc.length > 0) {
+          setEntries(acc);
+          setContinueHintVisible(true);
+          window.setTimeout(() => setContinueHintVisible(false), 3000);
+        }
+      })
+      .catch(() => {
+        /* no history is fine */
+      });
+  }, [session.id, session.status, historyAttempted, entries.length]);
+
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
   useEffect(() => {
@@ -3322,10 +3373,34 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         appendMeta(prev, nextEntryId("websocket-error"), "websocket error", undefined, "error"),
       );
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       flushStdoutBuffer();
       setRunning(false);
-      setRunStatus((prev) => (prev === "running" ? "done" : prev));
+      // 1000 = normal close, 1005 = no status (most cancel/done paths since
+      // we call ws.close() with no code), 1001 = going away (page nav).
+      // Anything else mid-run we surface as a connection error so the user
+      // knows to resend rather than waiting on a silent dropped run.
+      const abnormal =
+        event.code !== 1000 && event.code !== 1005 && event.code !== 1001;
+      // Use functional setter so we read the latest runStatus, not the
+      // closure value from when the WS was created.
+      setRunStatus((prev) => {
+        if (abnormal && prev === "running") {
+          setEntries((entries) =>
+            appendMeta(
+              entries,
+              nextEntryId("ws-close"),
+              "Connection lost",
+              `WebSocket closed with code ${event.code}${
+                event.reason ? ` — ${event.reason}` : ""
+              }. Resend to continue.`,
+              "error",
+            ),
+          );
+          return "error";
+        }
+        return prev === "running" ? "done" : prev;
+      });
     };
   }
 
@@ -3755,11 +3830,18 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             </p>
           </div>
         ) : (
-          <RunMessages
-            entries={entries}
-            showThinking={runPrefs.showThinking}
-            autoExpandTools={runPrefs.autoExpandTools}
-          />
+          <>
+            {continueHintVisible && (
+              <div className="run-continue-hint" role="status">
+                Continuing previous conversation
+              </div>
+            )}
+            <RunMessages
+              entries={entries}
+              showThinking={runPrefs.showThinking}
+              autoExpandTools={runPrefs.autoExpandTools}
+            />
+          </>
         )}
       </main>
 

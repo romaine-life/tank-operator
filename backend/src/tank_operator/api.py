@@ -695,6 +695,45 @@ async def walk_session_files(
     )
 
 
+@app.get("/api/sessions/{session_id}/run/history")
+async def get_run_history(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> Response:
+    """Stream the most recent claude-code session JSONL out of the session
+    pod. Used by HeadlessRun on mount as a fallback when localStorage is
+    empty (different browser, cleared cache, etc).
+
+    Returns ndjson body. Empty body when no history exists yet — frontend
+    treats that as "no prior conversation".
+    """
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    # claude-code persists each session at
+    # ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl. We don't track the
+    # uuid → tank session mapping yet; for now return the most recently
+    # modified jsonl in any project subdir, which corresponds to the last
+    # `claude -p` invocation on the pod.
+    cmd = [
+        "bash",
+        "-lc",
+        "ls -t /home/node/.claude/projects/*/*.jsonl 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null",
+    ]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError:
+        out = b""
+    return Response(content=out, media_type="application/x-ndjson")
+
+
 @app.get("/api/sessions/{session_id}/files/raw")
 async def get_session_file_raw(
     session_id: str,
