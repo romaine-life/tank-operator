@@ -48,18 +48,6 @@ for _entry in os.environ.get("K8S_AUTH_ALLOWED_SUBJECTS", "").split(","):
     if _sa and _email:
         K8S_AUTH_SUBJECT_TO_EMAIL[_sa] = _email
 
-# Slot-1 dev hot-load fallback. The orchestrator pod we're hot-loading
-# into wasn't deployed with K8S_AUTH_ALLOWED_SUBJECTS set, and adding it
-# would trigger a pod restart that wipes /opt/live-pkg. Hardcoding the
-# slot-1 smoke-SA mapping here keeps the auth bypass functional for
-# in-cluster Playwright probes against tank-slot-1.tank.dev.romaine.life
-# without requiring a new image. Remove this block before merging — prod
-# render-test-env.sh already wires the env var.
-if not K8S_AUTH_SUBJECT_TO_EMAIL:
-    K8S_AUTH_SUBJECT_TO_EMAIL = {
-        "system:serviceaccount:tank-slot-1-sessions:smoke": "nelson@romaine.life",
-    }
-
 # Match kill-me's posture: `common` JWKS endpoint, regex issuer match. Lets
 # any Microsoft user attempt to sign in; the email allowlist is the gate.
 _JWKS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
