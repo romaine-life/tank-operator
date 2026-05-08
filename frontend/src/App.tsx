@@ -1745,6 +1745,86 @@ function humanFileSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** Map a filename to a syntax-highlighter language hint. Streamdown
+ *  pipes through Prism so common short identifiers work out of the box. */
+function syntaxLangForPath(path: string): string {
+  const lower = path.toLowerCase();
+  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
+  const name = lower.slice(lower.lastIndexOf("/") + 1);
+  // Special-cased filenames first.
+  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
+  if (name === "makefile") return "makefile";
+  if (name === ".gitignore" || name.endsWith(".gitignore")) return "ini";
+  if (name.endsWith(".env") || name === ".env") return "ini";
+  // Then by extension. Limited to common cases — Prism falls back to plain
+  // text on unknown lang, which is fine.
+  return (
+    {
+      ts: "ts",
+      tsx: "tsx",
+      js: "js",
+      jsx: "jsx",
+      mjs: "js",
+      cjs: "js",
+      py: "python",
+      rb: "ruby",
+      go: "go",
+      rs: "rust",
+      java: "java",
+      kt: "kotlin",
+      cs: "csharp",
+      cpp: "cpp",
+      cc: "cpp",
+      c: "c",
+      h: "c",
+      hpp: "cpp",
+      sh: "bash",
+      bash: "bash",
+      zsh: "bash",
+      fish: "bash",
+      yml: "yaml",
+      yaml: "yaml",
+      json: "json",
+      jsonc: "json",
+      md: "markdown",
+      mdx: "markdown",
+      sql: "sql",
+      html: "html",
+      htm: "html",
+      xml: "xml",
+      svg: "xml",
+      css: "css",
+      scss: "scss",
+      sass: "sass",
+      less: "less",
+      tf: "hcl",
+      hcl: "hcl",
+      toml: "toml",
+      lua: "lua",
+      php: "php",
+      swift: "swift",
+      dart: "dart",
+      ex: "elixir",
+      exs: "elixir",
+      erl: "erlang",
+      hs: "haskell",
+      r: "r",
+      scala: "scala",
+      vue: "html",
+      svelte: "html",
+      proto: "protobuf",
+      graphql: "graphql",
+      gql: "graphql",
+    }[ext] ?? "text"
+  );
+}
+
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
+function isImagePath(path: string): boolean {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  return IMAGE_EXTS.has(ext);
+}
 type RunComposerMode =
   | "default"
   | "acceptEdits"
@@ -2995,6 +3075,14 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                     <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
                     <span>Loading…</span>
                   </div>
+                ) : selectedFile.binary && isImagePath(selectedFile.path) ? (
+                  <div className="run-files-viewer-image-wrap">
+                    <img
+                      className="run-files-viewer-image"
+                      alt={selectedFile.path}
+                      src={`/api/sessions/${session.id}/files/raw?path=${encodeURIComponent(selectedFile.path)}`}
+                    />
+                  </div>
                 ) : selectedFile.binary ? (
                   <div className="run-files-status">
                     <FileIcon size={14} aria-hidden="true" />
@@ -3046,17 +3134,40 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                     )}
                     {/* Editable when not truncated. Truncated reads aren't
                         safe to overwrite — would silently destroy the
-                        unread tail. */}
+                        unread tail. Read-only highlighted view when the
+                        user hasn't started editing yet (fileDraft==null);
+                        switches to the textarea on first focus. */}
                     {selectedFile.truncated ? (
-                      <pre className="run-files-viewer-content">
-                        {selectedFile.text}
-                      </pre>
+                      <div className="run-files-viewer-content">
+                        <Streamdown>
+                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
+                        </Streamdown>
+                      </div>
+                    ) : fileDraft == null ? (
+                      <div
+                        className="run-files-viewer-content run-files-viewer-readonly"
+                        onClick={() => setFileDraft(selectedFile.text)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setFileDraft(selectedFile.text);
+                          }
+                        }}
+                        title="Click to edit"
+                      >
+                        <Streamdown>
+                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
+                        </Streamdown>
+                      </div>
                     ) : (
                       <textarea
                         className="run-files-viewer-content run-files-viewer-editor"
-                        value={fileDraft ?? selectedFile.text}
+                        value={fileDraft}
                         onChange={(e) => setFileDraft(e.target.value)}
                         spellCheck={false}
+                        autoFocus
                       />
                     )}
                   </>
@@ -3066,7 +3177,8 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
           </div>
         ) : !ready ? (
           <div className="run-empty">
-            <span className="run-muted">waiting for session pod</span>
+            <Loader2Icon size={20} className="run-spin" aria-hidden="true" />
+            <span className="run-muted">waiting for session pod…</span>
           </div>
         ) : entries.length === 0 ? (
           <div className="run-empty run-empty-launchpad">

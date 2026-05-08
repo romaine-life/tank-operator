@@ -2137,15 +2137,19 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
-/* Composer textarea — taller, more breathing room. */
+/* Composer textarea — taller, more breathing room. Auto-grows with
+   content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {
-  min-height: 4.5rem !important;
+  min-height: 3rem !important;
+  max-height: 14rem !important;
   padding: 0.75rem 1rem !important;
   font-family: var(--font-primary) !important;
   font-size: var(--text-sm) !important;
   color: var(--text-primary) !important;
   background: transparent !important;
   border: none !important;
+  line-height: 1.5;
+  overflow-y: auto;
 }
 
 .run-composer-textarea::placeholder {
@@ -2583,6 +2587,41 @@ button:disabled {
   color: var(--text-body);
   background: var(--bg-base, #0a0a0a);
   white-space: pre;
+}
+
+/* Read-only viewer wraps a Streamdown code-block. Reset the pre styles
+   the markdown renderer adds so the block fills the viewer pane. */
+.run-files-viewer-readonly {
+  white-space: normal;
+  cursor: text;
+}
+
+.run-files-viewer-readonly pre,
+.run-files-viewer-readonly [data-streamdown="code-block"] {
+  margin: 0;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+}
+
+.run-files-viewer-image-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background:
+    repeating-conic-gradient(rgba(255, 255, 255, 0.025) 0% 25%, transparent 0% 50%) 50% / 16px 16px,
+    var(--bg-base, #0a0a0a);
+}
+
+.run-files-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 0.4rem;
 }
 
 textarea.run-files-viewer-editor {

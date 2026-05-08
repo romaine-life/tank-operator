@@ -16,6 +16,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi import Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -692,6 +693,48 @@ async def walk_session_files(
         paths=list(body.get("paths") or []),
         truncated=bool(body.get("truncated")),
     )
+
+
+@app.get("/api/sessions/{session_id}/files/raw")
+async def get_session_file_raw(
+    session_id: str,
+    path: str,
+    user: User = Depends(current_user),
+) -> Response:
+    """Stream a raw file from /workspace as bytes — used by the file
+    viewer to render images. Capped at MAX_UPLOAD_BYTES (8 MiB).
+    """
+    abs_path = _safe_workspace_path(path)
+    if abs_path == WORKSPACE_ROOT:
+        raise HTTPException(status_code=400, detail="cannot read directory")
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    cmd = ["head", "-c", str(MAX_UPLOAD_BYTES), "--", abs_path]
+    try:
+        data = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=f"file not found: {exc}")
+    # Pick a content-type from the extension. Defensively narrow to the
+    # set the file viewer actually requests; everything else gets octet.
+    ext = abs_path.rsplit(".", 1)[-1].lower() if "." in abs_path else ""
+    ctype = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "svg": "image/svg+xml",
+        "bmp": "image/bmp",
+    }.get(ext, "application/octet-stream")
+    return Response(content=data, media_type=ctype)
 
 
 @app.put("/api/sessions/{session_id}/files/content", response_model=FileContent)
