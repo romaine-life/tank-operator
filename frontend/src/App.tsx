@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  ArrowDownIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -43,6 +44,7 @@ import {
   SquarePenIcon,
   TerminalIcon,
   WrenchIcon,
+  XIcon,
   type LucideIcon,
 } from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
@@ -1904,7 +1906,15 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
+  // Composer text mirror — used to know when the input has content (drives
+  // hint fade + clear-X visibility) without making the textarea controlled.
+  const [composerText, setComposerText] = useState("");
+  // Auto-scroll bookkeeping — track whether the user has scrolled away from
+  // the bottom; if so, suppress auto-scroll on new entries and offer the
+  // floating "scroll to bottom" button.
+  const [userScrolledUp, setUserScrolledUp] = useState(false);
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
 
@@ -1937,6 +1947,29 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [running]);
+
+  // Auto-scroll the transcript to the bottom when entries grow, unless
+  // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
+  // + wheel-detection behaviour.
+  useEffect(() => {
+    if (userScrolledUp) return;
+    const main = transcriptScrollRef.current;
+    if (!main) return;
+    main.scrollTop = main.scrollHeight;
+  }, [entries.length, userScrolledUp]);
+
+  // Detect user scroll-away from the bottom. Threshold of 24px so small
+  // overshoots (image loads) don't disable auto-scroll.
+  useEffect(() => {
+    const main = transcriptScrollRef.current;
+    if (!main) return;
+    const onScroll = () => {
+      const distanceFromBottom = main.scrollHeight - main.scrollTop - main.clientHeight;
+      setUserScrolledUp(distanceFromBottom > 24);
+    };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
 
   // Persist transcript entries per-session in localStorage. Survives page
   // refresh; restored on initial state via loadStoredEntries above.
@@ -1979,11 +2012,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     return () => window.removeEventListener("keydown", onKey, true);
   }, [running, slashOpen]);
 
-  // Slash-palette typing detection. Listens at the composer wrap; reads
-  // the textarea's value + cursor on every event to recompute the active
-  // slash context. Only resets the selection index when the query
-  // actually changes — otherwise ArrowDown nav would snap back to 0 on
-  // every keyup.
+  // Slash-palette typing detection + composer-text mirror. Listens at the
+  // composer wrap; reads the textarea's value + cursor on every event to
+  // recompute the active slash context AND keep `composerText` in sync.
+  // The mirror drives hint fade + clear-X visibility without making the
+  // textarea controlled (which would conflict with PromptInput's form).
   useEffect(() => {
     const wrap = composerWrapRef.current;
     if (!wrap) return;
@@ -1991,8 +2024,10 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       const ta = wrap.querySelector("textarea") as HTMLTextAreaElement | null;
       if (!ta) {
         setSlashOpen(false);
+        setComposerText("");
         return;
       }
+      setComposerText(ta.value);
       const ctx = findSlashContext(ta);
       if (ctx) {
         setSlashOpen(true);
@@ -2266,6 +2301,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             aria-selected={activeTab === "chat"}
             className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("chat")}
+            title="Conversation with the agent"
           >
             <MessageSquareIcon className="run-tab-icon" aria-hidden="true" />
             <span>Chat</span>
@@ -2276,6 +2312,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             aria-selected={activeTab === "shell"}
             className={`run-tab${activeTab === "shell" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("shell")}
+            title="Interactive bash shell in the session pod"
           >
             <TerminalIcon className="run-tab-icon" aria-hidden="true" />
             <span>Shell</span>
@@ -2286,6 +2323,7 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             aria-selected={activeTab === "files"}
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("files")}
+            title="Browse files in /workspace"
           >
             <FolderIcon className="run-tab-icon" aria-hidden="true" />
             <span>Files</span>
@@ -2293,7 +2331,10 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         </nav>
       </header>
 
-      <main className={`run-main run-main-${runStatus}`}>
+      <main
+        className={`run-main run-main-${runStatus}`}
+        ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+      >
         {activeTab === "shell" ? (
           <div className="run-shell">
             <Terminal
@@ -2412,6 +2453,24 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             <kbd className="run-status-kbd">ESC</kbd>
           </button>
         </div>
+      )}
+
+      {/* Floating scroll-to-bottom button — appears when the transcript
+          has been scrolled up. Snaps the user back to the latest message
+          and re-enables auto-scroll. */}
+      {activeTab === "chat" && userScrolledUp && entries.length > 0 && (
+        <button
+          type="button"
+          className="run-scroll-to-bottom"
+          onClick={() => {
+            const main = transcriptScrollRef.current;
+            if (main) main.scrollTop = main.scrollHeight;
+            setUserScrolledUp(false);
+          }}
+          aria-label="Scroll to latest"
+        >
+          <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+        </button>
       )}
 
       {activeTab === "chat" && (
@@ -2575,9 +2634,38 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
                   </span>
                 </span>
               </PromptInputTools>
-              <span className="run-composer-hint">
+              <span
+                className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
+              >
                 Enter to send · Shift+Enter for new line · / for slash commands
               </span>
+              {composerText.length > 0 && (
+                <button
+                  type="button"
+                  className="run-composer-clear"
+                  aria-label="Clear input"
+                  onMouseDown={(e) => {
+                    // mousedown so the button doesn't blur the textarea
+                    // before the click reaches it (which would also
+                    // close the slash palette via blur).
+                    e.preventDefault();
+                    const wrap = composerWrapRef.current;
+                    const ta = wrap?.querySelector("textarea") as
+                      | HTMLTextAreaElement
+                      | null;
+                    if (!ta) return;
+                    const setter = Object.getOwnPropertyDescriptor(
+                      window.HTMLTextAreaElement.prototype,
+                      "value",
+                    )?.set;
+                    setter?.call(ta, "");
+                    ta.dispatchEvent(new Event("input", { bubbles: true }));
+                    ta.focus();
+                  }}
+                >
+                  <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+                </button>
+              )}
               <PromptInputSubmit
                 className="run-submit-btn"
                 status={submitStatus}

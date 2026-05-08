@@ -1643,6 +1643,7 @@ button:disabled {
   min-height: 0;
   background: var(--bg-base, #0a0a0a);
   font-family: var(--font-primary);
+  position: relative;
 }
 
 /* Header bar — session title left, tab nav right. */
@@ -1946,6 +1947,63 @@ button:disabled {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: opacity var(--motion-fast, 180ms) ease;
+}
+
+/* Fades out once the composer has any content. */
+.run-composer-hint-faded {
+  opacity: 0.32;
+}
+
+/* Clear-input X — sits between the hint and the send button. */
+.run-composer-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-composer-clear:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+/* Floating "scroll to latest" button — pinned bottom-right of the chat
+   pane while the user is scrolled away from the bottom. */
+.run-scroll-to-bottom {
+  position: absolute;
+  right: calc(var(--space-5) + 0.5rem);
+  bottom: 6.5rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 17, 21, 0.92);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  transition:
+    background var(--motion-fast, 140ms) ease,
+    border-color var(--motion-fast, 140ms) ease;
+}
+
+.run-scroll-to-bottom:hover {
+  background: rgba(30, 33, 39, 0.96);
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 /* Composer textarea — taller, more breathing room. */
