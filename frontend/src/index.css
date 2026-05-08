@@ -1703,6 +1703,38 @@ button:disabled {
   letter-spacing: -0.01em;
 }
 
+.run-header-name-btn {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  margin: 0;
+  letter-spacing: -0.01em;
+  cursor: text;
+  border-radius: var(--radius-sm);
+}
+.run-header-name-btn:hover { color: var(--text-primary); opacity: 0.75; }
+
+.run-header-name-input {
+  background: transparent;
+  border: 1px solid var(--gray-700);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+  font-family: var(--font-primary);
+  font-weight: 600;
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  min-width: 0;
+  width: 16rem;
+  outline: none;
+}
+.run-header-name-input:focus { border-color: var(--accent); }
+.run-header-name-input::placeholder { color: var(--text-faint); opacity: 1; }
+
 .run-header-sub {
   font-size: var(--text-xs);
   color: var(--text-muted);
