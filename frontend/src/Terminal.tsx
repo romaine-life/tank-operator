@@ -479,6 +479,10 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
         return false;
       }
 
+      if (event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        return false;
+      }
+
       if (!mode.startsWith("codex_")) return true;
 
       if (event.key === "PageUp") {
