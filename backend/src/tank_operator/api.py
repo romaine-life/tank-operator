@@ -45,6 +45,7 @@ from .exec_proxy import (
     exec_stream_to_websocket,
     exec_write_file,
 )
+from .internal_api import build_router as build_internal_router
 from .profiles import ProfileStore, SessionRegistryStore
 from .sessions import (
     CODEX_HEADLESS_MODE,
@@ -90,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(build_internal_router(sessions, profiles))
 
 
 class LoginBody(BaseModel):

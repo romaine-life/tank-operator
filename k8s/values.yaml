@@ -133,6 +133,15 @@ cosmos:
 github:
   appSlug: tank-operator-romaine-life
 
+# Cluster operator email — the user whose romaine-life-app installation is
+# the "host" fallback when a non-host session pod touches a host-owned repo
+# via mcp-github (#57 stage 3). Empty means no host: every caller goes
+# through the user-facing tank-operator-romaine-life App. Must match the
+# tank-operator/owner-email annotation that session pods carry, which the
+# orchestrator stamps from the signed-in user's email.
+host:
+  email: nelson@romaine.life
+
 externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore

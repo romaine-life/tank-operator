@@ -72,6 +72,22 @@ roleRef:
   kind: ClusterRole
   name: system:auth-delegator
 ---
+# Orchestrator SA needs auth-delegator so the /api/internal/resolve-caller
+# endpoint can call TokenReview to validate inbound mcp-github SA tokens
+# (#57 stage 3). Same primitive kube-rbac-proxy uses for session→MCP traffic.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.orchestrator.serviceAccount }}-auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.orchestrator.serviceAccount }}
+    namespace: {{ .Values.namespaces.orchestrator }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+---
 # Session SA gets cluster-admin so an in-cluster Claude session can act on
 # the cluster directly (patch finalizers, delete wedged releases, edit
 # shared infra) instead of asking the user to run every kubectl by hand.
