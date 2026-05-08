@@ -157,8 +157,8 @@ def _build_headless_script(
     quoted_path = _shlex.quote(prompt_path)
     return (
         f"bash /opt/tank/headless-run.sh {provider} {quoted_path} "
-        f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}' "
-        f"</dev/null; rc=$?; rm -f {quoted_path}; exit $rc"
+        f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}'"
+        f"; rc=$?; rm -f {quoted_path}; exit $rc"
     )
 
 
