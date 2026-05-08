@@ -1856,6 +1856,29 @@ button:disabled {
   max-width: 32rem;
 }
 
+.run-empty-kbd {
+  margin: 0.25rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.run-empty-kbd kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+}
+
 /* Composer footer at the bottom of the chat pane. */
 .run-composer-wrap {
   flex: 0 0 auto;
@@ -2110,7 +2133,8 @@ button:disabled {
 }
 
 /* Floating "scroll to latest" button — pinned bottom-right of the chat
-   pane while the user is scrolled away from the bottom. */
+   pane while the user is scrolled away from the bottom. Uses opacity +
+   translate transition so it fades in/out instead of snapping. */
 .run-scroll-to-bottom {
   position: absolute;
   right: calc(var(--space-5) + 0.5rem);
@@ -2127,9 +2151,19 @@ button:disabled {
   cursor: pointer;
   box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
   z-index: 5;
+  transform: translateY(0);
+  opacity: 1;
   transition:
+    opacity var(--motion-base, 200ms) ease,
+    transform var(--motion-base, 200ms) ease,
     background var(--motion-fast, 140ms) ease,
     border-color var(--motion-fast, 140ms) ease;
+}
+
+.run-scroll-to-bottom-hidden {
+  opacity: 0;
+  transform: translateY(0.4rem);
+  pointer-events: none;
 }
 
 .run-scroll-to-bottom:hover {

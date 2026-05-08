@@ -2840,6 +2840,25 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
+  // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
+  // cloudcli's keyboard shortcut hint.
+  useEffect(() => {
+    if (activeTab !== "chat") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        // Open the trigger by clicking it — the dropdown manages its
+        // own open state internally via Radix.
+        const trigger = composerWrapRef.current?.parentElement?.querySelector(
+          ".run-provider-card",
+        ) as HTMLButtonElement | null;
+        trigger?.click();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeTab]);
+
   // Streaming-pill computeds — only meaningful while running.
   const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
   const elapsedLabel = formatStreamElapsed(elapsedMs);
@@ -2864,7 +2883,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             onClick={() => setActiveTab("chat")}
             title="Conversation with the agent"
           >
-            <MessageSquareIcon className="run-tab-icon" aria-hidden="true" />
+            <MessageSquareIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
             <span>Chat</span>
           </button>
           <button
@@ -2875,7 +2898,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             onClick={() => setActiveTab("shell")}
             title="Interactive bash shell in the session pod"
           >
-            <TerminalIcon className="run-tab-icon" aria-hidden="true" />
+            <TerminalIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "shell" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
             <span>Shell</span>
           </button>
           <button
@@ -2886,7 +2913,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             onClick={() => setActiveTab("files")}
             title="Browse files in /workspace"
           >
-            <FolderIcon className="run-tab-icon" aria-hidden="true" />
+            <FolderIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "files" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
             <span>Files</span>
           </button>
           <DropdownMenu>
@@ -3214,6 +3245,9 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
             <p className="run-empty-status">
               Ready to use {selectedModel.label}. Start typing your message below.
             </p>
+            <p className="run-empty-kbd">
+              Press <kbd>⌘K</kbd> to switch model
+            </p>
           </div>
         ) : (
           <AgentTranscript
@@ -3281,13 +3315,16 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
         </div>
       )}
 
-      {/* Floating scroll-to-bottom button — appears when the transcript
+      {/* Floating scroll-to-bottom button — fades in when the transcript
           has been scrolled up. Snaps the user back to the latest message
-          and re-enables auto-scroll. */}
-      {activeTab === "chat" && userScrolledUp && entries.length > 0 && (
+          and re-enables auto-scroll. Always rendered so the opacity
+          transition reads cleanly; pointer-events handled in CSS. */}
+      {activeTab === "chat" && entries.length > 0 && (
         <button
           type="button"
-          className="run-scroll-to-bottom"
+          className={`run-scroll-to-bottom${
+            userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
+          }`}
           onClick={() => {
             const main = transcriptScrollRef.current;
             if (main) main.scrollTop = main.scrollHeight;
