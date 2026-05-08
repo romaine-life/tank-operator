@@ -3109,11 +3109,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
     if (!slashOpen) return;
     const onKey = (e: KeyboardEvent) => {
       const filtered = filterSlashCommands(slashQuery);
-      if (e.key === "ArrowDown") {
+      if (e.key === "ArrowDown" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         setSlashIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === "ArrowUp" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         setSlashIndex((i) =>
@@ -3142,11 +3142,11 @@ function HeadlessRun({ session, visible }: { session: Session; visible: boolean 
       const filtered = mentionPaths
         ? filterMentionPaths(mentionPaths, mentionQuery)
         : [];
-      if (e.key === "ArrowDown") {
+      if (e.key === "ArrowDown" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         setMentionIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
-      } else if (e.key === "ArrowUp") {
+      } else if (e.key === "ArrowUp" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         setMentionIndex((i) =>
