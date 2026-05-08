@@ -1568,6 +1568,18 @@ function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
   });
 }
 
+function toolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .map((b) => (isJsonObject(b) && b.type === "text" && typeof b.text === "string" ? b.text : ""))
+      .filter(Boolean)
+      .join("\n");
+    return text || shortJson(content);
+  }
+  return shortJson(content);
+}
+
 function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const message = event.message;
   if (!isJsonObject(message) || !Array.isArray(message.content)) return entries;
@@ -1581,7 +1593,7 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
       kind: "tool",
       toolName: existing?.toolName ?? "tool result",
       toolInput: existing?.toolInput,
-      toolOutput: shortJson(block.content),
+      toolOutput: toolResultText(block.content),
       toolStatus: block.is_error === true ? "failed" : "completed",
       time: existing?.time ?? nowIso(),
     });
@@ -1626,11 +1638,21 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
     // (the frontend adds the user bubble directly in startRun). Use text
     // deduplication so re-running this during live streaming is a no-op.
     const message = event.message;
-    if (isJsonObject(message) && Array.isArray(message.content)) {
-      for (const block of message.content as unknown[]) {
-        if (!isJsonObject(block) || block.type !== "text") continue;
-        const text = typeof block.text === "string" ? block.text.trim() : "";
-        if (text && !nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
+    if (isJsonObject(message)) {
+      const texts: string[] = [];
+      if (typeof message.content === "string") {
+        // Initial prompt stored as a plain string.
+        const t = message.content.trim();
+        if (t) texts.push(t);
+      } else if (Array.isArray(message.content)) {
+        for (const block of message.content as unknown[]) {
+          if (!isJsonObject(block) || block.type !== "text") continue;
+          const t = typeof block.text === "string" ? block.text.trim() : "";
+          if (t) texts.push(t);
+        }
+      }
+      for (const text of texts) {
+        if (!nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
           nextEntries = [
             ...nextEntries,
             {
