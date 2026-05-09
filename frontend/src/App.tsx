@@ -3537,7 +3537,11 @@ function HeadlessRun({
   }
 
   function cancelRun() {
-    wsRef.current?.close();
+    const ws = wsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ cancel: true }));
+    }
+    ws?.close();
     wsRef.current = null;
     setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
     activeToolNameRef.current = null;
