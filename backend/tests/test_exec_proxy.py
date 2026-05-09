@@ -18,6 +18,7 @@ from tank_operator import exec_proxy  # noqa: E402
 class _FakeBrowser:
     def __init__(self, first_message: str | None = None) -> None:
         self.sent: list[dict[str, object]] = []
+        self.closed = False
         self._first_message = first_message
 
     async def receive_text(self) -> str:
@@ -29,6 +30,9 @@ class _FakeBrowser:
 
     async def send_json(self, payload: dict[str, object]) -> None:
         self.sent.append(payload)
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed = True
 
 
 class _FakeK8sWs:

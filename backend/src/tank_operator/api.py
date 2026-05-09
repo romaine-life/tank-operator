@@ -128,6 +128,7 @@ import shlex as _shlex
 _HEADLESS_ARG_PATTERN = _re_arg.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
 _RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
+_SESSION_EVENTS_KEEPALIVE_SECONDS = 10
 
 
 def _validate_headless_arg(value: str | None) -> str:
@@ -450,7 +451,9 @@ async def session_events_stream(
             yield "event: ready\ndata: {}\n\n"
             while not await request.is_disconnected():
                 try:
-                    await asyncio.wait_for(queue.get(), timeout=25)
+                    await asyncio.wait_for(
+                        queue.get(), timeout=_SESSION_EVENTS_KEEPALIVE_SECONDS
+                    )
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
