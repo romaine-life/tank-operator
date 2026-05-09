@@ -88,18 +88,32 @@ class PodNotReady(Exception):
     pass
 
 
+API_KEY_MODE = "api_key"
+CLAUDE_CLI_MODE = "claude_cli"
+CLAUDE_GUI_MODE = "claude_gui"
+CODEX_CLI_MODE = "codex_cli"
+CODEX_GUI_MODE = "codex_gui"
+PI_CLI_MODE = "pi_cli"
+SESSION_MODE_ALIASES = {
+    "subscription": CLAUDE_CLI_MODE,
+    "subscription_headless": CLAUDE_GUI_MODE,
+    "codex_subscription": CODEX_CLI_MODE,
+    "codex_headless": CODEX_GUI_MODE,
+    "pi_subscription": PI_CLI_MODE,
+}
 SESSION_MODES = (
-    "api_key",
-    "subscription",
+    API_KEY_MODE,
+    CLAUDE_CLI_MODE,
+    CLAUDE_GUI_MODE,
     "config",
     "codex_config",
-    "codex_subscription",
-    "codex_headless",
+    CODEX_CLI_MODE,
+    CODEX_GUI_MODE,
     "pi_config",
-    "pi_subscription",
-    "subscription_headless",
+    PI_CLI_MODE,
 )
-DEFAULT_SESSION_MODE = "subscription"
+ACCEPTED_SESSION_MODES = SESSION_MODES + tuple(SESSION_MODE_ALIASES)
+DEFAULT_SESSION_MODE = CLAUDE_CLI_MODE
 # Config mode: a one-shot pod the user logs into via `claude /login` to seed
 # the OAuth credentials in KV. Differs from regular sessions in three ways:
 # (1) no credentials are pre-seeded into the pod (we're harvesting, not
@@ -136,10 +150,10 @@ CODEX_CONFIG_MODE = "codex_config"
 # sidecar (sufficient if OpenAI doesn't rotate refresh_tokens) or a
 # centralized codex-api-proxy that single-flights refresh (mandatory if it
 # does). Determined by observing rotation behavior in a codex_config pod.
-CODEX_SUBSCRIPTION_MODE = "codex_subscription"
-CODEX_HEADLESS_MODE = "codex_headless"
+CODEX_SUBSCRIPTION_MODE = CODEX_CLI_MODE
+CODEX_HEADLESS_MODE = CODEX_GUI_MODE
 CODEX_CREDS_SECRET = os.environ.get("CODEX_CREDS_SECRET", "codex-credentials")
-SUBSCRIPTION_HEADLESS_MODE = "subscription_headless"
+SUBSCRIPTION_HEADLESS_MODE = CLAUDE_GUI_MODE
 # Pi-config is a disposable Pi login sandbox. Pi-subscription curates
 # Tank-backed Claude/Codex subscriptions into Pi's auth.json at pod startup so
 # the launcher only needs one Pi option while Pi still sees multiple providers.
@@ -152,7 +166,7 @@ SUBSCRIPTION_HEADLESS_MODE = "subscription_headless"
 # multi-provider work: Qwen/Kimi/DeepSeek, OpenRouter, Bedrock/Vertex/Azure
 # gateways, or self-hosted OpenAI-compatible endpoints.
 PI_CONFIG_MODE = "pi_config"
-PI_SUBSCRIPTION_MODE = "pi_subscription"
+PI_SUBSCRIPTION_MODE = PI_CLI_MODE
 # Modes that must reach the real internet directly (no platform.claude.com /
 # api.anthropic.com hijack). Adding a Claude hostAlias to a config or codex
 # pod would 404 the OAuth endpoints they're trying to reach. pi_subscription
@@ -188,6 +202,14 @@ HEADLESS_MODES = frozenset({SUBSCRIPTION_HEADLESS_MODE, CODEX_HEADLESS_MODE})
 # K8s allows up to ~256 KB of annotations per object — we cap inbound names
 # well below that for UI sanity.
 NAME_ANNOTATION = "tank-operator/display-name"
+
+
+def normalize_session_mode(mode: str | None) -> str:
+    """Return the canonical mode name while accepting legacy API/pod values."""
+    raw = mode or DEFAULT_SESSION_MODE
+    return SESSION_MODE_ALIASES.get(raw, raw)
+
+
 MAX_NAME_LENGTH = 80
 GLIMMUNG_CONTEXT_ANNOTATION = "tank-operator/glimmung-context"
 TEST_STATE_ANNOTATION = "tank-operator/test-state"
@@ -366,6 +388,7 @@ class SessionManager:
         mode: str,
         glimmung_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        mode = normalize_session_mode(mode)
         owner_label = _owner_label(owner)
         pod_name = f"session-{session_id}"
         argocd_tracking_id = (
@@ -651,6 +674,7 @@ class SessionManager:
         requested_at: str | None = None,
     ) -> SessionInfo:
         assert self._core is not None
+        mode = normalize_session_mode(mode)
         if mode not in SESSION_MODES:
             raise ValueError(f"unknown session mode: {mode!r}")
         request_started_at = requested_at or _now_iso()
@@ -733,7 +757,8 @@ class SessionManager:
         from .exec_proxy import exec_launch_detached, exec_write_file
 
         session = await self.get_session(owner=owner, session_id=session_id)
-        if session.mode not in HEADLESS_MODES:
+        mode = normalize_session_mode(session.mode)
+        if mode not in HEADLESS_MODES:
             raise ValueError(
                 f"session mode {session.mode!r} does not support headless dispatch"
             )
@@ -746,7 +771,7 @@ class SessionManager:
         if permission_mode and not safe_pm:
             raise ValueError("invalid permission_mode")
 
-        provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+        provider = "codex" if mode == CODEX_HEADLESS_MODE else "claude"
         prompt_path = _new_prompt_path()
         log_path = f"/tmp/tank-headless-{uuid.uuid4().hex[:12]}.log"
         await exec_write_file(
@@ -789,8 +814,8 @@ class SessionManager:
             await self._registry.upsert(
                 email=owner,
                 session_id=session_id,
-                mode=pod.metadata.labels.get(
-                    "tank-operator/mode", DEFAULT_SESSION_MODE
+                mode=normalize_session_mode(
+                    pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
                 ),
                 pod_name=pod.metadata.name,
                 name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
@@ -814,7 +839,9 @@ class SessionManager:
         pod.
         """
         pod = await self._read_owned_pod(owner, session_id)
-        mode = pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        mode = normalize_session_mode(
+            pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        )
         return SessionInfo(
             id=session_id,
             pod_name=pod.metadata.name,
@@ -857,7 +884,9 @@ class SessionManager:
             namespace=SESSIONS_NAMESPACE,
             body={"metadata": {"annotations": {NAME_ANNOTATION: annotation_value}}},
         )
-        mode = patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        mode = normalize_session_mode(
+            patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        )
         info = SessionInfo(
             id=session_id,
             pod_name=patched.metadata.name,
@@ -925,7 +954,9 @@ class SessionManager:
                 "metadata": {"annotations": {TEST_STATE_ANNOTATION: annotation_value}}
             },
         )
-        mode = patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        mode = normalize_session_mode(
+            patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        )
         info = SessionInfo(
             id=session_id,
             pod_name=patched.metadata.name,
@@ -1174,7 +1205,9 @@ def _session_info_from_pod(owner: str, pod: Any) -> SessionInfo:
         pod_name=pod.metadata.name,
         owner=owner,
         status=_pod_status(pod),
-        mode=pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE),
+        mode=normalize_session_mode(
+            pod.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        ),
         requested_at=_pod_created_at(pod),
         created_at=_pod_created_at(pod),
         ready_at=_pod_ready_at(pod),
@@ -1192,7 +1225,7 @@ def _session_info_from_record(
             pod_name=pod.metadata.name,
             owner=owner,
             status=_pod_status(pod),
-            mode=record.mode,
+            mode=normalize_session_mode(record.mode),
             requested_at=record.requested_at
             or record.created_at
             or _pod_created_at(pod),
@@ -1206,7 +1239,7 @@ def _session_info_from_record(
         pod_name=record.pod_name,
         owner=owner,
         status="Failed",
-        mode=record.mode,
+        mode=normalize_session_mode(record.mode),
         requested_at=record.requested_at or record.created_at,
         created_at=record.created_at,
         ready_at=None,

@@ -189,7 +189,7 @@ def test_session_registry_scope_isolates_environments() -> None:
         slot.upsert(
             email="operator@example.test",
             session_id="shared-id",
-            mode="subscription_headless",
+            mode="claude_gui",
             pod_name="session-slot",
         )
     )
@@ -300,11 +300,11 @@ def test_plain_session_has_no_glimmung_context_annotation() -> None:
     assert _claude_env(manifest)["TANK_GLIMMUNG_CONTEXT_JSON"] == ""
 
 
-def test_pi_subscription_uses_pi_image_and_mounts_codex_credentials() -> None:
+def test_pi_cli_uses_pi_image_and_mounts_codex_credentials() -> None:
     manifest = SessionManager()._pod_manifest(
         "abc123",
         owner="operator@example.test",
-        mode="pi_subscription",
+        mode="pi_cli",
     )
 
     assert _claude_container(manifest)["image"].endswith("/pi-container:latest")
@@ -327,7 +327,7 @@ def test_headless_codex_uses_codex_image_and_mounts_credentials() -> None:
     manifest = SessionManager()._pod_manifest(
         "abc123",
         owner="operator@example.test",
-        mode="codex_headless",
+        mode="codex_gui",
     )
 
     assert _claude_container(manifest)["image"].endswith("/codex-container:latest")
@@ -350,7 +350,7 @@ def test_headless_claude_keeps_anthropic_proxy_plumbing() -> None:
     manifest = manager._pod_manifest(
         "abc123",
         owner="operator@example.test",
-        mode="subscription_headless",
+        mode="claude_gui",
     )
 
     assert _pod_spec(manifest)["hostAliases"] == [
@@ -363,7 +363,7 @@ def test_headless_claude_keeps_anthropic_proxy_plumbing() -> None:
     assert "oauth-gateway-ca" in mount_names
 
 
-def test_pi_subscription_only_hijacks_anthropic_api_proxy() -> None:
+def test_pi_cli_only_hijacks_anthropic_api_proxy() -> None:
     manager = SessionManager()
     manager._oauth_gateway_ip = "10.0.0.10"
     manager._api_proxy_ip = "10.0.0.20"
@@ -371,7 +371,7 @@ def test_pi_subscription_only_hijacks_anthropic_api_proxy() -> None:
     manifest = manager._pod_manifest(
         "abc123",
         owner="operator@example.test",
-        mode="pi_subscription",
+        mode="pi_cli",
     )
 
     assert _pod_spec(manifest)["hostAliases"] == [

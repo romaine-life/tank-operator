@@ -74,24 +74,24 @@ import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
   | "api_key"
-  | "subscription"
-  | "subscription_headless"
+  | "claude_cli"
+  | "claude_gui"
   | "config"
-  | "codex_subscription"
-  | "codex_headless"
+  | "codex_cli"
+  | "codex_gui"
   | "codex_config"
-  | "pi_subscription"
+  | "pi_cli"
   | "pi_config";
 type DefaultSessionMode = Extract<
   SessionMode,
-  | "subscription"
-  | "subscription_headless"
-  | "codex_subscription"
-  | "codex_headless"
-  | "pi_subscription"
+  | "claude_cli"
+  | "claude_gui"
+  | "codex_cli"
+  | "codex_gui"
+  | "pi_cli"
 >;
 type Provider = "anthropic" | "openai" | "pi";
-type SessionInteraction = "run" | "newterm";
+type SessionInteraction = "gui" | "cli";
 
 interface Session {
   id: string;
@@ -116,13 +116,13 @@ interface TestState {
 
 const MODE_LABELS: Record<SessionMode, string> = {
   api_key: "Claude API key",
-  subscription: "Claude",
-  subscription_headless: "Claude run",
+  claude_cli: "Claude CLI",
+  claude_gui: "Claude GUI",
   config: "Claude config",
-  codex_subscription: "Codex",
-  codex_headless: "Codex run",
+  codex_cli: "Codex CLI",
+  codex_gui: "Codex GUI",
   codex_config: "Codex config",
-  pi_subscription: "Pi",
+  pi_cli: "Pi CLI",
   pi_config: "Pi config",
 };
 
@@ -130,33 +130,33 @@ const MODE_LABELS: Record<SessionMode, string> = {
 // elsewhere.
 const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   api_key: "api",
-  subscription: "claude",
-  subscription_headless: "claude-run",
+  claude_cli: "claude-cli",
+  claude_gui: "claude-gui",
   config: "config",
-  codex_subscription: "codex",
-  codex_headless: "codex-run",
+  codex_cli: "codex-cli",
+  codex_gui: "codex-gui",
   codex_config: "codex-cfg",
-  pi_subscription: "pi",
+  pi_cli: "pi-cli",
   pi_config: "pi-cfg",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
-  subscription: "anthropic",
-  subscription_headless: "anthropic",
-  codex_subscription: "openai",
-  codex_headless: "openai",
-  pi_subscription: "pi",
+  claude_cli: "anthropic",
+  claude_gui: "anthropic",
+  codex_cli: "openai",
+  codex_gui: "openai",
+  pi_cli: "pi",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   api_key: "anthropic",
-  subscription: "anthropic",
-  subscription_headless: "anthropic",
+  claude_cli: "anthropic",
+  claude_gui: "anthropic",
   config: "anthropic",
-  codex_subscription: "openai",
-  codex_headless: "openai",
+  codex_cli: "openai",
+  codex_gui: "openai",
   codex_config: "openai",
-  pi_subscription: "pi",
+  pi_cli: "pi",
   pi_config: "pi",
 };
 
@@ -164,17 +164,17 @@ const PROVIDER_INTERACTION_MODES: Record<
   Provider,
   Partial<Record<SessionInteraction, DefaultSessionMode | null>>
 > = {
-  anthropic: { run: "subscription_headless", newterm: "subscription_headless" },
-  openai: { run: "codex_headless", newterm: "codex_headless" },
-  pi: { run: null, newterm: "pi_subscription" },
+  anthropic: { gui: "claude_gui", cli: "claude_cli" },
+  openai: { gui: "codex_gui", cli: "codex_cli" },
+  pi: { gui: null, cli: "pi_cli" },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
-  run: "gui",
-  newterm: "terminal",
+  gui: "gui",
+  cli: "cli",
 };
 
-const INTERACTION_OPTIONS: SessionInteraction[] = ["run", "newterm"];
+const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
@@ -183,24 +183,24 @@ const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
-  subscription: "Uses claude.ai login",
-  subscription_headless: "Headless claude -p output",
+  claude_cli: "Uses claude.ai login",
+  claude_gui: "GUI run pane for claude -p output",
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
-  codex_subscription: "Uses ChatGPT login from KV",
-  codex_headless: "Headless codex exec output",
+  codex_cli: "Uses ChatGPT login from KV",
+  codex_gui: "GUI run pane for codex exec output",
   codex_config: "codex login --device-auth · seeds KV for Codex",
-  pi_subscription: "Uses Tank Claude/Codex subscriptions",
+  pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
 };
 
 const MODE_ORDER: SessionMode[] = [
-  "subscription_headless",
+  "claude_gui",
   "api_key",
   "config",
-  "codex_headless",
+  "codex_gui",
   "codex_config",
-  "pi_subscription",
+  "pi_cli",
   "pi_config",
 ];
 
@@ -210,7 +210,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     pod_name: "tank-demo-claude-code",
     owner: "preview",
     status: "Active",
-    mode: "subscription_headless",
+    mode: "claude_gui",
     requested_at: new Date(Date.now() - 12 * 60 * 1000 - 2 * 1000).toISOString(),
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
@@ -221,7 +221,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     pod_name: "tank-demo-codex-cli",
     owner: "preview",
     status: "Active",
-    mode: "codex_headless",
+    mode: "codex_gui",
     requested_at: new Date(Date.now() - 68 * 60 * 1000 - 4 * 1000).toISOString(),
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
@@ -232,7 +232,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     pod_name: "tank-demo-pi-agent",
     owner: "preview",
     status: "Active",
-    mode: "pi_subscription",
+    mode: "pi_cli",
     requested_at: new Date(Date.now() - 3 * 60 * 60 * 1000 - 3 * 1000).toISOString(),
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
@@ -308,16 +308,16 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_subscription" || session.mode === "codex_headless"
+  const template = session.mode === "codex_cli" || session.mode === "codex_gui"
     ? DEMO_CODEX_LINES
-    : session.mode === "pi_subscription"
+    : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_subscription" || session.mode === "codex_headless") {
+    if (session.mode === "codex_cli" || session.mode === "codex_gui") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "pi_subscription") {
+    } else if (session.mode === "pi_cli") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -426,9 +426,9 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_subscription" || mode === "codex_headless"
+  const label = mode === "codex_cli" || mode === "codex_gui"
     ? "Codex"
-    : mode === "pi_subscription"
+    : mode === "pi_cli"
       ? "Pi"
       : "Claude Code";
   return {
@@ -460,26 +460,41 @@ const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 
+function normalizeSessionMode(value: string | null): string | null {
+  switch (value) {
+    case "subscription":
+      return "claude_cli";
+    case "subscription_headless":
+      return "claude_gui";
+    case "codex_subscription":
+      return "codex_cli";
+    case "codex_headless":
+      return "codex_gui";
+    case "pi_subscription":
+      return "pi_cli";
+    default:
+      return value;
+  }
+}
+
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
   return (
-    value === "subscription" ||
-    value === "subscription_headless" ||
-    value === "codex_subscription" ||
-    value === "codex_headless" ||
-    value === "pi_subscription"
+    value === "claude_cli" ||
+    value === "claude_gui" ||
+    value === "codex_cli" ||
+    value === "codex_gui" ||
+    value === "pi_cli"
   );
 }
 
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
-    const stored = localStorage.getItem(DEFAULT_SESSION_MODE_KEY);
-    if (stored === "subscription") return "subscription_headless";
-    if (stored === "codex_subscription") return "codex_headless";
+    const stored = normalizeSessionMode(localStorage.getItem(DEFAULT_SESSION_MODE_KEY));
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
   }
-  return "subscription_headless";
+  return "claude_gui";
 }
 
 function writeDefaultSessionMode(mode: DefaultSessionMode): void {
@@ -493,12 +508,13 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
 function readDefaultInteraction(): SessionInteraction {
   try {
     const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
-    if (stored === "run" || stored === "newterm") return stored;
-    if (stored === "terminal") return "newterm";
+    if (stored === "gui" || stored === "cli") return stored;
+    if (stored === "run") return "gui";
+    if (stored === "newterm" || stored === "terminal") return "cli";
   } catch {}
   // Back-compat: derive from stored session mode.
   const mode = readDefaultSessionMode();
-  return HEADLESS_MODES.has(mode) ? "run" : "newterm";
+  return HEADLESS_MODES.has(mode) ? "gui" : "cli";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
@@ -510,7 +526,9 @@ function writeDefaultInteraction(interaction: SessionInteraction): void {
 function readSessionInteraction(id: string): SessionInteraction | null {
   try {
     const stored = localStorage.getItem(SESSION_INTERACTION_KEY_PREFIX + id);
-    if (stored === "run" || stored === "newterm") return stored;
+    if (stored === "gui" || stored === "cli") return stored;
+    if (stored === "run") return "gui";
+    if (stored === "newterm" || stored === "terminal") return "cli";
   } catch {}
   return null;
 }
@@ -519,6 +537,11 @@ function writeSessionInteraction(id: string, interaction: SessionInteraction): v
   try {
     localStorage.setItem(SESSION_INTERACTION_KEY_PREFIX + id, interaction);
   } catch {}
+}
+
+function normalizeSession(session: Session): Session {
+  const mode = normalizeSessionMode(session.mode) as SessionMode;
+  return mode === session.mode ? session : { ...session, mode };
 }
 
 function sessionOrderStorageKey(user: SessionUser): string {
@@ -574,10 +597,10 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
-const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
-const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
+const HEADLESS_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
+const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
+const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -588,7 +611,7 @@ const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
   return (
     PROVIDER_INTERACTION_MODES[provider][interaction] ??
-    PROVIDER_INTERACTION_MODES[provider].newterm!
+    PROVIDER_INTERACTION_MODES[provider].cli!
   );
 }
 
@@ -947,9 +970,9 @@ function IconReload() {
 function sessionInteractionForSession(session: Session): SessionInteraction | null {
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
-  if (HEADLESS_MODES.has(session.mode)) return "run";
-  return session.mode === "subscription" || session.mode === "codex_subscription" || session.mode === "pi_subscription"
-    ? "newterm"
+  if (HEADLESS_MODES.has(session.mode)) return "gui";
+  return session.mode === "claude_cli" || session.mode === "codex_cli" || session.mode === "pi_cli"
+    ? "cli"
     : null;
 }
 
@@ -960,7 +983,7 @@ function InteractionIcon({
   interaction: SessionInteraction;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "run" ? MonitorIcon : TerminalIcon;
+  const Icon: LucideIcon = interaction === "gui" ? MonitorIcon : TerminalIcon;
   return <Icon className={className} aria-hidden="true" />;
 }
 
@@ -1095,7 +1118,7 @@ function DemoLanding() {
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
-  const selectedMode = defaultModeFor(selectedProvider, "newterm");
+  const selectedMode = defaultModeFor(selectedProvider, "cli");
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -1211,7 +1234,7 @@ function DemoLanding() {
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {PROVIDERS.map((provider) => {
-                  const mode = defaultModeFor(provider, "newterm");
+                  const mode = defaultModeFor(provider, "cli");
                   return (
                     <li key={provider}>
                       <button
@@ -1287,7 +1310,7 @@ function DemoLanding() {
                   </div>
                   <div className="session-row-bottom">
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    {s.mode === "subscription" && (
+                    {s.mode === "claude_cli" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
                       </span>
@@ -1318,7 +1341,7 @@ function DemoLanding() {
 
       <main className="workspace demo-workspace">
         <div
-          className={`demo-terminal${selected?.mode === "subscription" || selected?.mode === "subscription_headless" ? " is-claude" : " is-codex"}`}
+          className={`demo-terminal${selected?.mode === "claude_cli" || selected?.mode === "claude_gui" ? " is-claude" : " is-codex"}`}
           role="img"
           aria-label="tank-operator terminal preview"
           tabIndex={0}
@@ -1706,12 +1729,12 @@ function applyProviderEvent(
   mode: SessionMode,
   event: JsonObject,
 ): TranscriptEntry[] {
-  if (mode === "codex_headless") return applyCodexEvent(entries, event);
+  if (mode === "codex_gui") return applyCodexEvent(entries, event);
   return applyClaudeEvent(entries, event);
 }
 
 function isClaudeRunMode(mode: SessionMode): boolean {
-  return mode === "subscription_headless";
+  return mode === "claude_gui";
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -5389,7 +5412,7 @@ export function App() {
     try {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
-      const listed: Session[] = await res.json();
+      const listed: Session[] = (await res.json()).map(normalizeSession);
       setSessions(user ? orderSessions(listed, readSessionOrder(sessionOrderStorageKey(user))) : listed);
       setError(null);
     } catch (e) {
@@ -5589,7 +5612,7 @@ export function App() {
         body: JSON.stringify({ mode }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
-      const created: Session = await res.json();
+      const created: Session = normalizeSession(await res.json());
       if (HEADLESS_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
@@ -5606,7 +5629,7 @@ export function App() {
   function setDefaultProvider(provider: Provider) {
     const interaction =
       PROVIDER_INTERACTION_MODES[provider][defaultInteraction] == null
-        ? "newterm"
+        ? "cli"
         : defaultInteraction;
     const mode = defaultModeFor(provider, interaction);
     if (interaction !== defaultInteraction) {
@@ -5636,7 +5659,7 @@ export function App() {
         body: JSON.stringify({ name: nextName }),
       });
       if (!res.ok) throw new Error(`rename failed: ${res.status}`);
-      const updated: Session = await res.json();
+      const updated: Session = normalizeSession(await res.json());
       setSessions((prev) =>
         prev.map((s) => (s.id === id ? { ...s, name: updated.name ?? null } : s))
       );
@@ -5714,7 +5737,7 @@ export function App() {
         body: JSON.stringify({ mode: existing.mode }),
       });
       if (!createRes.ok) throw new Error(`create failed: ${createRes.status}`);
-      const created: Session = await createRes.json();
+      const created: Session = normalizeSession(await createRes.json());
       const existingInteraction = readSessionInteraction(existing.id);
       if (existingInteraction) {
         writeSessionInteraction(created.id, existingInteraction);

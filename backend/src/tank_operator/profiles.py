@@ -91,7 +91,7 @@ def _session_from_doc(doc: dict) -> SessionRecord:
     return SessionRecord(
         id=doc.get("session_id") or doc["id"].removeprefix("session:"),
         email=doc["email"],
-        mode=doc.get("mode", "subscription"),
+        mode=doc.get("mode", "claude_cli"),
         scope=doc.get("session_scope") or doc.get("scope") or "default",
         pod_name=doc.get("pod_name"),
         name=doc.get("name"),

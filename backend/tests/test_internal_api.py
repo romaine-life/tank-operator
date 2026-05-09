@@ -441,10 +441,10 @@ def test_internal_create_session_resolves_caller_to_email() -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["owner"] == "alice@example.test"
-    assert body["mode"] == "subscription"
+    assert body["mode"] == "claude_cli"
     assert body["url"].endswith("/?session=new123")
     create_call = next(c for c in sessions.calls if c[0] == "create")
-    assert create_call[1] == {"owner": "alice@example.test", "mode": "subscription"}
+    assert create_call[1] == {"owner": "alice@example.test", "mode": "claude_cli"}
 
 
 def test_internal_create_session_422_when_caller_pod_unknown() -> None:

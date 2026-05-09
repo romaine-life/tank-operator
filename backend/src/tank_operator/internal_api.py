@@ -36,12 +36,14 @@ from pydantic import BaseModel
 
 from .profiles import ProfileStore
 from .sessions import (
+    ACCEPTED_SESSION_MODES,
     HEADLESS_MODES,
     SUBSCRIPTION_HEADLESS_MODE,
     PodNotReady,
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
+    normalize_session_mode,
 )
 
 log = logging.getLogger(__name__)
@@ -278,12 +280,12 @@ def build_router(
         _: CallerSubject = Depends(authorized_caller),
     ) -> dict:
         """Create a session owned by the caller identified by pod IP."""
-        from .sessions import SESSION_MODES
-
         email = await _resolve_email_from_pod_ip(caller_pod_ip, sessions)
-        if body.mode not in SESSION_MODES:
+        if body.mode not in ACCEPTED_SESSION_MODES:
             raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
-        session = await sessions.create(owner=email, mode=body.mode)
+        session = await sessions.create(
+            owner=email, mode=normalize_session_mode(body.mode)
+        )
         return {**dataclasses.asdict(session), "url": _session_url(session.id)}
 
     @router.delete("/sessions/{session_id}")
@@ -393,13 +395,14 @@ def build_router(
         """
         if not body.prompt or not body.prompt.strip():
             raise HTTPException(status_code=400, detail="missing prompt")
-        if body.mode not in HEADLESS_MODES:
+        mode = normalize_session_mode(body.mode)
+        if mode not in HEADLESS_MODES:
             raise HTTPException(
                 status_code=400,
                 detail=f"mode {body.mode!r} does not support headless runs",
             )
         email = await _resolve_email_from_pod_ip(caller_pod_ip, sessions)
-        session = await sessions.create(owner=email, mode=body.mode)
+        session = await sessions.create(owner=email, mode=mode)
         if body.name:
             try:
                 session = await sessions.set_name(

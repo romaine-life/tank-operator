@@ -38,7 +38,7 @@ def test_pod_manifest_omits_legacy_mcp_tank_callback_env() -> None:
     manifest = SessionManager()._pod_manifest(
         "abc123",
         owner="operator@example.test",
-        mode="subscription_headless",
+        mode="claude_gui",
     )
 
     env = _claude_env(manifest)
@@ -144,13 +144,13 @@ def test_dispatch_headless_writes_prompt_and_backgrounds_command(
     assert path in script
     assert " true " in script  # follow_up flag splice
     assert "/opt/tank/headless-run.sh" in script
-    assert "claude" in script  # subscription_headless → claude provider
+    assert "claude" in script  # claude_gui → claude provider
 
 
 def test_dispatch_headless_codex_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _DispatchFakeManager(mode="codex_headless")
+    manager = _DispatchFakeManager(mode="codex_gui")
     from tank_operator import exec_proxy
 
     monkeypatch.setattr(exec_proxy, "exec_write_file", _fake_write_file)
@@ -171,7 +171,7 @@ def test_dispatch_headless_codex_provider(
     assert " false " in script
 
 
-def test_codex_headless_runner_resumes_on_follow_up() -> None:
+def test_codex_gui_runner_resumes_on_follow_up() -> None:
     runner = Path(__file__).resolve().parents[2] / "k8s/session-config/headless-run.sh"
     script = runner.read_text()
 
@@ -180,7 +180,7 @@ def test_codex_headless_runner_resumes_on_follow_up() -> None:
     assert 'args.extend(["--model", model])' in script
 
 
-def test_codex_headless_runner_mirrors_json_stream_to_history() -> None:
+def test_codex_gui_runner_mirrors_json_stream_to_history() -> None:
     runner = Path(__file__).resolve().parents[2] / "k8s/session-config/headless-run.sh"
     script = runner.read_text()
 
