@@ -1963,7 +1963,6 @@ const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
   "claude-opus-4-7": 200_000,
   "claude-sonnet-4-6": 200_000,
   "claude-haiku-4-5": 200_000,
-  "gpt-5-5": 256_000,
   "gpt-5": 128_000,
 };
 
@@ -2088,16 +2087,15 @@ interface ModelOption {
   label: string; // display name in dropdown + provider card
 }
 
-// Hardcoded for now. Backend doesn't yet accept --model from the WS prompt
-// payload — adding that is a follow-up. Selecting here only affects display.
+const CODEX_ACCOUNT_DEFAULT_MODEL_ID = "codex-account-default";
+
 const CLAUDE_MODELS: ModelOption[] = [
   { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
 ];
 const CODEX_MODELS: ModelOption[] = [
-  { id: "gpt-5-5", label: "Codex · GPT-5.5" },
-  { id: "gpt-5", label: "Codex · GPT-5" },
+  { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
@@ -3635,7 +3633,7 @@ function HeadlessRun({
         JSON.stringify({
           prompt: trimmed,
           follow_up: followUp,
-          model: selectedModelId,
+          model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
           permission_mode: composerMode,
         }),
       );
