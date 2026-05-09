@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -210,6 +211,15 @@ def test_dispatch_headless_codex_provider(
     script = _fake_launch_detached.captured[2]  # type: ignore[attr-defined]
     assert " codex " in script
     assert " false " in script
+
+
+def test_codex_headless_runner_resumes_on_follow_up() -> None:
+    runner = Path(__file__).resolve().parents[2] / "k8s/session-config/headless-run.sh"
+    script = runner.read_text()
+
+    assert 'follow_up = sys.argv[2] == "true"' in script
+    assert 'args.extend(["resume", "--last"])' in script
+    assert 'args.extend(["--model", model])' in script
 
 
 def test_dispatch_headless_validates_model_and_permission_mode(

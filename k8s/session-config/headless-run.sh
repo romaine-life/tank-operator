@@ -150,25 +150,26 @@ case "$provider" in
     ;;
   codex)
     configure_codex
-    # Codex `exec --json` is single-turn; conversation continuity for codex is
-    # tracked separately. Today follow_up is ignored for codex.
-    exec python3 - "$prompt_file" <<'PY'
+    exec python3 - "$prompt_file" "$follow_up" "$model" <<'PY'
 import os
 import pty
 import sys
 
 prompt_path = sys.argv[1]
+follow_up = sys.argv[2] == "true"
+model = sys.argv[3]
 with open(prompt_path, encoding="utf-8") as f:
     prompt = f.read()
 
 os.chdir("/workspace")
-status = pty.spawn([
-    "codex",
-    "exec",
-    "--json",
-    "--skip-git-repo-check",
-    prompt,
-])
+args = ["codex", "exec"]
+if follow_up:
+    args.extend(["resume", "--last"])
+args.extend(["--json", "--skip-git-repo-check"])
+if model:
+    args.extend(["--model", model])
+args.append(prompt)
+status = pty.spawn(args)
 raise SystemExit(os.waitstatus_to_exitcode(status))
 PY
     ;;
