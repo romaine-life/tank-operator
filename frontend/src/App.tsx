@@ -2112,7 +2112,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
-const CHAT_FONT_SCALE_MAX = 1.4;
+const CHAT_FONT_SCALE_MAX = 2.0;
 const CHAT_FONT_SCALE_STEP = 0.1;
 
 function clampChatFontScale(value: number): number {
@@ -2136,6 +2136,8 @@ function loadRunPrefs(): RunPrefs {
   }
   return out;
 }
+
+type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void;
 
 // localStorage key for persisting a single run's transcript entries.
 // Backend-side persistence (replay JSONL from
@@ -2943,11 +2945,15 @@ function HeadlessRun({
   session,
   visible,
   onRename,
+  runPrefs,
+  setRunPref,
   user,
 }: {
   session: Session;
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
+  runPrefs: RunPrefs;
+  setRunPref: SetRunPref;
   user: SessionUser;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
@@ -3014,16 +3020,6 @@ function HeadlessRun({
   // in the prompt so Claude can Read them via tool use.
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  // Per-user prefs (persisted in localStorage; keyed by RUN_PREF_PREFIX).
-  const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
-  function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
-    setRunPrefs((p) => ({ ...p, [key]: value }));
-    try {
-      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
-    } catch {
-      /* ignore */
-    }
-  }
   const setChatFontScale = (value: number) => {
     setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
   };
@@ -4952,6 +4948,17 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+  // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
+  // sync immediately, while localStorage keeps them across reloads/windows.
+  const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
+  function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
+    setRunPrefs((p) => ({ ...p, [key]: value }));
+    try {
+      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
+    } catch {
+      /* ignore */
+    }
+  }
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -4965,6 +4972,16 @@ export function App() {
     }
     window.history.replaceState({}, "", url.toString());
   }, [active]);
+
+  useEffect(() => {
+    const syncRunPrefs = (event: StorageEvent) => {
+      if (event.storageArea !== localStorage) return;
+      if (!event.key?.startsWith(RUN_PREF_PREFIX)) return;
+      setRunPrefs(loadRunPrefs());
+    };
+    window.addEventListener("storage", syncRunPrefs);
+    return () => window.removeEventListener("storage", syncRunPrefs);
+  }, []);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
@@ -5728,6 +5745,8 @@ export function App() {
                       session={s}
                       visible={active === s.id}
                       onRename={renameSession}
+                      runPrefs={runPrefs}
+                      setRunPref={setRunPref}
                       user={user!}
                     />
                   </div>

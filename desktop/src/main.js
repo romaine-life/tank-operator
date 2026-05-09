@@ -1,5 +1,6 @@
 const { app, BrowserWindow, Menu, ipcMain, screen, shell } = require("electron");
 const { CryptoProvider, PublicClientApplication } = require("@azure/msal-node");
+const fs = require("node:fs");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
@@ -11,12 +12,14 @@ const DESKTOP_AUTH_REDIRECT_URI = `${DESKTOP_AUTH_PROTOCOL}://auth`;
 const DESKTOP_AUTH_SCOPES = ["User.Read", "openid", "profile", "email"];
 const DESKTOP_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const MIN_ZOOM_FACTOR = 0.5;
-const MAX_ZOOM_FACTOR = 2.0;
+const MAX_ZOOM_FACTOR = 3.0;
 const ZOOM_STEP = 0.1;
+const DESKTOP_PREFS_FILE = "desktop-preferences.json";
 const WINDOW_TITLE = "Tank";
 
 let mainWindow = null;
 let pendingDesktopAuth = null;
+let desktopZoomFactor = 1;
 
 function normalizeUrl(value) {
   const parsed = new URL(value);
@@ -82,6 +85,8 @@ function createWindow(initialUrl = tankUrl) {
     },
   });
 
+  win.webContents.setZoomFactor(desktopZoomFactor);
+
   win.once("ready-to-show", () => {
     win.maximize();
     win.show();
@@ -145,6 +150,7 @@ ipcMain.handle("desktop-auth:microsoft-login", async (event) => {
 });
 
 app.whenReady().then(() => {
+  desktopZoomFactor = loadDesktopZoomFactor();
   mainWindow = createWindow();
   handleProtocolCallback(
     process.argv.find((arg) => arg.startsWith(`${DESKTOP_AUTH_PROTOCOL}://`)),
@@ -291,6 +297,49 @@ function clearPendingDesktopAuth() {
   pendingDesktopAuth = null;
 }
 
+function desktopPrefsPath() {
+  return path.join(app.getPath("userData"), DESKTOP_PREFS_FILE);
+}
+
+function clampZoomFactor(value) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(MIN_ZOOM_FACTOR, Math.min(MAX_ZOOM_FACTOR, value));
+}
+
+function normalizeZoomFactor(value) {
+  return Math.round(clampZoomFactor(value) * 10) / 10;
+}
+
+function loadDesktopZoomFactor() {
+  try {
+    const raw = fs.readFileSync(desktopPrefsPath(), "utf8");
+    const prefs = JSON.parse(raw);
+    return normalizeZoomFactor(Number(prefs.zoomFactor));
+  } catch {
+    return 1;
+  }
+}
+
+function saveDesktopZoomFactor(value) {
+  try {
+    fs.writeFileSync(
+      desktopPrefsPath(),
+      `${JSON.stringify({ zoomFactor: value }, null, 2)}\n`,
+      "utf8",
+    );
+  } catch {
+    // Zoom should still apply to open windows even if preference persistence fails.
+  }
+}
+
+function setDesktopZoomFactor(value) {
+  desktopZoomFactor = normalizeZoomFactor(value);
+  saveDesktopZoomFactor(desktopZoomFactor);
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.setZoomFactor(desktopZoomFactor);
+  }
+}
+
 function registerWindowShortcuts(win) {
   win.webContents.on("before-input-event", (event, input) => {
     if (input.type !== "keyDown") return;
@@ -309,17 +358,17 @@ function registerWindowShortcuts(win) {
       return;
     }
     if (commandOrControl && (input.key === "+" || input.key === "=")) {
-      adjustZoom(win, ZOOM_STEP);
+      adjustZoom(ZOOM_STEP);
       event.preventDefault();
       return;
     }
     if (commandOrControl && input.key === "-") {
-      adjustZoom(win, -ZOOM_STEP);
+      adjustZoom(-ZOOM_STEP);
       event.preventDefault();
       return;
     }
     if (commandOrControl && input.key === "0") {
-      win.webContents.setZoomFactor(1);
+      setDesktopZoomFactor(1);
       event.preventDefault();
       return;
     }
@@ -338,11 +387,10 @@ function registerWindowShortcuts(win) {
   });
 }
 
-function adjustZoom(win, delta) {
-  const current = win.webContents.getZoomFactor();
-  const next = Math.max(
-    MIN_ZOOM_FACTOR,
-    Math.min(MAX_ZOOM_FACTOR, Math.round((current + delta) * 10) / 10),
-  );
-  win.webContents.setZoomFactor(next);
+function adjustZoom(delta) {
+  adjustDesktopZoom(delta);
+}
+
+function adjustDesktopZoom(delta) {
+  setDesktopZoomFactor(desktopZoomFactor + delta);
 }
