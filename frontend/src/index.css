@@ -1748,7 +1748,11 @@ button:disabled {
 
 .run-tabs {
   display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: var(--space-1);
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .run-tab {
@@ -1763,6 +1767,7 @@ button:disabled {
   font-family: var(--font-primary);
   font-size: var(--text-sm);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     color var(--motion-fast, 120ms) ease,
@@ -1790,6 +1795,26 @@ button:disabled {
 .run-tab-icononly {
   padding: 0.45rem 0.5rem;
   margin-left: 0.2rem;
+}
+
+@media (max-width: 720px) {
+  .run-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .run-tabs {
+    width: 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+  }
+
+  .run-tab {
+    flex: 0 0 auto;
+  }
 }
 
 /* Settings menu — wider rows for label + check. */

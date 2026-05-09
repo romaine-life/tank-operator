@@ -4090,6 +4090,42 @@ function HeadlessRun({
           <button
             type="button"
             role="tab"
+            aria-selected={activeTab === "chat"}
+            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
+            onClick={() => {
+              setActiveTab("chat");
+              writeSessionInitialTab(session.id, "chat");
+            }}
+            title="Return to the session"
+          >
+            <BotIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Session</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "shell"}
+            className={`run-tab${activeTab === "shell" ? " run-tab-active" : ""}`}
+            onClick={() => {
+              setActiveTab("shell");
+              writeSessionInitialTab(session.id, "shell");
+            }}
+            title="Open an interactive shell"
+          >
+            <TerminalIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "shell" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Shell</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={activeTab === "files"}
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("files")}
