@@ -53,6 +53,7 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
+  MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
   PlugIcon,
@@ -1777,6 +1778,14 @@ interface SelectedFile {
   binary: boolean;
 }
 
+interface SkillEntry {
+  name: string;
+  path: string;
+  source: string;
+  description: string;
+  body_preview: string;
+}
+
 function joinFilesPath(parent: string, name: string): string {
   if (!parent) return name;
   return `${parent}/${name}`;
@@ -1985,9 +1994,9 @@ interface SlashCommand {
   desc: string;
 }
 
-// Hardcoded for now — these match the slash commands Claude Code
-// recognises. Backend wire-through (per-project / user-defined) is a
-// follow-up; today they're inserted into the prompt verbatim.
+// Built-ins plus dynamically discovered SKILL.md entries from the session pod.
+// Mirrors CloudCLI's command-palette pattern: expose installed agent
+// affordances at the point where users type slash commands.
 const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/clear", desc: "Clear the conversation history" },
   { name: "/compact", desc: "Compact the conversation context" },
@@ -2056,10 +2065,10 @@ function filterMentionPaths(paths: string[], query: string, limit = 30): string[
   return [...basenameMatches, ...fullMatches].slice(0, limit);
 }
 
-function filterSlashCommands(query: string): SlashCommand[] {
-  if (!query) return SLASH_COMMANDS;
+function filterSlashCommands(commands: SlashCommand[], query: string): SlashCommand[] {
+  if (!query) return commands;
   const q = query.toLowerCase();
-  return SLASH_COMMANDS.filter(
+  return commands.filter(
     (c) => c.name.slice(1).toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
   );
 }
@@ -2975,6 +2984,7 @@ function HeadlessRun({
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
+  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -3034,6 +3044,7 @@ function HeadlessRun({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+  const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
   // tree only as long as keys are stable across renders.
@@ -3048,7 +3059,7 @@ function HeadlessRun({
     return `queued-${session.id}-${queuedMessageSeqRef.current}`;
   }
 
-  const slashFiltered = slashOpen ? filterSlashCommands(slashQuery) : [];
+  const slashFiltered = slashOpen ? filterSlashCommands(slashCommands, slashQuery) : [];
   const mentionFiltered =
     mentionOpen && mentionPaths
       ? filterMentionPaths(mentionPaths, mentionQuery)
@@ -3244,6 +3255,38 @@ function HeadlessRun({
       cancelled = true;
     };
   }, [selectedFile, session.id]);
+
+  useEffect(() => {
+    if (session.status !== "Active") {
+      setSlashCommands(SLASH_COMMANDS);
+      return;
+    }
+    let cancelled = false;
+    void authedFetch(`/api/sessions/${session.id}/skills`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return (await res.json()) as { entries: SkillEntry[] };
+      })
+      .then((body) => {
+        if (cancelled) return;
+        const byName = new Map<string, SlashCommand>();
+        for (const command of SLASH_COMMANDS) byName.set(command.name, command);
+        for (const skill of body.entries ?? []) {
+          const normalizedName = skill.name.startsWith("/") ? skill.name : `/${skill.name}`;
+          byName.set(normalizedName, {
+            name: normalizedName,
+            desc: skill.description || skill.body_preview || `${skill.source} skill`,
+          });
+        }
+        setSlashCommands([...byName.values()]);
+      })
+      .catch(() => {
+        if (!cancelled) setSlashCommands(SLASH_COMMANDS);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, session.status]);
 
   function openFileEntry(name: string, type: FileEntry["type"]) {
     const next = joinFilesPath(filesPath, name);
@@ -3450,12 +3493,13 @@ function HeadlessRun({
       const slash = findSlashContext(ta);
       const mention = findMentionContext(ta);
       if (slash) {
+        slashManualOpenRef.current = false;
         setSlashOpen(true);
         setSlashQuery((prev) => {
           if (prev !== slash.query) setSlashIndex(0);
           return slash.query;
         });
-      } else {
+      } else if (!slashManualOpenRef.current) {
         setSlashOpen(false);
       }
       if (mention) {
@@ -3513,7 +3557,7 @@ function HeadlessRun({
   useEffect(() => {
     if (!slashOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      const filtered = filterSlashCommands(slashQuery);
+      const filtered = filterSlashCommands(slashCommands, slashQuery);
       if (e.key === "ArrowDown" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -3529,16 +3573,18 @@ function HeadlessRun({
         e.preventDefault();
         e.stopPropagation();
         applySlashCommand(filtered[Math.min(slashIndex, filtered.length - 1)].name);
+        slashManualOpenRef.current = false;
         setSlashOpen(false);
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
+        slashManualOpenRef.current = false;
         setSlashOpen(false);
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [slashOpen, slashQuery, slashIndex]);
+  }, [slashOpen, slashQuery, slashIndex, slashCommands]);
 
   // Mention-palette keyboard nav (mirror of slash).
   useEffect(() => {
@@ -3634,6 +3680,20 @@ function HeadlessRun({
     const newPos = start + insert.length;
     ta.setSelectionRange(newPos, newPos);
     ta.focus();
+  }
+
+  function openSlashCommandMenu() {
+    if (slashOpen && slashManualOpenRef.current) {
+      slashManualOpenRef.current = false;
+      setSlashOpen(false);
+      return;
+    }
+    slashManualOpenRef.current = true;
+    setSlashQuery("");
+    setSlashIndex(0);
+    setSlashOpen(true);
+    const ta = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    ta?.focus();
   }
 
   function applyStdoutLine(line: string) {
@@ -4580,9 +4640,8 @@ function HeadlessRun({
             }}
           />
           {/* Slash-command palette — opens above the composer when the
-              user types `/` at a word boundary. Up/Down navigates,
-              Enter/Tab inserts, Esc closes. Backed by SLASH_COMMANDS
-              today; project-scoped + user-defined commands TBD. */}
+              user types `/` at a word boundary. Includes built-ins and
+              SKILL.md entries discovered from the active session pod. */}
           {slashOpen && slashFiltered.length > 0 && (
             <div className="run-slash-palette" role="listbox" aria-label="Slash commands">
               <div className="run-slash-palette-label">Slash commands</div>
@@ -4599,6 +4658,7 @@ function HeadlessRun({
                     // input handler.
                     e.preventDefault();
                     applySlashCommand(cmd.name);
+                    slashManualOpenRef.current = false;
                     setSlashOpen(false);
                   }}
                   onMouseEnter={() => setSlashIndex(i)}
@@ -4804,6 +4864,23 @@ function HeadlessRun({
                     {usagePct.toFixed(usagePct < 10 ? 1 : 0)}%
                   </span>
                 </span>
+                <button
+                  type="button"
+                  className="run-composer-icon-btn run-command-menu-btn"
+                  aria-label="Show slash commands"
+                  title="Show slash commands"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    openSlashCommandMenu();
+                  }}
+                >
+                  <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                  {slashCommands.length > 0 && (
+                    <span className="run-command-menu-count">
+                      {slashCommands.length}
+                    </span>
+                  )}
+                </button>
               </PromptInputTools>
               <span
                 className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
