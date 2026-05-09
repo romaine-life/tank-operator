@@ -72,7 +72,7 @@ from .sessions import (
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
-    SessionTerminalUnavailable,
+    SessionSandboxAgentUnavailable,
     normalize_session_mode,
 )
 
@@ -1462,7 +1462,9 @@ def _supports_cli_process(mode: str) -> bool:
 
 
 async def _session_pod_ip(owner: str, session_id: str) -> str:
-    pod_ip, _ = await sessions.get_terminal_endpoint(owner=owner, session_id=session_id)
+    pod_ip, _ = await sessions.get_sandbox_agent_endpoint(
+        owner=owner, session_id=session_id
+    )
     return pod_ip
 
 
@@ -1548,7 +1550,7 @@ async def create_cli_process(
         raise HTTPException(status_code=403, detail="not owner")
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")
-    except SessionTerminalUnavailable:
+    except SessionSandboxAgentUnavailable:
         raise HTTPException(status_code=409, detail="session needs restart")
     except PodNotReady:
         raise HTTPException(status_code=503, detail="pod not ready")
@@ -1630,7 +1632,7 @@ async def sandbox_agent_process_terminal_ws(
     except SessionNotFound:
         await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
         return
-    except SessionTerminalUnavailable:
+    except SessionSandboxAgentUnavailable:
         await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session needs restart")
         return
     except PodNotReady:

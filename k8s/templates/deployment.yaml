@@ -47,14 +47,6 @@ spec:
               value: {{ .Values.session.configMap | quote }}
             - name: SESSION_REGISTRY_SCOPE
               value: {{ .Values.session.registryScope | quote }}
-            - name: TERMINAL_PROXY_CONFIGMAP
-              value: {{ .Values.terminalProxy.configMap | quote }}
-            - name: TERMINAL_PROXY_IMAGE
-              value: {{ .Values.terminalProxy.image | quote }}
-            - name: TERMINALD_PORT
-              value: {{ .Values.terminalProxy.terminaldPort | quote }}
-            - name: TERMINAL_PROXY_PORT
-              value: {{ .Values.terminalProxy.proxyPort | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ .Values.externalSecret.githubApp.secretName | quote }}
             - name: CODEX_CREDS_SECRET

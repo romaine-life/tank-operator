@@ -30,15 +30,7 @@ PI_SESSION_IMAGE = os.environ.get(
 SESSION_SERVICE_ACCOUNT = os.environ.get("SESSION_SERVICE_ACCOUNT", "claude-session")
 SESSION_CONFIGMAP = os.environ.get("SESSION_CONFIGMAP", "tank-session-config")
 GITHUB_APP_SECRET = os.environ.get("GITHUB_APP_SECRET", "github-app-creds")
-TERMINAL_PROXY_CONFIGMAP = os.environ.get(
-    "TERMINAL_PROXY_CONFIGMAP", "tank-terminal-proxy"
-)
-TERMINALD_PORT = int(os.environ.get("TERMINALD_PORT", "7680"))
-TERMINAL_PROXY_PORT = int(os.environ.get("TERMINAL_PROXY_PORT", "7681"))
 SANDBOX_AGENT_PORT = int(os.environ.get("SANDBOX_AGENT_PORT", "2468"))
-TERMINAL_PROXY_IMAGE = os.environ.get(
-    "TERMINAL_PROXY_IMAGE", "quay.io/brancz/kube-rbac-proxy:v0.22.0"
-)
 # OAuth gateway: in-cluster service that impersonates platform.claude.com.
 # Session pods reach it via a hostAlias mapping platform.claude.com to this
 # Service's ClusterIP — hostAliases requires an IP, not a DNS name, so we
@@ -80,7 +72,7 @@ class SessionNotOwned(Exception):
     pass
 
 
-class SessionTerminalUnavailable(Exception):
+class SessionSandboxAgentUnavailable(Exception):
     pass
 
 
@@ -135,7 +127,7 @@ CODEX_CONFIG_MODE = "codex_config"
 # Codex-subscription: consume mode for codex. Mounts the ESO-mirrored
 # `codex-credentials` Secret as a file volume; the bootstrap copies it to
 # ~/.codex/auth.json (so codex's in-place refresh has somewhere writable to
-# rewrite — Secret volumes are read-only) and launches `codex` via tmux.
+# rewrite — Secret volumes are read-only) and launches `codex`.
 # No proxy hijack — codex talks to api.openai.com directly and rotates the
 # token bundle in-pod (per OpenAI's CI/CD auth doc: refresh-on-401 plus
 # the ~8-day last_refresh window, written back to auth.json).
@@ -307,8 +299,8 @@ def _test_state_from_annotations(
 class SessionManager:
     """Manages session lifecycle as one Pod per session.
 
-    A session Pod is the runtime identity: workspace, tmux, agent process, and
-    terminal transport all live there. If the Pod dies, the session is failed
+    A session Pod is the runtime identity: workspace, agent process, and
+    process terminal transport all live there. If the Pod dies, the session is failed
     rather than silently recreated as a new empty runtime.
     """
 
@@ -425,27 +417,6 @@ class SessionManager:
                 "fsGroup": 1000,
             },
             "containers": [
-                {
-                    "name": "terminal-proxy",
-                    "image": TERMINAL_PROXY_IMAGE,
-                    "imagePullPolicy": "IfNotPresent",
-                    "args": [
-                        f"--insecure-listen-address=0.0.0.0:{TERMINAL_PROXY_PORT}",
-                        f"--upstream=http://127.0.0.1:{TERMINALD_PORT}/",
-                        "--config-file=/etc/kube-rbac-proxy/config.yaml",
-                        "--v=2",
-                    ],
-                    "ports": [
-                        {"name": "terminal", "containerPort": TERMINAL_PROXY_PORT},
-                    ],
-                    "volumeMounts": [
-                        {
-                            "name": "terminal-proxy-config",
-                            "mountPath": "/etc/kube-rbac-proxy",
-                            "readOnly": True,
-                        }
-                    ],
-                },
                 # Sidecar: localhost reverse proxy that injects fresh SA-token
                 # bearer auth into outbound HTTP MCP calls. Same image as the
                 # main container, different command. Required because the
@@ -471,20 +442,14 @@ class SessionManager:
                             "if command -v sandbox-agent >/dev/null 2>&1; then "
                             "sandbox_agent_cmd=sandbox-agent; "
                             "else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; "
-                            f"$sandbox_agent_cmd server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
-                            "--no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & "
-                            "exec tank-terminald"
+                            f"exec $sandbox_agent_cmd server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
+                            "--no-token --no-telemetry"
                         ),
                     ],
                     "ports": [
-                        {"name": "terminald", "containerPort": TERMINALD_PORT},
                         {"name": "sandbox-agent", "containerPort": SANDBOX_AGENT_PORT},
                     ],
                     "env": [
-                        {
-                            "name": "TERMINALD_PORT",
-                            "value": str(TERMINALD_PORT),
-                        },
                         {
                             "name": "SANDBOX_AGENT_PORT",
                             "value": str(SANDBOX_AGENT_PORT),
@@ -543,10 +508,6 @@ class SessionManager:
             ],
             "volumes": [
                 _session_config_volume(),
-                {
-                    "name": "terminal-proxy-config",
-                    "configMap": {"name": TERMINAL_PROXY_CONFIGMAP},
-                },
             ],
         }
         # OAuth gateway plumbing: add a hostAlias so platform.claude.com
@@ -835,11 +796,11 @@ class SessionManager:
             return [
                 _session_info_from_pod(owner, p)
                 for p in pods.items
-                if _pod_has_container(p, "terminal-proxy")
+                if _pod_has_sandbox_agent(p)
             ]
 
         for session_id, pod in pods_by_id.items():
-            if not _pod_has_container(pod, "terminal-proxy"):
+            if not _pod_has_sandbox_agent(pod):
                 continue
             if await self._registry.get(owner, session_id) is not None:
                 continue
@@ -1017,17 +978,17 @@ class SessionManager:
             await asyncio.sleep(1)
         raise PodNotReady(session_id)
 
-    async def get_terminal_endpoint(
+    async def get_sandbox_agent_endpoint(
         self, owner: str, session_id: str, timeout: float = 90.0
     ) -> tuple[str, int]:
-        """Return the current session pod IP and terminal proxy port."""
+        """Return the current session pod IP and sandbox-agent port."""
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
             pod = await self._read_owned_pod(owner, session_id)
             if _pod_ready(pod) and pod.status and pod.status.pod_ip:
-                if not _pod_has_container(pod, "terminal-proxy"):
-                    raise SessionTerminalUnavailable(session_id)
-                return pod.status.pod_ip, TERMINAL_PROXY_PORT
+                if not _pod_has_sandbox_agent(pod):
+                    raise SessionSandboxAgentUnavailable(session_id)
+                return pod.status.pod_ip, SANDBOX_AGENT_PORT
             await asyncio.sleep(1)
         raise PodNotReady(session_id)
 
@@ -1159,10 +1120,11 @@ class SessionManager:
             session_id = pod.metadata.labels.get("tank-operator/session-id")
             if not session_id:
                 continue
-            if not _pod_has_container(pod, "terminal-proxy"):
-                # Pre-terminald sessions cannot prove liveness through the
-                # browser websocket anymore. Leave them for explicit deletion
-                # so kubectl-attached users are not disconnected by the reaper.
+            if not _pod_has_sandbox_agent(pod):
+                # Pre-sandbox-agent sessions cannot prove liveness through the
+                # browser process terminal anymore. Leave them for explicit
+                # deletion so manually attached users are not disconnected by
+                # the reaper.
                 self._activity[session_id] = now
                 continue
             if self._ws_count.get(session_id, 0) > 0:
@@ -1280,7 +1242,7 @@ def _session_info_from_record(
 
 
 def _legacy_deployment_owner(pod: Any) -> str | None:
-    """Return the pre-terminald Deployment owner for old session pods, if any."""
+    """Return the old Deployment owner for legacy session pods, if any."""
     for owner in pod.metadata.owner_references or []:
         if owner.kind != "ReplicaSet" or not owner.name:
             continue
@@ -1303,3 +1265,17 @@ def _pod_ready(pod: Any) -> bool:
 def _pod_has_container(pod: Any, name: str) -> bool:
     spec = getattr(pod, "spec", None)
     return any(c.name == name for c in (getattr(spec, "containers", None) or []))
+
+
+def _pod_has_sandbox_agent(pod: Any) -> bool:
+    spec = getattr(pod, "spec", None)
+    for container in getattr(spec, "containers", None) or []:
+        for port in getattr(container, "ports", None) or []:
+            name = getattr(port, "name", None)
+            container_port = getattr(port, "container_port", None)
+            if isinstance(port, dict):
+                name = port.get("name")
+                container_port = port.get("containerPort")
+            if name == "sandbox-agent" or container_port == SANDBOX_AGENT_PORT:
+                return True
+    return False

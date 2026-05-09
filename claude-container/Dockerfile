@@ -37,7 +37,6 @@ RUN apk add --no-cache \
         py3-pip \
         python3 \
         ripgrep \
-        tmux \
         unzip \
         vim
 
@@ -108,12 +107,6 @@ RUN pip install --no-cache-dir --break-system-packages \
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
-# Pod-local terminal WebSocket fanout. The orchestrator no longer keeps a
-# Kubernetes pods/exec stream open for the browser terminal; it proxies to this
-# process through kube-rbac-proxy instead.
-COPY claude-container/terminald /opt/terminald
-RUN pip install --no-cache-dir --break-system-packages /opt/terminald
-
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
 # bootstrap script are mounted from the chart-managed tank-session-config
 # ConfigMap. Keep the parent directories in the image so the orchestrator can
@@ -131,12 +124,6 @@ RUN mkdir -p /workspace \
 RUN if [ "${TANK_AGENT}" = "pi" ]; then \
       HOME=/home/node pi install npm:pi-mcp-adapter; \
     fi
-
-# Hide tmux's status bar so the TUI gets the full terminal height.
-# tmux is the reconnect-survival wrapper for agent sessions
-# (see tank-bootstrap.sh); the status bar would steal one row.
-RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\nset -s extended-keys on\n' > /home/node/.tmux.conf \
-    && chown node:node /home/node/.tmux.conf
 
 # Run the agent as a non-root user so claude's safety check accepts
 # bypassPermissions mode (it refuses to enable bypass when uid 0). Also

@@ -32,46 +32,6 @@ roleRef:
   kind: Role
   name: tank-operator-sessions-mgr
 ---
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: tank-operator-terminal-invoker
-rules:
-  - apiGroups: ["terminal.tank-operator.io"]
-    resources: ["sessions"]
-    # WebSocket upgrade is a GET; keep create for future POST/debug calls
-    # through the same kube-rbac-proxy config.
-    verbs: ["get", "create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: tank-operator-terminal-invoker
-  namespace: {{ .Values.namespaces.sessions }}
-subjects:
-  - kind: ServiceAccount
-    name: {{ .Values.orchestrator.serviceAccount }}
-    namespace: {{ .Values.namespaces.orchestrator }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: tank-operator-terminal-invoker
----
-# Session-pod kube-rbac-proxy validates the orchestrator's projected service
-# account token before forwarding terminal WebSockets to terminald.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ .Values.session.serviceAccount }}-auth-delegator
-subjects:
-  - kind: ServiceAccount
-    name: {{ .Values.session.serviceAccount }}
-    namespace: {{ .Values.namespaces.sessions }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: system:auth-delegator
----
 # Orchestrator SA needs auth-delegator so the /api/internal/resolve-caller
 # endpoint can call TokenReview to validate inbound mcp-github SA tokens
 # (#57 stage 3). Same primitive kube-rbac-proxy uses for session→MCP traffic.

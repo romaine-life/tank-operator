@@ -207,7 +207,8 @@ def test_codex_gui_runner_mirrors_json_stream_to_history() -> None:
 
     assert 'history_path = "/tmp/tank-run-history.ndjson"' in script
     assert '"type": "tank.user_message"' in script
-    assert "history.buffer.write(data)" in script
+    assert "history.write(stamped_line(line) + \"\\n\")" in script
+    assert "history_line_buffer" in script
     assert "pty.spawn(args, master_read=master_read)" in script
 
 
