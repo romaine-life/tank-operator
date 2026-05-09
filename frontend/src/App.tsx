@@ -948,27 +948,37 @@ function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: Sess
   const label = MODE_CHIP_LABELS[mode] ?? mode;
   const interactionLabel = interaction ? INTERACTION_LABELS[interaction] : null;
 
+  if (icon) {
+    return (
+      <>
+        <span
+          className="mode mode-icon-only mode-provider-chip"
+          title={MODE_LABELS[mode]}
+          aria-label={MODE_LABELS[mode]}
+        >
+          <ProviderIcon provider={icon} className="mode-provider-icon" />
+          <span className="sr-only">{label}</span>
+        </span>
+        {interaction && (
+          <span
+            className="mode mode-icon-only mode-interaction-chip"
+            title={interactionLabel ?? undefined}
+            aria-label={interactionLabel ?? undefined}
+          >
+            <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
+          </span>
+        )}
+      </>
+    );
+  }
+
   return (
     <span
-      className={`mode mode-${mode}${icon ? " mode-icon-only" : ""}${interaction ? " mode-with-interaction" : ""}`}
-      title={interactionLabel ? `${MODE_LABELS[mode]} ${interactionLabel}` : MODE_LABELS[mode]}
-      aria-label={interactionLabel ? `${MODE_LABELS[mode]} ${interactionLabel}` : MODE_LABELS[mode]}
+      className={`mode mode-${mode}`}
+      title={MODE_LABELS[mode]}
+      aria-label={MODE_LABELS[mode]}
     >
-      {icon ? (
-        <>
-          <span className="mode-icon-slot">
-            <ProviderIcon provider={icon} className="mode-provider-icon" />
-          </span>
-          {interaction && (
-            <span className="mode-icon-slot">
-              <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
-            </span>
-          )}
-          <span className="sr-only">{label}</span>
-        </>
-      ) : (
-        label
-      )}
+      {label}
     </span>
   );
 }

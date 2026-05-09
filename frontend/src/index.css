@@ -1222,24 +1222,15 @@ button:disabled {
 }
 
 .mode-icon-only {
-  width: 22px;
+  width: 18px;
   height: 18px;
   padding: 0;
 }
 
-.mode-icon-only.mode-with-interaction {
-  width: auto;
-  display: inline-grid;
-  grid-template-columns: repeat(2, 18px);
-  gap: 0;
-}
-
-.mode-icon-slot {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.mode-provider-chip,
+.mode-interaction-chip {
+  background: var(--gray-850);
+  color: var(--text-muted);
 }
 
 .mode-provider-icon {
