@@ -72,6 +72,7 @@ from .sessions import (
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
+    SessionTerminalUnavailable,
     normalize_session_mode,
 )
 
@@ -116,6 +117,10 @@ class LoginBody(BaseModel):
 class LoginResponse(BaseModel):
     token: str
     user: dict[str, str]
+
+
+class CliProcessResponse(BaseModel):
+    process_id: str
 
 
 MAX_HEADLESS_PROMPT_BYTES = int(
@@ -1381,6 +1386,200 @@ async def paste_image(
             status_code=502, detail="failed to write image into session pod"
         )
     return {"path": path}
+
+
+_CLI_PROCESS_COMMAND = "bash"
+_CLI_PROCESS_ARGS = [
+    "-lc",
+    "TANK_SESSION_TRANSPORT=sandbox-agent exec bash /opt/tank/bootstrap.sh",
+]
+
+
+def _supports_cli_process(mode: str) -> bool:
+    return mode not in HEADLESS_MODES
+
+
+async def _session_pod_ip(owner: str, session_id: str) -> str:
+    pod_ip, _ = await sessions.get_terminal_endpoint(owner=owner, session_id=session_id)
+    return pod_ip
+
+
+async def _sandbox_agent_json(
+    pod_ip: str,
+    method: str,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
+    attempts: int = 1,
+) -> dict[str, Any]:
+    url = f"http://{pod_ip}:{SANDBOX_AGENT_PORT}{path}"
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.request(method, url, json=body) as res:
+                    text = await res.text()
+                    if res.status >= 400:
+                        raise RuntimeError(
+                            f"sandbox-agent {method} {path} failed: {res.status} {text}"
+                        )
+                    if not text:
+                        return {}
+                    try:
+                        return await res.json()
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"sandbox-agent returned non-JSON response: {text}"
+                        ) from exc
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            last_error = exc
+            if attempt + 1 >= attempts:
+                break
+            await asyncio.sleep(1)
+    raise RuntimeError(f"sandbox-agent {method} {path} unavailable: {last_error}")
+
+
+def _matching_cli_process(process: dict[str, Any]) -> bool:
+    return (
+        process.get("command") == _CLI_PROCESS_COMMAND
+        and process.get("args") == _CLI_PROCESS_ARGS
+        and process.get("status") == "running"
+    )
+
+
+@app.post("/api/sessions/{session_id}/cli-process", response_model=CliProcessResponse)
+async def create_cli_process(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> CliProcessResponse:
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+        if not _supports_cli_process(session.mode):
+            raise HTTPException(
+                status_code=400,
+                detail="CLI shell is only available for CLI sessions",
+            )
+        pod_ip = await _session_pod_ip(user.email, session_id)
+        listed = await _sandbox_agent_json(pod_ip, "GET", "/v1/processes", attempts=45)
+        for process in listed.get("processes", []):
+            if isinstance(process, dict) and _matching_cli_process(process):
+                return CliProcessResponse(process_id=str(process["id"]))
+        created = await _sandbox_agent_json(
+            pod_ip,
+            "POST",
+            "/v1/processes",
+            body={
+                "command": _CLI_PROCESS_COMMAND,
+                "args": _CLI_PROCESS_ARGS,
+                "cwd": "/workspace",
+                "interactive": True,
+                "tty": True,
+            },
+        )
+        process_id = created.get("id")
+        if not isinstance(process_id, str) or not process_id:
+            raise RuntimeError(f"sandbox-agent process response missing id: {created}")
+        return CliProcessResponse(process_id=process_id)
+    except HTTPException:
+        raise
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="not owner")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except SessionTerminalUnavailable:
+        raise HTTPException(status_code=409, detail="session needs restart")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+    except RuntimeError as exc:
+        log.warning("failed to create cli process for session %s: %s", session_id, exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+async def _bridge_sandbox_terminal(ws: WebSocket, pod_ip: str, process_id: str) -> None:
+    quoted_id = quote(process_id, safe="")
+    url = f"ws://{pod_ip}:{SANDBOX_AGENT_PORT}/v1/processes/{quoted_id}/terminal/ws"
+    async with aiohttp.ClientSession() as http:
+        async with http.ws_connect(url, heartbeat=30) as terminal_ws:
+            await terminal_ws.send_str(json.dumps({"type": "input", "data": "\f"}))
+
+            async def browser_to_terminal() -> None:
+                try:
+                    while True:
+                        data = await ws.receive()
+                        if data.get("type") == "websocket.disconnect":
+                            await terminal_ws.close()
+                            return
+                        if data.get("text") is not None:
+                            await terminal_ws.send_str(data["text"])
+                        elif "bytes" in data and data["bytes"] is not None:
+                            await terminal_ws.send_bytes(data["bytes"])
+                except WebSocketDisconnect:
+                    await terminal_ws.close()
+
+            async def terminal_to_browser() -> None:
+                async for msg in terminal_ws:
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        await ws.send_bytes(msg.data)
+                    elif msg.type == aiohttp.WSMsgType.TEXT:
+                        await ws.send_text(msg.data)
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        break
+
+            tasks = [
+                asyncio.create_task(browser_to_terminal()),
+                asyncio.create_task(terminal_to_browser()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done:
+                task.result()
+
+
+@app.websocket("/api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws")
+async def sandbox_agent_process_terminal_ws(
+    ws: WebSocket,
+    session_id: str,
+    process_id: str,
+) -> None:
+    await ws.accept()
+    try:
+        user = current_user_ws(ws)
+    except HTTPException as e:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.detail)
+        return
+
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+        if not _supports_cli_process(session.mode):
+            await ws.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="CLI shell is only available for CLI sessions",
+            )
+            return
+        pod_ip = await _session_pod_ip(user.email, session_id)
+    except SessionNotOwned:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
+        return
+    except SessionNotFound:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
+        return
+    except SessionTerminalUnavailable:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session needs restart")
+        return
+    except PodNotReady:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
+        return
+
+    async with sessions.track_ws(session_id):
+        try:
+            await _bridge_sandbox_terminal(ws, pod_ip=pod_ip, process_id=process_id)
+        except WebSocketDisconnect:
+            pass
 
 
 class SpawnRunSessionBody(BaseModel):
