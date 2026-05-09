@@ -225,6 +225,13 @@ async def exec_stream_to_websocket(
     ws_client = WsApiClient()
     core = client.CoreV1Api(api_client=ws_client)
     error_status: dict[str, str] | None = None
+
+    async def close_browser() -> None:
+        try:
+            await browser.close(code=1000)
+        except Exception:
+            pass
+
     try:
         cm = await core.connect_get_namespaced_pod_exec(
             name=pod_name,
@@ -374,6 +381,7 @@ async def exec_stream_to_websocket(
             await browser.send_json({"status": "error", "detail": str(e)})
         except Exception:
             pass
+        await close_browser()
         return
     finally:
         await ws_client.close()
@@ -383,8 +391,10 @@ async def exec_stream_to_websocket(
             await browser.send_json({"status": "error", "detail": str(error_status)})
         except Exception:
             pass
+        await close_browser()
         return
     try:
         await browser.send_json({"status": "done"})
     except Exception:
         pass
+    await close_browser()
