@@ -44,7 +44,7 @@ class TerminalHub:
         master_fd, slave_fd = pty.openpty()
         self._set_winsize(master_fd, self._cols, self._rows)
         env = os.environ.copy()
-        env.setdefault("TERM", "xterm-256color")
+        env.setdefault("TERM", "tmux-256color")
         self._process = subprocess.Popen(
             ["bash", BOOTSTRAP],
             stdin=slave_fd,

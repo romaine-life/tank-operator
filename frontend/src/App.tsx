@@ -43,6 +43,7 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
+  MonitorIcon,
   PlugIcon,
   SearchIcon,
   SendHorizontalIcon,
@@ -55,7 +56,6 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
 import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
@@ -79,7 +79,7 @@ type DefaultSessionMode = Extract<
   | "pi_subscription"
 >;
 type Provider = "anthropic" | "openai" | "pi";
-type SessionInteraction = "terminal" | "run" | "newterm";
+type SessionInteraction = "run" | "newterm";
 
 interface Session {
   id: string;
@@ -144,18 +144,17 @@ const PROVIDER_INTERACTION_MODES: Record<
   Provider,
   Partial<Record<SessionInteraction, DefaultSessionMode | null>>
 > = {
-  anthropic: { terminal: "subscription", run: "subscription_headless", newterm: "subscription_headless" },
-  openai: { terminal: "codex_subscription", run: "codex_headless", newterm: "codex_headless" },
-  pi: { terminal: "pi_subscription", run: null, newterm: null },
+  anthropic: { run: "subscription_headless", newterm: "subscription_headless" },
+  openai: { run: "codex_headless", newterm: "codex_headless" },
+  pi: { run: null, newterm: "pi_subscription" },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
-  terminal: "terminal",
   run: "gui",
-  newterm: "newterm",
+  newterm: "terminal",
 };
 
-const INTERACTION_OPTIONS: SessionInteraction[] = ["terminal", "run", "newterm"];
+const INTERACTION_OPTIONS: SessionInteraction[] = ["run", "newterm"];
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
@@ -176,11 +175,9 @@ const MODE_HINTS: Record<SessionMode, string> = {
 };
 
 const MODE_ORDER: SessionMode[] = [
-  "subscription",
   "subscription_headless",
   "api_key",
   "config",
-  "codex_subscription",
   "codex_headless",
   "codex_config",
   "pi_subscription",
@@ -193,7 +190,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     pod_name: "tank-demo-claude-code",
     owner: "preview",
     status: "Active",
-    mode: "subscription",
+    mode: "subscription_headless",
     requested_at: new Date(Date.now() - 12 * 60 * 1000 - 2 * 1000).toISOString(),
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
@@ -204,7 +201,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     pod_name: "tank-demo-codex-cli",
     owner: "preview",
     status: "Active",
-    mode: "codex_subscription",
+    mode: "codex_headless",
     requested_at: new Date(Date.now() - 68 * 60 * 1000 - 4 * 1000).toISOString(),
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
@@ -291,14 +288,14 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_subscription"
+  const template = session.mode === "codex_subscription" || session.mode === "codex_headless"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_subscription"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_subscription") {
+    if (session.mode === "codex_subscription" || session.mode === "codex_headless") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else if (session.mode === "pi_subscription") {
       lines[lines.length - 1] = `> ${promptText}`;
@@ -409,7 +406,7 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_subscription"
+  const label = mode === "codex_subscription" || mode === "codex_headless"
     ? "Codex"
     : mode === "pi_subscription"
       ? "Pi"
@@ -440,12 +437,8 @@ const DEMO_LANDING_LINES = [
 
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
-const SESSION_INITIAL_TAB_KEY_PREFIX = "tank.sessionTab:";
-const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
-const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
+const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
-const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
-const MIN_COMPLETION_SOUND_VOLUME = 0.05;
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
   return (
@@ -460,11 +453,13 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = localStorage.getItem(DEFAULT_SESSION_MODE_KEY);
+    if (stored === "subscription") return "subscription_headless";
+    if (stored === "codex_subscription") return "codex_headless";
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
   }
-  return "subscription";
+  return "subscription_headless";
 }
 
 function writeDefaultSessionMode(mode: DefaultSessionMode): void {
@@ -478,11 +473,12 @@ function writeDefaultSessionMode(mode: DefaultSessionMode): void {
 function readDefaultInteraction(): SessionInteraction {
   try {
     const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
-    if (stored === "terminal" || stored === "run" || stored === "newterm") return stored;
+    if (stored === "run" || stored === "newterm") return stored;
+    if (stored === "terminal") return "newterm";
   } catch {}
   // Back-compat: derive from stored session mode.
   const mode = readDefaultSessionMode();
-  return HEADLESS_MODES.has(mode) ? "run" : "terminal";
+  return HEADLESS_MODES.has(mode) ? "run" : "newterm";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
@@ -491,58 +487,18 @@ function writeDefaultInteraction(interaction: SessionInteraction): void {
   } catch {}
 }
 
-function readSessionInitialTab(id: string): "chat" | "shell" {
+function readSessionInteraction(id: string): SessionInteraction | null {
   try {
-    if (localStorage.getItem(SESSION_INITIAL_TAB_KEY_PREFIX + id) === "shell") return "shell";
+    const stored = localStorage.getItem(SESSION_INTERACTION_KEY_PREFIX + id);
+    if (stored === "run" || stored === "newterm") return stored;
   } catch {}
-  return "chat";
+  return null;
 }
 
-function writeSessionInitialTab(id: string, tab: "chat" | "shell"): void {
+function writeSessionInteraction(id: string, interaction: SessionInteraction): void {
   try {
-    localStorage.setItem(SESSION_INITIAL_TAB_KEY_PREFIX + id, tab);
+    localStorage.setItem(SESSION_INTERACTION_KEY_PREFIX + id, interaction);
   } catch {}
-}
-
-function readCompletionSoundEnabled(): boolean {
-  try {
-    return localStorage.getItem(COMPLETION_SOUND_ENABLED_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-function writeCompletionSoundEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem(COMPLETION_SOUND_ENABLED_KEY, enabled ? "1" : "0");
-  } catch {
-    // Preference persistence is best-effort.
-  }
-}
-
-function readCompletionSoundVolume(): number {
-  try {
-    const storedValue = localStorage.getItem(COMPLETION_SOUND_VOLUME_KEY);
-    if (storedValue == null || storedValue === "") return DEFAULT_COMPLETION_SOUND_VOLUME;
-    const stored = Number(storedValue);
-    if (Number.isFinite(stored) && stored > 0) {
-      return Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, stored));
-    }
-  } catch {
-    // Fall through to the default.
-  }
-  return DEFAULT_COMPLETION_SOUND_VOLUME;
-}
-
-function writeCompletionSoundVolume(volume: number): void {
-  try {
-    localStorage.setItem(
-      COMPLETION_SOUND_VOLUME_KEY,
-      String(Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, volume))),
-    );
-  } catch {
-    // Preference persistence is best-effort.
-  }
 }
 
 function sessionOrderStorageKey(user: SessionUser): string {
@@ -598,12 +554,6 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CODEX_MODES = new Set<SessionMode>([
-  "codex_subscription",
-  "codex_headless",
-  "codex_config",
-]);
-const PI_MODES = new Set<SessionMode>(["pi_subscription", "pi_config"]);
 const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
@@ -611,15 +561,13 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const CODEX_ROLLOUT_SUBMIT_DELAY_MS = 200;
-const AGENT_ACTIVITY_MODES = new Set<SessionMode>([...CODEX_MODES, ...PI_MODES]);
 const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
   return (
     PROVIDER_INTERACTION_MODES[provider][interaction] ??
-    PROVIDER_INTERACTION_MODES[provider].terminal!
+    PROVIDER_INTERACTION_MODES[provider].newterm!
   );
 }
 
@@ -640,11 +588,6 @@ type GlimmungLaunchContext = {
   glimmung_issue_id: string;
   glimmung_pr_id: string | null;
   validation_url: string | null;
-};
-
-type RolloutTimer = {
-  startedAtMs: number;
-  stoppedAtMs: number | null;
 };
 
 const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
@@ -716,18 +659,6 @@ function formatBootTime(ms: number): string {
   if (seconds < 1) return "<1s";
   if (seconds < 60) return `${seconds}s`;
   return formatRuntime(ms);
-}
-
-function formatRolloutElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 100) return `${seconds}s`;
-  if (seconds < 60 * 60) {
-    const minutes = Math.floor(seconds / 60);
-    const remaining = seconds % 60;
-    return `${minutes}:${String(remaining).padStart(2, "0")}`;
-  }
-  const hours = Math.floor(seconds / 3600);
-  return `${hours}h`;
 }
 
 function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
@@ -992,19 +923,43 @@ function IconReload() {
   );
 }
 
-function ModeChip({ mode }: { mode: SessionMode }) {
+function sessionInteractionForSession(session: Session): SessionInteraction | null {
+  const stored = readSessionInteraction(session.id);
+  if (stored) return stored;
+  if (HEADLESS_MODES.has(session.mode)) return "run";
+  return session.mode === "subscription" || session.mode === "codex_subscription" || session.mode === "pi_subscription"
+    ? "newterm"
+    : null;
+}
+
+function InteractionIcon({
+  interaction,
+  className,
+}: {
+  interaction: SessionInteraction;
+  className?: string;
+}) {
+  const Icon: LucideIcon = interaction === "run" ? MonitorIcon : TerminalIcon;
+  return <Icon className={className} aria-hidden="true" />;
+}
+
+function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: SessionInteraction | null }) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
+  const interactionLabel = interaction ? INTERACTION_LABELS[interaction] : null;
 
   return (
     <span
-      className={`mode mode-${mode}${icon ? " mode-icon-only" : ""}`}
-      title={MODE_LABELS[mode]}
-      aria-label={MODE_LABELS[mode]}
+      className={`mode mode-${mode}${icon ? " mode-icon-only" : ""}${interaction ? " mode-with-interaction" : ""}`}
+      title={interactionLabel ? `${MODE_LABELS[mode]} ${interactionLabel}` : MODE_LABELS[mode]}
+      aria-label={interactionLabel ? `${MODE_LABELS[mode]} ${interactionLabel}` : MODE_LABELS[mode]}
     >
       {icon ? (
         <>
           <ProviderIcon provider={icon} className="mode-provider-icon" />
+          {interaction && (
+            <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
+          )}
           <span className="sr-only">{label}</span>
         </>
       ) : (
@@ -1105,7 +1060,7 @@ function DemoLanding() {
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
-  const selectedMode = defaultModeFor(selectedProvider, "terminal");
+  const selectedMode = defaultModeFor(selectedProvider, "newterm");
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -1221,7 +1176,7 @@ function DemoLanding() {
             {modeMenuOpen && (
               <ul className="dropdown dropdown-provider" role="menu">
                 {PROVIDERS.map((provider) => {
-                  const mode = defaultModeFor(provider, "terminal");
+                  const mode = defaultModeFor(provider, "newterm");
                   return (
                     <li key={provider}>
                       <button
@@ -1295,7 +1250,7 @@ function DemoLanding() {
                     </button>
                   </div>
                   <div className="session-row-bottom">
-                    <ModeChip mode={s.mode} />
+                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {s.mode === "subscription" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
@@ -1327,7 +1282,7 @@ function DemoLanding() {
 
       <main className="workspace demo-workspace">
         <div
-          className={`demo-terminal${selected?.mode === "subscription" ? " is-claude" : " is-codex"}`}
+          className={`demo-terminal${selected?.mode === "subscription" || selected?.mode === "subscription_headless" ? " is-claude" : " is-codex"}`}
           role="img"
           aria-label="tank-operator terminal preview"
           tabIndex={0}
@@ -1764,7 +1719,7 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "shell" | "files";
+type RunTab = "chat" | "files";
 
 interface ComposerAttachment {
   id: string; // local-only id for keying
@@ -2841,7 +2796,7 @@ function HeadlessRun({
   // Mirrors cloudcli's ClaudeStatus idle state: persists last status text
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<RunTab>(() => readSessionInitialTab(session.id));
+  const [activeTab, setActiveTab] = useState<RunTab>("chat");
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3930,18 +3885,7 @@ function HeadlessRun({
         className={`run-main run-main-${runStatus}`}
         ref={transcriptScrollRef as React.RefObject<HTMLElement>}
       >
-        {activeTab === "shell" ? (
-          <div className="run-shell">
-            <Terminal
-              sessionId={session.id}
-              mode={session.mode}
-              status={session.status}
-              completionSoundEnabled={false}
-              completionSoundVolume={0}
-              visible={visible && activeTab === "shell"}
-            />
-          </div>
-        ) : activeTab === "files" ? (
+        {activeTab === "files" ? (
           <div className="run-files">
             <div className="run-files-breadcrumb">
               <button
@@ -4596,6 +4540,22 @@ function HeadlessRun({
   );
 }
 
+function LegacyInteractiveSession({ session }: { session: Session }) {
+  return (
+    <section className="run-panel">
+      <main className="run-main">
+        <div className="run-empty">
+          <AlertCircleIcon size={20} aria-hidden="true" />
+          <span className="run-muted">
+            {MODE_LABELS[session.mode]} used the removed interactive terminal path.
+            Create a GUI or terminal session from the launcher.
+          </span>
+        </div>
+      </main>
+    </section>
+  );
+}
+
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [booted, setBooted] = useState(false);
@@ -4619,12 +4579,8 @@ export function App() {
     window.history.replaceState({}, "", url.toString());
   }, [active]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
-  const [rolloutTimers, setRolloutTimers] = useState<Record<string, RolloutTimer>>({});
-  const [agentActivityBySession, setAgentActivityBySession] = useState<Record<string, AgentActivity>>({});
-  // Sessions whose Terminal stays mounted (so the WS keeps draining and
-  // scrollback survives switching). A session is mounted the first time it
-  // becomes active and unmounts only on deletion. Sessions you haven't
-  // touched don't open a WS — same opt-in semantic the old tab list had.
+  // Sessions stay mounted after first activation so chat state and websocket
+  // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
@@ -4636,19 +4592,11 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
-  const [completionSoundEnabled, setCompletionSoundEnabled] =
-    useState(readCompletionSoundEnabled);
-  const [completionSoundVolume, setCompletionSoundVolume] =
-    useState(readCompletionSoundVolume);
   // Inline rename state. `editingId` is the session whose row is currently
   // an <input>; `editingValue` holds the in-progress name. Reset on commit
   // or cancel. Triggered by clicking the session name.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
-  // One Terminal handle per session — populated by Terminal's forwardRef
-  // callback. Used by the inline "remote control" button to inject the
-  // /remote-control slash command into the live WS.
-  const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
@@ -4702,11 +4650,9 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    const hasRunningRolloutTimer = Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null);
-    const tickMs = hasRunningRolloutTimer ? 1000 : SESSION_RUNTIME_TICK_MS;
-    const t = setInterval(() => setNowMs(Date.now()), tickMs);
+    const t = setInterval(() => setNowMs(Date.now()), SESSION_RUNTIME_TICK_MS);
     return () => clearInterval(t);
-  }, [user, rolloutTimers]);
+  }, [user]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
@@ -4776,61 +4722,7 @@ export function App() {
       });
       return changed ? next : prev;
     });
-    setRolloutTimers((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      let changed = false;
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([id]) => {
-          const keep = existing.has(id);
-          if (!keep) changed = true;
-          return keep;
-        })
-      ) as Record<string, RolloutTimer>;
-      return changed ? next : prev;
-    });
-    setAgentActivityBySession((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      const next = Object.fromEntries(
-        Object.entries(prev).filter(([id]) => existing.has(id))
-      ) as Record<string, AgentActivity>;
-      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-    });
   }, [sessions, active, closingIds]);
-
-  useEffect(() => {
-    if (Object.values(rolloutTimers).some((timer) => timer.stoppedAtMs == null)) {
-      setNowMs(Date.now());
-    }
-  }, [rolloutTimers]);
-
-  function rolloutTimerLabel(sessionId: string): string | null {
-    const timer = rolloutTimers[sessionId];
-    if (!timer) return null;
-    return formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
-  }
-
-  function rolloutTimerTitle(sessionId: string, mode: SessionMode): string {
-    const timer = rolloutTimers[sessionId];
-    const action = CODEX_ROLLOUT_MODES.has(mode)
-      ? "type $rollout into this Codex session"
-      : "type /rollout into this Claude session";
-    if (!timer) return action;
-    const elapsed = formatRolloutElapsed((timer.stoppedAtMs ?? nowMs) - timer.startedAtMs);
-    return timer.stoppedAtMs == null
-      ? `rollout running for ${elapsed}`
-      : `rollout finished in ${elapsed}`;
-  }
-
-  function stopRolloutTimer(sessionId: string) {
-    setRolloutTimers((prev) => {
-      const timer = prev[sessionId];
-      if (!timer || timer.stoppedAtMs != null) return prev;
-      return {
-        ...prev,
-        [sessionId]: { ...timer, stoppedAtMs: Date.now() },
-      };
-    });
-  }
 
   useEffect(() => {
     const target = initialSessionId.current;
@@ -4851,7 +4743,6 @@ export function App() {
       event.stopPropagation();
       setActive(nextId);
       setMounted((prev) => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
-      focusTerminalAfterRender(nextId);
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
@@ -4860,21 +4751,6 @@ export function App() {
   function activate(id: string) {
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
-  }
-
-  function focusTerminalAfterRender(id: string, attempts = 6) {
-    window.requestAnimationFrame(() => {
-      const focused = terminalRefs.current.get(id)?.focus() ?? false;
-      if (!focused && attempts > 1) {
-        window.setTimeout(() => focusTerminalAfterRender(id, attempts - 1), 25);
-      }
-    });
-  }
-
-  function setAgentActivity(sessionId: string, activity: AgentActivity) {
-    setAgentActivityBySession((prev) =>
-      prev[sessionId] === activity ? prev : { ...prev, [sessionId]: activity }
-    );
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
@@ -4937,8 +4813,8 @@ export function App() {
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = await res.json();
-      if (HEADLESS_MODES.has(mode) && defaultInteraction === "newterm") {
-        writeSessionInitialTab(created.id, "shell");
+      if (HEADLESS_MODES.has(mode)) {
+        writeSessionInteraction(created.id, defaultInteraction);
       }
       await refresh();
       activate(created.id);
@@ -4951,7 +4827,15 @@ export function App() {
   }
 
   function setDefaultProvider(provider: Provider) {
-    const mode = defaultModeFor(provider, defaultInteraction);
+    const interaction =
+      PROVIDER_INTERACTION_MODES[provider][defaultInteraction] == null
+        ? "newterm"
+        : defaultInteraction;
+    const mode = defaultModeFor(provider, interaction);
+    if (interaction !== defaultInteraction) {
+      setDefaultInteraction(interaction);
+      writeDefaultInteraction(interaction);
+    }
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
     setModeMenuOpen(false);
@@ -4965,21 +4849,6 @@ export function App() {
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
     setInteractionMenuOpen(false);
-  }
-
-  function updateCompletionSoundEnabled(enabled: boolean) {
-    setCompletionSoundEnabled(enabled);
-    writeCompletionSoundEnabled(enabled);
-    if (enabled && completionSoundVolume <= 0) {
-      setCompletionSoundVolume(DEFAULT_COMPLETION_SOUND_VOLUME);
-      writeCompletionSoundVolume(DEFAULT_COMPLETION_SOUND_VOLUME);
-    }
-  }
-
-  function updateCompletionSoundVolume(volume: number) {
-    const nextVolume = Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, volume));
-    setCompletionSoundVolume(nextVolume);
-    writeCompletionSoundVolume(nextVolume);
   }
 
   async function renameSession(id: string, nextName: string | null) {
@@ -5030,7 +4899,6 @@ export function App() {
       next.delete(id);
       return next;
     });
-    terminalRefs.current.delete(id);
     setEditingId((prev) => (prev === id ? null : prev));
     setActive((prev) => {
       if (prev !== id) return prev;
@@ -5070,6 +4938,10 @@ export function App() {
       });
       if (!createRes.ok) throw new Error(`create failed: ${createRes.status}`);
       const created: Session = await createRes.json();
+      const existingInteraction = readSessionInteraction(existing.id);
+      if (existingInteraction) {
+        writeSessionInteraction(created.id, existingInteraction);
+      }
       if (existing.name) {
         await renameSession(created.id, existing.name);
       }
@@ -5080,30 +4952,6 @@ export function App() {
     } finally {
       setBusy(false);
     }
-  }
-
-  function startRemoteControl(id: string) {
-    // \r is what the terminal would send for the Enter key, so claude
-    // submits the line. Slash commands are evaluated client-side by the
-    // claude TUI, so this needs no orchestrator round-trip.
-    terminalRefs.current.get(id)?.sendInput("/remote-control\r");
-  }
-
-  function startRollout(id: string, mode: SessionMode) {
-    const startedAtMs = Date.now();
-    setNowMs(startedAtMs);
-    setRolloutTimers((prev) => ({
-      ...prev,
-      [id]: { startedAtMs, stoppedAtMs: null },
-    }));
-    const terminal = terminalRefs.current.get(id);
-    if (!terminal) return;
-    if (!CODEX_ROLLOUT_MODES.has(mode)) {
-      terminal.sendInput("/rollout\r");
-      return;
-    }
-    terminal.sendInput("$rollout ");
-    window.setTimeout(() => terminal.sendInput("\r"), CODEX_ROLLOUT_SUBMIT_DELAY_MS);
   }
 
   async function saveCredentials(id: string) {
@@ -5190,7 +5038,13 @@ export function App() {
                 aria-label="choose interaction"
                 aria-expanded={interactionMenuOpen}
               >
-                {INTERACTION_LABELS[defaultInteraction]}
+                <InteractionIcon
+                  interaction={defaultInteraction}
+                  className="new-row-interaction-icon"
+                />
+                <span className="new-row-interaction-label">
+                  {INTERACTION_LABELS[defaultInteraction]}
+                </span>
                 <IconChevronDown className="new-row-interaction-chevron" />
               </button>
               {interactionMenuOpen && (
@@ -5199,10 +5053,17 @@ export function App() {
                     <li key={interaction}>
                       <button
                         onClick={() => selectDefaultInteraction(interaction)}
-                        disabled={busy || (interaction !== "terminal" && MODE_MENU_ICONS[defaultSessionMode] === "pi")}
+                        disabled={
+                          busy ||
+                          PROVIDER_INTERACTION_MODES[MODE_MENU_ICONS[defaultSessionMode]][interaction] == null
+                        }
                         aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
                         className={defaultInteraction === interaction ? "is-selected" : undefined}
                       >
+                        <InteractionIcon
+                          interaction={interaction}
+                          className="dropdown-interaction-icon"
+                        />
                         {INTERACTION_LABELS[interaction]}
                       </button>
                     </li>
@@ -5271,19 +5132,10 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const agentActivity = isLive && AGENT_ACTIVITY_MODES.has(s.mode)
-                ? agentActivityBySession[s.id] ?? "waiting"
-                : null;
-              const statusDotClass = agentActivity
-                ? `status-dot status-codex-${agentActivity}`
-                : `status-dot status-${s.status.toLowerCase()}`;
-              const statusLabel = agentActivity
-                ? `${MODE_LABELS[s.mode]} ${agentActivity}`
-                : s.status;
+              const statusDotClass = `status-dot status-${s.status.toLowerCase()}`;
+              const statusLabel = s.status;
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
-              const rolloutLabel = rolloutTimerLabel(s.id);
-              const isRolloutTiming = Boolean(rolloutLabel);
               return (
                 <li
                   key={s.id}
@@ -5372,35 +5224,8 @@ export function App() {
                     </button>
                   </div>
                   <div className="session-row-bottom">
-                    <ModeChip mode={s.mode} />
+                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {isClosing && <span className="session-closing-chip">closing</span>}
-                    {s.mode === "subscription" && isLive && (
-                      <button
-                        className="session-action session-remote is-icon"
-                        onClick={(e) => { e.stopPropagation(); startRemoteControl(s.id); }}
-                        disabled={isClosing}
-                        title="type /remote-control into this session — claude will print a https://claude.ai/code/session_… URL you can open"
-                        aria-label="open remote control link"
-                      >
-                        <IconExternal />
-                      </button>
-                    )}
-                    {ROLLOUT_MODES.has(s.mode) && isLive && (
-                      <button
-                        className={`session-action session-rollout is-icon${isRolloutTiming ? " is-clicked is-timing" : ""}`}
-                        onClick={(e) => { e.stopPropagation(); startRollout(s.id, s.mode); }}
-                        disabled={isClosing}
-                        title={rolloutTimerTitle(s.id, s.mode)}
-                        aria-label="start rollout"
-                      >
-                        <TankIcon className="session-action-tank-icon" />
-                        {rolloutLabel && (
-                          <span className="session-rollout-timer" aria-hidden="true">
-                            {rolloutLabel}
-                          </span>
-                        )}
-                      </button>
-                    )}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"
@@ -5450,31 +5275,6 @@ export function App() {
                 <span className="dropdown-meta-value">{user.email}</span>
               </li>
               <li className="dropdown-divider" role="separator" />
-              <li className="dropdown-settings" role="none">
-                <label className="setting-toggle">
-                  <input
-                    type="checkbox"
-                    checked={completionSoundEnabled}
-                    onChange={(e) => updateCompletionSoundEnabled(e.target.checked)}
-                  />
-                  <span>Completion sound</span>
-                </label>
-                <label className="setting-range">
-                  <span>Volume</span>
-                  <input
-                    type="range"
-                    min={MIN_COMPLETION_SOUND_VOLUME}
-                    max="1"
-                    step="0.01"
-                    value={completionSoundVolume}
-                    disabled={!completionSoundEnabled}
-                    onChange={(e) => updateCompletionSoundVolume(Number(e.target.value))}
-                    aria-label="Completion sound volume"
-                  />
-                  <span className="setting-value">{Math.round(completionSoundVolume * 100)}%</span>
-                </label>
-              </li>
-              <li className="dropdown-divider" role="separator" />
               <li>
                 <button onClick={logout}>Sign out</button>
               </li>
@@ -5519,23 +5319,13 @@ export function App() {
                     <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} user={user!} />
                   </div>
                 ) : (
-                  <Terminal
+                  <div
                     key={s.id}
-                    ref={(h) => {
-                      if (h) terminalRefs.current.set(s.id, h);
-                      else terminalRefs.current.delete(s.id);
-                    }}
-                    sessionId={s.id}
-                    mode={s.mode}
-                    status={s.status}
-                    bootLabel={sessionBootLabel(s, nowMs)}
-                    bootTitle={sessionBootTitle(s, nowMs)}
-                    completionSoundEnabled={completionSoundEnabled}
-                    completionSoundVolume={completionSoundVolume}
-                    visible={active === s.id}
-                    onAgentActivityChange={setAgentActivity}
-                    onAgentCompletion={stopRolloutTimer}
-                  />
+                    className="run-body"
+                    hidden={active !== s.id}
+                  >
+                    <LegacyInteractiveSession session={s} />
+                  </div>
                 )
               )}
           </div>
