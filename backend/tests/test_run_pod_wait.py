@@ -68,3 +68,33 @@ def test_headless_script_preserves_exit_status_after_prompt_cleanup() -> None:
         permission_mode="acceptEdits",
     )
     assert "rm -f '/tmp/prompt one'; (exit $rc)" in script
+
+
+def test_check_active_run_on_pod_uses_specific_registry_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_exec_capture(
+        namespace: str, pod_name: str, command: list[str]
+    ) -> bytes:
+        captured["namespace"] = namespace
+        captured["pod_name"] = pod_name
+        captured["command"] = command
+        return b"run_abc 42\n"
+
+    monkeypatch.setattr(api, "exec_capture", fake_exec_capture)
+
+    result = asyncio.run(api._check_active_run_on_pod("session-abc", "run_abc"))
+
+    assert result == ("run_abc", 42)
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "/tmp/tank-run-run_abc.pid" in command[-1]
+    assert "ls -t /tmp/tank-run-*.pid" not in command[-1]
+
+
+def test_check_active_run_on_pod_rejects_malicious_registry_run() -> None:
+    result = asyncio.run(api._check_active_run_on_pod("session-abc", "../../bad"))
+
+    assert result is None

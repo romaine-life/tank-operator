@@ -56,7 +56,7 @@ from .exec_proxy import (
     exec_stream_to_websocket,
 )
 from .internal_api import build_router as build_internal_router
-from .profiles import ProfileStore, SessionRegistryStore
+from .profiles import ActiveRunStore, ProfileStore, SessionRegistryStore
 from .session_events import SessionEventBus
 from .sessions import (
     ACCEPTED_SESSION_MODES,
@@ -77,8 +77,11 @@ from .sessions import (
 )
 
 session_registry = SessionRegistryStore()
+active_runs = ActiveRunStore()
 session_events = SessionEventBus()
-sessions = SessionManager(registry=session_registry, events=session_events)
+sessions = SessionManager(
+    registry=session_registry, events=session_events, active_runs=active_runs
+)
 profiles = ProfileStore()
 log = logging.getLogger(__name__)
 
@@ -97,11 +100,13 @@ MAX_PASTE_IMAGE_BYTES = int(
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await profiles.startup()
     await session_registry.startup()
+    await active_runs.startup()
     await sessions.startup()
     try:
         yield
     finally:
         await sessions.shutdown()
+        await active_runs.shutdown()
         await session_registry.shutdown()
         await profiles.shutdown()
 
@@ -243,6 +248,64 @@ def _build_cancel_run_command(pid_path: str) -> list[str]:
             "fi"
         ),
     ]
+
+
+async def _check_active_run_on_pod(
+    pod_name: str, run_id: str | None = None
+) -> tuple[str, int] | None:
+    """Return the live run_id and stream byte offset if the pod process exists."""
+
+    if run_id:
+        safe_run_id = _validate_run_id(run_id)
+        if safe_run_id != run_id:
+            return None
+        pid_path = _shlex.quote(_run_pid_path(run_id))
+        stream_path = _shlex.quote(_run_stream_path(run_id))
+        check_script = (
+            f"pid_file={pid_path}; "
+            "[ ! -f \"$pid_file\" ] && exit 0; "
+            "pid=$(cat \"$pid_file\" 2>/dev/null || true); "
+            "[ -z \"$pid\" ] && exit 0; "
+            "kill -0 \"$pid\" 2>/dev/null || { rm -f \"$pid_file\"; exit 0; }; "
+            f"bytes=$(wc -c < {stream_path} 2>/dev/null || echo 0); "
+            f"echo {_shlex.quote(run_id)} \"$bytes\""
+        )
+    else:
+        # Fallback for older launches or registry write failures: scan the pod
+        # for a live pid file and return the first still-running process.
+        check_script = (
+            "for pid_file in $(ls -t /tmp/tank-run-*.pid 2>/dev/null); do "
+            "pid=$(cat \"$pid_file\" 2>/dev/null || true); "
+            "[ -z \"$pid\" ] && continue; "
+            "if kill -0 \"$pid\" 2>/dev/null; then "
+            "run_id=${pid_file#/tmp/tank-run-}; run_id=${run_id%.pid}; "
+            "stream_path=\"/tmp/tank-run-${run_id}.stream\"; "
+            "bytes=$(wc -c < \"$stream_path\" 2>/dev/null || echo 0); "
+            "echo \"$run_id $bytes\"; exit 0; "
+            "else rm -f \"$pid_file\"; fi; "
+            "done"
+        )
+    try:
+        out = await exec_capture(
+            SESSIONS_NAMESPACE, pod_name, ["bash", "-c", check_script]
+        )
+    except RuntimeError:
+        return None
+
+    line = out.decode().strip()
+    if not line:
+        return None
+    parts = line.split()
+    if len(parts) != 2:
+        return None
+    live_run_id, stream_bytes = parts[0], parts[1]
+    if _validate_run_id(live_run_id) != live_run_id:
+        return None
+    try:
+        stream_offset = int(stream_bytes)
+    except ValueError:
+        stream_offset = 0
+    return live_run_id, stream_offset
 
 
 def _build_tail_run_script(stream_path: str, offset: int = 0) -> str:
@@ -1102,40 +1165,39 @@ async def get_active_run(
     except PodNotReady:
         raise HTTPException(status_code=503, detail="pod not ready")
 
-    # Single exec: find the newest pid file, verify the process is still alive
-    # via kill -0 (guards against stale files from SIGKILL/OOM deaths where the
-    # trap didn't run), then return run_id and current stream byte offset.
-    # Outputs "<run_id> <stream_bytes>" on success, empty string if idle.
-    check_script = (
-        "pid_file=$(ls /tmp/tank-run-*.pid 2>/dev/null | head -1); "
-        "[ -z \"$pid_file\" ] && exit 0; "
-        "pid=$(cat \"$pid_file\" 2>/dev/null || true); "
-        "[ -z \"$pid\" ] && exit 0; "
-        "kill -0 \"$pid\" 2>/dev/null || { rm -f \"$pid_file\"; exit 0; }; "
-        "run_id=${pid_file#/tmp/tank-run-}; run_id=${run_id%.pid}; "
-        "stream_path=\"/tmp/tank-run-${run_id}.stream\"; "
-        "bytes=$(wc -c < \"$stream_path\" 2>/dev/null || echo 0); "
-        "echo \"$run_id $bytes\""
-    )
     try:
-        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, ["bash", "-c", check_script])
-    except RuntimeError:
-        return None
+        record = await active_runs.get_active(session_id)
+    except Exception as exc:
+        log.warning("failed to read active run registry for %s: %s", session_id, exc)
+        record = None
+    if record is not None:
+        live = await _check_active_run_on_pod(pod_name, record.run_id)
+        if live is not None:
+            run_id, stream_offset = live
+            return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
+        try:
+            await active_runs.mark_stale(session_id, record.run_id)
+        except Exception as exc:
+            log.warning("failed to mark active run stale %s: %s", record.run_id, exc)
 
-    line = out.decode().strip()
-    if not line:
+    live = await _check_active_run_on_pod(pod_name)
+    if live is None:
         return None
-
-    parts = line.split()
-    if len(parts) != 2:
-        return None
-    run_id, stream_bytes = parts[0], parts[1]
-    if not run_id or "/" in run_id:
-        return None
+    run_id, stream_offset = live
     try:
-        stream_offset = int(stream_bytes)
-    except ValueError:
-        stream_offset = 0
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+        provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+        await active_runs.start(
+            email=user.email,
+            session_id=session_id,
+            run_id=run_id,
+            pod_name=pod_name,
+            provider=provider,
+            stream_path=_run_stream_path(run_id),
+            pid_path=_run_pid_path(run_id),
+        )
+    except Exception as exc:
+        log.warning("failed to backfill active run %s: %s", run_id, exc)
 
     return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
 
@@ -1812,6 +1874,19 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             await ws.send_json({"status": "error", "detail": f"failed to launch run: {exc}"})
             await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="run launch failed")
             return
+        try:
+            await active_runs.start(
+                email=user.email,
+                session_id=session_id,
+                run_id=run_id,
+                pod_name=pod_name,
+                provider=provider,
+                stream_path=stream_path,
+                pid_path=pid_path,
+            )
+            session_events.publish(user.email)
+        except Exception as exc:
+            log.warning("failed to persist active run %s: %s", run_id, exc)
     await ws.send_json({"status": "attached", "run_id": run_id})
     command = ["bash", "-lc", _build_tail_run_script(stream_path, tail_offset)]
     async with sessions.track_ws(session_id):
@@ -1824,6 +1899,11 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 stdin=b"",
                 cancel_command=_build_cancel_run_command(pid_path),
             )
+            try:
+                await active_runs.mark_completed(session_id, run_id)
+                session_events.publish(user.email)
+            except Exception as exc:
+                log.warning("failed to mark active run complete %s: %s", run_id, exc)
         except WebSocketDisconnect:
             pass
 

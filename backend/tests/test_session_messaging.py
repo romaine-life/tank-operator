@@ -50,8 +50,8 @@ def test_pod_manifest_omits_legacy_mcp_tank_callback_env() -> None:
 class _DispatchFakeManager(SessionManager):
     """SessionManager stub that captures dispatch_headless's pod-side calls."""
 
-    def __init__(self, *, mode: str) -> None:
-        super().__init__()
+    def __init__(self, *, mode: str, active_runs: Any | None = None) -> None:
+        super().__init__(active_runs=active_runs)
         self._mode = mode
         self.captured_command: list[str] | None = None
         self.captured_prompt: bytes | None = None
@@ -96,6 +96,14 @@ async def _fake_launch_detached(
     )
 
 
+class _FakeActiveRuns:
+    def __init__(self) -> None:
+        self.started: list[dict[str, Any]] = []
+
+    async def start(self, **kwargs: Any) -> None:
+        self.started.append(kwargs)
+
+
 def test_dispatch_headless_rejects_non_headless_mode() -> None:
     manager = _DispatchFakeManager(mode="subscription")
     with pytest.raises(ValueError):
@@ -114,7 +122,10 @@ def test_dispatch_headless_rejects_non_headless_mode() -> None:
 def test_dispatch_headless_writes_prompt_and_backgrounds_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manager = _DispatchFakeManager(mode=SUBSCRIPTION_HEADLESS_MODE)
+    active_runs = _FakeActiveRuns()
+    manager = _DispatchFakeManager(
+        mode=SUBSCRIPTION_HEADLESS_MODE, active_runs=active_runs
+    )
 
     # exec_proxy is imported lazily inside dispatch_headless; patch the
     # module attributes so the late import picks up our stubs.
@@ -140,11 +151,21 @@ def test_dispatch_headless_writes_prompt_and_backgrounds_command(
     assert data == b"ship it"
 
     _, _, script, log_path = _fake_launch_detached.captured  # type: ignore[attr-defined]
-    assert log_path.startswith("/tmp/tank-headless-")
+    assert log_path.startswith("/tmp/tank-run-")
+    assert log_path.endswith(".stream")
     assert path in script
+    assert "/tmp/tank-run-" in script
+    assert ".pid" in script
     assert " true " in script  # follow_up flag splice
     assert "/opt/tank/headless-run.sh" in script
     assert "claude" in script  # claude_gui → claude provider
+    assert active_runs.started
+    assert active_runs.started[0]["email"] == "operator@example.test"
+    assert active_runs.started[0]["session_id"] == "abc123"
+    assert active_runs.started[0]["pod_name"] == "session-abc123"
+    assert active_runs.started[0]["provider"] == "claude"
+    assert active_runs.started[0]["stream_path"] == log_path
+    assert active_runs.started[0]["pid_path"].startswith("/tmp/tank-run-")
 
 
 def test_dispatch_headless_codex_provider(

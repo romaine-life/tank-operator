@@ -1613,6 +1613,10 @@ function toolResultText(content: unknown): string {
   return shortJson(content);
 }
 
+function isScheduleWakeupToolName(name: string | undefined): boolean {
+  return (name ?? "").toLowerCase() === "schedulewakeup";
+}
+
 function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const message = event.message;
   if (!isJsonObject(message) || !Array.isArray(message.content)) return entries;
@@ -1768,6 +1772,9 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   if (name === "Task" || name === "Agent") {
     return { Icon: BotIcon, colorClass: "tool-color-task" };
   }
+  if (isScheduleWakeupToolName(name)) {
+    return { Icon: TimerIcon, colorClass: "tool-color-plan" };
+  }
   if (name === "ExitPlanMode" || name === "EnterPlanMode") {
     return { Icon: ClipboardListIcon, colorClass: "tool-color-plan" };
   }
@@ -1775,6 +1782,23 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
     return { Icon: PlugIcon, colorClass: "tool-color-mcp" };
   }
   return { Icon: WrenchIcon, colorClass: "tool-color-default" };
+}
+
+function normalizeToolState(status: string | undefined): string {
+  const normalized = (status ?? "completed").toLowerCase();
+  if (
+    normalized === "started" ||
+    normalized === "running" ||
+    normalized === "pending" ||
+    normalized === "in_progress" ||
+    normalized === "in-progress"
+  ) {
+    return "running";
+  }
+  if (normalized === "done" || normalized === "success" || normalized === "succeeded") {
+    return "completed";
+  }
+  return normalized;
 }
 
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
@@ -2843,7 +2867,7 @@ function RunToolItem({
 }) {
   const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
-  const state = (entry.toolStatus ?? "completed") as string;
+  const state = normalizeToolState(entry.toolStatus);
   return (
     <div
       className="run-transcript-tool"
@@ -3042,6 +3066,7 @@ function HeadlessRun({
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
+  const scheduledWakeupRef = useRef(false);
   // Mirrors cloudcli's ClaudeStatus idle state: persists last status text
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
@@ -3334,28 +3359,47 @@ function HeadlessRun({
       .then(async (res) => {
         if (!res.ok) return;
         const data = (await res.json()) as { run_id: string; stream_offset: number } | null;
-        if (!data || currentRunRef.current) return;
-        const run = {
-          id: data.run_id,
-          prompt: "",
-          followUp: false,
-          model: "",
-          permissionMode: "",
-          turnStart: Date.now(),
-          reconnects: 0,
-          offset: data.stream_offset,
-          cancelled: false,
-        };
-        currentRunRef.current = run;
-        setRunning(true);
-        setRunStartedAt(Date.now());
-        setNow(Date.now());
-        openRunSocket(run, true);
+        attachActiveRun(data);
       })
       .catch(() => undefined);
   // openRunSocket is defined in the same render scope and intentionally omitted.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyAttempted, activeRunChecked, session.id, session.status, running]);
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active" || running || lastStatusText !== "Wakeup scheduled") return;
+    let cancelled = false;
+    let timer: number | null = null;
+    let attempts = 0;
+    const check = async () => {
+      attempts += 1;
+      try {
+        const res = await authedFetch(`/api/sessions/${session.id}/run/active`);
+        if (res.ok) {
+          const data = (await res.json()) as { run_id: string; stream_offset: number } | null;
+          if (!cancelled && attachActiveRun(data)) {
+            if (timer !== null) window.clearInterval(timer);
+            return;
+          }
+        }
+      } catch {
+        /* retry until the watch window expires */
+      }
+      if (!cancelled) refreshRunHistory(false);
+      if (attempts >= 120 && timer !== null) {
+        window.clearInterval(timer);
+      }
+    };
+    void check();
+    timer = window.setInterval(check, 5000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
+  // refreshRunHistory/openRunSocket are intentionally omitted; both close over
+  // current session state and the polling gate above controls when this runs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, session.id, session.status, running, lastStatusText]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -3945,6 +3989,9 @@ function HeadlessRun({
         }
       }
     } else if (t === "user") {
+      if (isScheduleWakeupToolName(activeToolNameRef.current ?? undefined)) {
+        scheduledWakeupRef.current = true;
+      }
       activeToolNameRef.current = null;
       setActiveToolName(null);
     } else if (t === "result") {
@@ -3976,6 +4023,27 @@ function HeadlessRun({
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
 
+  function attachActiveRun(data: { run_id: string; stream_offset: number } | null): boolean {
+    if (!data || currentRunRef.current) return false;
+    const run = {
+      id: data.run_id,
+      prompt: "",
+      followUp: false,
+      model: "",
+      permissionMode: "",
+      turnStart: Date.now(),
+      reconnects: 0,
+      offset: data.stream_offset,
+      cancelled: false,
+    };
+    currentRunRef.current = run;
+    setRunning(true);
+    setRunStartedAt(Date.now());
+    setNow(Date.now());
+    openRunSocket(run, true);
+    return true;
+  }
+
   function cancelRun() {
     const ws = wsRef.current;
     if (currentRunRef.current) currentRunRef.current.cancelled = true;
@@ -3986,6 +4054,7 @@ function HeadlessRun({
     wsRef.current = null;
     setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
     activeToolNameRef.current = null;
+    scheduledWakeupRef.current = false;
     setActiveToolName(null);
     setRunning(false);
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
@@ -4160,8 +4229,15 @@ function HeadlessRun({
           }
           return prev;
         });
-        setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
+        setLastStatusText(
+          scheduledWakeupRef.current
+            ? "Wakeup scheduled"
+            : activeToolNameRef.current
+              ? `Used ${formatToolLabel(activeToolNameRef.current)}`
+              : "Done",
+        );
         activeToolNameRef.current = null;
+        scheduledWakeupRef.current = false;
         setActiveToolName(null);
         setRunStatus("done");
         setRunning(false);
@@ -4174,6 +4250,7 @@ function HeadlessRun({
         currentRunRef.current = null;
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
         activeToolNameRef.current = null;
+        scheduledWakeupRef.current = false;
         setActiveToolName(null);
         setRunStatus("error");
         setRunning(false);
@@ -4210,6 +4287,7 @@ function HeadlessRun({
       currentRunRef.current = null;
       setLastStatusText("Connection lost");
       activeToolNameRef.current = null;
+      scheduledWakeupRef.current = false;
       setActiveToolName(null);
       setRunning(false);
       setEntries((entries) =>
