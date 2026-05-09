@@ -3790,8 +3790,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: start;
 }
 
-/* Avatars — pseudo-elements for the assistant icon (left column);
-   user avatar is a real element (.run-msg-avatar) in column 3. */
+/* Avatars — assistant and user avatars are real elements in the outer columns. */
 .run-transcript-message::before,
 .run-transcript-message::after {
   width: 1.7rem;
@@ -3828,15 +3827,23 @@ textarea.run-files-viewer-editor:focus {
   font-size: var(--run-chat-font-meta);
 }
 
-.run-transcript-message[data-variant="assistant"]::before {
-  content: "✶";
+.run-msg-ai-avatar {
   grid-column: 1;
   grid-row: 1;
-  background: rgba(249, 115, 22, 0.14);
-  color: #fb923c;
-  border: 1px solid rgba(251, 146, 60, 0.35);
-  font-size: var(--run-chat-font-star);
-  line-height: 1;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--mode-codex-subscription-bg);
+  color: var(--mode-codex-subscription-fg);
+  border: 1px solid rgba(120, 200, 180, 0.36);
+  flex-shrink: 0;
+}
+
+.run-transcript-message[data-variant="assistant"]::before {
+  content: none;
 }
 
 .run-transcript-message[data-variant="assistant"]::after {

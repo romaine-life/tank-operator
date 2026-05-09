@@ -2479,6 +2479,11 @@ function RunMessageBubble({
       data-role={variant}
       data-kind="message"
     >
+      {variant === "assistant" && (
+        <span className="run-msg-ai-avatar" aria-hidden="true">
+          <BotIcon size={14} strokeWidth={2} />
+        </span>
+      )}
       <div
         className="run-transcript-message-content"
         data-slot="message-content"
