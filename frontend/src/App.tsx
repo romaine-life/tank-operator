@@ -1387,6 +1387,21 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function normalizeIsoTimestamp(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function eventTime(event: JsonObject): string {
+  return (
+    normalizeIsoTimestamp(event.timestamp) ??
+    normalizeIsoTimestamp(event.time) ??
+    normalizeIsoTimestamp(event.created_at) ??
+    nowIso()
+  );
+}
+
 function upsertEntry(entries: TranscriptEntry[], entry: TranscriptEntry): TranscriptEntry[] {
   const index = entries.findIndex((candidate) => candidate.id === entry.id);
   if (index === -1) return [...entries, entry];
@@ -1401,13 +1416,14 @@ function appendMeta(
   title: string,
   detail?: string,
   severity: "info" | "error" = "info",
+  time: string = nowIso(),
 ): TranscriptEntry[] {
   return [
     ...entries,
     {
       id,
       kind: "meta",
-      time: nowIso(),
+      time,
       meta: { title, detail, severity },
     },
   ];
@@ -1417,6 +1433,7 @@ function appendAssistantMessage(
   entries: TranscriptEntry[],
   id: string,
   text: string,
+  time: string = nowIso(),
 ): TranscriptEntry[] {
   if (!text.trim()) return entries;
   return [
@@ -1426,7 +1443,7 @@ function appendAssistantMessage(
       kind: "message",
       role: "assistant",
       text,
-      time: nowIso(),
+      time,
     },
   ];
 }
@@ -1453,6 +1470,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
   const id = typeof item.id === "string" ? item.id : `codex-tool-${Date.now()}`;
   const status = typeof item.status === "string" ? item.status : String(event.type ?? "");
   const itemType = item.type;
+  const time = eventTime(event);
 
   if (itemType === "command_execution") {
     const command = typeof item.command === "string" ? item.command : "command";
@@ -1463,7 +1481,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
       toolInput: command,
       toolOutput: shortJson(item.aggregated_output),
       toolStatus: status,
-      time: nowIso(),
+      time,
     };
   }
 
@@ -1474,7 +1492,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
       toolName: "file change",
       toolInput: shortJson(item.changes),
       toolStatus: status,
-      time: nowIso(),
+      time,
     };
   }
 
@@ -1488,7 +1506,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
       toolInput: shortJson(item.arguments),
       toolOutput: shortJson(item.result ?? item.error),
       toolStatus: status,
-      time: nowIso(),
+      time,
     };
   }
 
@@ -1499,7 +1517,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
       toolName: "web search",
       toolInput: typeof item.query === "string" ? item.query : shortJson(item),
       toolStatus: status,
-      time: nowIso(),
+      time,
     };
   }
 
@@ -1508,6 +1526,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
 
 function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
+  const time = eventTime(event);
   if (type === "tank.user_message") {
     const text = typeof event.message === "string" ? event.message.trim() : "";
     if (!text || entries.some((entry) => entry.kind === "message" && entry.role === "user" && entry.text === text)) {
@@ -1520,19 +1539,19 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
         kind: "message",
         role: "user",
         text,
-        time: nowIso(),
+        time,
       },
     ];
   }
   if (type === "thread.started") {
     const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
-    return appendMeta(entries, `codex-thread-${threadId || Date.now()}`, "Codex thread started", threadId);
+    return appendMeta(entries, `codex-thread-${threadId || Date.now()}`, "Codex thread started", threadId, "info", time);
   }
   if (type === "turn.started") {
-    return appendMeta(entries, `codex-turn-started-${Date.now()}`, "Turn started");
+    return appendMeta(entries, `codex-turn-started-${Date.now()}`, "Turn started", undefined, "info", time);
   }
   if (type === "turn.completed") {
-    return appendMeta(entries, `codex-turn-completed-${Date.now()}`, "Turn completed", describeUsage(event.usage));
+    return appendMeta(entries, `codex-turn-completed-${Date.now()}`, "Turn completed", describeUsage(event.usage), "info", time);
   }
   if (type === "turn.failed" || type === "error") {
     const error = isJsonObject(event.error) ? event.error.message : event.message;
@@ -1542,6 +1561,7 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
       type === "turn.failed" ? "Turn failed" : "Codex error",
       typeof error === "string" ? error : shortJson(event),
       "error",
+      time,
     );
   }
   if (type === "item.started" || type === "item.updated" || type === "item.completed") {
@@ -1559,14 +1579,14 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
       return upsertEntry(entries, {
         id,
         kind: "reasoning",
-        time: nowIso(),
+        time,
         reasoning: { text: typeof item.text === "string" ? item.text : shortJson(item) },
       });
     }
     const toolEntry = codexToolEntry(event);
     return toolEntry ? upsertEntry(entries, toolEntry) : entries;
   }
-  return appendMeta(entries, `codex-event-${Date.now()}`, String(type || "Codex event"), shortJson(event));
+  return appendMeta(entries, `codex-event-${Date.now()}`, String(type || "Codex event"), shortJson(event), "info", time);
 }
 
 function claudeTextFromContent(content: unknown, includeToolResults: boolean): string {
@@ -1585,6 +1605,7 @@ function claudeTextFromContent(content: unknown, includeToolResults: boolean): s
 function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
   const message = event.message;
   if (!isJsonObject(message) || !Array.isArray(message.content)) return [];
+  const time = eventTime(event);
   return message.content.flatMap((block): TranscriptEntry[] => {
     if (!isJsonObject(block) || block.type !== "tool_use") return [];
     const id = typeof block.id === "string" ? block.id : `claude-tool-${Date.now()}`;
@@ -1595,7 +1616,7 @@ function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
         toolName: typeof block.name === "string" ? block.name : "tool",
         toolInput: shortJson(block.input),
         toolStatus: "started",
-        time: nowIso(),
+        time,
       },
     ];
   });
@@ -1620,6 +1641,7 @@ function isScheduleWakeupToolName(name: string | undefined): boolean {
 function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const message = event.message;
   if (!isJsonObject(message) || !Array.isArray(message.content)) return entries;
+  const time = eventTime(event);
   return message.content.reduce<TranscriptEntry[]>((nextEntries, block) => {
     if (!isJsonObject(block) || block.type !== "tool_result") return nextEntries;
     const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
@@ -1632,13 +1654,14 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
       toolInput: existing?.toolInput,
       toolOutput: toolResultText(block.content),
       toolStatus: block.is_error === true ? "failed" : "completed",
-      time: existing?.time ?? nowIso(),
+      time: existing?.time ?? time,
     });
   }, entries);
 }
 
 function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
+  const time = eventTime(event);
   // Skip internal claude-code events that appear in the JSONL file but are
   // not streamed via WebSocket and have no chat-visible meaning.
   if (
@@ -1663,6 +1686,7 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
         nextEntries,
         typeof event.uuid === "string" ? event.uuid : `claude-message-${Date.now()}`,
         text,
+        time,
       );
     }
     return nextEntries;
@@ -1697,7 +1721,7 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
               kind: "message" as const,
               role: "user" as const,
               text,
-              time: nowIso(),
+              time,
             },
           ];
         }
@@ -1710,7 +1734,7 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
     const result = typeof event.result === "string" ? event.result : "";
     if (!isError) {
       if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-        return appendAssistantMessage(entries, `claude-result-message-${Date.now()}`, result);
+        return appendAssistantMessage(entries, `claude-result-message-${Date.now()}`, result, time);
       }
       return entries;
     }
@@ -1720,13 +1744,14 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
       "Claude run failed",
       result,
       "error",
+      time,
     );
     if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result);
+      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result, time);
     }
     return nextEntries;
   }
-  return appendMeta(entries, `claude-event-${Date.now()}`, String(type || "Claude event"), shortJson(event));
+  return appendMeta(entries, `claude-event-${Date.now()}`, String(type || "Claude event"), shortJson(event), "info", time);
 }
 
 function applyProviderEvent(
