@@ -59,6 +59,7 @@ from .internal_api import build_router as build_internal_router
 from .profiles import ProfileStore, SessionRegistryStore
 from .session_events import SessionEventBus
 from .sessions import (
+    ACCEPTED_SESSION_MODES,
     CODEX_HEADLESS_MODE,
     DEFAULT_SESSION_MODE,
     HEADLESS_MODES,
@@ -71,6 +72,7 @@ from .sessions import (
     SessionManager,
     SessionNotFound,
     SessionNotOwned,
+    normalize_session_mode,
 )
 
 session_registry = SessionRegistryStore()
@@ -470,7 +472,10 @@ async def create_session(
     body: CreateSessionBody | None = None,
     user: User = Depends(current_user),
 ) -> SessionInfo:
-    mode = body.mode if body else DEFAULT_SESSION_MODE
+    raw_mode = body.mode if body else DEFAULT_SESSION_MODE
+    if raw_mode not in ACCEPTED_SESSION_MODES:
+        raise HTTPException(status_code=400, detail=f"unknown mode: {raw_mode}")
+    mode = normalize_session_mode(raw_mode)
     if mode not in SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {mode}")
     return await sessions.create(owner=user.email, mode=mode)
@@ -488,8 +493,9 @@ async def create_session_with_context(
     mcp-glimmung to read the Issue / Run / PR details from the source of
     truth while still booting with enough context to orient the operator.
     """
-    if body.mode not in SESSION_MODES:
+    if body.mode not in ACCEPTED_SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
+    mode = normalize_session_mode(body.mode)
     if body.caller_email and body.caller_email.lower() != user.email.lower():
         raise HTTPException(
             status_code=403, detail="caller_email does not match session user"
@@ -504,7 +510,7 @@ async def create_session_with_context(
     }
     created = await sessions.create(
         owner=user.email,
-        mode=body.mode,
+        mode=mode,
         glimmung_context=context,
     )
     session_url = str(request.base_url).rstrip("/") + f"/?session={created.id}"
@@ -672,7 +678,7 @@ async def list_session_skills(
 
     if session.mode.startswith("codex") or session.mode.startswith("pi"):
         roots = ["/home/node/.codex/skills"]
-    elif session.mode.startswith("subscription") or session.mode in ("api_key", "config"):
+    elif session.mode.startswith("claude_") or session.mode in ("api_key", "config"):
         roots = ["/home/node/.claude/skills"]
     else:
         roots = ["/home/node/.codex/skills", "/home/node/.claude/skills"]
@@ -1421,13 +1427,14 @@ async def spawn_run_session(
     Returns 202 once the run has been launched on the pod
     (fire-and-forget); poll /api/sessions/{id}/run/history for output.
     """
-    if body.mode not in HEADLESS_MODES:
+    mode = normalize_session_mode(body.mode)
+    if mode not in HEADLESS_MODES:
         raise HTTPException(
             status_code=400,
             detail=f"mode {body.mode!r} does not support headless runs",
         )
     _validate_prompt(body.prompt)
-    created = await sessions.create(owner=user.email, mode=body.mode)
+    created = await sessions.create(owner=user.email, mode=mode)
     if body.name:
         try:
             created = await sessions.set_name(

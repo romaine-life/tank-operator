@@ -59,7 +59,7 @@ new_interactive_session() {
 
 configure_git_identity() {
   case "${TANK_SESSION_MODE:-api_key}" in
-    codex_config|codex_subscription)
+    codex_config|codex_cli|codex_gui|codex_subscription|codex_headless)
       git config --global user.name "tank-operator-codex[bot]"
       git config --global user.email "tank-operator-codex@romaine.life"
       ;;
@@ -145,7 +145,7 @@ fi
 # refresh — known issue, Phase 2 (write-back sidecar or codex-api-proxy)
 # decides which way. See backend/src/tank_operator/sessions.py near
 # CODEX_SUBSCRIPTION_MODE for the full picture.
-if [ "${TANK_SESSION_MODE}" = "codex_subscription" ] || [ "${TANK_SESSION_MODE}" = "codex_headless" ]; then
+if [ "${TANK_SESSION_MODE}" = "codex_cli" ] || [ "${TANK_SESSION_MODE}" = "codex_gui" ] || [ "${TANK_SESSION_MODE}" = "codex_subscription" ] || [ "${TANK_SESSION_MODE}" = "codex_headless" ]; then
   mkdir -p $HOME/.codex
   # Translate /workspace/.mcp.json (claude shape) to codex's
   # [mcp_servers.X] TOML blocks. mcp-auth-proxy is transparent — the
@@ -200,7 +200,7 @@ EOF
     echo "no codex credentials found in /etc/codex-creds/auth.json" >&2
     echo "spawn a 'Codex (config)' session and complete \`codex login --device-auth\` first," >&2
     echo "then click Save Credentials. Once KV has the auth.json, ESO will mirror it" >&2
-    echo "into this namespace and a fresh codex_subscription pod will pick it up." >&2
+    echo "into this namespace and a fresh codex_cli pod will pick it up." >&2
     new_interactive_session 'exec bash'
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
@@ -221,7 +221,7 @@ EOF
 fi
 # Pi-subscription mode: curate all Tank-backed subscription auth into Pi's
 # native ~/.pi/agent/auth.json from existing Claude proxy and Codex credentials.
-if [ "${TANK_SESSION_MODE}" = "pi_subscription" ]; then
+if [ "${TANK_SESSION_MODE}" = "pi_cli" ] || [ "${TANK_SESSION_MODE}" = "pi_subscription" ]; then
   mkdir -p $HOME/.pi/agent
   cp /workspace/AGENTS.md $HOME/.pi/agent/AGENTS.md 2>/dev/null || true
   cat >> $HOME/.pi/agent/AGENTS.md <<'EOF'
@@ -338,7 +338,7 @@ if [ -f /workspace/.mcp.json ]; then
   mcp_enabled="$(jq -c '.mcpServers | keys' /workspace/.mcp.json)"
 fi
 case "${TANK_SESSION_MODE:-api_key}" in
-  subscription|subscription_headless)
+  claude_cli|claude_gui|subscription|subscription_headless)
     # Static placeholder credentials. The api-proxy in front of
     # api.anthropic.com strips this Authorization on every request and
     # injects the real token, so claude never needs valid creds locally.

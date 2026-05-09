@@ -103,22 +103,22 @@
   /* Mode chips (auth modes). subscription rides the unified accent; api-key
      uses muted lavender; config-sub uses warm clay — distinct without the
      candy-pink consumer warmth of the previous palette. */
-  --mode-subscription-bg: var(--accent-soft);
-  --mode-subscription-fg: var(--accent-fg);
-  --mode-subscription-headless-bg: rgba(229, 169, 132, 0.12);
-  --mode-subscription-headless-fg: #e8b28f;
+  --mode-claude-cli-bg: var(--accent-soft);
+  --mode-claude-cli-fg: var(--accent-fg);
+  --mode-claude-gui-bg: rgba(229, 169, 132, 0.12);
+  --mode-claude-gui-fg: #e8b28f;
   --mode-api-key-bg: rgba(159, 122, 234, 0.12);
   --mode-api-key-fg: #c8b6f5;
   --mode-config-bg: rgba(217, 119, 87, 0.12);
   --mode-config-fg: #e6b59a;
-  --mode-codex-subscription-bg: rgba(120, 200, 180, 0.12);
-  --mode-codex-subscription-fg: #9fd6c5;
-  --mode-codex-headless-bg: rgba(93, 190, 165, 0.14);
-  --mode-codex-headless-fg: #8bd7c5;
+  --mode-codex-cli-bg: rgba(120, 200, 180, 0.12);
+  --mode-codex-cli-fg: #9fd6c5;
+  --mode-codex-gui-bg: rgba(93, 190, 165, 0.14);
+  --mode-codex-gui-fg: #8bd7c5;
   --mode-codex-config-bg: rgba(180, 200, 120, 0.10);
   --mode-codex-config-fg: #c9d68b;
-  --mode-pi-subscription-bg: rgba(99, 179, 237, 0.12);
-  --mode-pi-subscription-fg: #9ccff2;
+  --mode-pi-cli-bg: rgba(99, 179, 237, 0.12);
+  --mode-pi-cli-fg: #9ccff2;
   --mode-pi-config-bg: rgba(99, 179, 237, 0.09);
   --mode-pi-config-fg: #b8d8ee;
 
@@ -1282,14 +1282,14 @@ button:disabled {
   flex-shrink: 0;
 }
 
-.mode-subscription        { background: var(--mode-subscription-bg); color: var(--mode-subscription-fg); }
-.mode-subscription_headless { background: var(--mode-subscription-headless-bg); color: var(--mode-subscription-headless-fg); }
+.mode-claude_cli        { background: var(--mode-claude-cli-bg); color: var(--mode-claude-cli-fg); }
+.mode-claude_gui { background: var(--mode-claude-gui-bg); color: var(--mode-claude-gui-fg); }
 .mode-api_key             { background: var(--mode-api-key-bg); color: var(--mode-api-key-fg); }
 .mode-config              { background: var(--mode-config-bg); color: var(--mode-config-fg); }
-.mode-codex_subscription  { background: var(--mode-codex-subscription-bg); color: var(--mode-codex-subscription-fg); }
-.mode-codex_headless      { background: var(--mode-codex-headless-bg); color: var(--mode-codex-headless-fg); }
+.mode-codex_cli  { background: var(--mode-codex-cli-bg); color: var(--mode-codex-cli-fg); }
+.mode-codex_gui      { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
-.mode-pi_subscription     { background: var(--mode-pi-subscription-bg); color: var(--mode-pi-subscription-fg); }
+.mode-pi_cli     { background: var(--mode-pi-cli-bg); color: var(--mode-pi-cli-fg); }
 .mode-pi_config           { background: var(--mode-pi-config-bg); color: var(--mode-pi-config-fg); }
 
 /* Profile footer — OWUI Sidebar.svelte:1593-1638 */
@@ -4071,8 +4071,8 @@ textarea.run-files-viewer-editor:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--mode-codex-subscription-bg);
-  color: var(--mode-codex-subscription-fg);
+  background: var(--mode-codex-cli-bg);
+  color: var(--mode-codex-cli-fg);
   border: 1px solid rgba(120, 200, 180, 0.36);
   flex-shrink: 0;
 }

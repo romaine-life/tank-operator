@@ -13,22 +13,22 @@
 import { useState } from "react";
 import { ProviderIcon } from "./providerIcons";
 
-const MODES = ["subscription", "api_key", "config", "codex_subscription"] as const;
+const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
-  subscription: "claude",
+  claude_cli: "claude-cli",
   api_key: "api",
   config: "config",
-  codex_subscription: "codex",
+  codex_cli: "codex-cli",
 };
 const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
-  subscription: "Claude",
+  claude_cli: "Claude CLI",
   api_key: "Claude API key",
   config: "Claude config",
-  codex_subscription: "Codex",
+  codex_cli: "Codex CLI",
 };
 const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">> = {
-  subscription: "anthropic",
-  codex_subscription: "openai",
+  claude_cli: "anthropic",
+  codex_cli: "openai",
 };
 const STATUSES = ["active", "pending", "error"] as const;
 
@@ -299,9 +299,9 @@ export function StyleguideView() {
                 </button>
               </div>
               <div className="session-row-bottom">
-                <span className="mode mode-subscription mode-icon-only" title="Claude" aria-label="Claude">
+                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
                   <ProviderIcon provider="anthropic" className="mode-provider-icon" />
-                  <span className="sr-only">claude</span>
+                  <span className="sr-only">claude-cli</span>
                 </span>
                 <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
                   <span>↗</span>
