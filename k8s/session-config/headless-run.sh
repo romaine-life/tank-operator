@@ -154,6 +154,7 @@ case "$provider" in
     configure_codex
     exec python3 - "$prompt_file" "$follow_up" "$model" <<'PY'
 import json
+import os
 import subprocess
 import sys
 
