@@ -4679,6 +4679,7 @@ function HeadlessRun({
         <footer
           className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
           ref={composerWrapRef}
+          style={chatFontScaleStyle}
           onDragOver={(e) => {
             e.preventDefault();
             if (!dragActive) setDragActive(true);
