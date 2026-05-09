@@ -2413,6 +2413,11 @@ function hasUrl(text: string): boolean {
   return found;
 }
 
+function PreWithLinks({ children, className }: { children: string; className?: string }) {
+  if (!hasUrl(children)) return <pre className={className}>{children}</pre>;
+  return <pre className={className}>{linkifyUrls(children)}</pre>;
+}
+
 function textFromCodeChildren(children: ReactNode): string {
   if (Array.isArray(children)) return children.map(textFromCodeChildren).join("");
   if (typeof children === "string" || typeof children === "number") return String(children);
@@ -2740,7 +2745,7 @@ function ToolDiffBody({
       {entry.toolOutput && (
         <details className="run-tool-output">
           <summary>Output</summary>
-          <pre>{entry.toolOutput}</pre>
+          <PreWithLinks>{entry.toolOutput}</PreWithLinks>
         </details>
       )}
     </div>
@@ -2783,7 +2788,7 @@ function ToolBashBody({
       {entry.toolOutput && (
         <>
           <div className="run-tool-section-title">output</div>
-          <pre className="run-tool-bash-out">{entry.toolOutput}</pre>
+          <PreWithLinks className="run-tool-bash-out">{entry.toolOutput}</PreWithLinks>
         </>
       )}
     </div>
@@ -2827,7 +2832,7 @@ function ToolDefaultBody({
       {entry.toolOutput && (
         <>
           <div className="run-tool-section-title">output</div>
-          <pre className="run-tool-default-pre">{entry.toolOutput}</pre>
+          <PreWithLinks className="run-tool-default-pre">{entry.toolOutput}</PreWithLinks>
         </>
       )}
     </div>
