@@ -13,7 +13,6 @@ from typing import Any, AsyncIterator
 
 from kubernetes_asyncio import client, config
 
-from .auth import mint_session_token_for_email
 from .profiles import SessionRecord, SessionRegistryStore
 
 log = logging.getLogger(__name__)
@@ -73,15 +72,6 @@ ARGOCD_TRACKING_APP = os.environ.get("ARGOCD_TRACKING_APP", "tank-operator-sessi
 # README's "killed when the tab closes" promise.
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("IDLE_TIMEOUT_SECONDS", "300"))
 REAPER_INTERVAL_SECONDS = int(os.environ.get("REAPER_INTERVAL_SECONDS", "60"))
-# In-cluster URL the orchestrator's own Service is reachable at. Stamped onto
-# each session pod as TANK_OPERATOR_URL so the in-pod mcp-tank stdio server
-# can call back to /api/sessions/* on behalf of the owner.
-TANK_OPERATOR_URL = os.environ.get(
-    "TANK_OPERATOR_URL",
-    "http://tank-operator.tank-operator.svc.cluster.local",
-)
-
-
 class SessionNotFound(Exception):
     pass
 
@@ -357,7 +347,6 @@ class SessionManager:
         owner: str,
         mode: str,
         glimmung_context: dict[str, Any] | None = None,
-        api_token: str | None = None,
     ) -> dict[str, Any]:
         owner_label = _owner_label(owner)
         pod_name = f"session-{session_id}"
@@ -497,15 +486,6 @@ class SessionManager:
                         # auto-wrap, and xterm.js's built-in OSC 8
                         # support renders them natively.
                         {"name": "FORCE_HYPERLINK", "value": "1"},
-                        # Orchestrator URL + per-pod session JWT so the
-                        # in-pod mcp-tank stdio server can call back as the
-                        # owning user. The JWT is bound to `owner` via the
-                        # same JWT_SECRET the orchestrator validates user
-                        # browser sessions with — one identity model, two
-                        # transports (browser cookie / pod env).
-                        {"name": "TANK_OPERATOR_URL", "value": TANK_OPERATOR_URL},
-                        {"name": "TANK_API_TOKEN", "value": api_token or ""},
-                        {"name": "TANK_SESSION_ID", "value": session_id},
                         # Switch claude's TUI to the alternate-screen-buffer
                         # renderer (vim/htop-style) instead of the default
                         # in-place redraw. Fixes the documented Ink
@@ -683,22 +663,9 @@ class SessionManager:
         # and injects the real one, refreshing against platform.claude.com
         # behind the scenes when it observes a 401.
         session_id = uuid.uuid4().hex[:10]
-        # Mint a per-pod JWT bound to the owner's email. If JWT_SECRET isn't
-        # configured (local dev / first install) skip injection — pods boot
-        # without TANK_API_TOKEN and the in-pod mcp-tank tools surface an
-        # actionable "no token" error instead of the orchestrator failing
-        # to spawn pods at all.
-        api_token: str | None
-        try:
-            api_token = mint_session_token_for_email(owner, sub=f"pod:{session_id}")
-        except Exception:
-            log.warning("could not mint TANK_API_TOKEN for %s; spawning without it", owner)
-            api_token = None
         created = await self._core.create_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
-            body=self._pod_manifest(
-                session_id, owner, mode, glimmung_context, api_token=api_token
-            ),
+            body=self._pod_manifest(session_id, owner, mode, glimmung_context),
         )
         # Seed activity so the reaper gives the session a full
         # IDLE_TIMEOUT to receive its first WS before being eligible

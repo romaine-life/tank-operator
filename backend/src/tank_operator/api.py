@@ -1322,10 +1322,8 @@ async def spawn_run_session(
 ) -> SpawnRunSessionResponse:
     """Create a new headless session and dispatch a first prompt to it.
 
-    Agent-to-agent handoff entrypoint paired with mcp-tank's
-    spawn_run_session tool. Returns 202 once the run has been launched on
-    the pod (fire-and-forget); poll /api/sessions/{id}/run/history for
-    output.
+    Returns 202 once the run has been launched on the pod
+    (fire-and-forget); poll /api/sessions/{id}/run/history for output.
     """
     if body.mode not in HEADLESS_MODES:
         raise HTTPException(
