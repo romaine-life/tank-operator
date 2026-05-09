@@ -24,7 +24,7 @@
     "radix-ui": "^1.4.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "sandbox-agent": "^0.2.2",
+    "sandbox-agent": "^0.4.2",
     "shadcn": "^4.7.0",
     "streamdown": "^2.5.0",
     "tailwind-merge": "^3.5.0",

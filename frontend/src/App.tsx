@@ -5,7 +5,8 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import type { TranscriptEntry } from "@sandbox-agent/react";
+import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
+import { SandboxAgent } from "sandbox-agent";
 import { Streamdown } from "streamdown";
 import {
   PromptInput,
@@ -56,7 +57,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Terminal, type AgentActivity, type TerminalHandle } from "./Terminal";
-import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
@@ -2818,6 +2819,67 @@ function RunMessages({
   );
 }
 
+function CliProcessTerminal({
+  session,
+  visible,
+}: {
+  session: Session;
+  visible: boolean;
+}) {
+  const [processId, setProcessId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const client = useMemo(
+    () =>
+      new SandboxAgent({
+        baseUrl: `${location.origin}/api/sessions/${session.id}/sandbox-agent`,
+        token: getStoredToken() ?? undefined,
+        skipHealthCheck: true,
+      }),
+    [session.id],
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    setError(null);
+    authedFetch(`/api/sessions/${session.id}/cli-process`, { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`CLI process create failed: ${res.status}`);
+        return (await res.json()) as { process_id: string };
+      })
+      .then((body) => {
+        if (!cancelled) setProcessId(body.process_id);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String((err as Error).message ?? err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, visible]);
+
+  if (error) {
+    return <div className="run-shell-error">{error}</div>;
+  }
+  if (!processId) {
+    return (
+      <div className="run-shell-loading">
+        <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+        <span>starting CLI…</span>
+      </div>
+    );
+  }
+  return (
+    <ProcessTerminal
+      client={client}
+      processId={processId}
+      className="run-process-terminal"
+      height="100%"
+      showStatusBar={false}
+    />
+  );
+}
+
 function HeadlessRun({
   session,
   visible,
@@ -3932,14 +3994,7 @@ function HeadlessRun({
       >
         {activeTab === "shell" ? (
           <div className="run-shell">
-            <Terminal
-              sessionId={session.id}
-              mode={session.mode}
-              status={session.status}
-              completionSoundEnabled={false}
-              completionSoundVolume={0}
-              visible={visible && activeTab === "shell"}
-            />
+            <CliProcessTerminal session={session} visible={visible && activeTab === "shell"} />
           </div>
         ) : activeTab === "files" ? (
           <div className="run-files">

@@ -246,6 +246,9 @@ def current_user_ws(ws: WebSocket) -> User:
     """Same check as current_user, but pulls headers/cookies off a raw WebSocket."""
     authorization = ws.headers.get("authorization")
     auth_cookie = ws.cookies.get(COOKIE_NAME)
+    auth_query = ws.query_params.get("access_token") or ws.query_params.get(COOKIE_NAME)
+    if auth_query:
+        auth_cookie = auth_query
     return _decode_session_token(_token_from_request(authorization, auth_cookie))
 
 
