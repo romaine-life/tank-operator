@@ -1492,6 +1492,22 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
 
 function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
+  if (type === "tank.user_message") {
+    const text = typeof event.message === "string" ? event.message.trim() : "";
+    if (!text || entries.some((entry) => entry.kind === "message" && entry.role === "user" && entry.text === text)) {
+      return entries;
+    }
+    return [
+      ...entries,
+      {
+        id: `codex-user-message-${Date.now()}`,
+        kind: "message",
+        role: "user",
+        text,
+        time: nowIso(),
+      },
+    ];
+  }
   if (type === "thread.started") {
     const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
     return appendMeta(entries, `codex-thread-${threadId || Date.now()}`, "Codex thread started", threadId);
@@ -2988,9 +3004,9 @@ function HeadlessRun({
   }, [entries, session.id]);
 
   // History replay — when localStorage is empty and the session is Active,
-  // fetch the most recent claude-code session JSONL from the pod and
-  // replay each event through applyClaudeEvent. Covers cross-browser /
-  // cleared-cache cases that localStorage can't.
+  // fetch provider JSONL from the pod and replay each event through the
+  // matching provider parser. Covers cross-browser / cleared-cache cases
+  // that localStorage can't.
   const [historyAttempted, setHistoryAttempted] = useState(false);
   // Toggled briefly when entries are restored (from localStorage OR backend
   // history) so we can show a "Continuing previous conversation" hint.
@@ -3021,7 +3037,7 @@ function HeadlessRun({
           try {
             const ev = JSON.parse(line);
             if (isJsonObject(ev)) {
-              acc = applyClaudeEvent(acc, ev);
+              acc = applyProviderEvent(acc, session.mode, ev);
             }
           } catch {
             /* skip unparseable */

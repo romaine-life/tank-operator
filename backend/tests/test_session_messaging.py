@@ -222,6 +222,16 @@ def test_codex_headless_runner_resumes_on_follow_up() -> None:
     assert 'args.extend(["--model", model])' in script
 
 
+def test_codex_headless_runner_mirrors_json_stream_to_history() -> None:
+    runner = Path(__file__).resolve().parents[2] / "k8s/session-config/headless-run.sh"
+    script = runner.read_text()
+
+    assert 'history_path = "/tmp/tank-run-history.ndjson"' in script
+    assert '"type": "tank.user_message"' in script
+    assert "history.buffer.write(data)" in script
+    assert "pty.spawn(args, master_read=master_read)" in script
+
+
 def test_dispatch_headless_validates_model_and_permission_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

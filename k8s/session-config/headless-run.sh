@@ -151,6 +151,7 @@ case "$provider" in
   codex)
     configure_codex
     exec python3 - "$prompt_file" "$follow_up" "$model" <<'PY'
+import json
 import os
 import pty
 import sys
@@ -158,6 +159,7 @@ import sys
 prompt_path = sys.argv[1]
 follow_up = sys.argv[2] == "true"
 model = sys.argv[3]
+history_path = "/tmp/tank-run-history.ndjson"
 with open(prompt_path, encoding="utf-8") as f:
     prompt = f.read()
 
@@ -169,7 +171,19 @@ args.extend(["--json", "--skip-git-repo-check"])
 if model:
     args.extend(["--model", model])
 args.append(prompt)
-status = pty.spawn(args)
+
+with open(history_path, "a", encoding="utf-8") as history:
+    history.write(json.dumps({"type": "tank.user_message", "message": prompt}) + "\n")
+    history.flush()
+
+    def master_read(fd: int) -> bytes:
+        data = os.read(fd, 1024)
+        if data:
+            history.buffer.write(data)
+            history.flush()
+        return data
+
+    status = pty.spawn(args, master_read=master_read)
 raise SystemExit(os.waitstatus_to_exitcode(status))
 PY
     ;;
