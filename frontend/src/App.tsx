@@ -2967,7 +2967,9 @@ function HeadlessRun({
   // applyStdoutLine when an `assistant` or `result` event with usage info
   // arrives. Drives the % ring in the composer footer.
   const [tokensUsed, setTokensUsed] = useState(0);
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+  const [queuedMessages, setQueuedMessages] = useState<
+    { id: string; text: string }[]
+  >([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
   const [slashOpen, setSlashOpen] = useState(false);
@@ -3040,6 +3042,11 @@ function HeadlessRun({
     entryIdSeqRef.current += 1;
     return `${prefix}-${session.id}-${entryIdSeqRef.current}`;
   }
+  const queuedMessageSeqRef = useRef(0);
+  function nextQueuedMessageId(): string {
+    queuedMessageSeqRef.current += 1;
+    return `queued-${session.id}-${queuedMessageSeqRef.current}`;
+  }
 
   const slashFiltered = slashOpen ? filterSlashCommands(slashQuery) : [];
   const mentionFiltered =
@@ -3075,17 +3082,17 @@ function HeadlessRun({
     return () => window.clearInterval(id);
   }, [running]);
 
-  // Auto-send a message that was submitted while a run was in progress.
+  // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
-    if (!running && pendingMessage !== null) {
-      const msg = pendingMessage;
-      setPendingMessage(null);
-      startRun(msg);
+    if (!running && queuedMessages.length > 0) {
+      const [nextMessage, ...remaining] = queuedMessages;
+      setQueuedMessages(remaining);
+      startRun(nextMessage.text);
     }
   // startRun is intentionally omitted — it's redefined each render, and
   // useEffect's closure gives us the fresh version when deps actually change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, pendingMessage]);
+  }, [running, queuedMessages]);
 
   // Auto-scroll the transcript to the bottom when entries grow, unless
   // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
@@ -3376,6 +3383,7 @@ function HeadlessRun({
   // entries to whatever's stored for that session.
   useEffect(() => {
     setEntries(loadStoredEntries(session.id));
+    setQueuedMessages([]);
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -3589,6 +3597,21 @@ function HeadlessRun({
     ta.focus();
   }
 
+  function setComposerValue(value: string) {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, value);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.focus();
+    const cursor = value.length;
+    ta.setSelectionRange(cursor, cursor);
+  }
+
   function applySlashCommand(name: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -3714,10 +3737,13 @@ function HeadlessRun({
       return [];
     });
     if (running) {
-      // Queue message to send once the current run finishes rather than
-      // silently dropping it (the PromptInput clears its textarea before
-      // calling onSubmit, so the text would otherwise be lost).
-      setPendingMessage(composed);
+      // Queue message to send once the current run finishes. PromptInput
+      // clears the textarea before this callback returns, so the visible
+      // queued-message list is the user's confirmation that the submit stuck.
+      setQueuedMessages((prev) => [
+        ...prev,
+        { id: nextQueuedMessageId(), text: composed },
+      ]);
       return;
     }
     startRun(composed);
@@ -4613,6 +4639,55 @@ function HeadlessRun({
               ))}
             </div>
           )}
+          {queuedMessages.length > 0 && (
+            <div className="run-queued-followups" aria-live="polite">
+              <div className="run-queued-followups-head">
+                <span>Queued follow-up inputs</span>
+                <span>{queuedMessages.length}</span>
+              </div>
+              <div className="run-queued-followups-list">
+                {queuedMessages.map((message, index) => (
+                  <div className="run-queued-followup" key={message.id}>
+                    <div className="run-queued-followup-index">
+                      {index + 1}
+                    </div>
+                    <div className="run-queued-followup-text" title={message.text}>
+                      {message.text}
+                    </div>
+                    <button
+                      type="button"
+                      className="run-queued-followup-action"
+                      aria-label="Edit queued follow-up"
+                      title="Edit queued follow-up"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setQueuedMessages((prev) =>
+                          prev.filter((item) => item.id !== message.id),
+                        );
+                        setComposerValue(message.text);
+                      }}
+                    >
+                      <SquarePenIcon size={13} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-queued-followup-action"
+                      aria-label="Remove queued follow-up"
+                      title="Remove queued follow-up"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setQueuedMessages((prev) =>
+                          prev.filter((item) => item.id !== message.id),
+                        );
+                      }}
+                    >
+                      <XIcon size={13} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <PromptInput onSubmit={handleSubmit} className="run-composer">
             <PromptInputTextarea
               className="run-composer-textarea"
@@ -4747,18 +4822,7 @@ function HeadlessRun({
                     // before the click reaches it (which would also
                     // close the slash palette via blur).
                     e.preventDefault();
-                    const wrap = composerWrapRef.current;
-                    const ta = wrap?.querySelector("textarea") as
-                      | HTMLTextAreaElement
-                      | null;
-                    if (!ta) return;
-                    const setter = Object.getOwnPropertyDescriptor(
-                      window.HTMLTextAreaElement.prototype,
-                      "value",
-                    )?.set;
-                    setter?.call(ta, "");
-                    ta.dispatchEvent(new Event("input", { bubbles: true }));
-                    ta.focus();
+                    setComposerValue("");
                   }}
                 >
                   <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
