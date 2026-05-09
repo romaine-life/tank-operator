@@ -134,10 +134,9 @@ RUN if [ "${TANK_AGENT}" = "pi" ]; then \
     fi
 
 # Hide tmux's status bar so the TUI gets the full terminal height.
-# tmux is the WS-reconnect-survival wrapper for agent sessions
-# (see tank-bootstrap.sh); the status bar would steal one row. Mouse mode
-# lets tmux handle wheel scrolling when the browser is attached to tmux.
-RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\nset -s extended-keys on\nset -as terminal-features "xterm*:extkeys"\n' > /home/node/.tmux.conf \
+# tmux is the reconnect-survival wrapper for agent sessions
+# (see tank-bootstrap.sh); the status bar would steal one row.
+RUN printf 'set -g status off\nset -g default-terminal "tmux-256color"\nset -g mouse on\nset -s extended-keys on\n' > /home/node/.tmux.conf \
     && chown node:node /home/node/.tmux.conf
 
 # Run the agent as a non-root user so claude's safety check accepts

@@ -43,10 +43,10 @@
 # the same PTY/scrollback. If claude exits we fall through to bash so the
 # WS stays useful.
 #
-# Browser kubectl-exec PTYs report TERM=xterm but do not advertise the U8
-# terminfo capability, which makes tmux attach clients with client_utf8=0.
-# In that mode tmux substitutes unsupported Unicode glyphs with underscores
-# on redraw, even though the pane history itself still contains UTF-8.
+# Some PTY clients do not advertise the U8 terminfo capability, which makes
+# tmux attach clients with client_utf8=0. In that mode tmux substitutes
+# unsupported Unicode glyphs with underscores on redraw, even though the pane
+# history itself still contains UTF-8.
 tmux_utf8=(tmux -u)
 
 new_interactive_session() {

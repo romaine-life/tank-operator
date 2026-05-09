@@ -1,9 +1,8 @@
 # tank-operator
 
 Web frontend over a thin K8s orchestrator that spawns ephemeral agent pods on
-demand. "+ button → fresh agent shell, terminal opens in a browser tab, killed when the tab
-closes." See [issue #1](https://github.com/nelsong6/tank-operator/issues/1) for the full
-design and rationale.
+demand. The launcher creates GUI/headless agent sessions backed by Kubernetes
+pods.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
 in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy` and `terminald`
@@ -35,7 +34,7 @@ referenced here as data sources.
 
 ```
 backend/                      FastAPI + kubernetes-asyncio orchestrator
-frontend/                     Vite + React UI (xterm.js arrives in Phase 2)
+frontend/                     Vite + React UI
 Dockerfile                    multi-stage: vite build → python runtime
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret
 .github/workflows/build.yml   OIDC az login → build → push to ACR
@@ -43,9 +42,9 @@ k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalS
 
 ## Phases
 
-1. **Skeleton** (this commit) — orchestrator Deployment up; `POST /api/sessions` creates a
-   Job; `GET`/`DELETE` work; frontend `+` button hits the API and lists sessions. No exec.
-2. **Exec** — WebSocket proxy + xterm.js. End-to-end terminal in browser.
+1. **Skeleton** — orchestrator Deployment up; `POST /api/sessions` creates a
+   session pod; `GET`/`DELETE` work; frontend launcher hits the API and lists sessions.
+2. **Headless runs** — WebSocket streaming for Claude/Codex run output.
 3. **Polish** — tab UI, sidebar, idle reaper, optional per-session PVC.
 
 ## Local dev

@@ -504,10 +504,8 @@ button:disabled {
 }
 
 .new-row-provider-toggle {
-  width: 2.75rem;
-  min-width: 2.75rem;
-  display: grid;
-  grid-template-columns: 2rem 0.75rem;
+  width: 2rem;
+  min-width: 2rem;
   padding: 0;
   border-radius: var(--radius-xl);
   background: var(--bg-sidebar-control);
@@ -521,20 +519,22 @@ button:disabled {
 
 .new-row-interaction-toggle {
   height: 2rem;
-  min-width: 3.75rem;
-  padding: 0 var(--space-2);
+  width: 2rem;
+  min-width: 2rem;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
   border-radius: var(--radius-xl);
   background: var(--bg-sidebar-control);
   color: var(--text-muted);
-  font-family: var(--font-primary);
-  font-size: 11px;
-  text-transform: lowercase;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-  width: 100%;
+}
+
+.new-row-interaction-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
 }
 
 .new-row-interaction-toggle:hover:not(:disabled) {
@@ -549,20 +549,39 @@ button:disabled {
   box-shadow: none;
 }
 
-.new-row-interaction-chevron {
-  width: 0.65rem;
-  height: 0.65rem;
-  flex-shrink: 0;
-}
-
-.dropdown-interaction {
+.dropdown.dropdown-interaction {
   top: 100%;
   left: 0;
-  min-width: 100%;
+  width: 2rem;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0 0 var(--space-1);
+  border-color: transparent;
+  border-top: 1px solid var(--gray-800);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+  box-shadow: none;
   transform-origin: top left;
 }
 
-.dropdown-interaction button.is-selected {
+.dropdown.dropdown-interaction button {
+  width: 100%;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: row;
+  gap: 0;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+
+.dropdown-interaction-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex-shrink: 0;
+}
+
+.dropdown.dropdown-interaction button.is-selected {
   color: var(--text-primary);
 }
 
@@ -576,8 +595,8 @@ button:disabled {
 }
 
 .new-row-action {
-  width: 2.25rem;
-  min-width: 2.25rem;
+  width: 2rem;
+  min-width: 2rem;
 }
 
 .new-row-provider-toggle.is-open {
@@ -595,11 +614,7 @@ button:disabled {
 }
 
 .new-row-provider-chevron {
-  width: 0.75rem;
-  height: 0.75rem;
-  color: var(--text-faint);
-  justify-self: center;
-  flex-shrink: 0;
+  display: none;
 }
 
 .new-row-action {
@@ -625,6 +640,14 @@ button:disabled {
   align-items: center;
   justify-content: center;
   color: currentColor;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.row-icon svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 .new-row-provider-icon {
@@ -770,7 +793,7 @@ button:disabled {
 .dropdown-provider {
   top: 100%;
   left: 0;
-  width: 2.75rem;
+  width: 2rem;
   min-width: 0;
   box-sizing: border-box;
   padding: 0 0 var(--space-1);
@@ -990,7 +1013,7 @@ button:disabled {
 .session-row-bottom {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 4px;
   /* Indent so chips/actions visually align with the name above the dot. */
   padding-left: calc(6px + var(--space-2));
   padding-right: 28px;
@@ -1204,12 +1227,24 @@ button:disabled {
 }
 
 .mode-icon-only {
-  width: 22px;
+  width: 18px;
   height: 18px;
   padding: 0;
 }
 
+.mode-provider-chip,
+.mode-interaction-chip {
+  background: var(--gray-850);
+  color: var(--text-muted);
+}
+
 .mode-provider-icon {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
+.mode-interaction-icon {
   width: 12px;
   height: 12px;
   display: block;
@@ -1581,7 +1616,9 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
   line-height: 0;
 }
 
@@ -2585,50 +2622,6 @@ button:disabled {
 /* Model picker dropdown — rendered from the provider card. */
 .run-model-menu {
   min-width: 16rem;
-}
-
-/* Shell tab content — Ghostty-backed ProcessTerminal surface. */
-.run-shell {
-  flex: 1 1 auto;
-  min-height: 0;
-  min-width: 0;
-  position: relative;
-  background: var(--bg-base, #0a0a0a);
-}
-
-.run-process-terminal {
-  width: 100%;
-  height: 100%;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: var(--bg-base, #0a0a0a) !important;
-  --run-terminal-font-scale: 1;
-}
-
-.run-process-terminal-scaled > [role="presentation"] {
-  overflow: hidden;
-}
-
-.run-process-terminal-scaled > [role="presentation"] > * {
-  width: calc(100% / var(--run-terminal-font-scale)) !important;
-  height: calc(100% / var(--run-terminal-font-scale)) !important;
-  transform: scale(var(--run-terminal-font-scale));
-  transform-origin: top left;
-}
-
-.run-shell-loading,
-.run-shell-error {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  color: var(--text-muted);
-  font-size: 0.875rem;
-}
-
-.run-shell-error {
-  color: var(--danger, #f87171);
 }
 
 /* Files tab — split view: entry list on the left, file preview on right. */
@@ -4100,41 +4093,6 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--run-chat-font-xs);
-}
-
-.terminal-body,
-.terminal-waiting {
-  position: absolute;
-  inset: 0;
-}
-
-.terminal-body {
-  padding: var(--space-2);
-  overflow: hidden;
-}
-
-.terminal-body .xterm-viewport {
-  scrollbar-width: none;
-}
-
-.terminal-body .xterm-viewport::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.terminal-waiting {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-
-.terminal-waiting-time {
-  color: var(--text);
 }
 
 /*

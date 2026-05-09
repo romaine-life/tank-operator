@@ -5,8 +5,8 @@
  * primary monospace fonts (ui-monospace / Cascadia Code / Consolas /
  * monospace).
  *
- * font-display: swap so xterm doesn't block on font load — initial render
- * shows replacement chars briefly, then re-renders with the real glyphs.
+ * font-display: swap so initial render shows replacement chars briefly, then
+ * re-renders with the real glyphs.
  */
 @font-face {
   font-family: "Symbols Nerd Font Mono";

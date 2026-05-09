@@ -476,15 +476,7 @@ class SessionManager:
                         },
                         # Force claude (and anything else using the
                         # `supports-hyperlinks` npm lib) to emit OSC 8
-                        # hyperlinks. The library's terminal-sniff list
-                        # doesn't recognise xterm.js, so without this
-                        # claude falls back to plain text URLs and we'd
-                        # have to detect wrapped URLs heuristically in
-                        # frontend/src/wrappedLinkProvider.ts. With OSC 8
-                        # the terminal gets explicit "this byte range is
-                        # one link" markers regardless of newlines or
-                        # auto-wrap, and xterm.js's built-in OSC 8
-                        # support renders them natively.
+                        # hyperlinks when a CLI surface is attached.
                         {"name": "FORCE_HYPERLINK", "value": "1"},
                         # Switch claude's TUI to the alternate-screen-buffer
                         # renderer (vim/htop-style) instead of the default
@@ -492,9 +484,7 @@ class SessionManager:
                         # SIGWINCH redraw-leak (anthropics/claude-code#49086)
                         # and full-buffer redraw drift (#29937) — both of
                         # which manifest as ghost lines and post-resize text
-                        # collisions in xterm.js, since xterm.js is the same
-                        # rendering-throughput-bound consumer class as the
-                        # VS Code integrated terminal that the docs call out.
+                        # collisions in browser-hosted terminal renderers.
                         {"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
                     ],
                     "envFrom": [
