@@ -3661,7 +3661,7 @@ function HeadlessRun({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen) {
         e.preventDefault();
-        cancelRun();
+        cancelRun("ESC key");
       }
     };
     window.addEventListener("keydown", onKey, true);
@@ -3981,8 +3981,7 @@ function HeadlessRun({
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
 
-  function cancelRun() {
-    console.warn("[tank] cancelRun called", new Error().stack);
+  function cancelRun(reason = "unknown") {
     const ws = wsRef.current;
     if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
@@ -3990,6 +3989,9 @@ function HeadlessRun({
     }
     ws?.close();
     wsRef.current = null;
+    setEntries((prev) =>
+      appendMeta(prev, nextEntryId("cancel"), "run cancelled", `trigger: ${reason}`),
+    );
     setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
     activeToolNameRef.current = null;
     setActiveToolName(null);
@@ -4844,7 +4846,7 @@ function HeadlessRun({
               <button
                 type="button"
                 className="run-status-stop"
-                onClick={cancelRun}
+                onClick={() => cancelRun("stop button")}
                 aria-label="Stop generating"
               >
                 <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
@@ -5283,7 +5285,7 @@ function HeadlessRun({
               <PromptInputSubmit
                 className="run-submit-btn"
                 status={submitStatus}
-                onStop={cancelRun}
+                onStop={() => cancelRun("stop button")}
                 disabled={!ready}
               >
                 {/* When idle, force the cloudcli-style paper-plane icon.
