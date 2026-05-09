@@ -1008,7 +1008,7 @@ button:disabled {
 .session-row-bottom {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 4px;
   /* Indent so chips/actions visually align with the name above the dot. */
   padding-left: calc(6px + var(--space-2));
   padding-right: 28px;
@@ -1610,7 +1610,9 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px;
+  width: 22px;
+  height: 18px;
+  padding: 0;
   line-height: 0;
 }
 
