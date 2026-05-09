@@ -1,0 +1,14 @@
+{{- if .Values.orchestrator.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tank-operator
+  namespace: {{ .Values.namespaces.orchestrator }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+spec:
+  minAvailable: {{ .Values.orchestrator.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tank-operator
+{{- end }}

@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced — no implicit `:latest` drift.
-  tag: "def5465"
+  tag: "3ebbd5a"
   pullPolicy: IfNotPresent
 
 namespaces:
@@ -15,7 +15,12 @@ orchestrator:
   # cluster's shared workload-identity pool — the orchestrator only needs in-cluster
   # K8s API auth (projected SA token + RoleBinding).
   serviceAccount: tank-operator
-  replicas: 1
+  replicas: 2
+  terminationGracePeriodSeconds: 75
+  preStopSleepSeconds: 20
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
 
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on

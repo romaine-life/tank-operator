@@ -44,3 +44,27 @@ def test_wait_for_run_pod_name_sends_keepalive_while_pending(
         payload == {"keepalive": True, "phase": "waiting_for_pod"}
         for payload in ws.sent
     )
+
+
+def test_run_id_validation_rejects_shell_metacharacters() -> None:
+    assert api._validate_run_id("run_abc-123.ok") == "run_abc-123.ok"
+    generated = api._validate_run_id("bad; rm -rf /")
+    assert generated != "bad; rm -rf /"
+    assert api._run_stream_path(generated).startswith("/tmp/tank-run-")
+
+
+def test_tail_script_resumes_from_offset_and_waits_for_marker() -> None:
+    script = api._build_tail_run_script("/tmp/tank-run-abc.stream", offset=42)
+    assert "tail -c +43 -F /tmp/tank-run-abc.stream" in script
+    assert api._HEADLESS_RUN_EXIT_MARKER in script
+
+
+def test_headless_script_preserves_exit_status_after_prompt_cleanup() -> None:
+    script = api._build_headless_script(
+        provider="codex",
+        prompt_path="/tmp/prompt one",
+        follow_up=True,
+        model="gpt-5.4",
+        permission_mode="acceptEdits",
+    )
+    assert "rm -f '/tmp/prompt one'; (exit $rc)" in script

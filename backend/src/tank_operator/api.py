@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import logging
+import re as _re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -122,11 +123,12 @@ MAX_HEADLESS_PROMPT_BYTES = int(
 # headless-run.sh's positional args 4 + 5 (model, permission_mode) reach the
 # claude/codex CLI verbatim. Constraining what gets there to a tight charset
 # means we can splice them into bash command literals without a quoting layer.
-import re as _re_arg
 import secrets as _secrets
 import shlex as _shlex
-_HEADLESS_ARG_PATTERN = _re_arg.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_HEADLESS_ARG_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_RUN_ID_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
+_HEADLESS_RUN_EXIT_MARKER = "__TANK_RUN_EXIT__:"
 _RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
 _SESSION_EVENTS_KEEPALIVE_SECONDS = 10
 
@@ -141,6 +143,20 @@ def _validate_headless_arg(value: str | None) -> str:
 
 def _new_prompt_path() -> str:
     return f"{_HEADLESS_PROMPT_DIR}/tank-prompt-{_secrets.token_hex(8)}"
+
+
+def _validate_run_id(value: str | None) -> str:
+    if isinstance(value, str) and _RUN_ID_PATTERN.match(value):
+        return value
+    return _secrets.token_hex(12)
+
+
+def _run_stream_path(run_id: str) -> str:
+    return f"/tmp/tank-run-{run_id}.stream"
+
+
+def _run_pid_path(run_id: str) -> str:
+    return f"/tmp/tank-run-{run_id}.pid"
 
 
 async def _wait_for_run_pod_name(owner: str, session_id: str, ws: WebSocket) -> str:
@@ -185,7 +201,52 @@ def _build_headless_script(
     return (
         f"bash /opt/tank/headless-run.sh {provider} {quoted_path} "
         f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}'"
-        f"; rc=$?; rm -f {quoted_path}; exit $rc"
+        f"; rc=$?; rm -f {quoted_path}; (exit $rc)"
+    )
+
+
+def _build_live_run_script(script: str, pid_path: str) -> str:
+    marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
+    quoted_pid_path = _shlex.quote(pid_path)
+    return (
+        f"echo $$ > {quoted_pid_path}; "
+        "trap 'rc=$?; exit $rc' TERM INT; "
+        f"{script}; rc=$?; "
+        f"rm -f {quoted_pid_path}; "
+        f"printf '\\n%s%s\\n' {marker} \"$rc\"; "
+        f"exit $rc"
+    )
+
+
+def _build_cancel_run_command(pid_path: str) -> list[str]:
+    quoted_pid_path = _shlex.quote(pid_path)
+    return [
+        "bash",
+        "-lc",
+        (
+            f"pid=$(cat {quoted_pid_path} 2>/dev/null || true); "
+            "if [ -n \"$pid\" ]; then "
+            "pkill -TERM -P \"$pid\" 2>/dev/null || true; "
+            "kill -TERM \"$pid\" 2>/dev/null || true; "
+            "fi"
+        ),
+    ]
+
+
+def _build_tail_run_script(stream_path: str, offset: int = 0) -> str:
+    quoted_path = _shlex.quote(stream_path)
+    marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
+    start_byte = max(1, offset + 1)
+    return (
+        "set -euo pipefail; "
+        f"while [ ! -f {quoted_path} ]; do sleep 0.2; done; "
+        f"tail -c +{start_byte} -F {quoted_path} & tail_pid=$!; "
+        f"while ! grep -q {marker} {quoted_path}; do sleep 0.5; done; "
+        "sleep 0.2; "
+        "kill \"$tail_pid\" 2>/dev/null || true; "
+        "wait \"$tail_pid\" 2>/dev/null || true; "
+        f"rc=$(sed -n 's/^{_HEADLESS_RUN_EXIT_MARKER}//p' {quoted_path} | tail -1); "
+        "exit \"${rc:-0}\""
     )
 
 
@@ -494,6 +555,13 @@ class PatchSessionBody(BaseModel):
     name: str | None = None
 
 
+class TestStateBody(BaseModel):
+    active: bool = True
+    slot_index: int | None = None
+    url: str | None = None
+    lease_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Files API — read-only browsing of /workspace inside the session pod.
 # Powers the Files tab in the chat pane. Edits are out of scope for now.
@@ -548,6 +616,18 @@ class SkillEntry(BaseModel):
 
 class SkillListing(BaseModel):
     entries: list[SkillEntry]
+
+
+class McpServerEntry(BaseModel):
+    name: str
+    transport: str
+    target: str
+    source: str
+    enabled: bool
+
+
+class McpServerListing(BaseModel):
+    entries: list[McpServerEntry]
 
 
 class WriteFileBody(BaseModel):
@@ -655,6 +735,82 @@ async def list_session_skills(
             )
         )
     return SkillListing(entries=entries)
+
+
+@app.get("/api/sessions/{session_id}/mcp-servers", response_model=McpServerListing)
+async def list_session_mcp_servers(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> McpServerListing:
+    """List MCP servers configured inside the session pod.
+
+    GUI/headless sessions hide the agent startup inventory, so the web UI needs
+    its own view over the mounted MCP config just like it does for skills.
+    """
+    try:
+        await sessions.get_session(owner=user.email, session_id=session_id)
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+
+    scan_script = (
+        "import json\n"
+        "path = '/workspace/.mcp.json'\n"
+        "out = []\n"
+        "try:\n"
+        "    config = json.load(open(path, encoding='utf-8'))\n"
+        "except Exception:\n"
+        "    config = {}\n"
+        "servers = config.get('mcpServers') or {}\n"
+        "if isinstance(servers, dict):\n"
+        "    for name, value in servers.items():\n"
+        "        if not isinstance(value, dict):\n"
+        "            continue\n"
+        "        transport = str(value.get('type') or "
+        "('stdio' if value.get('command') else 'unknown'))\n"
+        "        target = str(value.get('url') or value.get('command') or '')\n"
+        "        out.append({\n"
+        "            'name': str(name),\n"
+        "            'transport': transport,\n"
+        "            'target': target,\n"
+        "            'source': path,\n"
+        "            'enabled': True,\n"
+        "        })\n"
+        "out.sort(key=lambda x: x['name'].lower())\n"
+        "print(json.dumps(out))\n"
+    )
+    try:
+        out = await exec_capture(
+            SESSIONS_NAMESPACE, pod_name, ["python3", "-c", scan_script]
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"mcp scan failed: {exc}")
+
+    import json as _json
+    try:
+        raw_entries = _json.loads(out.decode("utf-8", errors="replace") or "[]")
+    except _json.JSONDecodeError:
+        raw_entries = []
+    entries: list[McpServerEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        entries.append(
+            McpServerEntry(
+                name=str(item.get("name") or ""),
+                transport=str(item.get("transport") or ""),
+                target=str(item.get("target") or ""),
+                source=str(item.get("source") or ""),
+                enabled=bool(item.get("enabled")),
+            )
+        )
+    return McpServerListing(entries=entries)
 
 
 @app.get("/api/sessions/{session_id}/files", response_model=FileListing)
@@ -1033,6 +1189,27 @@ async def patch_session(
         raise HTTPException(status_code=403, detail="session not owned by caller")
 
 
+@app.post("/api/sessions/{session_id}/test-state")
+async def update_test_state(
+    session_id: str,
+    body: TestStateBody,
+    user: User = Depends(current_user),
+) -> SessionInfo:
+    try:
+        return await sessions.set_test_state(
+            owner=user.email,
+            session_id=session_id,
+            active=body.active,
+            slot_index=body.slot_index,
+            url=body.url,
+            lease_id=body.lease_id,
+        )
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+
+
 @app.post("/api/sessions/{session_id}/save-credentials")
 async def save_credentials(
     session_id: str, user: User = Depends(current_user)
@@ -1266,17 +1443,23 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     except Exception:
         await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="expected JSON")
         return
+    resume = bool(first.get("resume")) if isinstance(first, dict) else False
+    run_id = _validate_run_id(first.get("run_id") if isinstance(first, dict) else None)
     prompt = first.get("prompt") if isinstance(first, dict) else None
-    if not isinstance(prompt, str) or not prompt.strip():
-        await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
-        return
-    prompt_bytes = prompt.encode()
-    if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
-        await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
-        return
+    prompt_bytes = b""
+    if not resume:
+        if not isinstance(prompt, str) or not prompt.strip():
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
+            return
+        prompt_bytes = prompt.encode()
+        if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
+            await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
+            return
     follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
     raw_model = first.get("model") if isinstance(first, dict) else None
     raw_pm = first.get("permission_mode") if isinstance(first, dict) else None
+    raw_offset = first.get("offset") if isinstance(first, dict) else 0
+    tail_offset = raw_offset if isinstance(raw_offset, int) and raw_offset > 0 else 0
     model = _validate_headless_arg(raw_model if isinstance(raw_model, str) else None)
     permission_mode = _validate_headless_arg(
         raw_pm if isinstance(raw_pm, str) else None
@@ -1299,23 +1482,38 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
-    prompt_path = _new_prompt_path()
-    try:
-        await exec_write_file(
-            SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
+    stream_path = _run_stream_path(run_id)
+    pid_path = _run_pid_path(run_id)
+    if not resume:
+        prompt_path = _new_prompt_path()
+        try:
+            await exec_write_file(
+                SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
+            )
+        except RuntimeError as exc:
+            await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
+            return
+        script = _build_headless_script(
+            provider=provider,
+            prompt_path=prompt_path,
+            follow_up=follow_up,
+            model=model,
+            permission_mode=permission_mode,
         )
-    except RuntimeError as exc:
-        await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
-        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
-        return
-    script = _build_headless_script(
-        provider=provider,
-        prompt_path=prompt_path,
-        follow_up=follow_up,
-        model=model,
-        permission_mode=permission_mode,
-    )
-    command = ["bash", "-lc", script]
+        try:
+            await exec_launch_detached(
+                namespace=SESSIONS_NAMESPACE,
+                pod_name=pod_name,
+                command=_build_live_run_script(script, pid_path),
+                log_path=stream_path,
+            )
+        except RuntimeError as exc:
+            await ws.send_json({"status": "error", "detail": f"failed to launch run: {exc}"})
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="run launch failed")
+            return
+    await ws.send_json({"status": "attached", "run_id": run_id})
+    command = ["bash", "-lc", _build_tail_run_script(stream_path, tail_offset)]
     async with sessions.track_ws(session_id):
         try:
             await exec_stream_to_websocket(
@@ -1324,6 +1522,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 pod_name=pod_name,
                 command=command,
                 stdin=b"",
+                cancel_command=_build_cancel_run_command(pid_path),
             )
         except WebSocketDisconnect:
             pass

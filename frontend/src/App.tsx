@@ -48,6 +48,7 @@ import {
   CopyIcon,
   FileIcon,
   FileTextIcon,
+  FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
   ImageIcon,
@@ -107,6 +108,14 @@ interface Session {
   ready_at: string | null;
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
+  test_state?: TestState | null;
+}
+
+interface TestState {
+  active?: boolean;
+  slot_index?: number | null;
+  url?: string | null;
+  lease_id?: string | null;
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
@@ -572,6 +581,7 @@ const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -1247,6 +1257,7 @@ function DemoLanding() {
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
+                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
@@ -1331,7 +1342,8 @@ function DemoLanding() {
 type RunEvent = {
   stream?: "stdout" | "stderr";
   data?: string;
-  status?: "done" | "error";
+  status?: "attached" | "done" | "error";
+  run_id?: string;
   detail?: string;
 };
 
@@ -1785,6 +1797,14 @@ interface SkillEntry {
   source: string;
   description: string;
   body_preview: string;
+}
+
+interface McpServerEntry {
+  name: string;
+  transport: string;
+  target: string;
+  source: string;
+  enabled: boolean;
 }
 
 function joinFilesPath(parent: string, name: string): string {
@@ -3026,6 +3046,7 @@ function HeadlessRun({
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3048,6 +3069,7 @@ function HeadlessRun({
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
+  const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -3069,6 +3091,9 @@ function HeadlessRun({
   const [fileDraft, setFileDraft] = useState<string | null>(null);
   const [fileSaving, setFileSaving] = useState(false);
   const [fileSaveError, setFileSaveError] = useState<string | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
   // Auto-scroll bookkeeping — track whether the user has scrolled away from
   // the bottom; if so, suppress auto-scroll on new entries and offer the
   // floating "scroll to bottom" button.
@@ -3076,6 +3101,11 @@ function HeadlessRun({
   // Composer attachments — uploaded to /workspace/.attachments and referenced
   // in the prompt so Claude can Read them via tool use.
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+
+  useEffect(() => {
+    setTestState(session.test_state ?? null);
+  }, [session.test_state]);
+
   const [dragActive, setDragActive] = useState(false);
   const setChatFontScale = (value: number) => {
     setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
@@ -3097,6 +3127,17 @@ function HeadlessRun({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+  const currentRunRef = useRef<{
+    id: string;
+    prompt: string;
+    followUp: boolean;
+    model: string;
+    permissionMode: string;
+    turnStart: number;
+    reconnects: number;
+    offset: number;
+    cancelled: boolean;
+  } | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3342,6 +3383,36 @@ function HeadlessRun({
 
   useEffect(() => {
     if (session.status !== "Active") {
+      setMcpServers(null);
+      setMcpError(null);
+      return;
+    }
+    let cancelled = false;
+    setMcpLoading(true);
+    setMcpError(null);
+    void authedFetch(`/api/sessions/${session.id}/mcp-servers`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return (await res.json()) as { entries: McpServerEntry[] };
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setMcpServers(body.entries ?? []);
+        setMcpLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMcpServers([]);
+        setMcpError(String(err));
+        setMcpLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, session.status]);
+
+  useEffect(() => {
+    if (session.status !== "Active") {
       setSlashCommands(SLASH_COMMANDS);
       return;
     }
@@ -3571,6 +3642,7 @@ function HeadlessRun({
       if (!ta) {
         setSlashOpen(false);
         setMentionOpen(false);
+        setMcpOpen(false);
         setComposerText("");
         return;
       }
@@ -3580,6 +3652,7 @@ function HeadlessRun({
       if (slash) {
         slashManualOpenRef.current = false;
         setSlashOpen(true);
+        setMcpOpen(false);
         setSlashQuery((prev) => {
           if (prev !== slash.query) setSlashIndex(0);
           return slash.query;
@@ -3589,6 +3662,7 @@ function HeadlessRun({
       }
       if (mention) {
         setMentionOpen(true);
+        setMcpOpen(false);
         setMentionQuery((prev) => {
           if (prev !== mention.query) setMentionIndex(0);
           return mention.query;
@@ -3704,6 +3778,19 @@ function HeadlessRun({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [mentionOpen, mentionQuery, mentionIndex, mentionPaths]);
 
+  useEffect(() => {
+    if (!mcpOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMcpOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [mcpOpen]);
+
   function applyMentionPath(relPath: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -3774,6 +3861,8 @@ function HeadlessRun({
       return;
     }
     slashManualOpenRef.current = true;
+    setMcpOpen(false);
+    setMentionOpen(false);
     setSlashQuery("");
     setSlashIndex(0);
     setSlashOpen(true);
@@ -3784,6 +3873,7 @@ function HeadlessRun({
   function applyStdoutLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) return;
+    if (trimmed.startsWith("__TANK_RUN_EXIT__:")) return;
     let providerEvent: unknown;
     try {
       providerEvent = JSON.parse(trimmed);
@@ -3845,8 +3935,15 @@ function HeadlessRun({
     if (pending.trim()) applyStdoutLine(pending);
   }
 
+  function newRunId() {
+    const cryptoObj = window.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
   function cancelRun() {
     const ws = wsRef.current;
+    if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ cancel: true }));
     }
@@ -3894,11 +3991,64 @@ function HeadlessRun({
     startRun(composed);
   }
 
+  function submitSkillPrompt(prompt: string) {
+    if (running) {
+      setQueuedMessages((prev) => [
+        ...prev,
+        { id: nextQueuedMessageId(), text: prompt },
+      ]);
+      return;
+    }
+    startRun(prompt);
+  }
+
+  async function markTestState(state: TestState) {
+    setTestState(state);
+    const res = await authedFetch(`/api/sessions/${session.id}/test-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+    if (!res.ok) {
+      throw new Error(`test state update failed: ${res.status}`);
+    }
+  }
+
+  function startTestSkill() {
+    if (session.status !== "Active") return;
+    void markTestState({ active: true }).catch((e) => {
+      setEntries((prev) =>
+        appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
+      );
+    });
+    const skillRef = isClaude ? "/test" : "$test";
+    submitSkillPrompt(
+      `${skillRef}\n\nAcquire a Glimmung test slot for this repo, hot-swap the current work into it, then call the tank-operator.set_test_environment MCP tool with the slot index and test URL once it is ready.`,
+    );
+  }
+
+  function startGuiRollout() {
+    if (session.status !== "Active") return;
+    submitSkillPrompt(isClaude ? "/rollout" : "$rollout");
+  }
+
   function startRun(trimmed: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
     const followUp = entries.length > 0;
     const turnStart = Date.now();
+    const run = {
+      id: newRunId(),
+      prompt: trimmed,
+      followUp,
+      model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
+      permissionMode: composerMode,
+      turnStart,
+      reconnects: 0,
+      offset: 0,
+      cancelled: false,
+    };
+    currentRunRef.current = run;
     setEntries((prev) => [
       ...prev,
       {
@@ -3921,6 +4071,10 @@ function HeadlessRun({
     // always fire an input event in time, so my mirror lingers and the
     // X-clear button stays visible. Force the mirror clean.
     setComposerText("");
+    openRunSocket(run, false);
+  }
+
+  function openRunSocket(run: NonNullable<typeof currentRunRef.current>, resume: boolean) {
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/run`;
@@ -3929,10 +4083,13 @@ function HeadlessRun({
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
-          prompt: trimmed,
-          follow_up: followUp,
-          model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
-          permission_mode: composerMode,
+          run_id: run.id,
+          resume,
+          prompt: resume ? "" : run.prompt,
+          offset: resume ? run.offset : 0,
+          follow_up: run.followUp,
+          model: run.model,
+          permission_mode: run.permissionMode,
         }),
       );
     };
@@ -3947,14 +4104,17 @@ function HeadlessRun({
         return;
       }
       if (msg.stream === "stdout" && msg.data) {
+        run.offset += msg.data.length;
         applyStdoutChunk(msg.data);
       } else if (msg.stream === "stderr" && msg.data) {
+        run.offset += msg.data.length;
         setEntries((prev) =>
           appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
-        const durationMs = Date.now() - turnStart;
+        currentRunRef.current = null;
+        const durationMs = Date.now() - run.turnStart;
         setEntries((prev) => {
           for (let i = prev.length - 1; i >= 0; i--) {
             if (prev[i].kind === "message" && prev[i].role === "assistant") {
@@ -3973,6 +4133,7 @@ function HeadlessRun({
         ws.close();
       } else if (msg.status === "error") {
         flushStdoutBuffer();
+        currentRunRef.current = null;
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
         activeToolNameRef.current = null;
         setActiveToolName(null);
@@ -3985,46 +4146,46 @@ function HeadlessRun({
       }
     };
     ws.onerror = () => {
-      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
-      activeToolNameRef.current = null;
-      setActiveToolName(null);
-      setRunStatus("error");
-      setRunning(false);
-      setEntries((prev) =>
-        appendMeta(prev, nextEntryId("websocket-error"), "websocket error", undefined, "error"),
-      );
+      if (!run.cancelled) {
+        setLastStatusText("Reconnecting");
+      }
     };
     ws.onclose = (event) => {
       flushStdoutBuffer();
+      if (currentRunRef.current?.id !== run.id || run.cancelled) {
+        return;
+      }
+      // If the backend closes before a done/error frame, assume transport loss
+      // and reattach to the pod-local run stream. Normal done/cancel paths clear
+      // currentRunRef before this handler runs.
+      if (run.reconnects < 8) {
+        run.reconnects += 1;
+        const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
+        setLastStatusText("Reconnecting");
+        window.setTimeout(() => {
+          if (currentRunRef.current?.id === run.id && !run.cancelled) {
+            openRunSocket(run, true);
+          }
+        }, delay);
+        return;
+      }
+      currentRunRef.current = null;
       setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
       activeToolNameRef.current = null;
       setActiveToolName(null);
       setRunning(false);
-      // 1000 = normal close, 1005 = no status (most cancel/done paths since
-      // we call ws.close() with no code), 1001 = going away (page nav).
-      // Anything else mid-run we surface as a connection error so the user
-      // knows to resend rather than waiting on a silent dropped run.
-      const abnormal =
-        event.code !== 1000 && event.code !== 1005 && event.code !== 1001;
-      // Use functional setter so we read the latest runStatus, not the
-      // closure value from when the WS was created.
-      setRunStatus((prev) => {
-        if (abnormal && prev === "running") {
-          setEntries((entries) =>
-            appendMeta(
-              entries,
-              nextEntryId("ws-close"),
-              "Connection lost",
-              `WebSocket closed with code ${event.code}${
-                event.reason ? ` — ${event.reason}` : ""
-              }. Resend to continue.`,
-              "error",
-            ),
-          );
-          return "error";
-        }
-        return prev === "running" ? "done" : prev;
-      });
+      setEntries((entries) =>
+        appendMeta(
+          entries,
+          nextEntryId("ws-close"),
+          "Connection lost",
+          `WebSocket closed with code ${event.code}${
+            event.reason ? ` — ${event.reason}` : ""
+          }. Resend to continue.`,
+          "error",
+        ),
+      );
+      setRunStatus("error");
     };
   }
 
@@ -4123,6 +4284,48 @@ function HeadlessRun({
           )}
         </div>
         <nav className="run-tabs" aria-label="Session actions">
+          {GUI_ROLLOUT_MODES.has(session.mode) && (
+            <button
+              type="button"
+              className="run-tab run-tab-icononly run-tab-action"
+              onClick={startGuiRollout}
+              disabled={!ready}
+              aria-label="Start rollout"
+              title={isClaude ? "Use /rollout in this run" : "Use $rollout in this run"}
+            >
+              <TankIcon className="run-tab-icon" />
+            </button>
+          )}
+          {testState?.active && testState.url ? (
+            <a
+              className="run-skill-pill run-test-pill is-active"
+              href={testState.url}
+              target="_blank"
+              rel="noreferrer"
+              title="Open test environment"
+            >
+              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Test</span>
+              {testState.slot_index != null && (
+                <span className="run-test-slot">{testState.slot_index}</span>
+              )}
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={`run-skill-pill run-test-pill${testState?.active ? " is-active" : ""}`}
+              onClick={startTestSkill}
+              disabled={!ready}
+              aria-label="Start test skill"
+              title={testState?.active ? "Test skill is active" : "Use the test skill"}
+            >
+              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Test</span>
+              {testState?.slot_index != null && (
+                <span className="run-test-slot">{testState.slot_index}</span>
+              )}
+            </button>
+          )}
           <button
             type="button"
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
@@ -4634,6 +4837,7 @@ function HeadlessRun({
         <footer
           className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
           ref={composerWrapRef}
+          style={chatFontScaleStyle}
           onDragOver={(e) => {
             e.preventDefault();
             if (!dragActive) setDragActive(true);
@@ -4776,6 +4980,34 @@ function HeadlessRun({
                   </span>
                   <span className="run-slash-desc run-mention-dir">{p}</span>
                 </button>
+              ))}
+            </div>
+          )}
+          {mcpOpen && (
+            <div className="run-slash-palette run-mcp-palette" role="listbox" aria-label="MCP servers">
+              <div className="run-slash-palette-label">MCP servers</div>
+              {mcpLoading && (
+                <div className="run-slash-empty">
+                  <Loader2Icon className="run-spin" size={13} aria-hidden="true" />
+                  loading
+                </div>
+              )}
+              {mcpError && (
+                <div className="run-slash-empty run-mcp-error">{mcpError}</div>
+              )}
+              {!mcpLoading && !mcpError && mcpServers && mcpServers.length === 0 && (
+                <div className="run-slash-empty">no MCP servers</div>
+              )}
+              {!mcpLoading && !mcpError && mcpServers?.map((server) => (
+                <div className="run-mcp-menu-item" role="option" aria-selected={false} key={server.name}>
+                  <span className="run-mcp-menu-top">
+                    <span className="run-slash-name">{server.name}</span>
+                    <span className="run-mcp-menu-transport">{server.transport}</span>
+                  </span>
+                  <span className="run-slash-desc run-mcp-menu-target">
+                    {server.target || server.source}
+                  </span>
+                </div>
               ))}
             </div>
           )}
@@ -4958,6 +5190,25 @@ function HeadlessRun({
                   {slashCommands.length > 0 && (
                     <span className="run-command-menu-count">
                       {slashCommands.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="run-composer-icon-btn run-command-menu-btn"
+                  aria-label="Show MCP servers"
+                  title="Show MCP servers"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setSlashOpen(false);
+                    setMentionOpen(false);
+                    setMcpOpen((open) => !open);
+                  }}
+                >
+                  <PlugIcon className="run-composer-icon" aria-hidden="true" />
+                  {mcpServers && mcpServers.length > 0 && (
+                    <span className="run-command-menu-count">
+                      {mcpServers.length}
                     </span>
                   )}
                 </button>
@@ -5663,6 +5914,7 @@ export function App() {
                       title={statusLabel}
                       aria-label={`status: ${statusLabel}`}
                     />
+                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     {isEditing ? (
                       <input
                         className="session-name-input"
