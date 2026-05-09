@@ -2155,6 +2155,57 @@ function loadStoredEntries(sessionId: string): TranscriptEntry[] {
   }
 }
 
+function transcriptComparable(entries: TranscriptEntry[]): string {
+  return JSON.stringify(
+    entries.map((entry) => {
+      if (entry.kind === "message") {
+        return {
+          kind: entry.kind,
+          role: entry.role,
+          text: entry.text,
+        };
+      }
+      if (entry.kind === "tool") {
+        return {
+          kind: entry.kind,
+          id: entry.id,
+          toolName: entry.toolName,
+          toolInput: entry.toolInput,
+          toolOutput: entry.toolOutput,
+          toolStatus: entry.toolStatus,
+        };
+      }
+      if (entry.kind === "reasoning") {
+        return {
+          kind: entry.kind,
+          id: entry.id,
+          reasoning: entry.reasoning,
+        };
+      }
+      return {
+        kind: entry.kind,
+        meta: entry.meta,
+      };
+    }),
+  );
+}
+
+function parseRunHistory(text: string, mode: SessionMode): TranscriptEntry[] {
+  let acc: TranscriptEntry[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const ev = JSON.parse(line);
+      if (isJsonObject(ev)) {
+        acc = applyProviderEvent(acc, mode, ev);
+      }
+    } catch {
+      /* skip unparseable history lines */
+    }
+  }
+  return acc;
+}
+
 // ---------------------------------------------------------------------------
 // Inline message renderer. Replaces AgentTranscript so we can ship per-tool
 // body renderers (diff viewer, todo list, bash, etc), per-message copy
@@ -3146,26 +3197,16 @@ function HeadlessRun({
     }
   }, [entries, session.id]);
 
-  // History replay — when localStorage is empty and the session is Active,
-  // fetch provider JSONL from the pod and replay each event through the
-  // matching provider parser. Covers cross-browser / cleared-cache cases
-  // that localStorage can't.
+  // History replay — fetch provider JSONL from the pod and replay each event
+  // through the matching provider parser. This is intentionally not limited
+  // to empty localStorage: a run can finish while the tab is closed, leaving
+  // localStorage with a stale partial transcript.
   const [historyAttempted, setHistoryAttempted] = useState(false);
   // Toggled briefly when entries are restored (from localStorage OR backend
   // history) so we can show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
-  useEffect(() => {
-    // If we already had entries on mount (localStorage), surface a brief
-    // continue-hint and skip backend fetch.
-    if (historyAttempted) return;
-    if (entries.length > 0) {
-      setHistoryAttempted(true);
-      setContinueHintVisible(true);
-      const t = window.setTimeout(() => setContinueHintVisible(false), 3000);
-      return () => window.clearTimeout(t);
-    }
-    if (session.status !== "Active") return;
-    setHistoryAttempted(true);
+  function refreshRunHistory(showHint: boolean) {
+    if (session.status !== "Active" || running) return;
     void authedFetch(`/api/sessions/${session.id}/run/history`)
       .then(async (res) => {
         if (!res.ok) return "";
@@ -3173,29 +3214,54 @@ function HeadlessRun({
       })
       .then((text) => {
         if (!text) return;
-        const lines = text.split("\n");
-        let acc: TranscriptEntry[] = [];
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const ev = JSON.parse(line);
-            if (isJsonObject(ev)) {
-              acc = applyProviderEvent(acc, session.mode, ev);
-            }
-          } catch {
-            /* skip unparseable */
-          }
-        }
+        const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
-          setEntries(acc);
-          setContinueHintVisible(true);
-          window.setTimeout(() => setContinueHintVisible(false), 3000);
+          setEntries((prev) =>
+            transcriptComparable(prev) === transcriptComparable(acc) ? prev : acc,
+          );
+          if (showHint) {
+            setContinueHintVisible(true);
+            window.setTimeout(() => setContinueHintVisible(false), 3000);
+          }
         }
       })
       .catch(() => {
         /* no history is fine */
       });
+  }
+  useEffect(() => {
+    if (historyAttempted) return;
+    if (entries.length > 0) {
+      setContinueHintVisible(true);
+      const t = window.setTimeout(() => setContinueHintVisible(false), 3000);
+      setHistoryAttempted(true);
+      refreshRunHistory(false);
+      return () => window.clearTimeout(t);
+    }
+    if (session.status !== "Active") return;
+    setHistoryAttempted(true);
+    refreshRunHistory(true);
+  // refreshRunHistory is intentionally omitted; it closes over current
+  // session state and should only run for the gates above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, session.status, historyAttempted, entries.length]);
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active" || running) return;
+    refreshRunHistory(false);
+    const onFocus = () => refreshRunHistory(false);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshRunHistory(false);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  // refreshRunHistory is intentionally omitted for the same reason as above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, session.id, session.status, running]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -3421,12 +3487,13 @@ function HeadlessRun({
     }
   }
 
-  // When the session id changes (user picks a different session in the
-  // sidebar that re-mounts this HeadlessRun with a different id), reset
-  // entries to whatever's stored for that session.
+  // When the session id changes, reset local transcript state to that
+  // session's cached entries and allow the history sync to run again.
   useEffect(() => {
     setEntries(loadStoredEntries(session.id));
     setQueuedMessages([]);
+    setHistoryAttempted(false);
+    setContinueHintVisible(false);
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
