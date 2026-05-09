@@ -154,8 +154,7 @@ case "$provider" in
     configure_codex
     exec python3 - "$prompt_file" "$follow_up" "$model" <<'PY'
 import json
-import os
-import pty
+import subprocess
 import sys
 
 prompt_path = sys.argv[1]
@@ -178,15 +177,19 @@ with open(history_path, "a", encoding="utf-8") as history:
     history.write(json.dumps({"type": "tank.user_message", "message": prompt}) + "\n")
     history.flush()
 
-    def master_read(fd: int) -> bytes:
-        data = os.read(fd, 1024)
-        if data:
-            history.buffer.write(data)
-            history.flush()
-        return data
-
-    status = pty.spawn(args, master_read=master_read)
-raise SystemExit(os.waitstatus_to_exitcode(status))
+    proc = subprocess.Popen(
+        args,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    for data in iter(lambda: proc.stdout.read(4096), b""):
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        history.buffer.write(data)
+        history.flush()
+    raise SystemExit(proc.wait())
 PY
     ;;
   *)

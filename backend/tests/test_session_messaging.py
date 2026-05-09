@@ -187,7 +187,9 @@ def test_codex_headless_runner_mirrors_json_stream_to_history() -> None:
     assert 'history_path = "/tmp/tank-run-history.ndjson"' in script
     assert '"type": "tank.user_message"' in script
     assert "history.buffer.write(data)" in script
-    assert "pty.spawn(args, master_read=master_read)" in script
+    assert "subprocess.Popen(" in script
+    assert "stdout=subprocess.PIPE" in script
+    assert "sys.stdout.buffer.write(data)" in script
 
 
 # ---------------------------------------------------------------------------
