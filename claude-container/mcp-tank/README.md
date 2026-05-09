@@ -1,16 +1,20 @@
 # mcp-tank
 
-Stdio MCP server baked into tank-operator session containers. Exposes
+Legacy stdio MCP server baked into tank-operator session containers. Exposes
 session-orchestration tools so an agent in one session can hand work off to
 another — either by spawning a fresh run pod or by appending a follow-up
 to an existing one.
+
+Session pods no longer register this server by default. The canonical
+session-management MCP surface is the in-cluster HTTP `tank-operator` server
+from `nelsong6/mcp-tank-operator`, mounted through `k8s/session-config/mcp.json`
+as `tank-operator`. Keep this package only for explicit local/manual use.
 
 Lives here (rather than its own repo) because the surface is one-to-one
 with tank-operator's `/api/sessions/*` endpoints; splitting them would just
 make the two drift apart.
 
-The server runs as a subprocess inside each session pod (registered in
-`k8s/session-config/mcp.json` via `command: "mcp-tank"`) and calls the
+When run manually, the server starts as a subprocess and calls the
 orchestrator's HTTP API at `$TANK_OPERATOR_URL` using the per-pod
 `$TANK_API_TOKEN` JWT.
 

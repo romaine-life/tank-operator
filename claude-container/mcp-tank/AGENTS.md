@@ -1,7 +1,9 @@
 # mcp-tank — agent notes
 
-This repo's tools are how a session pod talks to its sibling sessions.
-See [README.md](README.md) for what each tool does.
+This legacy stdio server is not registered in default session pods. The
+canonical sibling-session surface is the HTTP `tank-operator` MCP server from
+`nelsong6/mcp-tank-operator`; see [README.md](README.md) before changing this
+package.
 
 When extending: keep the surface small and orchestration-focused. Anything
 that feels like "the agent's own work" (running a build, reading code,
