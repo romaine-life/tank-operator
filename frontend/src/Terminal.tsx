@@ -99,6 +99,7 @@ interface Props {
   bootTitle?: string;
   completionSoundEnabled: boolean;
   completionSoundVolume: number;
+  fontSize: number;
   onAgentActivityChange?: (sessionId: string, activity: AgentActivity) => void;
   onAgentCompletion?: (sessionId: string) => void;
   /**
@@ -260,6 +261,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     visible,
     completionSoundEnabled,
     completionSoundVolume,
+    fontSize,
     onAgentActivityChange,
     onAgentCompletion,
   },
@@ -330,7 +332,7 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
       // while still letting it satisfy private-use terminal glyphs before the
       // browser settles for generic monospace tofu.
       fontFamily: 'ui-monospace, "Cascadia Code", "Consolas", "Symbols Nerd Font Mono", monospace',
-      fontSize: 13,
+      fontSize,
       theme: TERMINAL_THEME,
     });
     const fit = new FitAddon();
@@ -684,6 +686,18 @@ export const Terminal = forwardRef<TerminalHandle, Props>(function Terminal(
     // visible intentionally omitted — we don't tear down on hide.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, mode, everActive]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontSize = fontSize;
+    term.clearTextureAtlas();
+    window.requestAnimationFrame(() => {
+      fitRef.current?.fit();
+      term.resize(term.cols, term.rows);
+      term.refresh(0, term.rows - 1);
+    });
+  }, [fontSize]);
 
   // Re-fit and re-focus whenever this tab becomes visible. xterm computes
   // rows/cols from the container's offsetWidth (0 while display:none), and

@@ -54,7 +54,10 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
+  MinusIcon,
   PlugIcon,
+  PlusIcon,
+  RotateCcwIcon,
   SearchIcon,
   SendHorizontalIcon,
   SettingsIcon,
@@ -454,9 +457,14 @@ const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
 const SESSION_INITIAL_TAB_KEY_PREFIX = "tank.sessionTab:";
 const COMPLETION_SOUND_ENABLED_KEY = "tank.completionSoundEnabled";
 const COMPLETION_SOUND_VOLUME_KEY = "tank.completionSoundVolume";
+const TERMINAL_FONT_SCALE_KEY = "tank.terminalFontScale";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 const DEFAULT_COMPLETION_SOUND_VOLUME = 0.55;
 const MIN_COMPLETION_SOUND_VOLUME = 0.05;
+const DEFAULT_TERMINAL_FONT_SIZE = 13;
+const TERMINAL_FONT_SCALE_MIN = 0.8;
+const TERMINAL_FONT_SCALE_MAX = 1.4;
+const TERMINAL_FONT_SCALE_STEP = 0.1;
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
   return (
@@ -551,6 +559,29 @@ function writeCompletionSoundVolume(volume: number): void {
       COMPLETION_SOUND_VOLUME_KEY,
       String(Math.max(MIN_COMPLETION_SOUND_VOLUME, Math.min(1, volume))),
     );
+  } catch {
+    // Preference persistence is best-effort.
+  }
+}
+
+function clampTerminalFontScale(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(TERMINAL_FONT_SCALE_MAX, Math.max(TERMINAL_FONT_SCALE_MIN, value));
+}
+
+function readTerminalFontScale(): number {
+  try {
+    const stored = localStorage.getItem(TERMINAL_FONT_SCALE_KEY);
+    if (stored != null && stored !== "") return clampTerminalFontScale(Number(stored));
+  } catch {
+    // Fall through to the default.
+  }
+  return 1;
+}
+
+function writeTerminalFontScale(scale: number): void {
+  try {
+    localStorage.setItem(TERMINAL_FONT_SCALE_KEY, String(clampTerminalFontScale(scale)));
   } catch {
     // Preference persistence is best-effort.
   }
@@ -2119,6 +2150,7 @@ interface RunPrefs {
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  chatFontScale: number;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2127,14 +2159,26 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   autoExpandTools: false,
   showTimestamps: true,
   showDuration: true,
+  chatFontScale: 1,
 };
+
+const CHAT_FONT_SCALE_MIN = 0.8;
+const CHAT_FONT_SCALE_MAX = 1.4;
+const CHAT_FONT_SCALE_STEP = 0.1;
+
+function clampChatFontScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
+  return Math.min(CHAT_FONT_SCALE_MAX, Math.max(CHAT_FONT_SCALE_MIN, value));
+}
 
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
-      if (raw === "true" || raw === "false") {
+      if (key === "chatFontScale") {
+        if (raw != null) out[key] = clampChatFontScale(Number(raw));
+      } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
     }
@@ -2949,9 +2993,11 @@ function RunMessages({
 function CliProcessTerminal({
   session,
   visible,
+  fontScale,
 }: {
   session: Session;
   visible: boolean;
+  fontScale: number;
 }) {
   const [processId, setProcessId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3000,7 +3046,8 @@ function CliProcessTerminal({
     <ProcessTerminal
       client={client}
       processId={processId}
-      className="run-process-terminal"
+      className="run-process-terminal run-process-terminal-scaled"
+      style={{ "--run-terminal-font-scale": fontScale } as CSSProperties}
       height="100%"
       showStatusBar={false}
     />
@@ -3012,11 +3059,15 @@ function HeadlessRun({
   visible,
   onRename,
   user,
+  terminalFontScale,
+  onTerminalFontScaleChange,
 }: {
   session: Session;
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
   user: SessionUser;
+  terminalFontScale: number;
+  onTerminalFontScaleChange: (scale: number) => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     loadStoredEntries(session.id),
@@ -3089,6 +3140,28 @@ function HeadlessRun({
       /* ignore */
     }
   }
+  const setChatFontScale = (value: number) => {
+    setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
+  };
+  const activePaneUsesTerminalScale = activeTab === "shell";
+  const paneFontScale = activePaneUsesTerminalScale ? terminalFontScale : runPrefs.chatFontScale;
+  const paneFontScalePct = Math.round(paneFontScale * 100);
+  const setPaneFontScale = (value: number) => {
+    if (activePaneUsesTerminalScale) {
+      onTerminalFontScaleChange(value);
+    } else {
+      setChatFontScale(value);
+    }
+  };
+  const chatFontScaleStyle = {
+    "--run-chat-font-scale": runPrefs.chatFontScale,
+    "--run-chat-font-xs": `${(0.75 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-sm": `${(0.875 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-meta": `${(0.72 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-code-xs": `${(0.7 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-code-sm": `${(0.78 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
+  } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -4057,6 +4130,62 @@ function HeadlessRun({
                   )}
                 </span>
               </DropdownMenuItem>
+              <DropdownMenuLabel>{activePaneUsesTerminalScale ? "Shell" : "Transcript"}</DropdownMenuLabel>
+              <DropdownMenuItem
+                className="run-settings-zoom-item"
+                onSelect={(e) => e.preventDefault()}
+              >
+                <span className="run-settings-zoom-row">
+                  <span className="run-settings-label">Text zoom</span>
+                  <span className="run-settings-zoom-controls">
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP);
+                      }}
+                      disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+                      aria-label="Decrease pane text size"
+                      title="Decrease text size"
+                    >
+                      <MinusIcon aria-hidden="true" />
+                    </button>
+                    <span className="run-settings-zoom-value" aria-live="polite">
+                      {paneFontScalePct}%
+                    </span>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP);
+                      }}
+                      disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+                      aria-label="Increase pane text size"
+                      title="Increase text size"
+                    >
+                      <PlusIcon aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale);
+                      }}
+                      disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+                      aria-label="Reset pane text size"
+                      title="Reset text size"
+                    >
+                      <RotateCcwIcon aria-hidden="true" />
+                    </button>
+                  </span>
+                </span>
+              </DropdownMenuItem>
               <DropdownMenuLabel>Transcript</DropdownMenuLabel>
               <DropdownMenuItem
                 onSelect={(e) => {
@@ -4118,10 +4247,15 @@ function HeadlessRun({
       <main
         className={`run-main run-main-${runStatus}`}
         ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+        style={chatFontScaleStyle}
       >
         {activeTab === "shell" ? (
           <div className="run-shell">
-            <CliProcessTerminal session={session} visible={visible && activeTab === "shell"} />
+            <CliProcessTerminal
+              session={session}
+              visible={visible && activeTab === "shell"}
+              fontScale={terminalFontScale}
+            />
           </div>
         ) : activeTab === "files" ? (
           <div className="run-files">
@@ -4822,6 +4956,8 @@ export function App() {
     useState(readCompletionSoundEnabled);
   const [completionSoundVolume, setCompletionSoundVolume] =
     useState(readCompletionSoundVolume);
+  const [terminalFontScale, setTerminalFontScale] =
+    useState(readTerminalFontScale);
   // Inline rename state. `editingId` is the session whose row is currently
   // an <input>; `editingValue` holds the in-progress name. Reset on commit
   // or cancel. Triggered by clicking the session name.
@@ -5188,6 +5324,12 @@ export function App() {
     writeCompletionSoundVolume(nextVolume);
   }
 
+  function updateTerminalFontScale(scale: number) {
+    const nextScale = Number(clampTerminalFontScale(scale).toFixed(2));
+    setTerminalFontScale(nextScale);
+    writeTerminalFontScale(nextScale);
+  }
+
   async function renameSession(id: string, nextName: string | null) {
     try {
       const res = await authedFetch(`/api/sessions/${id}`, {
@@ -5354,6 +5496,8 @@ export function App() {
 
   const selectedProvider = MODE_MENU_ICONS[defaultSessionMode];
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
+  const terminalFontScalePct = Math.round(terminalFontScale * 100);
+  const terminalFontSize = Math.round(DEFAULT_TERMINAL_FONT_SIZE * terminalFontScale);
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -5679,6 +5823,44 @@ export function App() {
                   />
                   <span className="setting-value">{Math.round(completionSoundVolume * 100)}%</span>
                 </label>
+                <div className="setting-zoom">
+                  <span>Terminal text</span>
+                  <span className="run-settings-zoom-controls">
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={() => updateTerminalFontScale(terminalFontScale - TERMINAL_FONT_SCALE_STEP)}
+                      disabled={terminalFontScale <= TERMINAL_FONT_SCALE_MIN}
+                      aria-label="Decrease terminal text size"
+                      title="Decrease terminal text size"
+                    >
+                      <MinusIcon aria-hidden="true" />
+                    </button>
+                    <span className="run-settings-zoom-value" aria-live="polite">
+                      {terminalFontScalePct}%
+                    </span>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={() => updateTerminalFontScale(terminalFontScale + TERMINAL_FONT_SCALE_STEP)}
+                      disabled={terminalFontScale >= TERMINAL_FONT_SCALE_MAX}
+                      aria-label="Increase terminal text size"
+                      title="Increase terminal text size"
+                    >
+                      <PlusIcon aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={() => updateTerminalFontScale(1)}
+                      disabled={terminalFontScale === 1}
+                      aria-label="Reset terminal text size"
+                      title="Reset terminal text size"
+                    >
+                      <RotateCcwIcon aria-hidden="true" />
+                    </button>
+                  </span>
+                </div>
               </li>
               <li className="dropdown-divider" role="separator" />
               <li>
@@ -5722,7 +5904,14 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} user={user!} />
+                    <HeadlessRun
+                      session={s}
+                      visible={active === s.id}
+                      onRename={renameSession}
+                      user={user!}
+                      terminalFontScale={terminalFontScale}
+                      onTerminalFontScaleChange={updateTerminalFontScale}
+                    />
                   </div>
                 ) : (
                   <Terminal
@@ -5738,6 +5927,7 @@ export function App() {
                     bootTitle={sessionBootTitle(s, nowMs)}
                     completionSoundEnabled={completionSoundEnabled}
                     completionSoundVolume={completionSoundVolume}
+                    fontSize={terminalFontSize}
                     visible={active === s.id}
                     onAgentActivityChange={setAgentActivity}
                     onAgentCompletion={stopRolloutTimer}
