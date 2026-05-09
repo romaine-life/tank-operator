@@ -3982,6 +3982,7 @@ function HeadlessRun({
   }
 
   function cancelRun() {
+    console.warn("[tank] cancelRun called", new Error().stack);
     const ws = wsRef.current;
     if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
