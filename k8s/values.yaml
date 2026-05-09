@@ -20,9 +20,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-0eaa640e55686f8442ba9ebddeba4e8d4ae3d4228bdb7a7e4c06b3aa7e73123f
-  codexImage: romainecr.azurecr.io/codex-container:codex-91f8bc54fcc21d8aa6585aeac52889da452a8dc460cd3e4a90a817a4da6020da
-  piImage: romainecr.azurecr.io/pi-container:pi-3284a5ab74f2b2881ec5fda716ab162fad1f518068e99eeaee07c28c419201ce
+  image: romainecr.azurecr.io/claude-container:claude-8830ff958b11a7cddfb2c4d52dd87fb1598ec6ef98a3453435169302d6c5fbd4
+  codexImage: romainecr.azurecr.io/codex-container:codex-ea7771dd50b2f186bd0556803ef7170ad1641de89220393fa9b628bedb6064d9
+  piImage: romainecr.azurecr.io/pi-container:pi-df8b577187ecab9f7cc0eb9dbe21010581790bdb1ebdd6e55b183e2da1665241
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
