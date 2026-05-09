@@ -31,8 +31,8 @@
 #                                   in-cluster api-proxy strips claude's
 #                                   Authorization on every request and
 #                                   injects the current real Bearer.
-#   ~/.claude/skills/<name>/      — SKILL.md files baked into the
-#                                   agent-specific image at build time.
+#   ~/.claude/skills/<name>/      — bundled skills mounted from the
+#   ~/.codex/skills/<name>/         chart-managed session ConfigMap.
 #
 # Pod-environment primers and /workspace/.mcp.json are mounted from the
 # chart-managed session ConfigMap. Claude Code reads /workspace/CLAUDE.md;
@@ -70,6 +70,46 @@ configure_git_identity() {
   esac
 }
 
+skill_targets_for_scope() {
+  case "$1" in
+    common) printf '%s\n' "claude codex" ;;
+    claude) printf '%s\n' "claude" ;;
+    codex) printf '%s\n' "codex" ;;
+    *) return 1 ;;
+  esac
+}
+
+install_tank_skills() {
+  local config_dir="/opt/tank/session-config"
+  local bundled_file base rest scope encoded_path skill rel targets target root dest_path
+  [ -d "$config_dir" ] || return 0
+  mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills"
+
+  shopt -s nullglob
+  for bundled_file in "$config_dir"/skills__*; do
+    base="$(basename "$bundled_file")"
+    rest="${base#skills__}"
+    scope="${rest%%__*}"
+    encoded_path="${rest#"$scope"__}"
+    skill="${encoded_path%%__*}"
+    rel="${encoded_path#"$skill"}"
+    rel="${rel#__}"
+    rel="${rel//__/\/}"
+    targets="$(skill_targets_for_scope "$scope")" || continue
+    for target in $targets; do
+      case "$target" in
+        claude) root="$HOME/.claude/skills" ;;
+        codex) root="$HOME/.codex/skills" ;;
+        *) continue ;;
+      esac
+      dest_path="$root/$skill/$rel"
+      mkdir -p "$(dirname "$dest_path")"
+      cp "$bundled_file" "$dest_path"
+    done
+  done
+  shopt -u nullglob
+}
+
 # Reconnect fast-path: if the tmux session already exists this is a
 # reattach, not a fresh boot. Skip settings/credentials setup (already
 # done on first connect; rewriting is idempotent but wasteful, and in
@@ -79,6 +119,7 @@ if [ "${TANK_SESSION_TRANSPORT:-}" != "sandbox-agent" ] && "${tmux_utf8[@]}" has
 fi
 bash /opt/tank/write-glimmung-context.sh
 configure_git_identity
+install_tank_skills
 # Config-mode: short-circuit the regular session bootstrap. The user is
 # here to do `claude /login` once so we can capture credentials.json and
 # write it to KV. No MCP wiring, no onboarding bypass, no credentials
