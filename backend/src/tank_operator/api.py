@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import logging
 import time
@@ -1053,7 +1054,7 @@ async def _sandbox_agent_json(
             last_error = exc
             if attempt + 1 >= attempts:
                 break
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(1)
     raise RuntimeError(f"sandbox-agent {method} {path} unavailable: {last_error}")
 
 
@@ -1078,7 +1079,7 @@ async def create_cli_process(
                 detail="CLI shell is only available for headless run sessions",
             )
         pod_ip = await _session_pod_ip(user.email, session_id)
-        listed = await _sandbox_agent_json(pod_ip, "GET", "/v1/processes", attempts=15)
+        listed = await _sandbox_agent_json(pod_ip, "GET", "/v1/processes", attempts=45)
         for process in listed.get("processes", []):
             if isinstance(process, dict) and _matching_cli_process(process):
                 return CliProcessResponse(process_id=str(process["id"]))
@@ -1118,6 +1119,10 @@ async def _bridge_sandbox_terminal(ws: WebSocket, pod_ip: str, process_id: str) 
     url = f"ws://{pod_ip}:{SANDBOX_AGENT_PORT}/v1/processes/{quoted_id}/terminal/ws"
     async with aiohttp.ClientSession() as http:
         async with http.ws_connect(url, heartbeat=30) as terminal_ws:
+            # The process starts before the browser attaches, so initial TUI
+            # paint can be missed. Ask the CLI to redraw once the PTY is wired.
+            await terminal_ws.send_str(json.dumps({"type": "input", "data": "\f"}))
+
             async def browser_to_terminal() -> None:
                 try:
                     while True:
@@ -1158,6 +1163,48 @@ async def _bridge_sandbox_terminal(ws: WebSocket, pod_ip: str, process_id: str) 
 
 @app.websocket("/api/sessions/{session_id}/cli-process/{process_id}/terminal/ws")
 async def cli_process_terminal_ws(
+    ws: WebSocket,
+    session_id: str,
+    process_id: str,
+) -> None:
+    await ws.accept()
+    try:
+        user = current_user_ws(ws)
+    except HTTPException as e:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason=e.detail)
+        return
+
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+        if session.mode not in HEADLESS_MODES:
+            await ws.close(
+                code=status.WS_1008_POLICY_VIOLATION,
+                reason="CLI shell is only available for headless run sessions",
+            )
+            return
+        pod_ip = await _session_pod_ip(user.email, session_id)
+    except SessionNotOwned:
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
+        return
+    except SessionNotFound:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session not found")
+        return
+    except SessionTerminalUnavailable:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="session needs restart")
+        return
+    except PodNotReady:
+        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
+        return
+
+    async with sessions.track_ws(session_id):
+        try:
+            await _bridge_sandbox_terminal(ws, pod_ip=pod_ip, process_id=process_id)
+        except WebSocketDisconnect:
+            pass
+
+
+@app.websocket("/api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws")
+async def sandbox_agent_process_terminal_ws(
     ws: WebSocket,
     session_id: str,
     process_id: str,

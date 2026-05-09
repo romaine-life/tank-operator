@@ -424,7 +424,10 @@ class SessionManager:
                         "bash",
                         "-lc",
                         (
-                            f"sandbox-agent server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
+                            "if command -v sandbox-agent >/dev/null 2>&1; then "
+                            "sandbox_agent_cmd=sandbox-agent; "
+                            "else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; "
+                            f"$sandbox_agent_cmd server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
                             "--no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & "
                             "exec tank-terminald"
                         ),

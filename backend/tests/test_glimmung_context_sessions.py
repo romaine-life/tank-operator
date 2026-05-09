@@ -283,7 +283,7 @@ def test_glimmung_context_is_stamped_on_session_pod() -> None:
     assert _claude_container(manifest)["command"] == [
         "bash",
         "-lc",
-        "sandbox-agent server --host 0.0.0.0 --port 2468 --no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & exec tank-terminald",
+        "if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & exec tank-terminald",
     ]
     ports = _claude_container(manifest)["ports"]
     assert {"name": "sandbox-agent", "containerPort": 2468} in ports
