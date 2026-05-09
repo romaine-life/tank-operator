@@ -177,6 +177,13 @@ class InternalPatchSessionBody(BaseModel):
     name: str | None = None
 
 
+class InternalTestStateBody(BaseModel):
+    active: bool = True
+    slot_index: int | None = None
+    url: str | None = None
+    lease_id: str | None = None
+
+
 class InternalSendMessageBody(BaseModel):
     prompt: str
     model: str | None = None
@@ -307,6 +314,30 @@ def build_router(
         try:
             session = await sessions.set_name(
                 owner=email, session_id=session_id, name=body.name
+            )
+        except SessionNotFound:
+            raise HTTPException(status_code=404, detail="session not found")
+        except SessionNotOwned:
+            raise HTTPException(status_code=403, detail="session not owned by caller")
+        return {**dataclasses.asdict(session), "url": _session_url(session.id)}
+
+    @router.post("/sessions/{session_id}/test-state")
+    async def internal_set_test_state(
+        session_id: str,
+        body: InternalTestStateBody,
+        caller_pod_ip: str = Query(...),
+        _: CallerSubject = Depends(authorized_caller),
+    ) -> dict:
+        """Update the caller-owned session's GUI test-environment state."""
+        email = await _resolve_email_from_pod_ip(caller_pod_ip, sessions)
+        try:
+            session = await sessions.set_test_state(
+                owner=email,
+                session_id=session_id,
+                active=body.active,
+                slot_index=body.slot_index,
+                url=body.url,
+                lease_id=body.lease_id,
             )
         except SessionNotFound:
             raise HTTPException(status_code=404, detail="session not found")
