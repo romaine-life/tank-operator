@@ -24,4 +24,6 @@ builder pod), not ad hoc Docker-in-this-session-pod.
 For shell `git` access, call the GitHub MCP `mint_clone_token` tool for the needed repo(s), then use the returned token in an `https://x-access-token:<token>@github.com/owner/
 repo.git` remote URL. The github MCP server has additional tools if the minted token lacks permissions. If the combination of both lacks permissions, the solve is likely to increase the scope of the mcp server or the token, so feel free to raise the issue (and maybe even draft a code change on a branch) that expands the permissions on the mcp server or the minted token.
 
+You need to install from the lockfile before doing frontend builds if you just cloned the repo.
+
 If you need to build a container with `docker`, that is delegated out to github actions. This gets around running docker in docker, since you're in a container currently. There should be an obvious github action you can use to test builds. When in the normal process of testing code against a feature branch, you're encouraged to freely push your code so github actions can run against it and test builds when you feel compelled to run docker.
