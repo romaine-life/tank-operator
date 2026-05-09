@@ -504,10 +504,8 @@ button:disabled {
 }
 
 .new-row-provider-toggle {
-  width: 2.75rem;
-  min-width: 2.75rem;
-  display: grid;
-  grid-template-columns: 2rem 0.75rem;
+  width: 2rem;
+  min-width: 2rem;
   padding: 0;
   border-radius: var(--radius-xl);
   background: var(--bg-sidebar-control);
@@ -597,8 +595,8 @@ button:disabled {
 }
 
 .new-row-action {
-  width: 2.25rem;
-  min-width: 2.25rem;
+  width: 2rem;
+  min-width: 2rem;
 }
 
 .new-row-provider-toggle.is-open {
@@ -616,11 +614,7 @@ button:disabled {
 }
 
 .new-row-provider-chevron {
-  width: 0.75rem;
-  height: 0.75rem;
-  color: var(--text-faint);
-  justify-self: center;
-  flex-shrink: 0;
+  display: none;
 }
 
 .new-row-action {
@@ -646,6 +640,14 @@ button:disabled {
   align-items: center;
   justify-content: center;
   color: currentColor;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+.row-icon svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 .new-row-provider-icon {
@@ -791,7 +793,7 @@ button:disabled {
 .dropdown-provider {
   top: 100%;
   left: 0;
-  width: 2.75rem;
+  width: 2rem;
   min-width: 0;
   box-sizing: border-box;
   padding: 0 0 var(--space-1);
