@@ -79,11 +79,6 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Resolve image tag
-        run: |
-          TAG="$(git rev-parse --short=7 HEAD)"
-          echo "TAG=${TAG}" >> $GITHUB_ENV
-
       - name: Compute image fingerprint
         id: fingerprint
         env:
@@ -103,44 +98,24 @@ jobs:
             | awk -F= '$1 == "fingerprint" { print $2 }')"
           echo "ALIAS_TAG=${{ matrix.agent }}-${fingerprint}" >> "$GITHUB_ENV"
 
-      - name: Check existing image aliases
+      - name: Check existing image
         id: image
         run: |
           set -euo pipefail
           if az acr repository show-tags \
               --name romainecr \
               --repository ${{ matrix.image }} \
-              --query "[?@=='${TAG}'] | [0]" \
-              --output tsv | grep -qx "${TAG}"; then
-            echo "target_exists=true" >>"${GITHUB_OUTPUT}"
-          else
-            echo "target_exists=false" >>"${GITHUB_OUTPUT}"
-          fi
-
-          if az acr repository show-tags \
-              --name romainecr \
-              --repository ${{ matrix.image }} \
               --query "[?@=='${ALIAS_TAG}'] | [0]" \
               --output tsv | grep -qx "${ALIAS_TAG}"; then
-            echo "alias_exists=true" >>"${GITHUB_OUTPUT}"
+            echo "exists=true" >>"${GITHUB_OUTPUT}"
             echo "Found reusable image romainecr.azurecr.io/${{ matrix.image }}:${ALIAS_TAG}"
           else
-            echo "alias_exists=false" >>"${GITHUB_OUTPUT}"
+            echo "exists=false" >>"${GITHUB_OUTPUT}"
             echo "No reusable image found for ${{ matrix.agent }} fingerprint"
           fi
 
-      - name: Retag existing fingerprint image
-        if: steps.image.outputs.target_exists != 'true' && steps.image.outputs.alias_exists == 'true'
-        run: |
-          set -euo pipefail
-          az acr import \
-            --name romainecr \
-            --source "romainecr.azurecr.io/${{ matrix.image }}:${ALIAS_TAG}" \
-            --image "${{ matrix.image }}:${TAG}" \
-            --force
-
       - name: Build and push image
-        if: steps.image.outputs.target_exists != 'true' && steps.image.outputs.alias_exists != 'true'
+        if: steps.image.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -148,22 +123,31 @@ jobs:
           push: true
           build-args: |
             TANK_AGENT=${{ matrix.agent }}
-          tags: |
-            romainecr.azurecr.io/${{ matrix.image }}:${{ env.TAG }}
-            romainecr.azurecr.io/${{ matrix.image }}:${{ env.ALIAS_TAG }}
+          tags: romainecr.azurecr.io/${{ matrix.image }}:${{ env.ALIAS_TAG }}
           cache-from: type=registry,ref=romainecr.azurecr.io/${{ matrix.image }}-build-cache:${{ matrix.agent }}
           cache-to: type=registry,ref=romainecr.azurecr.io/${{ matrix.image }}-build-cache:${{ matrix.agent }},mode=max
+
+      - name: Record image tag
+        run: |
+          mkdir -p session-image-tags
+          printf '%s\n' "${ALIAS_TAG}" > "session-image-tags/${{ matrix.agent }}.tag"
+
+      - name: Upload image tag
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-image-tag-${{ matrix.agent }}
+          path: session-image-tags/${{ matrix.agent }}.tag
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Summarize
         run: |
           {
-            echo "### ${{ matrix.image }} :${TAG}"
-            if [[ "${{ steps.image.outputs.target_exists }}" == "true" ]]; then
-              echo "- target tag already existed; nothing to do"
-            elif [[ "${{ steps.image.outputs.alias_exists }}" == "true" ]]; then
-              echo "- retagged from \`${ALIAS_TAG}\` (cached)"
+            echo "### ${{ matrix.image }} :${ALIAS_TAG}"
+            if [[ "${{ steps.image.outputs.exists }}" == "true" ]]; then
+              echo "- fingerprint tag already existed; nothing to do"
             else
-              echo "- built fresh and pushed (\`${ALIAS_TAG}\` + \`${TAG}\`)"
+              echo "- built fresh and pushed"
             fi
           } >> $GITHUB_STEP_SUMMARY
 
@@ -179,26 +163,35 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download image tags
+        uses: actions/download-artifact@v4
+        with:
+          pattern: session-image-tag-*
+          path: session-image-tags
+          merge-multiple: true
+
       - name: Bump session image tags
         run: |
           set -euo pipefail
-          tag="$(git rev-parse --short=7 HEAD)"
+          claude_tag="$(cat session-image-tags/claude.tag)"
+          codex_tag="$(cat session-image-tags/codex.tag)"
+          pi_tag="$(cat session-image-tags/pi.tag)"
           # session.image / session.codexImage / session.piImage are
-          # repo:tag strings; rewrite them. The matrix above pushed
-          # all three tags at this SHA before this job runs.
-          sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${tag}|" k8s/values.yaml
-          sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${tag}|" k8s/values.yaml
-          sed -i -E "s|^(  piImage: ).*$|\1romainecr.azurecr.io/pi-container:${tag}|" k8s/values.yaml
+          # repo:tag strings; rewrite them to the fingerprint tags the
+          # matrix above either found or pushed.
+          sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${claude_tag}|" k8s/values.yaml
+          sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${codex_tag}|" k8s/values.yaml
+          sed -i -E "s|^(  piImage: ).*$|\1romainecr.azurecr.io/pi-container:${pi_tag}|" k8s/values.yaml
 
           if git diff --quiet k8s/values.yaml; then
-            echo "no tag change"
+            echo "no session image tag change"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add k8s/values.yaml
-          git commit -m "chart: bump session agent images to ${tag} [skip ci]"
+          git commit -m "chart: bump session agent images to fingerprint tags [skip ci]"
           # Concurrent builds can leave us non-fast-forward. Rebase-retry a
           # few times before giving up.
           for i in 1 2 3; do
