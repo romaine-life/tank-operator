@@ -3738,6 +3738,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message-content {
   max-width: min(48rem, 86%);
+  min-width: 0;
   border-radius: 0.875rem;
   padding: 0.75rem 1rem;
   overflow-wrap: anywhere;
@@ -3776,6 +3777,78 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-message-text {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-transcript-message-text > div {
+  min-width: 0;
+}
+
+.run-transcript-message-text [data-streamdown="code-block"] {
+  min-width: 0;
+}
+
+.run-transcript-message-text a {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-decoration-color: rgba(147, 197, 253, 0.45);
+  text-underline-offset: 0.14em;
+}
+
+.run-transcript-message-text a:hover {
+  color: #bfdbfe;
+  text-decoration-color: currentColor;
+}
+
+.run-markdown-inline-code {
+  border-radius: 0.25rem;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.run-markdown-linked-code {
+  position: relative;
+}
+
+.run-markdown-code-actions {
+  pointer-events: none;
+  position: sticky;
+  top: 0.5rem;
+  z-index: 1;
+  display: flex;
+  height: 2rem;
+  justify-content: flex-end;
+  margin-top: -2.5rem;
+  padding-right: 0.35rem;
+}
+
+.run-markdown-code-actions > * {
+  pointer-events: auto;
+}
+
+.run-markdown-linked-code-body {
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.24);
+  padding: 0.85rem 1rem;
+}
+
+.run-markdown-linked-code-body pre {
+  margin: 0;
+}
+
+.run-markdown-linked-code-body code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.run-markdown-code-link {
+  overflow-wrap: anywhere;
 }
 
 .run-transcript-tool-single {

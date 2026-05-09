@@ -1,13 +1,23 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AnchorHTMLAttributes,
+  ComponentProps,
   CSSProperties,
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
 } from "react";
 import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
 import { SandboxAgent } from "sandbox-agent";
-import { Streamdown } from "streamdown";
+import {
+  CodeBlock,
+  CodeBlockContainer,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  Streamdown,
+  type Components as StreamdownComponents,
+} from "streamdown";
 import {
   PromptInput,
   PromptInputFooter,
@@ -2280,6 +2290,123 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`]+/g;
+const TRAILING_URL_PUNCTUATION_RE = /[.,;:!?]+$/;
+
+function splitTrailingUrlPunctuation(url: string): { href: string; trailing: string } {
+  let href = url;
+  let trailing = "";
+  const punctuation = href.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
+  if (punctuation) {
+    href = href.slice(0, -punctuation.length);
+    trailing = punctuation;
+  }
+  while (href.endsWith(")") && (href.match(/\(/g)?.length ?? 0) < (href.match(/\)/g)?.length ?? 0)) {
+    href = href.slice(0, -1);
+    trailing = `)${trailing}`;
+  }
+  while (href.endsWith("]") && (href.match(/\[/g)?.length ?? 0) < (href.match(/\]/g)?.length ?? 0)) {
+    href = href.slice(0, -1);
+    trailing = `]${trailing}`;
+  }
+  return { href, trailing };
+}
+
+function linkifyUrls(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  URL_IN_TEXT_RE.lastIndex = 0;
+  for (const match of text.matchAll(URL_IN_TEXT_RE)) {
+    const rawUrl = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    const { href, trailing } = splitTrailingUrlPunctuation(rawUrl);
+    parts.push(
+      <a
+        key={`${start}-${href}`}
+        className="run-markdown-code-link"
+        href={href}
+        rel="noreferrer"
+        target="_blank"
+      >
+        {href}
+      </a>,
+    );
+    if (trailing) parts.push(trailing);
+    lastIndex = start + rawUrl.length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : [text];
+}
+
+function hasUrl(text: string): boolean {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const found = URL_IN_TEXT_RE.test(text);
+  URL_IN_TEXT_RE.lastIndex = 0;
+  return found;
+}
+
+function textFromCodeChildren(children: ReactNode): string {
+  if (Array.isArray(children)) return children.map(textFromCodeChildren).join("");
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  return "";
+}
+
+type RunMarkdownCodeProps = ComponentProps<"code"> & {
+  "data-block"?: boolean | string;
+  node?: unknown;
+};
+
+function RunMarkdownCode({ children, className, node: _node, ...props }: RunMarkdownCodeProps) {
+  const code = textFromCodeChildren(children);
+  const isBlock = "data-block" in props;
+  const language = className?.match(/language-(\S+)/)?.[1] ?? "";
+  if (!isBlock) {
+    return (
+      <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
+        {children}
+      </code>
+    );
+  }
+  if (!hasUrl(code)) {
+    return (
+      <CodeBlock code={code} language={language}>
+        <CodeBlockCopyButton code={code} />
+      </CodeBlock>
+    );
+  }
+  return (
+    <CodeBlockContainer className="run-markdown-linked-code" language={language}>
+      <CodeBlockHeader language={language} />
+      <div className="run-markdown-code-actions" data-streamdown="code-block-actions">
+        <CodeBlockCopyButton code={code} />
+      </div>
+      <div className="run-markdown-linked-code-body" data-streamdown="code-block-body">
+        <pre>
+          <code className={className}>{linkifyUrls(code.replace(/\n$/, ""))}</code>
+        </pre>
+      </div>
+    </CodeBlockContainer>
+  );
+}
+
+function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return <a {...props} rel="noreferrer" target="_blank" />;
+}
+
+const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
+  a: RunMarkdownLink,
+  code: RunMarkdownCode,
+} as StreamdownComponents;
+
+function RunMarkdown({ children }: { children: string }) {
+  return (
+    <Streamdown components={RUN_MARKDOWN_COMPONENTS} linkSafety={{ enabled: false }}>
+      {children}
+    </Streamdown>
+  );
+}
+
 const RunContext = createContext<{ sendStdin: (text: string) => void; user: SessionUser | null }>({
   sendStdin: () => {},
   user: null,
@@ -2313,7 +2440,7 @@ function RunMessageBubble({
         data-slot="message-content"
       >
         <div className="run-transcript-message-text" data-slot="message-text">
-          <Streamdown>{text}</Streamdown>
+          <RunMarkdown>{text}</RunMarkdown>
         </div>
         <div
           className="run-msg-footer"
@@ -2362,7 +2489,7 @@ function RunReasoningBlock({
         <ChevronDownIcon size={12} className="run-reasoning-chevron" aria-hidden="true" />
       </summary>
       <div className="run-reasoning-body">
-        <Streamdown>{text}</Streamdown>
+        <RunMarkdown>{text}</RunMarkdown>
       </div>
     </details>
   );
