@@ -208,9 +208,14 @@ def _build_headless_script(
 def _build_live_run_script(script: str, pid_path: str) -> str:
     marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
     quoted_pid_path = _shlex.quote(pid_path)
+    # Use bash variables so the trap body doesn't need nested single-quotes.
+    # The trap writes the exit marker even on SIGTERM so the tail script's
+    # grep loop always terminates rather than hanging after a cancel.
     return (
         f"echo $$ > {quoted_pid_path}; "
-        "trap 'rc=$?; exit $rc' TERM INT; "
+        f"_tank_pid={quoted_pid_path}; _tank_marker={marker}; "
+        "trap 'rc=$?; rm -f \"$_tank_pid\"; "
+        "printf \"\\n%s%s\\n\" \"$_tank_marker\" \"$rc\"; exit $rc' TERM INT; "
         f"{script}; rc=$?; "
         f"rm -f {quoted_pid_path}; "
         f"printf '\\n%s%s\\n' {marker} \"$rc\"; "
@@ -239,13 +244,21 @@ def _build_tail_run_script(stream_path: str, offset: int = 0) -> str:
     start_byte = max(1, offset + 1)
     return (
         "set -euo pipefail; "
-        f"while [ ! -f {quoted_path} ]; do sleep 0.2; done; "
+        # Wait for the stream file with a 30s deadline so a pod crash or a
+        # launch failure doesn't leave the tail exec hanging indefinitely.
+        "deadline=$((SECONDS+30)); "
+        f"while [ ! -f {quoted_path} ]; do "
+        "sleep 0.2; "
+        "[ $SECONDS -lt $deadline ] || "
+        "{ echo 'timed out waiting for run stream' >&2; exit 1; }; "
+        "done; "
         f"tail -c +{start_byte} -F {quoted_path} & tail_pid=$!; "
         f"while ! grep -q {marker} {quoted_path}; do sleep 0.5; done; "
         "sleep 0.2; "
         "kill \"$tail_pid\" 2>/dev/null || true; "
         "wait \"$tail_pid\" 2>/dev/null || true; "
         f"rc=$(sed -n 's/^{_HEADLESS_RUN_EXIT_MARKER}//p' {quoted_path} | tail -1); "
+        f"rm -f {quoted_path}; "
         "exit \"${rc:-0}\""
     )
 
@@ -1485,6 +1498,17 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     stream_path = _run_stream_path(run_id)
     pid_path = _run_pid_path(run_id)
     if not resume:
+        # Best-effort removal of stream/pid files older than 60 minutes.
+        # Runs fire-and-forget so it doesn't block the run launch.
+        asyncio.create_task(
+            exec_capture(
+                SESSIONS_NAMESPACE,
+                pod_name,
+                ["bash", "-c",
+                 "find /tmp -maxdepth 1 -name 'tank-run-*.stream' -mmin +60 -delete 2>/dev/null; "
+                 "find /tmp -maxdepth 1 -name 'tank-run-*.pid' -mmin +60 -delete 2>/dev/null; true"],
+            )
+        )
         prompt_path = _new_prompt_path()
         try:
             await exec_write_file(

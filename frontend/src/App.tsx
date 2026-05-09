@@ -4131,6 +4131,9 @@ function HeadlessRun({
         setRunStatus("done");
         setRunning(false);
         ws.close();
+      } else if (msg.status === "attached") {
+        // Sync run_id from server in case it sanitised the client-provided value.
+        if (msg.run_id) run.id = msg.run_id;
       } else if (msg.status === "error") {
         flushStdoutBuffer();
         currentRunRef.current = null;
@@ -4170,7 +4173,7 @@ function HeadlessRun({
         return;
       }
       currentRunRef.current = null;
-      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
+      setLastStatusText("Connection lost");
       activeToolNameRef.current = null;
       setActiveToolName(null);
       setRunning(false);

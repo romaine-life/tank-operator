@@ -15,6 +15,10 @@ from typing import Any
 import pytest
 
 from tank_operator import sessions as sessions_module
+from tank_operator.api import (
+    _build_tail_run_script,
+    _validate_run_id,
+)
 from tank_operator.sessions import (
     HEADLESS_MODES,
     SessionInfo,
@@ -184,6 +188,53 @@ def test_codex_headless_runner_mirrors_json_stream_to_history() -> None:
     assert '"type": "tank.user_message"' in script
     assert "history.buffer.write(data)" in script
     assert "pty.spawn(args, master_read=master_read)" in script
+
+
+# ---------------------------------------------------------------------------
+# session_run resume path — helper-level coverage
+#
+# The WebSocket endpoint itself requires a live k8s cluster to integration-
+# test, so we verify the two helpers that encode the resume logic:
+#   - _validate_run_id: determines whether the client's run_id is used or a
+#     fresh one is minted (reconnects would break if ids diverge silently).
+#   - _build_tail_run_script with offset > 0: the tail start byte must be
+#     offset+1 so a reconnect replays exactly the bytes the browser missed.
+# ---------------------------------------------------------------------------
+
+
+def test_resume_run_id_passes_through_when_valid() -> None:
+    client_id = "550e8400-e29b-41d4-a716-446655440000"
+    assert _validate_run_id(client_id) == client_id
+
+
+def test_resume_run_id_sanitised_when_malicious() -> None:
+    bad = "../../etc/passwd"
+    result = _validate_run_id(bad)
+    assert result != bad
+    assert "/" not in result
+
+
+def test_resume_tail_offset_zero_reads_whole_file() -> None:
+    script = _build_tail_run_script("/tmp/run.stream", offset=0)
+    assert "tail -c +1 " in script
+
+
+def test_resume_tail_offset_nonzero_skips_already_seen_bytes() -> None:
+    script = _build_tail_run_script("/tmp/run.stream", offset=4096)
+    assert "tail -c +4097 " in script
+
+
+def test_resume_tail_offset_is_clamped_to_one_when_negative() -> None:
+    script = _build_tail_run_script("/tmp/run.stream", offset=-999)
+    assert "tail -c +1 " in script
+
+
+def test_resume_prompt_is_not_required_for_tail_script() -> None:
+    # The tail script takes only stream_path and offset — no prompt — so
+    # a reconnect never re-stages or re-runs the underlying command.
+    import inspect
+    sig = inspect.signature(_build_tail_run_script)
+    assert "prompt" not in sig.parameters
 
 
 def test_dispatch_headless_validates_model_and_permission_mode(
