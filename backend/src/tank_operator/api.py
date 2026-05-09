@@ -1087,33 +1087,39 @@ async def get_active_run(
     except PodNotReady:
         raise HTTPException(status_code=503, detail="pod not ready")
 
+    # Single exec: find the newest pid file, verify the process is still alive
+    # via kill -0 (guards against stale files from SIGKILL/OOM deaths where the
+    # trap didn't run), then return run_id and current stream byte offset.
+    # Outputs "<run_id> <stream_bytes>" on success, empty string if idle.
+    check_script = (
+        "pid_file=$(ls /tmp/tank-run-*.pid 2>/dev/null | head -1); "
+        "[ -z \"$pid_file\" ] && exit 0; "
+        "pid=$(cat \"$pid_file\" 2>/dev/null || true); "
+        "[ -z \"$pid\" ] && exit 0; "
+        "kill -0 \"$pid\" 2>/dev/null || { rm -f \"$pid_file\"; exit 0; }; "
+        "run_id=${pid_file#/tmp/tank-run-}; run_id=${run_id%.pid}; "
+        "stream_path=\"/tmp/tank-run-${run_id}.stream\"; "
+        "bytes=$(wc -c < \"$stream_path\" 2>/dev/null || echo 0); "
+        "echo \"$run_id $bytes\""
+    )
     try:
-        out = await exec_capture(
-            SESSIONS_NAMESPACE,
-            pod_name,
-            ["bash", "-c", "ls /tmp/tank-run-*.pid 2>/dev/null | head -1"],
-        )
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, ["bash", "-c", check_script])
     except RuntimeError:
         return None
 
-    pid_file = out.decode().strip()
-    if not pid_file:
+    line = out.decode().strip()
+    if not line:
         return None
 
-    # Extract run_id from /tmp/tank-run-{run_id}.pid
-    run_id = pid_file.removeprefix("/tmp/tank-run-").removesuffix(".pid")
+    parts = line.split()
+    if len(parts) != 2:
+        return None
+    run_id, stream_bytes = parts[0], parts[1]
     if not run_id or "/" in run_id:
         return None
-
-    stream_path = _run_stream_path(run_id)
     try:
-        size_out = await exec_capture(
-            SESSIONS_NAMESPACE,
-            pod_name,
-            ["bash", "-c", f"wc -c < {_shlex.quote(stream_path)} 2>/dev/null || echo 0"],
-        )
-        stream_offset = int(size_out.decode().strip())
-    except (RuntimeError, ValueError):
+        stream_offset = int(stream_bytes)
+    except ValueError:
         stream_offset = 0
 
     return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
