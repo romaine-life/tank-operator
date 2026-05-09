@@ -127,6 +127,7 @@ import secrets as _secrets
 import shlex as _shlex
 _HEADLESS_ARG_PATTERN = _re_arg.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
+_RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
 
 
 def _validate_headless_arg(value: str | None) -> str:
@@ -139,6 +140,28 @@ def _validate_headless_arg(value: str | None) -> str:
 
 def _new_prompt_path() -> str:
     return f"{_HEADLESS_PROMPT_DIR}/tank-prompt-{_secrets.token_hex(8)}"
+
+
+async def _wait_for_run_pod_name(owner: str, session_id: str, ws: WebSocket) -> str:
+    """Wait for a run pod without leaving the browser WebSocket idle."""
+
+    pod_task = asyncio.create_task(
+        sessions.get_pod_name(owner=owner, session_id=session_id)
+    )
+    try:
+        while True:
+            done, _pending = await asyncio.wait(
+                {pod_task},
+                timeout=_RUN_PREFLIGHT_KEEPALIVE_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if done:
+                return await pod_task
+            await ws.send_json({"keepalive": True, "phase": "waiting_for_pod"})
+    except Exception:
+        if not pod_task.done():
+            pod_task.cancel()
+        raise
 
 
 def _build_headless_script(
@@ -1142,7 +1165,9 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     )
 
     try:
-        pod_name = await sessions.get_pod_name(owner=user.email, session_id=session_id)
+        pod_name = await _wait_for_run_pod_name(
+            owner=user.email, session_id=session_id, ws=ws
+        )
     except SessionNotOwned:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION, reason="not owner")
         return
@@ -1151,6 +1176,8 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
     except PodNotReady:
         await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="pod not ready")
+        return
+    except WebSocketDisconnect:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
