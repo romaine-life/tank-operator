@@ -956,9 +956,13 @@ function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: Sess
     >
       {icon ? (
         <>
-          <ProviderIcon provider={icon} className="mode-provider-icon" />
+          <span className="mode-icon-slot">
+            <ProviderIcon provider={icon} className="mode-provider-icon" />
+          </span>
           {interaction && (
-            <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
+            <span className="mode-icon-slot">
+              <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
+            </span>
           )}
           <span className="sr-only">{label}</span>
         </>
