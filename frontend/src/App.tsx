@@ -1786,6 +1786,14 @@ interface SkillEntry {
   body_preview: string;
 }
 
+interface McpServerEntry {
+  name: string;
+  transport: string;
+  target: string;
+  source: string;
+  enabled: boolean;
+}
+
 function joinFilesPath(parent: string, name: string): string {
   if (!parent) return name;
   return `${parent}/${name}`;
@@ -3041,6 +3049,7 @@ function HeadlessRun({
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
+  const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -3062,6 +3071,9 @@ function HeadlessRun({
   const [fileDraft, setFileDraft] = useState<string | null>(null);
   const [fileSaving, setFileSaving] = useState(false);
   const [fileSaveError, setFileSaveError] = useState<string | null>(null);
+  const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
+  const [mcpError, setMcpError] = useState<string | null>(null);
   // Auto-scroll bookkeeping — track whether the user has scrolled away from
   // the bottom; if so, suppress auto-scroll on new entries and offer the
   // floating "scroll to bottom" button.
@@ -3329,6 +3341,36 @@ function HeadlessRun({
 
   useEffect(() => {
     if (session.status !== "Active") {
+      setMcpServers(null);
+      setMcpError(null);
+      return;
+    }
+    let cancelled = false;
+    setMcpLoading(true);
+    setMcpError(null);
+    void authedFetch(`/api/sessions/${session.id}/mcp-servers`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return (await res.json()) as { entries: McpServerEntry[] };
+      })
+      .then((body) => {
+        if (cancelled) return;
+        setMcpServers(body.entries ?? []);
+        setMcpLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setMcpServers([]);
+        setMcpError(String(err));
+        setMcpLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, session.status]);
+
+  useEffect(() => {
+    if (session.status !== "Active") {
       setSlashCommands(SLASH_COMMANDS);
       return;
     }
@@ -3558,6 +3600,7 @@ function HeadlessRun({
       if (!ta) {
         setSlashOpen(false);
         setMentionOpen(false);
+        setMcpOpen(false);
         setComposerText("");
         return;
       }
@@ -3567,6 +3610,7 @@ function HeadlessRun({
       if (slash) {
         slashManualOpenRef.current = false;
         setSlashOpen(true);
+        setMcpOpen(false);
         setSlashQuery((prev) => {
           if (prev !== slash.query) setSlashIndex(0);
           return slash.query;
@@ -3576,6 +3620,7 @@ function HeadlessRun({
       }
       if (mention) {
         setMentionOpen(true);
+        setMcpOpen(false);
         setMentionQuery((prev) => {
           if (prev !== mention.query) setMentionIndex(0);
           return mention.query;
@@ -3691,6 +3736,19 @@ function HeadlessRun({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [mentionOpen, mentionQuery, mentionIndex, mentionPaths]);
 
+  useEffect(() => {
+    if (!mcpOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setMcpOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [mcpOpen]);
+
   function applyMentionPath(relPath: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -3761,6 +3819,8 @@ function HeadlessRun({
       return;
     }
     slashManualOpenRef.current = true;
+    setMcpOpen(false);
+    setMentionOpen(false);
     setSlashQuery("");
     setSlashIndex(0);
     setSlashOpen(true);
@@ -4771,6 +4831,34 @@ function HeadlessRun({
               ))}
             </div>
           )}
+          {mcpOpen && (
+            <div className="run-slash-palette run-mcp-palette" role="listbox" aria-label="MCP servers">
+              <div className="run-slash-palette-label">MCP servers</div>
+              {mcpLoading && (
+                <div className="run-slash-empty">
+                  <Loader2Icon className="run-spin" size={13} aria-hidden="true" />
+                  loading
+                </div>
+              )}
+              {mcpError && (
+                <div className="run-slash-empty run-mcp-error">{mcpError}</div>
+              )}
+              {!mcpLoading && !mcpError && mcpServers && mcpServers.length === 0 && (
+                <div className="run-slash-empty">no MCP servers</div>
+              )}
+              {!mcpLoading && !mcpError && mcpServers?.map((server) => (
+                <div className="run-mcp-menu-item" role="option" aria-selected={false} key={server.name}>
+                  <span className="run-mcp-menu-top">
+                    <span className="run-slash-name">{server.name}</span>
+                    <span className="run-mcp-menu-transport">{server.transport}</span>
+                  </span>
+                  <span className="run-slash-desc run-mcp-menu-target">
+                    {server.target || server.source}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {queuedMessages.length > 0 && (
             <div className="run-queued-followups" aria-live="polite">
               <div className="run-queued-followups-head">
@@ -4950,6 +5038,25 @@ function HeadlessRun({
                   {slashCommands.length > 0 && (
                     <span className="run-command-menu-count">
                       {slashCommands.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="run-composer-icon-btn run-command-menu-btn"
+                  aria-label="Show MCP servers"
+                  title="Show MCP servers"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setSlashOpen(false);
+                    setMentionOpen(false);
+                    setMcpOpen((open) => !open);
+                  }}
+                >
+                  <PlugIcon className="run-composer-icon" aria-hidden="true" />
+                  {mcpServers && mcpServers.length > 0 && (
+                    <span className="run-command-menu-count">
+                      {mcpServers.length}
                     </span>
                   )}
                 </button>
