@@ -8,7 +8,8 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import type { TranscriptEntry } from "@sandbox-agent/react";
+import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
+import { SandboxAgent } from "sandbox-agent";
 import {
   Streamdown,
   type Components as StreamdownComponents,
@@ -68,7 +69,7 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { ProviderIcon } from "./providerIcons";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
@@ -5295,16 +5296,84 @@ function HeadlessRun({
   );
 }
 
-function LegacyInteractiveSession({ session }: { session: Session }) {
+function CliProcessTerminal({
+  session,
+  visible,
+}: {
+  session: Session;
+  visible: boolean;
+}) {
+  const [processId, setProcessId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const client = useMemo(
+    () =>
+      new SandboxAgent({
+        baseUrl: `${location.origin}/api/sessions/${session.id}/sandbox-agent`,
+        token: getStoredToken() ?? undefined,
+        skipHealthCheck: true,
+      }),
+    [session.id],
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    setError(null);
+    authedFetch(`/api/sessions/${session.id}/cli-process`, { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`CLI process create failed: ${res.status}`);
+        return (await res.json()) as { process_id: string };
+      })
+      .then((body) => {
+        if (!cancelled) setProcessId(body.process_id);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String((err as Error).message ?? err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, visible]);
+
+  if (error) {
+    return <div className="run-shell-error">{error}</div>;
+  }
+  if (!processId) {
+    return (
+      <div className="run-shell-loading">
+        <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+        <span>starting CLI...</span>
+      </div>
+    );
+  }
+  return (
+    <ProcessTerminal
+      client={client}
+      processId={processId}
+      className="run-process-terminal"
+      height="100%"
+      showStatusBar={false}
+    />
+  );
+}
+
+function CliSession({ session, visible }: { session: Session; visible: boolean }) {
   return (
     <section className="run-panel">
+      <header className="run-header">
+        <div className="run-title-block">
+          <div className="run-title-row">
+            <span className="run-provider-mark">
+              <ProviderIcon provider={MODE_MENU_ICONS[session.mode]} className="run-provider-icon" />
+            </span>
+            <h2 className="run-title">{sessionDisplayName(session)}</h2>
+          </div>
+          <p className="run-subtitle">{MODE_LABELS[session.mode]}</p>
+        </div>
+      </header>
       <main className="run-main">
-        <div className="run-empty">
-          <AlertCircleIcon size={20} aria-hidden="true" />
-          <span className="run-muted">
-            {MODE_LABELS[session.mode]} used the removed interactive terminal path.
-            Create a GUI or terminal session from the launcher.
-          </span>
+        <div className="run-shell">
+          <CliProcessTerminal session={session} visible={visible} />
         </div>
       </main>
     </section>
@@ -6129,7 +6198,7 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <LegacyInteractiveSession session={s} />
+                    <CliSession session={s} visible={active === s.id} />
                   </div>
                 )
               )}
