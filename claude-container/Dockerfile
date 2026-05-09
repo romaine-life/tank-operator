@@ -121,9 +121,8 @@ RUN pip install --no-cache-dir --break-system-packages /opt/terminald
 # docs/config/script changes.
 RUN mkdir -p /workspace \
         /opt/tank \
-        /home/node/.claude/skills/done \
-        /home/node/.claude/skills/rollout/agents \
-        /home/node/.codex/skills/rollout/agents \
+        /home/node/.claude/skills \
+        /home/node/.codex/skills \
         /home/node/.pi/agent
 
 # Pi keeps MCP support in installable packages rather than core. Install the

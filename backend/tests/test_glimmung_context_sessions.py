@@ -106,7 +106,7 @@ def test_session_config_is_mounted_from_configmap() -> None:
     mounts = {
         (mount["mountPath"], mount["subPath"])
         for mount in _claude_container(manifest)["volumeMounts"]
-        if mount["name"] == "session-config"
+        if mount["name"] == "session-config" and "subPath" in mount
     }
     assert ("/workspace/.mcp.json", "mcp.json") in mounts
     assert ("/workspace/CLAUDE.md", "default-claude.md") in mounts
@@ -117,11 +117,11 @@ def test_session_config_is_mounted_from_configmap() -> None:
     ) in mounts
     assert ("/opt/tank/bootstrap.sh", "tank-bootstrap.sh") in mounts
     assert ("/opt/tank/headless-run.sh", "headless-run.sh") in mounts
-    assert ("/home/node/.claude/skills/done/SKILL.md", "skills.done.SKILL.md") in mounts
-    assert (
-        "/home/node/.codex/skills/rollout/SKILL.md",
-        "skills.rollout.SKILL.md",
-    ) in mounts
+    assert any(
+        mount["mountPath"] == "/opt/tank/session-config" and "subPath" not in mount
+        for mount in _claude_container(manifest)["volumeMounts"]
+        if mount["name"] == "session-config"
+    )
 
     proxy = next(
         c for c in _pod_spec(manifest)["containers"] if c["name"] == "mcp-auth-proxy"

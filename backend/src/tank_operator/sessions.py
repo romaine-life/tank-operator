@@ -199,18 +199,8 @@ SESSION_CONFIG_MOUNTS = (
     ("write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"),
     ("tank-bootstrap.sh", "/opt/tank/bootstrap.sh"),
     ("headless-run.sh", "/opt/tank/headless-run.sh"),
-    ("skills.done.SKILL.md", "/home/node/.claude/skills/done/SKILL.md"),
-    ("skills.rollout.SKILL.md", "/home/node/.claude/skills/rollout/SKILL.md"),
-    (
-        "skills.rollout.agents.openai.yaml",
-        "/home/node/.claude/skills/rollout/agents/openai.yaml",
-    ),
-    ("skills.rollout.SKILL.md", "/home/node/.codex/skills/rollout/SKILL.md"),
-    (
-        "skills.rollout.agents.openai.yaml",
-        "/home/node/.codex/skills/rollout/agents/openai.yaml",
-    ),
 )
+SESSION_CONFIG_DIR_MOUNT = "/opt/tank/session-config"
 
 
 @dataclass
@@ -249,7 +239,7 @@ def _owner_label(email: str) -> str:
 
 
 def _session_config_mounts() -> list[dict[str, Any]]:
-    return [
+    mounts = [
         {
             "name": "session-config",
             "mountPath": mount_path,
@@ -258,6 +248,14 @@ def _session_config_mounts() -> list[dict[str, Any]]:
         }
         for key, mount_path in SESSION_CONFIG_MOUNTS
     ]
+    mounts.append(
+        {
+            "name": "session-config",
+            "mountPath": SESSION_CONFIG_DIR_MOUNT,
+            "readOnly": True,
+        }
+    )
+    return mounts
 
 
 def _session_config_volume() -> dict[str, Any]:
