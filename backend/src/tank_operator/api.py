@@ -512,8 +512,123 @@ class FileContent(BaseModel):
     binary: bool
 
 
+class SkillEntry(BaseModel):
+    name: str
+    path: str
+    source: str
+    description: str
+    body_preview: str
+
+
+class SkillListing(BaseModel):
+    entries: list[SkillEntry]
+
+
 class WriteFileBody(BaseModel):
     text: str
+
+
+@app.get("/api/sessions/{session_id}/skills", response_model=SkillListing)
+async def list_session_skills(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> SkillListing:
+    """List installed SKILL.md files inside the session pod.
+
+    GUI/headless sessions hide the terminal's startup skill inventory, so the
+    web UI needs its own view over the same on-pod directories Codex and
+    Claude read from.
+    """
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+
+    if session.mode.startswith("codex") or session.mode.startswith("pi"):
+        roots = ["/home/node/.codex/skills"]
+    elif session.mode.startswith("subscription") or session.mode in ("api_key", "config"):
+        roots = ["/home/node/.claude/skills"]
+    else:
+        roots = ["/home/node/.codex/skills", "/home/node/.claude/skills"]
+
+    scan_script = (
+        "import json, os, sys\n"
+        "roots = sys.argv[1:]\n"
+        "def parse_skill(text):\n"
+        "    meta = {}\n"
+        "    body = text\n"
+        "    if text.startswith('---\\n'):\n"
+        "        end = text.find('\\n---', 4)\n"
+        "        if end != -1:\n"
+        "            raw = text[4:end]\n"
+        "            body = text[text.find('\\n', end + 1) + 1:]\n"
+        "            for line in raw.splitlines():\n"
+        "                if ':' not in line or line.startswith((' ', '\\t', '-')):\n"
+        "                    continue\n"
+        "                k, v = line.split(':', 1)\n"
+        "                meta[k.strip()] = v.strip().strip('\\\"\\'')\n"
+        "    preview = ' '.join(body.strip().split())[:240]\n"
+        "    return meta, preview\n"
+        "out = []\n"
+        "for root in roots:\n"
+        "    if not os.path.isdir(root):\n"
+        "        continue\n"
+        "    for dirpath, dirs, files in os.walk(root):\n"
+        "        dirs[:] = sorted(dirs)\n"
+        "        if 'SKILL.md' not in files:\n"
+        "            continue\n"
+        "        path = os.path.join(dirpath, 'SKILL.md')\n"
+        "        try:\n"
+        "            text = open(path, encoding='utf-8').read(65536)\n"
+        "        except OSError:\n"
+        "            continue\n"
+        "        meta, preview = parse_skill(text)\n"
+        "        rel = os.path.relpath(dirpath, root)\n"
+        "        fallback = os.path.basename(dirpath) if rel == '.' else rel\n"
+        "        name = str(meta.get('name') or fallback).replace(os.sep, '/')\n"
+        "        source = 'codex' if '/.codex/' in path else 'claude'\n"
+        "        out.append({\n"
+        "            'name': name,\n"
+        "            'path': path,\n"
+        "            'source': source,\n"
+        "            'description': str(meta.get('description') or ''),\n"
+        "            'body_preview': preview,\n"
+        "        })\n"
+        "out.sort(key=lambda x: (x['source'], x['name'].lower()))\n"
+        "print(json.dumps(out))\n"
+    )
+    cmd = ["python3", "-c", scan_script, *roots]
+    try:
+        out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"skill scan failed: {exc}")
+
+    import json as _json
+    try:
+        raw_entries = _json.loads(out.decode("utf-8", errors="replace") or "[]")
+    except _json.JSONDecodeError:
+        raw_entries = []
+    entries: list[SkillEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        entries.append(
+            SkillEntry(
+                name=str(item.get("name") or ""),
+                path=str(item.get("path") or ""),
+                source=str(item.get("source") or ""),
+                description=str(item.get("description") or ""),
+                body_preview=str(item.get("body_preview") or ""),
+            )
+        )
+    return SkillListing(entries=entries)
 
 
 @app.get("/api/sessions/{session_id}/files", response_model=FileListing)

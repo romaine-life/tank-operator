@@ -2506,6 +2506,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  position: relative;
   width: 2rem;
   height: 2rem;
   border-radius: 0.5rem;
@@ -2529,6 +2530,25 @@ button:disabled {
 .run-composer-icon {
   width: 1.1rem;
   height: 1.1rem;
+}
+
+.run-command-menu-count {
+  position: absolute;
+  top: -0.15rem;
+  right: -0.15rem;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent, #2563eb);
+  color: white;
+  font-family: var(--font-primary);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 /* Context usage ring — driven by stream-json `usage` events. SVG arc
