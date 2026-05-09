@@ -4934,6 +4934,30 @@ export function App() {
   }, [sessions, user, closingIds]);
 
   useEffect(() => {
+    if (!user) return;
+    const source = new EventSource("/api/sessions/events", { withCredentials: true });
+    const refreshSessions = () => void refresh();
+    source.addEventListener("sessions-changed", refreshSessions);
+    return () => {
+      source.removeEventListener("sessions-changed", refreshSessions);
+      source.close();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener("focus", refreshIfVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener("focus", refreshIfVisible);
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
       const selectable = sessions.filter((s) => !closingIds.has(s.id));
       setActive(selectable[selectable.length - 1]?.id ?? null);

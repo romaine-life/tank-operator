@@ -282,11 +282,14 @@ class SessionManager:
     rather than silently recreated as a new empty runtime.
     """
 
-    def __init__(self, registry: SessionRegistryStore | None = None) -> None:
+    def __init__(
+        self, registry: SessionRegistryStore | None = None, events: Any | None = None
+    ) -> None:
         self._api: client.ApiClient | None = None
         self._apps: client.AppsV1Api | None = None
         self._core: client.CoreV1Api | None = None
         self._registry = registry
+        self._events = events
         # In-memory connection tracking for the idle reaper. Single replica
         # only (values.yaml pins replicas: 1) — stateful, restart-tolerant
         # via the "adopt with now" branch in _reap_idle.
@@ -302,6 +305,10 @@ class SessionManager:
 
     def set_registry(self, registry: SessionRegistryStore) -> None:
         self._registry = registry
+
+    def _publish_changed(self, owner: str) -> None:
+        if self._events is not None:
+            self._events.publish(owner)
 
     async def startup(self) -> None:
         try:
@@ -720,6 +727,7 @@ class SessionManager:
                 requested_at=request_started_at,
                 created_at=created_at,
             )
+        self._publish_changed(owner)
         return info
 
     async def dispatch_headless(
@@ -896,6 +904,7 @@ class SessionManager:
                 requested_at=info.requested_at,
                 created_at=info.created_at,
             )
+        self._publish_changed(owner)
         return info
 
     async def get_pod_name(
@@ -935,6 +944,7 @@ class SessionManager:
                     await self._registry.mark_deleted(owner, session_id)
                     self._ws_count.pop(session_id, None)
                     self._activity.pop(session_id, None)
+                    self._publish_changed(owner)
                     return
             raise
         await self._delete_session_runtime(pod)
@@ -942,6 +952,7 @@ class SessionManager:
             await self._registry.mark_deleted(owner, session_id)
         self._ws_count.pop(session_id, None)
         self._activity.pop(session_id, None)
+        self._publish_changed(owner)
 
     async def touch(self, owner: str, session_id: str) -> None:
         await self._read_owned_pod(owner, session_id)
