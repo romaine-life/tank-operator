@@ -494,6 +494,13 @@ class PatchSessionBody(BaseModel):
     name: str | None = None
 
 
+class TestStateBody(BaseModel):
+    active: bool = True
+    slot_index: int | None = None
+    url: str | None = None
+    lease_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Files API — read-only browsing of /workspace inside the session pod.
 # Powers the Files tab in the chat pane. Edits are out of scope for now.
@@ -1114,6 +1121,27 @@ async def patch_session(
     try:
         return await sessions.set_name(
             owner=user.email, session_id=session_id, name=body.name
+        )
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+
+
+@app.post("/api/sessions/{session_id}/test-state")
+async def update_test_state(
+    session_id: str,
+    body: TestStateBody,
+    user: User = Depends(current_user),
+) -> SessionInfo:
+    try:
+        return await sessions.set_test_state(
+            owner=user.email,
+            session_id=session_id,
+            active=body.active,
+            slot_index=body.slot_index,
+            url=body.url,
+            lease_id=body.lease_id,
         )
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")

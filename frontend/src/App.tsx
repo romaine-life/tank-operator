@@ -48,6 +48,7 @@ import {
   CopyIcon,
   FileIcon,
   FileTextIcon,
+  FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
   ImageIcon,
@@ -107,6 +108,14 @@ interface Session {
   ready_at: string | null;
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
+  test_state?: TestState | null;
+}
+
+interface TestState {
+  active?: boolean;
+  slot_index?: number | null;
+  url?: string | null;
+  lease_id?: string | null;
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
@@ -572,6 +581,7 @@ const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const HEADLESS_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["subscription", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_subscription"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["subscription_headless", "codex_headless"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -3035,6 +3045,7 @@ function HeadlessRun({
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3089,6 +3100,11 @@ function HeadlessRun({
   // Composer attachments — uploaded to /workspace/.attachments and referenced
   // in the prompt so Claude can Read them via tool use.
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+
+  useEffect(() => {
+    setTestState(session.test_state ?? null);
+  }, [session.test_state]);
+
   const [dragActive, setDragActive] = useState(false);
   const setChatFontScale = (value: number) => {
     setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
@@ -3939,6 +3955,47 @@ function HeadlessRun({
     startRun(composed);
   }
 
+  function submitSkillPrompt(prompt: string) {
+    if (running) {
+      setQueuedMessages((prev) => [
+        ...prev,
+        { id: nextQueuedMessageId(), text: prompt },
+      ]);
+      return;
+    }
+    startRun(prompt);
+  }
+
+  async function markTestState(state: TestState) {
+    setTestState(state);
+    const res = await authedFetch(`/api/sessions/${session.id}/test-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+    if (!res.ok) {
+      throw new Error(`test state update failed: ${res.status}`);
+    }
+  }
+
+  function startTestSkill() {
+    if (session.status !== "Active") return;
+    void markTestState({ active: true }).catch((e) => {
+      setEntries((prev) =>
+        appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
+      );
+    });
+    const skillRef = isClaude ? "/test" : "$test";
+    submitSkillPrompt(
+      `${skillRef}\n\nAcquire a Glimmung test slot for this repo, hot-swap the current work into it, then call the tank-operator.set_test_environment MCP tool with the slot index and test URL once it is ready.`,
+    );
+  }
+
+  function startGuiRollout() {
+    if (session.status !== "Active") return;
+    submitSkillPrompt(isClaude ? "/rollout" : "$rollout");
+  }
+
   function startRun(trimmed: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
@@ -4168,6 +4225,48 @@ function HeadlessRun({
           )}
         </div>
         <nav className="run-tabs" aria-label="Session actions">
+          {GUI_ROLLOUT_MODES.has(session.mode) && (
+            <button
+              type="button"
+              className="run-tab run-tab-icononly run-tab-action"
+              onClick={startGuiRollout}
+              disabled={!ready}
+              aria-label="Start rollout"
+              title={isClaude ? "Use /rollout in this run" : "Use $rollout in this run"}
+            >
+              <TankIcon className="run-tab-icon" />
+            </button>
+          )}
+          {testState?.active && testState.url ? (
+            <a
+              className="run-skill-pill run-test-pill is-active"
+              href={testState.url}
+              target="_blank"
+              rel="noreferrer"
+              title="Open test environment"
+            >
+              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Test</span>
+              {testState.slot_index != null && (
+                <span className="run-test-slot">{testState.slot_index}</span>
+              )}
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={`run-skill-pill run-test-pill${testState?.active ? " is-active" : ""}`}
+              onClick={startTestSkill}
+              disabled={!ready}
+              aria-label="Start test skill"
+              title={testState?.active ? "Test skill is active" : "Use the test skill"}
+            >
+              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Test</span>
+              {testState?.slot_index != null && (
+                <span className="run-test-slot">{testState.slot_index}</span>
+              )}
+            </button>
+          )}
           <button
             type="button"
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
