@@ -157,6 +157,7 @@ import json
 import os
 import pty
 import sys
+from datetime import datetime, timezone
 
 prompt_path = sys.argv[1]
 follow_up = sys.argv[2] == "true"
@@ -175,17 +176,42 @@ if model:
 args.append(prompt)
 
 with open(history_path, "a", encoding="utf-8") as history:
-    history.write(json.dumps({"type": "tank.user_message", "message": prompt}) + "\n")
+    def stamped_line(line: str) -> str:
+        timestamp = datetime.now(timezone.utc).isoformat()
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return line
+        if isinstance(event, dict) and "timestamp" not in event:
+            event["timestamp"] = timestamp
+            return json.dumps(event)
+        return line
+
+    history.write(json.dumps({
+        "type": "tank.user_message",
+        "message": prompt,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }) + "\n")
     history.flush()
+    history_line_buffer = [""]
 
     def master_read(fd: int) -> bytes:
         data = os.read(fd, 1024)
         if data:
-            history.buffer.write(data)
+            chunk = data.decode("utf-8", errors="replace")
+            history_line_buffer[0] += chunk
+            while "\n" in history_line_buffer[0]:
+                line, history_line_buffer[0] = history_line_buffer[0].split("\n", 1)
+                line = line.rstrip("\r")
+                if line:
+                    history.write(stamped_line(line) + "\n")
             history.flush()
         return data
 
     status = pty.spawn(args, master_read=master_read)
+    if history_line_buffer[0].strip():
+        history.write(stamped_line(history_line_buffer[0].strip()) + "\n")
+        history.flush()
 raise SystemExit(os.waitstatus_to_exitcode(status))
 PY
     ;;
