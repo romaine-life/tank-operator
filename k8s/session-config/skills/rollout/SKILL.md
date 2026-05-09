@@ -22,3 +22,7 @@ When the user invokes `/rollout`, carry the current change all the way through d
 - Do not force-push or rewrite shared history unless the user explicitly asks.
 - If checks fail, stop and fix the failure before merging when it is in scope. If the failure is unrelated or external, explain the blocker clearly.
 - If ArgoCD does not sync within a reasonable window, keep polling while giving periodic status updates that include the current observed revision/image and health/sync state.
+
+## Lease/Glimmung
+
+- If you had the /test skill called previously, or if you took a lease using the glimmung mcp tool to utilize a test slot, return the lease and allow glimmung to handle the test environment cleanup.
