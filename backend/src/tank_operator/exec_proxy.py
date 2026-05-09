@@ -315,6 +315,7 @@ async def exec_stream_to_websocket(
                             if data:
                                 await k8s_ws.send_bytes(bytes([STDIN_CHANNEL]) + data)
                         elif isinstance(msg, dict) and msg.get("cancel"):
+                            log.info("run cancelled by browser pod=%s", pod_name)
                             return "cancel"
                 except WebSocketDisconnect:
                     browser_disconnected = True
