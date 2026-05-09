@@ -37,6 +37,7 @@ import {
 import {
   AlertCircleIcon,
   ArrowDownIcon,
+  ArrowLeftIcon,
   ArrowUpFromLineIcon,
   BotIcon,
   BrainIcon,
@@ -4037,38 +4038,33 @@ function HeadlessRun({
             </button>
           )}
         </div>
-        <nav className="run-tabs" role="tablist" aria-label="Session views">
+        <nav className="run-tabs" aria-label="Session actions">
           <button
             type="button"
-            role="tab"
-            aria-selected={activeTab === "chat"}
-            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
-            onClick={() => {
-              setActiveTab("chat");
-            }}
-            title="Return to the session"
-          >
-            <BotIcon
-              className="run-tab-icon"
-              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
-              aria-hidden="true"
-            />
-            <span>Session</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === "files"}
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
-            onClick={() => setActiveTab("files")}
-            title="Browse files in /workspace"
+            onClick={() => {
+              if (activeTab === "files") {
+                setActiveTab("chat");
+                return;
+              }
+              setActiveTab("files");
+            }}
+            title={activeTab === "files" ? "Return to previous view" : "Browse files in /workspace"}
           >
-            <FolderIcon
-              className="run-tab-icon"
-              strokeWidth={activeTab === "files" ? 2.4 : 1.8}
-              aria-hidden="true"
-            />
-            <span>Files</span>
+            {activeTab === "files" ? (
+              <ArrowLeftIcon
+                className="run-tab-icon"
+                strokeWidth={2.2}
+                aria-hidden="true"
+              />
+            ) : (
+              <FolderIcon
+                className="run-tab-icon"
+                strokeWidth={1.8}
+                aria-hidden="true"
+              />
+            )}
+            <span>{activeTab === "files" ? "Back" : "Files"}</span>
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
