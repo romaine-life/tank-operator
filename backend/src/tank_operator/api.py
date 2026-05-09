@@ -766,16 +766,23 @@ async def get_run_history(
         raise HTTPException(status_code=404, detail="session not found")
     except PodNotReady:
         raise HTTPException(status_code=503, detail="pod not ready")
-    # claude-code persists each session at
-    # ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl. We don't track the
-    # uuid → tank session mapping yet; for now return the most recently
-    # modified jsonl in any project subdir, which corresponds to the last
-    # `claude -p` invocation on the pod.
-    cmd = [
-        "bash",
-        "-lc",
-        "ls -t /home/node/.claude/projects/*/*.jsonl 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null",
-    ]
+    try:
+        session = await sessions.get_session(owner=user.email, session_id=session_id)
+    except (SessionNotOwned, SessionNotFound):
+        session = None
+    if session and session.mode == CODEX_HEADLESS_MODE:
+        cmd = ["bash", "-lc", "cat /tmp/tank-run-history.ndjson 2>/dev/null || true"]
+    else:
+        # claude-code persists each session at
+        # ~/.claude/projects/<encoded-cwd>/<uuid>.jsonl. We don't track the
+        # uuid → tank session mapping yet; for now return the most recently
+        # modified jsonl in any project subdir, which corresponds to the last
+        # `claude -p` invocation on the pod.
+        cmd = [
+            "bash",
+            "-lc",
+            "ls -t /home/node/.claude/projects/*/*.jsonl 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null",
+        ]
     try:
         out = await exec_capture(SESSIONS_NAMESPACE, pod_name, cmd)
     except RuntimeError:
