@@ -1,9 +1,7 @@
 """Tests for the session-to-session messaging surface.
 
 Covers:
-- Pod manifest gets TANK_OPERATOR_URL / TANK_API_TOKEN / TANK_SESSION_ID env
-  when the orchestrator can mint a JWT for the owner.
-- mint_session_token_for_email round-trips through _decode_session_token.
+- Pod manifest does not include the removed legacy mcp-tank callback env.
 - SessionManager.dispatch_headless rejects non-headless modes and shapes the
   launcher command correctly.
 """
@@ -16,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tank_operator import auth, sessions as sessions_module
+from tank_operator import sessions as sessions_module
 from tank_operator.sessions import (
     HEADLESS_MODES,
     SessionInfo,
@@ -32,61 +30,17 @@ def _claude_env(manifest: dict) -> dict[str, str]:
     return {e["name"]: e["value"] for e in claude["env"]}
 
 
-def test_pod_manifest_injects_orchestrator_url_and_session_token() -> None:
+def test_pod_manifest_omits_legacy_mcp_tank_callback_env() -> None:
     manifest = SessionManager()._pod_manifest(
         "abc123",
         owner="operator@example.test",
         mode="subscription_headless",
-        api_token="signed-token",
     )
 
     env = _claude_env(manifest)
-    assert env["TANK_API_TOKEN"] == "signed-token"
-    assert env["TANK_SESSION_ID"] == "abc123"
-    assert env["TANK_OPERATOR_URL"].startswith("http")
-
-
-def test_pod_manifest_omits_token_when_orchestrator_cannot_mint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Pods still boot when the orchestrator's JWT_SECRET isn't configured.
-    # The mcp-tank stdio server reads TANK_API_TOKEN at call time and
-    # surfaces an actionable error if it's empty.
-    manifest = SessionManager()._pod_manifest(
-        "abc123",
-        owner="operator@example.test",
-        mode="subscription_headless",
-        api_token=None,
-    )
-    assert _claude_env(manifest)["TANK_API_TOKEN"] == ""
-
-
-def test_mint_session_token_round_trips_to_user(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(auth, "JWT_SECRET", "test-secret")
-    monkeypatch.setattr(
-        auth, "ALLOWED_EMAILS", frozenset({"operator@example.test"})
-    )
-
-    token = auth.mint_session_token_for_email(
-        "Operator@Example.Test", sub="pod:session-abc"
-    )
-    user = auth._decode_session_token(token)
-    assert user.email == "operator@example.test"
-    assert user.sub == "pod:session-abc"
-
-
-def test_mint_session_token_rejects_unknown_email(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(auth, "JWT_SECRET", "test-secret")
-    monkeypatch.setattr(
-        auth, "ALLOWED_EMAILS", frozenset({"operator@example.test"})
-    )
-    with pytest.raises(auth.HTTPException) as exc:
-        auth.mint_session_token_for_email("intruder@example.test")
-    assert exc.value.status_code == 403
+    assert "TANK_OPERATOR_URL" not in env
+    assert "TANK_API_TOKEN" not in env
+    assert "TANK_SESSION_ID" not in env
 
 
 class _DispatchFakeManager(SessionManager):
