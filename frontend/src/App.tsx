@@ -1247,6 +1247,7 @@ function DemoLanding() {
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
+                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
@@ -5647,6 +5648,7 @@ export function App() {
                       title={statusLabel}
                       aria-label={`status: ${statusLabel}`}
                     />
+                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     {isEditing ? (
                       <input
                         className="session-name-input"
