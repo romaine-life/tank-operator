@@ -5035,17 +5035,14 @@ export function App() {
                 className={`new-row-interaction-toggle${interactionMenuOpen ? " is-open" : ""}`}
                 onClick={() => setInteractionMenuOpen((v) => !v)}
                 disabled={busy}
-                aria-label="choose interaction"
+                aria-label={`choose interaction: ${INTERACTION_LABELS[defaultInteraction]}`}
                 aria-expanded={interactionMenuOpen}
+                title={INTERACTION_LABELS[defaultInteraction]}
               >
                 <InteractionIcon
                   interaction={defaultInteraction}
                   className="new-row-interaction-icon"
                 />
-                <span className="new-row-interaction-label">
-                  {INTERACTION_LABELS[defaultInteraction]}
-                </span>
-                <IconChevronDown className="new-row-interaction-chevron" />
               </button>
               {interactionMenuOpen && (
                 <ul className="dropdown dropdown-interaction" role="menu">
@@ -5058,13 +5055,13 @@ export function App() {
                           PROVIDER_INTERACTION_MODES[MODE_MENU_ICONS[defaultSessionMode]][interaction] == null
                         }
                         aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
+                        title={INTERACTION_LABELS[interaction]}
                         className={defaultInteraction === interaction ? "is-selected" : undefined}
                       >
                         <InteractionIcon
                           interaction={interaction}
                           className="dropdown-interaction-icon"
                         />
-                        {INTERACTION_LABELS[interaction]}
                       </button>
                     </li>
                   ))}
