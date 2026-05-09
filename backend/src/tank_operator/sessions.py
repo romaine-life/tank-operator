@@ -36,6 +36,7 @@ TERMINAL_PROXY_CONFIGMAP = os.environ.get(
 )
 TERMINALD_PORT = int(os.environ.get("TERMINALD_PORT", "7680"))
 TERMINAL_PROXY_PORT = int(os.environ.get("TERMINAL_PROXY_PORT", "7681"))
+SANDBOX_AGENT_PORT = int(os.environ.get("SANDBOX_AGENT_PORT", "2468"))
 TERMINAL_PROXY_IMAGE = os.environ.get(
     "TERMINAL_PROXY_IMAGE", "quay.io/brancz/kube-rbac-proxy:v0.22.0"
 )
@@ -420,15 +421,26 @@ class SessionManager:
                     "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": [
-                        "tank-terminald",
+                        "bash",
+                        "-lc",
+                        (
+                            f"sandbox-agent server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
+                            "--no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & "
+                            "exec tank-terminald"
+                        ),
                     ],
                     "ports": [
                         {"name": "terminald", "containerPort": TERMINALD_PORT},
+                        {"name": "sandbox-agent", "containerPort": SANDBOX_AGENT_PORT},
                     ],
                     "env": [
                         {
                             "name": "TERMINALD_PORT",
                             "value": str(TERMINALD_PORT),
+                        },
+                        {
+                            "name": "SANDBOX_AGENT_PORT",
+                            "value": str(SANDBOX_AGENT_PORT),
                         },
                         # Read by exec_proxy's bootstrap to pick the
                         # auth path. Sourced at the env level (not

@@ -5,7 +5,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
 } from "react";
-import type { TranscriptEntry } from "@sandbox-agent/react";
+import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
 import { Streamdown } from "streamdown";
 import {
   PromptInput,
@@ -92,6 +92,133 @@ interface Session {
   ready_at: string | null;
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
+}
+
+type TerminalReadyFrame = { type: "ready"; processId: string };
+type TerminalExitFrame = { type: "exit"; exitCode?: number | null };
+type TerminalErrorFrame = { type: "error"; message: string };
+type TerminalResizePayload = { cols: number; rows: number };
+type TerminalStatusListener<T> = (status: T) => void;
+
+class TankProcessTerminalSession {
+  private socket: WebSocket;
+  private readyListeners = new Set<TerminalStatusListener<TerminalReadyFrame>>();
+  private dataListeners = new Set<(data: Uint8Array) => void>();
+  private exitListeners = new Set<TerminalStatusListener<TerminalExitFrame>>();
+  private errorListeners = new Set<TerminalStatusListener<TerminalErrorFrame | Error>>();
+  private closeListeners = new Set<() => void>();
+
+  constructor(socket: WebSocket) {
+    this.socket = socket;
+    this.socket.binaryType = "arraybuffer";
+    this.socket.addEventListener("message", (event) => {
+      void this.handleMessage(event.data);
+    });
+    this.socket.addEventListener("error", () => {
+      this.emitError(new Error("CLI terminal websocket connection failed."));
+    });
+    this.socket.addEventListener("close", () => {
+      for (const listener of this.closeListeners) listener();
+    });
+  }
+
+  onReady(listener: TerminalStatusListener<TerminalReadyFrame>) {
+    this.readyListeners.add(listener);
+    return () => this.readyListeners.delete(listener);
+  }
+
+  onData(listener: (data: Uint8Array) => void) {
+    this.dataListeners.add(listener);
+    return () => this.dataListeners.delete(listener);
+  }
+
+  onExit(listener: TerminalStatusListener<TerminalExitFrame>) {
+    this.exitListeners.add(listener);
+    return () => this.exitListeners.delete(listener);
+  }
+
+  onError(listener: TerminalStatusListener<TerminalErrorFrame | Error>) {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
+  }
+
+  onClose(listener: () => void) {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
+  }
+
+  sendInput(data: string | Uint8Array | ArrayBuffer) {
+    if (typeof data === "string") {
+      this.sendFrame({ type: "input", data });
+      return;
+    }
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    this.sendFrame({ type: "input", data: btoa(binary), encoding: "base64" });
+  }
+
+  resize(payload: TerminalResizePayload) {
+    this.sendFrame({ type: "resize", cols: payload.cols, rows: payload.rows });
+  }
+
+  close() {
+    this.sendFrame({ type: "close" });
+    this.socket.close();
+  }
+
+  private async handleMessage(data: string | ArrayBuffer | Blob) {
+    if (typeof data === "string") {
+      let frame: unknown;
+      try {
+        frame = JSON.parse(data);
+      } catch {
+        this.emitError(new Error("Received invalid terminal control frame."));
+        return;
+      }
+      if (isTerminalReadyFrame(frame)) {
+        for (const listener of this.readyListeners) listener(frame);
+      } else if (isTerminalExitFrame(frame)) {
+        for (const listener of this.exitListeners) listener(frame);
+      } else if (isTerminalErrorFrame(frame)) {
+        this.emitError(frame);
+      }
+      return;
+    }
+    const bytes = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : new Uint8Array(data);
+    for (const listener of this.dataListeners) listener(bytes);
+  }
+
+  private sendFrame(frame: Record<string, unknown>) {
+    if (this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(frame));
+    }
+  }
+
+  private emitError(error: TerminalErrorFrame | Error) {
+    for (const listener of this.errorListeners) listener(error);
+  }
+}
+
+function isTerminalReadyFrame(value: unknown): value is TerminalReadyFrame {
+  return isJsonObject(value) && value.type === "ready" && typeof value.processId === "string";
+}
+
+function isTerminalExitFrame(value: unknown): value is TerminalExitFrame {
+  return (
+    isJsonObject(value) &&
+    value.type === "exit" &&
+    (value.exitCode == null || typeof value.exitCode === "number")
+  );
+}
+
+function isTerminalErrorFrame(value: unknown): value is TerminalErrorFrame {
+  return isJsonObject(value) && value.type === "error" && typeof value.message === "string";
+}
+
+function cliTerminalWsUrl(sessionId: string, processId: string): string {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/api/sessions/${sessionId}/cli-process/${processId}/terminal/ws`;
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
@@ -2804,6 +2931,65 @@ function RunMessages({
   );
 }
 
+function CliProcessTerminal({
+  session,
+  visible,
+}: {
+  session: Session;
+  visible: boolean;
+}) {
+  const [processId, setProcessId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const client = useMemo(
+    () => ({
+      connectProcessTerminal: (id: string) =>
+        new TankProcessTerminalSession(new WebSocket(cliTerminalWsUrl(session.id, id))),
+    }),
+    [session.id],
+  );
+
+  useEffect(() => {
+    if (!visible) return;
+    let cancelled = false;
+    setError(null);
+    authedFetch(`/api/sessions/${session.id}/cli-process`, { method: "POST" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`CLI process create failed: ${res.status}`);
+        return (await res.json()) as { process_id: string };
+      })
+      .then((body) => {
+        if (!cancelled) setProcessId(body.process_id);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String((err as Error).message ?? err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.id, visible]);
+
+  if (error) {
+    return <div className="run-shell-error">{error}</div>;
+  }
+  if (!processId) {
+    return (
+      <div className="run-shell-loading">
+        <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+        <span>starting CLI…</span>
+      </div>
+    );
+  }
+  return (
+    <ProcessTerminal
+      client={client}
+      processId={processId}
+      className="run-process-terminal"
+      height="100%"
+      showStatusBar={false}
+    />
+  );
+}
+
 function HeadlessRun({
   session,
   visible,
@@ -3918,14 +4104,7 @@ function HeadlessRun({
       >
         {activeTab === "shell" ? (
           <div className="run-shell">
-            <Terminal
-              sessionId={session.id}
-              mode={session.mode}
-              status={session.status}
-              completionSoundEnabled={false}
-              completionSoundVolume={0}
-              visible={visible && activeTab === "shell"}
-            />
+            <CliProcessTerminal session={session} visible={visible && activeTab === "shell"} />
           </div>
         ) : activeTab === "files" ? (
           <div className="run-files">
