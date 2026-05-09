@@ -30,6 +30,8 @@ the app window. Links opened from the terminal are sent to the system browser.
 - `Ctrl+0`: reset zoom.
 - `Alt+Left` / `Alt+Right`: navigate back and forward.
 
+Zoom applies to all open Tank windows and persists across app restarts.
+
 ## Package And Install
 
 ```powershell
