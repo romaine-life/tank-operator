@@ -114,6 +114,7 @@ def test_exec_stream_cancel_frame_stops_pod_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_k8s_ws = _FakeK8sWs()
+    cancel_calls: list[tuple[str, str, list[str]]] = []
 
     class _FakeCoreV1Api:
         def __init__(self, api_client: object) -> None:
@@ -129,6 +130,14 @@ def test_exec_stream_cancel_frame_stops_pod_stream(
         _FakeCoreV1Api,
     )
 
+    async def fake_exec_capture(
+        namespace: str, pod_name: str, command: list[str]
+    ) -> bytes:
+        cancel_calls.append((namespace, pod_name, command))
+        return b""
+
+    monkeypatch.setattr(exec_proxy, "exec_capture", fake_exec_capture)
+
     asyncio.run(
         exec_proxy.exec_stream_to_websocket(
             _FakeBrowser(json.dumps({"cancel": True})),
@@ -136,7 +145,11 @@ def test_exec_stream_cancel_frame_stops_pod_stream(
             pod_name="session-abc",
             command=["bash", "-lc", "echo hi"],
             stdin=b"",
+            cancel_command=["bash", "-lc", "cancel"],
         )
     )
 
     assert fake_k8s_ws.completed is False
+    assert cancel_calls == [
+        ("tank-operator-sessions", "session-abc", ["bash", "-lc", "cancel"])
+    ]

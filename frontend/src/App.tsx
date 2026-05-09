@@ -1331,7 +1331,8 @@ function DemoLanding() {
 type RunEvent = {
   stream?: "stdout" | "stderr";
   data?: string;
-  status?: "done" | "error";
+  status?: "attached" | "done" | "error";
+  run_id?: string;
   detail?: string;
 };
 
@@ -3101,6 +3102,17 @@ function HeadlessRun({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stdoutBufferRef = useRef("");
+  const currentRunRef = useRef<{
+    id: string;
+    prompt: string;
+    followUp: boolean;
+    model: string;
+    permissionMode: string;
+    turnStart: number;
+    reconnects: number;
+    offset: number;
+    cancelled: boolean;
+  } | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3772,6 +3784,7 @@ function HeadlessRun({
   function applyStdoutLine(line: string) {
     const trimmed = line.trim();
     if (!trimmed) return;
+    if (trimmed.startsWith("__TANK_RUN_EXIT__:")) return;
     let providerEvent: unknown;
     try {
       providerEvent = JSON.parse(trimmed);
@@ -3833,8 +3846,15 @@ function HeadlessRun({
     if (pending.trim()) applyStdoutLine(pending);
   }
 
+  function newRunId() {
+    const cryptoObj = window.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
   function cancelRun() {
     const ws = wsRef.current;
+    if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ cancel: true }));
     }
@@ -3887,6 +3907,18 @@ function HeadlessRun({
     stdoutBufferRef.current = "";
     const followUp = entries.length > 0;
     const turnStart = Date.now();
+    const run = {
+      id: newRunId(),
+      prompt: trimmed,
+      followUp,
+      model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
+      permissionMode: composerMode,
+      turnStart,
+      reconnects: 0,
+      offset: 0,
+      cancelled: false,
+    };
+    currentRunRef.current = run;
     setEntries((prev) => [
       ...prev,
       {
@@ -3909,6 +3941,10 @@ function HeadlessRun({
     // always fire an input event in time, so my mirror lingers and the
     // X-clear button stays visible. Force the mirror clean.
     setComposerText("");
+    openRunSocket(run, false);
+  }
+
+  function openRunSocket(run: NonNullable<typeof currentRunRef.current>, resume: boolean) {
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/run`;
@@ -3917,10 +3953,13 @@ function HeadlessRun({
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
-          prompt: trimmed,
-          follow_up: followUp,
-          model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
-          permission_mode: composerMode,
+          run_id: run.id,
+          resume,
+          prompt: resume ? "" : run.prompt,
+          offset: resume ? run.offset : 0,
+          follow_up: run.followUp,
+          model: run.model,
+          permission_mode: run.permissionMode,
         }),
       );
     };
@@ -3935,14 +3974,17 @@ function HeadlessRun({
         return;
       }
       if (msg.stream === "stdout" && msg.data) {
+        run.offset += msg.data.length;
         applyStdoutChunk(msg.data);
       } else if (msg.stream === "stderr" && msg.data) {
+        run.offset += msg.data.length;
         setEntries((prev) =>
           appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
         );
       } else if (msg.status === "done") {
         flushStdoutBuffer();
-        const durationMs = Date.now() - turnStart;
+        currentRunRef.current = null;
+        const durationMs = Date.now() - run.turnStart;
         setEntries((prev) => {
           for (let i = prev.length - 1; i >= 0; i--) {
             if (prev[i].kind === "message" && prev[i].role === "assistant") {
@@ -3961,6 +4003,7 @@ function HeadlessRun({
         ws.close();
       } else if (msg.status === "error") {
         flushStdoutBuffer();
+        currentRunRef.current = null;
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
         activeToolNameRef.current = null;
         setActiveToolName(null);
@@ -3973,46 +4016,46 @@ function HeadlessRun({
       }
     };
     ws.onerror = () => {
-      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
-      activeToolNameRef.current = null;
-      setActiveToolName(null);
-      setRunStatus("error");
-      setRunning(false);
-      setEntries((prev) =>
-        appendMeta(prev, nextEntryId("websocket-error"), "websocket error", undefined, "error"),
-      );
+      if (!run.cancelled) {
+        setLastStatusText("Reconnecting");
+      }
     };
     ws.onclose = (event) => {
       flushStdoutBuffer();
+      if (currentRunRef.current?.id !== run.id || run.cancelled) {
+        return;
+      }
+      // If the backend closes before a done/error frame, assume transport loss
+      // and reattach to the pod-local run stream. Normal done/cancel paths clear
+      // currentRunRef before this handler runs.
+      if (run.reconnects < 8) {
+        run.reconnects += 1;
+        const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
+        setLastStatusText("Reconnecting");
+        window.setTimeout(() => {
+          if (currentRunRef.current?.id === run.id && !run.cancelled) {
+            openRunSocket(run, true);
+          }
+        }, delay);
+        return;
+      }
+      currentRunRef.current = null;
       setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Done");
       activeToolNameRef.current = null;
       setActiveToolName(null);
       setRunning(false);
-      // 1000 = normal close, 1005 = no status (most cancel/done paths since
-      // we call ws.close() with no code), 1001 = going away (page nav).
-      // Anything else mid-run we surface as a connection error so the user
-      // knows to resend rather than waiting on a silent dropped run.
-      const abnormal =
-        event.code !== 1000 && event.code !== 1005 && event.code !== 1001;
-      // Use functional setter so we read the latest runStatus, not the
-      // closure value from when the WS was created.
-      setRunStatus((prev) => {
-        if (abnormal && prev === "running") {
-          setEntries((entries) =>
-            appendMeta(
-              entries,
-              nextEntryId("ws-close"),
-              "Connection lost",
-              `WebSocket closed with code ${event.code}${
-                event.reason ? ` — ${event.reason}` : ""
-              }. Resend to continue.`,
-              "error",
-            ),
-          );
-          return "error";
-        }
-        return prev === "running" ? "done" : prev;
-      });
+      setEntries((entries) =>
+        appendMeta(
+          entries,
+          nextEntryId("ws-close"),
+          "Connection lost",
+          `WebSocket closed with code ${event.code}${
+            event.reason ? ` — ${event.reason}` : ""
+          }. Resend to continue.`,
+          "error",
+        ),
+      );
+      setRunStatus("error");
     };
   }
 

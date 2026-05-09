@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   replicas: {{ .Values.orchestrator.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: tank-operator
@@ -17,6 +22,7 @@ spec:
         azure.workload.identity/use: "true"
     spec:
       serviceAccountName: {{ .Values.orchestrator.serviceAccount }}
+      terminationGracePeriodSeconds: {{ .Values.orchestrator.terminationGracePeriodSeconds }}
       containers:
         - name: tank-operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -130,6 +136,13 @@ spec:
             - name: claude-credentials
               mountPath: /etc/claude-credentials
               readOnly: true
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep {{ .Values.orchestrator.preStopSleepSeconds }}
           readinessProbe:
             httpGet:
               path: /healthz

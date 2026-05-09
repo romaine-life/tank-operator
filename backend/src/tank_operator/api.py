@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import logging
+import re as _re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -122,11 +123,12 @@ MAX_HEADLESS_PROMPT_BYTES = int(
 # headless-run.sh's positional args 4 + 5 (model, permission_mode) reach the
 # claude/codex CLI verbatim. Constraining what gets there to a tight charset
 # means we can splice them into bash command literals without a quoting layer.
-import re as _re_arg
 import secrets as _secrets
 import shlex as _shlex
-_HEADLESS_ARG_PATTERN = _re_arg.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_HEADLESS_ARG_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_RUN_ID_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
+_HEADLESS_RUN_EXIT_MARKER = "__TANK_RUN_EXIT__:"
 _RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
 _SESSION_EVENTS_KEEPALIVE_SECONDS = 10
 
@@ -141,6 +143,20 @@ def _validate_headless_arg(value: str | None) -> str:
 
 def _new_prompt_path() -> str:
     return f"{_HEADLESS_PROMPT_DIR}/tank-prompt-{_secrets.token_hex(8)}"
+
+
+def _validate_run_id(value: str | None) -> str:
+    if isinstance(value, str) and _RUN_ID_PATTERN.match(value):
+        return value
+    return _secrets.token_hex(12)
+
+
+def _run_stream_path(run_id: str) -> str:
+    return f"/tmp/tank-run-{run_id}.stream"
+
+
+def _run_pid_path(run_id: str) -> str:
+    return f"/tmp/tank-run-{run_id}.pid"
 
 
 async def _wait_for_run_pod_name(owner: str, session_id: str, ws: WebSocket) -> str:
@@ -185,7 +201,52 @@ def _build_headless_script(
     return (
         f"bash /opt/tank/headless-run.sh {provider} {quoted_path} "
         f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}'"
-        f"; rc=$?; rm -f {quoted_path}; exit $rc"
+        f"; rc=$?; rm -f {quoted_path}; (exit $rc)"
+    )
+
+
+def _build_live_run_script(script: str, pid_path: str) -> str:
+    marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
+    quoted_pid_path = _shlex.quote(pid_path)
+    return (
+        f"echo $$ > {quoted_pid_path}; "
+        "trap 'rc=$?; exit $rc' TERM INT; "
+        f"{script}; rc=$?; "
+        f"rm -f {quoted_pid_path}; "
+        f"printf '\\n%s%s\\n' {marker} \"$rc\"; "
+        f"exit $rc"
+    )
+
+
+def _build_cancel_run_command(pid_path: str) -> list[str]:
+    quoted_pid_path = _shlex.quote(pid_path)
+    return [
+        "bash",
+        "-lc",
+        (
+            f"pid=$(cat {quoted_pid_path} 2>/dev/null || true); "
+            "if [ -n \"$pid\" ]; then "
+            "pkill -TERM -P \"$pid\" 2>/dev/null || true; "
+            "kill -TERM \"$pid\" 2>/dev/null || true; "
+            "fi"
+        ),
+    ]
+
+
+def _build_tail_run_script(stream_path: str, offset: int = 0) -> str:
+    quoted_path = _shlex.quote(stream_path)
+    marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
+    start_byte = max(1, offset + 1)
+    return (
+        "set -euo pipefail; "
+        f"while [ ! -f {quoted_path} ]; do sleep 0.2; done; "
+        f"tail -c +{start_byte} -F {quoted_path} & tail_pid=$!; "
+        f"while ! grep -q {marker} {quoted_path}; do sleep 0.5; done; "
+        "sleep 0.2; "
+        "kill \"$tail_pid\" 2>/dev/null || true; "
+        "wait \"$tail_pid\" 2>/dev/null || true; "
+        f"rc=$(sed -n 's/^{_HEADLESS_RUN_EXIT_MARKER}//p' {quoted_path} | tail -1); "
+        "exit \"${rc:-0}\""
     )
 
 
@@ -1266,17 +1327,23 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     except Exception:
         await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="expected JSON")
         return
+    resume = bool(first.get("resume")) if isinstance(first, dict) else False
+    run_id = _validate_run_id(first.get("run_id") if isinstance(first, dict) else None)
     prompt = first.get("prompt") if isinstance(first, dict) else None
-    if not isinstance(prompt, str) or not prompt.strip():
-        await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
-        return
-    prompt_bytes = prompt.encode()
-    if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
-        await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
-        return
+    prompt_bytes = b""
+    if not resume:
+        if not isinstance(prompt, str) or not prompt.strip():
+            await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
+            return
+        prompt_bytes = prompt.encode()
+        if len(prompt_bytes) > MAX_HEADLESS_PROMPT_BYTES:
+            await ws.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="prompt too large")
+            return
     follow_up = bool(first.get("follow_up")) if isinstance(first, dict) else False
     raw_model = first.get("model") if isinstance(first, dict) else None
     raw_pm = first.get("permission_mode") if isinstance(first, dict) else None
+    raw_offset = first.get("offset") if isinstance(first, dict) else 0
+    tail_offset = raw_offset if isinstance(raw_offset, int) and raw_offset > 0 else 0
     model = _validate_headless_arg(raw_model if isinstance(raw_model, str) else None)
     permission_mode = _validate_headless_arg(
         raw_pm if isinstance(raw_pm, str) else None
@@ -1299,23 +1366,38 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
         return
 
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
-    prompt_path = _new_prompt_path()
-    try:
-        await exec_write_file(
-            SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
+    stream_path = _run_stream_path(run_id)
+    pid_path = _run_pid_path(run_id)
+    if not resume:
+        prompt_path = _new_prompt_path()
+        try:
+            await exec_write_file(
+                SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
+            )
+        except RuntimeError as exc:
+            await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
+            return
+        script = _build_headless_script(
+            provider=provider,
+            prompt_path=prompt_path,
+            follow_up=follow_up,
+            model=model,
+            permission_mode=permission_mode,
         )
-    except RuntimeError as exc:
-        await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
-        await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
-        return
-    script = _build_headless_script(
-        provider=provider,
-        prompt_path=prompt_path,
-        follow_up=follow_up,
-        model=model,
-        permission_mode=permission_mode,
-    )
-    command = ["bash", "-lc", script]
+        try:
+            await exec_launch_detached(
+                namespace=SESSIONS_NAMESPACE,
+                pod_name=pod_name,
+                command=_build_live_run_script(script, pid_path),
+                log_path=stream_path,
+            )
+        except RuntimeError as exc:
+            await ws.send_json({"status": "error", "detail": f"failed to launch run: {exc}"})
+            await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="run launch failed")
+            return
+    await ws.send_json({"status": "attached", "run_id": run_id})
+    command = ["bash", "-lc", _build_tail_run_script(stream_path, tail_offset)]
     async with sessions.track_ws(session_id):
         try:
             await exec_stream_to_websocket(
@@ -1324,6 +1406,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 pod_name=pod_name,
                 command=command,
                 stdin=b"",
+                cancel_command=_build_cancel_run_command(pid_path),
             )
         except WebSocketDisconnect:
             pass

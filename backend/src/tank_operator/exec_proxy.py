@@ -210,6 +210,7 @@ async def exec_stream_to_websocket(
     pod_name: str,
     command: list[str],
     stdin: bytes,
+    cancel_command: list[str] | None = None,
 ) -> None:
     """Run a one-shot command and forward stdout/stderr chunks to the browser.
 
@@ -351,6 +352,11 @@ async def exec_stream_to_websocket(
                 except Exception:
                     cancelled_by_browser = False
                 if cancelled_by_browser:
+                    if cancel_command is not None:
+                        try:
+                            await exec_capture(namespace, pod_name, cancel_command)
+                        except Exception as exc:
+                            log.warning("cancel command failed: %s", exc)
                     pod_task.cancel()
                     try:
                         await pod_task
