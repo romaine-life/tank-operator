@@ -1,10 +1,14 @@
+import asyncio
+import json
 import os
 import logging
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import quote
 
+import aiohttp
 from fastapi import (
     Cookie,
     Depends,
@@ -17,7 +21,12 @@ from fastapi import (
     status,
 )
 from fastapi import Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -47,10 +56,12 @@ from .exec_proxy import (
 )
 from .internal_api import build_router as build_internal_router
 from .profiles import ProfileStore, SessionRegistryStore
+from .session_events import SessionEventBus
 from .sessions import (
     CODEX_HEADLESS_MODE,
     DEFAULT_SESSION_MODE,
     HEADLESS_MODES,
+    SANDBOX_AGENT_PORT,
     SESSION_MODES,
     SESSIONS_NAMESPACE,
     SUBSCRIPTION_HEADLESS_MODE,
@@ -62,7 +73,8 @@ from .sessions import (
 )
 
 session_registry = SessionRegistryStore()
-sessions = SessionManager(registry=session_registry)
+session_events = SessionEventBus()
+sessions = SessionManager(registry=session_registry, events=session_events)
 profiles = ProfileStore()
 log = logging.getLogger(__name__)
 
@@ -404,6 +416,24 @@ async def create_session_with_context(
 @app.get("/api/sessions")
 async def list_sessions(user: User = Depends(current_user)) -> list[SessionInfo]:
     return await sessions.list(owner=user.email)
+
+
+@app.get("/api/sessions/events")
+async def session_events_stream(
+    request: Request, user: User = Depends(current_user)
+) -> StreamingResponse:
+    async def events() -> AsyncIterator[str]:
+        async with session_events.subscribe(user.email) as queue:
+            yield "event: ready\ndata: {}\n\n"
+            while not await request.is_disconnected():
+                try:
+                    await asyncio.wait_for(queue.get(), timeout=25)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                yield "event: sessions-changed\ndata: {}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @app.delete("/api/sessions/{session_id}")

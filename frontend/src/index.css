@@ -839,7 +839,8 @@ button:disabled {
 }
 
 .setting-toggle,
-.setting-range {
+.setting-range,
+.setting-zoom {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -865,6 +866,10 @@ button:disabled {
 
 .setting-range input:disabled {
   opacity: 0.45;
+}
+
+.setting-zoom {
+  justify-content: space-between;
 }
 
 .setting-value {
@@ -1780,7 +1785,11 @@ button:disabled {
 
 .run-tabs {
   display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: var(--space-1);
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .run-tab {
@@ -1795,6 +1804,7 @@ button:disabled {
   font-family: var(--font-primary);
   font-size: var(--text-sm);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     color var(--motion-fast, 120ms) ease,
@@ -1824,6 +1834,26 @@ button:disabled {
   margin-left: 0.2rem;
 }
 
+@media (max-width: 720px) {
+  .run-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .run-tabs {
+    width: 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+  }
+
+  .run-tab {
+    flex: 0 0 auto;
+  }
+}
+
 /* Settings menu — wider rows for label + check. */
 .run-settings-menu {
   min-width: 18rem;
@@ -1848,6 +1878,74 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.run-settings-zoom-item {
+  cursor: default;
+}
+
+.run-settings-zoom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.85rem;
+}
+
+.run-settings-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+}
+
+.run-settings-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.45rem;
+  height: 1.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-body);
+  cursor: pointer;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.dropdown .run-settings-zoom-btn {
+  width: 1.45rem;
+  padding: 0;
+  flex-direction: row;
+  gap: 0;
+}
+
+.run-settings-zoom-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text-primary);
+}
+
+.run-settings-zoom-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.run-settings-zoom-btn svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.run-settings-zoom-value {
+  min-width: 2.65rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Main content area — empty state or transcript. */
 .run-main {
   flex: 1 1 auto;
@@ -1855,6 +1953,13 @@ button:disabled {
   overflow: auto;
   display: flex;
   flex-direction: column;
+  --run-chat-font-scale: 1;
+  --run-chat-font-xs: var(--text-xs);
+  --run-chat-font-sm: var(--text-sm);
+  --run-chat-font-meta: 0.72rem;
+  --run-chat-font-code-xs: 0.7rem;
+  --run-chat-font-code-sm: 0.78rem;
+  --run-chat-font-star: 0.95rem;
 }
 
 .run-empty {
@@ -2958,7 +3063,7 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.4rem;
   margin-top: 0.35rem;
   font-family: var(--font-primary);
-  font-size: 0.65rem;
+  font-size: var(--run-chat-font-code-xs);
   color: var(--text-muted);
   opacity: 0;
   transition: opacity var(--motion-fast, 140ms) ease;
@@ -3023,7 +3128,7 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.45rem;
   padding: 0.45rem 0.75rem;
   cursor: pointer;
-  font-size: 0.72rem;
+  font-size: var(--run-chat-font-meta);
   font-weight: 500;
   color: var(--text-muted);
   user-select: none;
@@ -3045,7 +3150,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-reasoning-body {
   padding: 0.5rem 0.85rem 0.7rem;
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
   color: var(--text-body);
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
@@ -3059,7 +3164,7 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(255, 255, 255, 0.02);
   font-family: var(--font-primary);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
 }
 
 .run-meta-error {
@@ -3086,7 +3191,7 @@ textarea.run-files-viewer-editor:focus {
 .run-meta-detail {
   margin: 0.3rem 0 0;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--run-chat-font-code-xs);
   color: var(--text-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3112,7 +3217,7 @@ textarea.run-files-viewer-editor:focus {
   padding: 0.5rem 0.85rem;
   background: rgba(255, 255, 255, 0.03);
   font-family: var(--font-primary);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -3209,7 +3314,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(255, 255, 255, 0.02);
   color: var(--text-primary);
   font-family: var(--font-primary);
-  font-size: var(--text-sm);
+  font-size: var(--run-chat-font-sm);
   cursor: pointer;
   text-align: left;
   min-height: auto;
@@ -3286,7 +3391,7 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.05);
   background: rgba(0, 0, 0, 0.25);
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: var(--run-chat-font-code-sm);
   line-height: 1.5;
   color: var(--text-body);
   white-space: pre-wrap;
@@ -3295,7 +3400,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-tool-body .run-transcript-code {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
   color: var(--text-primary);
 }
 
@@ -3306,7 +3411,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-tool-section-title,
 .run-tool-section-title {
   font-family: var(--font-primary);
-  font-size: 0.7rem;
+  font-size: var(--run-chat-font-code-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3321,7 +3426,7 @@ textarea.run-files-viewer-editor:focus {
 /* Diff body — Edit/Write/MultiEdit/ApplyPatch. */
 .run-tool-diff {
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
 }
 
 .run-tool-diff-path {
@@ -3391,7 +3496,7 @@ textarea.run-files-viewer-editor:focus {
 .run-tool-output > summary {
   cursor: pointer;
   font-family: var(--font-primary);
-  font-size: 0.7rem;
+  font-size: var(--run-chat-font-code-xs);
   color: var(--text-muted);
   list-style: none;
 }
@@ -3413,7 +3518,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 0.4rem;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--run-chat-font-meta);
   white-space: pre-wrap;
   max-height: 16rem;
   overflow: auto;
@@ -3426,7 +3531,7 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
   color: #a7f3d0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3438,7 +3543,7 @@ textarea.run-files-viewer-editor:focus {
   border-radius: 0.4rem;
   background: rgba(0, 0, 0, 0.3);
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: var(--run-chat-font-meta);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 16rem;
@@ -3452,7 +3557,7 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.6rem;
   align-items: baseline;
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: var(--run-chat-font-code-sm);
 }
 
 .run-tool-read-path {
@@ -3462,7 +3567,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-tool-read-meta {
   color: var(--text-muted);
-  font-size: 0.7rem;
+  font-size: var(--run-chat-font-code-xs);
 }
 
 /* Todo list. */
@@ -3477,7 +3582,7 @@ textarea.run-files-viewer-editor:focus {
   grid-template-columns: auto 1fr;
   gap: 0.55rem;
   padding: 0.25rem 0;
-  font-size: 0.82rem;
+  font-size: var(--run-chat-font-sm);
 }
 
 .run-tool-todo-marker {
@@ -3506,7 +3611,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.3);
   border-radius: 0.4rem;
   font-family: var(--font-mono);
-  font-size: 0.74rem;
+  font-size: var(--run-chat-font-meta);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 18rem;
@@ -3533,7 +3638,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-tool-ask-text {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--run-chat-font-sm);
   color: var(--text-primary);
   font-weight: 500;
 }
@@ -3564,18 +3669,18 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-tool-ask-option-label {
-  font-size: 0.82rem;
+  font-size: var(--run-chat-font-sm);
   color: var(--text-primary);
   font-weight: 500;
 }
 
 .run-tool-ask-option-desc {
-  font-size: 0.74rem;
+  font-size: var(--run-chat-font-meta);
   color: var(--text-muted);
 }
 
 .run-tool-ask-answered {
-  font-size: 0.82rem;
+  font-size: var(--run-chat-font-sm);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -3647,7 +3752,7 @@ textarea.run-files-viewer-editor:focus {
   align-content: start;
   gap: var(--space-3);
   font-family: var(--font-primary);
-  font-size: var(--text-sm);
+  font-size: var(--run-chat-font-sm);
   line-height: 1.55;
   white-space: normal;
   padding: var(--space-5) var(--space-5) var(--space-3);
@@ -3661,7 +3766,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: center;
   gap: var(--space-2);
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--run-chat-font-xs);
   text-transform: uppercase;
 }
 
@@ -3689,7 +3794,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: center;
   justify-content: center;
   font-family: var(--font-primary);
-  font-size: 0.72rem;
+  font-size: var(--run-chat-font-meta);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
@@ -3713,7 +3818,7 @@ textarea.run-files-viewer-editor:focus {
 .run-msg-avatar .avatar {
   width: 1.7rem;
   height: 1.7rem;
-  font-size: 0.72rem;
+  font-size: var(--run-chat-font-meta);
 }
 
 .run-transcript-message[data-variant="assistant"]::before {
@@ -3723,7 +3828,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(249, 115, 22, 0.14);
   color: #fb923c;
   border: 1px solid rgba(251, 146, 60, 0.35);
-  font-size: 0.95rem;
+  font-size: var(--run-chat-font-star);
   line-height: 1;
 }
 
@@ -3743,6 +3848,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message-content {
   max-width: min(48rem, 86%);
+  min-width: 0;
   border-radius: 0.875rem;
   padding: 0.75rem 1rem;
   overflow-wrap: anywhere;
@@ -3781,6 +3887,78 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-message-text {
   display: grid;
   gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-transcript-message-text > div {
+  min-width: 0;
+}
+
+.run-transcript-message-text [data-streamdown="code-block"] {
+  min-width: 0;
+}
+
+.run-transcript-message-text a {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-decoration-color: rgba(147, 197, 253, 0.45);
+  text-underline-offset: 0.14em;
+}
+
+.run-transcript-message-text a:hover {
+  color: #bfdbfe;
+  text-decoration-color: currentColor;
+}
+
+.run-markdown-inline-code {
+  border-radius: 0.25rem;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.run-markdown-linked-code {
+  position: relative;
+}
+
+.run-markdown-code-actions {
+  pointer-events: none;
+  position: sticky;
+  top: 0.5rem;
+  z-index: 1;
+  display: flex;
+  height: 2rem;
+  justify-content: flex-end;
+  margin-top: -2.5rem;
+  padding-right: 0.35rem;
+}
+
+.run-markdown-code-actions > * {
+  pointer-events: auto;
+}
+
+.run-markdown-linked-code-body {
+  overflow-x: auto;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.24);
+  padding: 0.85rem 1rem;
+}
+
+.run-markdown-linked-code-body pre {
+  margin: 0;
+}
+
+.run-markdown-linked-code-body code {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.run-markdown-code-link {
+  overflow-wrap: anywhere;
 }
 
 .run-transcript-tool-single {
@@ -3824,7 +4002,7 @@ textarea.run-files-viewer-editor:focus {
   min-width: 2.25rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--run-chat-font-xs);
 }
 
 .run-transcript-tools-label,
@@ -3838,7 +4016,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-tool-chevron {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--run-chat-font-xs);
 }
 
 .run-transcript-tools-body {
@@ -3868,7 +4046,7 @@ textarea.run-files-viewer-editor:focus {
   margin-bottom: var(--space-1);
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--run-chat-font-xs);
   text-transform: lowercase;
 }
 
@@ -3881,7 +4059,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(0, 0, 0, 0.26);
   color: var(--text-body);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--run-chat-font-code-sm);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3895,7 +4073,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript [data-slot="meta"] {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--run-chat-font-code-sm);
 }
 
 .run-transcript [data-severity="error"],
@@ -3906,7 +4084,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-thinking {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--run-chat-font-code-sm);
 }
 
 .run-tool-icon,
@@ -3914,7 +4092,7 @@ textarea.run-files-viewer-editor:focus {
 .run-pending {
   color: var(--text-muted);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--run-chat-font-xs);
 }
 
 /*

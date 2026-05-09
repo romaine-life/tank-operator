@@ -86,6 +86,10 @@ RUN case "${TANK_AGENT}" in \
         *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude, codex, or pi" >&2; exit 1 ;; \
     esac
 
+# Ghostty-backed in-browser process terminal support. The frontend talks to
+# sandbox-agent's process-terminal API for the run-pane Shell view.
+RUN npm install -g @sandbox-agent/cli@0.4.2
+
 # Baseline Python dev tools expected by agent workflows. Install them in the
 # image, not per-repo, so both claude and codex sessions can assume the
 # commands exist on PATH.

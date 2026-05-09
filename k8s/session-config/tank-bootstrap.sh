@@ -49,6 +49,14 @@
 # history itself still contains UTF-8.
 tmux_utf8=(tmux -u)
 
+new_interactive_session() {
+  local command="$1"
+  if [ "${TANK_SESSION_TRANSPORT:-}" = "sandbox-agent" ]; then
+    exec bash -lc "${command}"
+  fi
+  exec "${tmux_utf8[@]}" new-session -s tank "${command}"
+}
+
 configure_git_identity() {
   case "${TANK_SESSION_MODE:-api_key}" in
     codex_config|codex_subscription)
@@ -66,7 +74,7 @@ configure_git_identity() {
 # reattach, not a fresh boot. Skip settings/credentials setup (already
 # done on first connect; rewriting is idempotent but wasteful, and in
 # subscription mode would re-hit the OAuth gateway every reconnect).
-if "${tmux_utf8[@]}" has-session -t tank 2>/dev/null; then
+if [ "${TANK_SESSION_TRANSPORT:-}" != "sandbox-agent" ] && "${tmux_utf8[@]}" has-session -t tank 2>/dev/null; then
   exec "${tmux_utf8[@]}" attach-session -t tank
 fi
 bash /opt/tank/write-glimmung-context.sh
@@ -116,7 +124,7 @@ notifications = true
 notification_condition = "always"
 notification_method = "bel"
 EOF
-  exec "${tmux_utf8[@]}" new-session -s tank 'codex login --device-auth; exec bash'
+  new_interactive_session 'codex login --device-auth; exec bash'
 fi
 # Codex-subscription mode: consume the harvested auth.json. The
 # orchestrator mounts the ESO-mirrored codex-credentials Secret read-only
@@ -134,7 +142,7 @@ fi
 # refresh — known issue, Phase 2 (write-back sidecar or codex-api-proxy)
 # decides which way. See backend/src/tank_operator/sessions.py near
 # CODEX_SUBSCRIPTION_MODE for the full picture.
-if [ "${TANK_SESSION_MODE}" = "codex_subscription" ]; then
+if [ "${TANK_SESSION_MODE}" = "codex_subscription" ] || [ "${TANK_SESSION_MODE}" = "codex_headless" ]; then
   mkdir -p $HOME/.codex
   # Translate /workspace/.mcp.json (claude shape) to codex's
   # [mcp_servers.X] TOML blocks. mcp-auth-proxy is transparent — the
@@ -190,11 +198,11 @@ EOF
     echo "spawn a 'Codex (config)' session and complete \`codex login --device-auth\` first," >&2
     echo "then click Save Credentials. Once KV has the auth.json, ESO will mirror it" >&2
     echo "into this namespace and a fresh codex_subscription pod will pick it up." >&2
-    exec "${tmux_utf8[@]}" new-session -s tank 'exec bash'
+    new_interactive_session 'exec bash'
   fi
   cp /etc/codex-creds/auth.json $HOME/.codex/auth.json
   chmod 600 $HOME/.codex/auth.json
-  exec "${tmux_utf8[@]}" new-session -s tank 'codex --no-alt-screen; exec bash'
+  new_interactive_session 'codex --no-alt-screen; exec bash'
 fi
 # Pi-config mode: disposable login sandbox for the Pi Coding Agent. Pi manages
 # provider credentials with `/login` and stores them in ~/.pi/agent/auth.json.
@@ -327,7 +335,7 @@ if [ -f /workspace/.mcp.json ]; then
   mcp_enabled="$(jq -c '.mcpServers | keys' /workspace/.mcp.json)"
 fi
 case "${TANK_SESSION_MODE:-api_key}" in
-  subscription)
+  subscription|subscription_headless)
     # Static placeholder credentials. The api-proxy in front of
     # api.anthropic.com strips this Authorization on every request and
     # injects the real token, so claude never needs valid creds locally.
@@ -396,4 +404,4 @@ cat > $HOME/.claude.json <<EOF
 }
 EOF
 
-exec "${tmux_utf8[@]}" new-session -s tank 'claude; exec bash'
+new_interactive_session 'claude; exec bash'

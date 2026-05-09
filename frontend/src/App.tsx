@@ -1,12 +1,22 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AnchorHTMLAttributes,
+  ComponentProps,
   CSSProperties,
   DragEvent as ReactDragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  ReactNode,
 } from "react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
-import { Streamdown } from "streamdown";
+import {
+  CodeBlock,
+  CodeBlockContainer,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  Streamdown,
+  type Components as StreamdownComponents,
+} from "streamdown";
 import {
   PromptInput,
   PromptInputFooter,
@@ -43,8 +53,11 @@ import {
   InfoIcon,
   ListChecksIcon,
   Loader2Icon,
+  MinusIcon,
   MonitorIcon,
   PlugIcon,
+  PlusIcon,
+  RotateCcwIcon,
   SearchIcon,
   SendHorizontalIcon,
   SettingsIcon,
@@ -2077,6 +2090,7 @@ interface RunPrefs {
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  chatFontScale: number;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2085,14 +2099,26 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   autoExpandTools: false,
   showTimestamps: true,
   showDuration: true,
+  chatFontScale: 1,
 };
+
+const CHAT_FONT_SCALE_MIN = 0.8;
+const CHAT_FONT_SCALE_MAX = 1.4;
+const CHAT_FONT_SCALE_STEP = 0.1;
+
+function clampChatFontScale(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
+  return Math.min(CHAT_FONT_SCALE_MAX, Math.max(CHAT_FONT_SCALE_MIN, value));
+}
 
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
-      if (raw === "true" || raw === "false") {
+      if (key === "chatFontScale") {
+        if (raw != null) out[key] = clampChatFontScale(Number(raw));
+      } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
     }
@@ -2248,6 +2274,123 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`]+/g;
+const TRAILING_URL_PUNCTUATION_RE = /[.,;:!?]+$/;
+
+function splitTrailingUrlPunctuation(url: string): { href: string; trailing: string } {
+  let href = url;
+  let trailing = "";
+  const punctuation = href.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
+  if (punctuation) {
+    href = href.slice(0, -punctuation.length);
+    trailing = punctuation;
+  }
+  while (href.endsWith(")") && (href.match(/\(/g)?.length ?? 0) < (href.match(/\)/g)?.length ?? 0)) {
+    href = href.slice(0, -1);
+    trailing = `)${trailing}`;
+  }
+  while (href.endsWith("]") && (href.match(/\[/g)?.length ?? 0) < (href.match(/\]/g)?.length ?? 0)) {
+    href = href.slice(0, -1);
+    trailing = `]${trailing}`;
+  }
+  return { href, trailing };
+}
+
+function linkifyUrls(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  URL_IN_TEXT_RE.lastIndex = 0;
+  for (const match of text.matchAll(URL_IN_TEXT_RE)) {
+    const rawUrl = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
+    const { href, trailing } = splitTrailingUrlPunctuation(rawUrl);
+    parts.push(
+      <a
+        key={`${start}-${href}`}
+        className="run-markdown-code-link"
+        href={href}
+        rel="noreferrer"
+        target="_blank"
+      >
+        {href}
+      </a>,
+    );
+    if (trailing) parts.push(trailing);
+    lastIndex = start + rawUrl.length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts.length ? parts : [text];
+}
+
+function hasUrl(text: string): boolean {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const found = URL_IN_TEXT_RE.test(text);
+  URL_IN_TEXT_RE.lastIndex = 0;
+  return found;
+}
+
+function textFromCodeChildren(children: ReactNode): string {
+  if (Array.isArray(children)) return children.map(textFromCodeChildren).join("");
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  return "";
+}
+
+type RunMarkdownCodeProps = ComponentProps<"code"> & {
+  "data-block"?: boolean | string;
+  node?: unknown;
+};
+
+function RunMarkdownCode({ children, className, node: _node, ...props }: RunMarkdownCodeProps) {
+  const code = textFromCodeChildren(children);
+  const isBlock = "data-block" in props;
+  const language = className?.match(/language-(\S+)/)?.[1] ?? "";
+  if (!isBlock) {
+    return (
+      <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
+        {children}
+      </code>
+    );
+  }
+  if (!hasUrl(code)) {
+    return (
+      <CodeBlock code={code} language={language}>
+        <CodeBlockCopyButton code={code} />
+      </CodeBlock>
+    );
+  }
+  return (
+    <CodeBlockContainer className="run-markdown-linked-code" language={language}>
+      <CodeBlockHeader language={language} />
+      <div className="run-markdown-code-actions" data-streamdown="code-block-actions">
+        <CodeBlockCopyButton code={code} />
+      </div>
+      <div className="run-markdown-linked-code-body" data-streamdown="code-block-body">
+        <pre>
+          <code className={className}>{linkifyUrls(code.replace(/\n$/, ""))}</code>
+        </pre>
+      </div>
+    </CodeBlockContainer>
+  );
+}
+
+function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return <a {...props} rel="noreferrer" target="_blank" />;
+}
+
+const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
+  a: RunMarkdownLink,
+  code: RunMarkdownCode,
+} as StreamdownComponents;
+
+function RunMarkdown({ children }: { children: string }) {
+  return (
+    <Streamdown components={RUN_MARKDOWN_COMPONENTS} linkSafety={{ enabled: false }}>
+      {children}
+    </Streamdown>
+  );
+}
+
 const RunContext = createContext<{ sendStdin: (text: string) => void; user: SessionUser | null }>({
   sendStdin: () => {},
   user: null,
@@ -2281,7 +2424,7 @@ function RunMessageBubble({
         data-slot="message-content"
       >
         <div className="run-transcript-message-text" data-slot="message-text">
-          <Streamdown>{text}</Streamdown>
+          <RunMarkdown>{text}</RunMarkdown>
         </div>
         <div
           className="run-msg-footer"
@@ -2330,7 +2473,7 @@ function RunReasoningBlock({
         <ChevronDownIcon size={12} className="run-reasoning-chevron" aria-hidden="true" />
       </summary>
       <div className="run-reasoning-body">
-        <Streamdown>{text}</Streamdown>
+        <RunMarkdown>{text}</RunMarkdown>
       </div>
     </details>
   );
@@ -2869,6 +3012,21 @@ function HeadlessRun({
       /* ignore */
     }
   }
+  const setChatFontScale = (value: number) => {
+    setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
+  };
+  const paneFontScale = runPrefs.chatFontScale;
+  const paneFontScalePct = Math.round(paneFontScale * 100);
+  const setPaneFontScale = setChatFontScale;
+  const chatFontScaleStyle = {
+    "--run-chat-font-scale": runPrefs.chatFontScale,
+    "--run-chat-font-xs": `${(0.75 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-sm": `${(0.875 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-meta": `${(0.72 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-code-xs": `${(0.7 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-code-sm": `${(0.78 * runPrefs.chatFontScale).toFixed(3)}rem`,
+    "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
+  } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3797,6 +3955,23 @@ function HeadlessRun({
           <button
             type="button"
             role="tab"
+            aria-selected={activeTab === "chat"}
+            className={`run-tab${activeTab === "chat" ? " run-tab-active" : ""}`}
+            onClick={() => {
+              setActiveTab("chat");
+            }}
+            title="Return to the session"
+          >
+            <BotIcon
+              className="run-tab-icon"
+              strokeWidth={activeTab === "chat" ? 2.4 : 1.8}
+              aria-hidden="true"
+            />
+            <span>Session</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={activeTab === "files"}
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
             onClick={() => setActiveTab("files")}
@@ -3835,6 +4010,62 @@ function HeadlessRun({
                   {runPrefs.sendByCtrlEnter && (
                     <CheckIcon className="run-settings-check" aria-hidden="true" />
                   )}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuLabel>Transcript</DropdownMenuLabel>
+              <DropdownMenuItem
+                className="run-settings-zoom-item"
+                onSelect={(e) => e.preventDefault()}
+              >
+                <span className="run-settings-zoom-row">
+                  <span className="run-settings-label">Text zoom</span>
+                  <span className="run-settings-zoom-controls">
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP);
+                      }}
+                      disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+                      aria-label="Decrease pane text size"
+                      title="Decrease text size"
+                    >
+                      <MinusIcon aria-hidden="true" />
+                    </button>
+                    <span className="run-settings-zoom-value" aria-live="polite">
+                      {paneFontScalePct}%
+                    </span>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP);
+                      }}
+                      disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+                      aria-label="Increase pane text size"
+                      title="Increase text size"
+                    >
+                      <PlusIcon aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-settings-zoom-btn"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale);
+                      }}
+                      disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+                      aria-label="Reset pane text size"
+                      title="Reset text size"
+                    >
+                      <RotateCcwIcon aria-hidden="true" />
+                    </button>
+                  </span>
                 </span>
               </DropdownMenuItem>
               <DropdownMenuLabel>Transcript</DropdownMenuLabel>
@@ -3898,6 +4129,7 @@ function HeadlessRun({
       <main
         className={`run-main run-main-${runStatus}`}
         ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+        style={chatFontScaleStyle}
       >
         {activeTab === "files" ? (
           <div className="run-files">
@@ -4712,6 +4944,30 @@ export function App() {
   }, [sessions, user, closingIds]);
 
   useEffect(() => {
+    if (!user) return;
+    const source = new EventSource("/api/sessions/events", { withCredentials: true });
+    const refreshSessions = () => void refresh();
+    source.addEventListener("sessions-changed", refreshSessions);
+    return () => {
+      source.removeEventListener("sessions-changed", refreshSessions);
+      source.close();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", refreshIfVisible);
+    window.addEventListener("focus", refreshIfVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshIfVisible);
+      window.removeEventListener("focus", refreshIfVisible);
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
       const selectable = sessions.filter((s) => !closingIds.has(s.id));
       setActive(selectable[selectable.length - 1]?.id ?? null);
@@ -5327,7 +5583,12 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun session={s} visible={active === s.id} onRename={renameSession} user={user!} />
+                    <HeadlessRun
+                      session={s}
+                      visible={active === s.id}
+                      onRename={renameSession}
+                      user={user!}
+                    />
                   </div>
                 ) : (
                   <div

@@ -36,6 +36,7 @@ TERMINAL_PROXY_CONFIGMAP = os.environ.get(
 )
 TERMINALD_PORT = int(os.environ.get("TERMINALD_PORT", "7680"))
 TERMINAL_PROXY_PORT = int(os.environ.get("TERMINAL_PROXY_PORT", "7681"))
+SANDBOX_AGENT_PORT = int(os.environ.get("SANDBOX_AGENT_PORT", "2468"))
 TERMINAL_PROXY_IMAGE = os.environ.get(
     "TERMINAL_PROXY_IMAGE", "quay.io/brancz/kube-rbac-proxy:v0.22.0"
 )
@@ -281,11 +282,14 @@ class SessionManager:
     rather than silently recreated as a new empty runtime.
     """
 
-    def __init__(self, registry: SessionRegistryStore | None = None) -> None:
+    def __init__(
+        self, registry: SessionRegistryStore | None = None, events: Any | None = None
+    ) -> None:
         self._api: client.ApiClient | None = None
         self._apps: client.AppsV1Api | None = None
         self._core: client.CoreV1Api | None = None
         self._registry = registry
+        self._events = events
         # In-memory connection tracking for the idle reaper. Single replica
         # only (values.yaml pins replicas: 1) — stateful, restart-tolerant
         # via the "adopt with now" branch in _reap_idle.
@@ -301,6 +305,10 @@ class SessionManager:
 
     def set_registry(self, registry: SessionRegistryStore) -> None:
         self._registry = registry
+
+    def _publish_changed(self, owner: str) -> None:
+        if self._events is not None:
+            self._events.publish(owner)
 
     async def startup(self) -> None:
         try:
@@ -420,15 +428,29 @@ class SessionManager:
                     "image": session_image,
                     "imagePullPolicy": "Always",
                     "command": [
-                        "tank-terminald",
+                        "bash",
+                        "-lc",
+                        (
+                            "if command -v sandbox-agent >/dev/null 2>&1; then "
+                            "sandbox_agent_cmd=sandbox-agent; "
+                            "else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; "
+                            f"$sandbox_agent_cmd server --host 0.0.0.0 --port {SANDBOX_AGENT_PORT} "
+                            "--no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & "
+                            "exec tank-terminald"
+                        ),
                     ],
                     "ports": [
                         {"name": "terminald", "containerPort": TERMINALD_PORT},
+                        {"name": "sandbox-agent", "containerPort": SANDBOX_AGENT_PORT},
                     ],
                     "env": [
                         {
                             "name": "TERMINALD_PORT",
                             "value": str(TERMINALD_PORT),
+                        },
+                        {
+                            "name": "SANDBOX_AGENT_PORT",
+                            "value": str(SANDBOX_AGENT_PORT),
                         },
                         # Read by exec_proxy's bootstrap to pick the
                         # auth path. Sourced at the env level (not
@@ -695,6 +717,7 @@ class SessionManager:
                 requested_at=request_started_at,
                 created_at=created_at,
             )
+        self._publish_changed(owner)
         return info
 
     async def dispatch_headless(
@@ -871,6 +894,7 @@ class SessionManager:
                 requested_at=info.requested_at,
                 created_at=info.created_at,
             )
+        self._publish_changed(owner)
         return info
 
     async def get_pod_name(
@@ -910,6 +934,7 @@ class SessionManager:
                     await self._registry.mark_deleted(owner, session_id)
                     self._ws_count.pop(session_id, None)
                     self._activity.pop(session_id, None)
+                    self._publish_changed(owner)
                     return
             raise
         await self._delete_session_runtime(pod)
@@ -917,6 +942,7 @@ class SessionManager:
             await self._registry.mark_deleted(owner, session_id)
         self._ws_count.pop(session_id, None)
         self._activity.pop(session_id, None)
+        self._publish_changed(owner)
 
     async def touch(self, owner: str, session_id: str) -> None:
         await self._read_owned_pod(owner, session_id)
