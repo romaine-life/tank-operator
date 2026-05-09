@@ -3218,9 +3218,25 @@ function HeadlessRun({
         if (!text) return;
         const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
-          setEntries((prev) =>
-            transcriptComparable(prev) === transcriptComparable(acc) ? prev : acc,
-          );
+          let behind = false;
+          setEntries((prev) => {
+            if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
+            // If the JSONL has fewer conversation messages than the current
+            // state, the pod-side run is still in progress and the assistant
+            // turn hasn't been written to the JSONL yet. Replacing would
+            // regress the visible transcript — keep prev and retry shortly so
+            // we pick up the completed response once the pod finishes.
+            const prevMsgs = prev.filter((e) => e.kind === "message").length;
+            const accMsgs = acc.filter((e) => e.kind === "message").length;
+            if (accMsgs < prevMsgs) {
+              behind = true;
+              return prev;
+            }
+            return acc;
+          });
+          if (behind) {
+            window.setTimeout(() => refreshRunHistory(false), 3000);
+          }
           if (showHint) {
             setContinueHintVisible(true);
             window.setTimeout(() => setContinueHintVisible(false), 3000);
