@@ -2530,7 +2530,7 @@ button:disabled {
   max-height: 14rem !important;
   padding: 0.75rem 1rem !important;
   font-family: var(--font-primary) !important;
-  font-size: var(--text-sm) !important;
+  font-size: var(--run-chat-font-sm) !important;
   color: var(--text-primary) !important;
   background: transparent !important;
   border: none !important;
