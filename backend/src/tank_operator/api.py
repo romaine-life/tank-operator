@@ -253,11 +253,15 @@ def _build_tail_run_script(stream_path: str, offset: int = 0) -> str:
         "{ echo 'timed out waiting for run stream' >&2; exit 1; }; "
         "done; "
         f"tail -c +{start_byte} -F {quoted_path} & tail_pid=$!; "
-        f"while ! grep -q {marker} {quoted_path}; do sleep 0.5; done; "
+        # Guard the file-existence condition: if a concurrent tail script already
+        # found __TANK_RUN_EXIT__ and deleted the stream file, grep returns exit 2
+        # (file not found), ! inverts to 0, and the while would spin forever.
+        # Adding [ -f ... ] makes the loop exit cleanly when the file disappears.
+        f"while [ -f {quoted_path} ] && ! grep -q {marker} {quoted_path}; do sleep 0.5; done; "
         "sleep 0.2; "
         "kill \"$tail_pid\" 2>/dev/null || true; "
         "wait \"$tail_pid\" 2>/dev/null || true; "
-        f"rc=$(sed -n 's/^{_HEADLESS_RUN_EXIT_MARKER}//p' {quoted_path} | tail -1); "
+        f"rc=$(sed -n 's/^{_HEADLESS_RUN_EXIT_MARKER}//p' {quoted_path} 2>/dev/null | tail -1) || rc=; "
         f"rm -f {quoted_path}; "
         "exit \"${rc:-0}\""
     )
