@@ -1059,6 +1059,66 @@ async def walk_session_files(
     )
 
 
+class ActiveRunResponse(BaseModel):
+    run_id: str
+    stream_offset: int
+
+
+@app.get("/api/sessions/{session_id}/run/active")
+async def get_active_run(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> ActiveRunResponse | None:
+    """Check whether the session pod has an in-progress run.
+
+    Returns run_id and current stream byte offset when a pid file exists
+    (i.e. the agent process hasn't finished), null otherwise. The caller
+    can open the run WebSocket with resume=true + the returned run_id/offset
+    to attach to the live stream.
+    """
+    try:
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+
+    try:
+        out = await exec_capture(
+            SESSIONS_NAMESPACE,
+            pod_name,
+            ["bash", "-c", "ls /tmp/tank-run-*.pid 2>/dev/null | head -1"],
+        )
+    except RuntimeError:
+        return None
+
+    pid_file = out.decode().strip()
+    if not pid_file:
+        return None
+
+    # Extract run_id from /tmp/tank-run-{run_id}.pid
+    run_id = pid_file.removeprefix("/tmp/tank-run-").removesuffix(".pid")
+    if not run_id or "/" in run_id:
+        return None
+
+    stream_path = _run_stream_path(run_id)
+    try:
+        size_out = await exec_capture(
+            SESSIONS_NAMESPACE,
+            pod_name,
+            ["bash", "-c", f"wc -c < {_shlex.quote(stream_path)} 2>/dev/null || echo 0"],
+        )
+        stream_offset = int(size_out.decode().strip())
+    except (RuntimeError, ValueError):
+        stream_offset = 0
+
+    return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
+
+
 @app.get("/api/sessions/{session_id}/run/history")
 async def get_run_history(
     session_id: str,

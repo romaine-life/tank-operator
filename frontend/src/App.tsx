@@ -3245,6 +3245,7 @@ function HeadlessRun({
   // to empty localStorage: a run can finish while the tab is closed, leaving
   // localStorage with a stale partial transcript.
   const [historyAttempted, setHistoryAttempted] = useState(false);
+  const [activeRunChecked, setActiveRunChecked] = useState(false);
   // Toggled briefly when entries are restored (from localStorage OR backend
   // history) so we can show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
@@ -3321,6 +3322,40 @@ function HeadlessRun({
   // refreshRunHistory is intentionally omitted for the same reason as above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, session.id, session.status, running]);
+
+  // Detect in-progress runs after history loads — covers the case where the
+  // user refreshes the tab while an agent is actively running. The pid file
+  // on the pod exists for the lifetime of the run, so we use it as the
+  // liveness signal and reattach to the live stream.
+  useEffect(() => {
+    if (!historyAttempted || activeRunChecked || session.status !== "Active" || running) return;
+    setActiveRunChecked(true);
+    void authedFetch(`/api/sessions/${session.id}/run/active`)
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as { run_id: string; stream_offset: number } | null;
+        if (!data || currentRunRef.current) return;
+        const run = {
+          id: data.run_id,
+          prompt: "",
+          followUp: false,
+          model: "",
+          permissionMode: "",
+          turnStart: Date.now(),
+          reconnects: 0,
+          offset: data.stream_offset,
+          cancelled: false,
+        };
+        currentRunRef.current = run;
+        setRunning(true);
+        setRunStartedAt(Date.now());
+        setNow(Date.now());
+        openRunSocket(run, true);
+      })
+      .catch(() => undefined);
+  // openRunSocket is defined in the same render scope and intentionally omitted.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyAttempted, activeRunChecked, session.id, session.status, running]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
