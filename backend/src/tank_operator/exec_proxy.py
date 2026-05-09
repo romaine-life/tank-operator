@@ -256,6 +256,17 @@ async def exec_stream_to_websocket(
                     bytes([STDIN_CHANNEL]) + stdin[offset : offset + 64 * 1024]
                 )
 
+            browser_disconnected = False
+
+            async def send_browser_json(payload: dict[str, object]) -> None:
+                nonlocal browser_disconnected
+                if browser_disconnected:
+                    return
+                try:
+                    await browser.send_json(payload)
+                except Exception:
+                    browser_disconnected = True
+
             async def pump_pod() -> dict[str, str] | None:
                 status: dict[str, str] | None = None
                 async for wsmsg in k8s_ws:
@@ -265,15 +276,20 @@ async def exec_stream_to_websocket(
                         channel = wsmsg.data[0]
                         payload = wsmsg.data[1:]
                         if channel == STDOUT_CHANNEL:
-                            await browser.send_json(
-                                {"stream": "stdout", "data": payload.decode(errors="replace")}
+                            await send_browser_json(
+                                {
+                                    "stream": "stdout",
+                                    "data": payload.decode(errors="replace"),
+                                }
                             )
                         elif channel == STDERR_CHANNEL:
                             text = payload.decode(errors="replace")
                             # Claude CLI emits this when stdin is non-TTY even
                             # with < /dev/null; it's harmless but alarms users.
                             if "Warning: no stdin data received" not in text:
-                                await browser.send_json({"stream": "stderr", "data": text})
+                                await send_browser_json(
+                                    {"stream": "stderr", "data": text}
+                                )
                         elif channel == ERROR_CHANNEL:
                             try:
                                 status = json.loads(payload)
@@ -290,7 +306,8 @@ async def exec_stream_to_websocket(
                         break
                 return status
 
-            async def pump_browser() -> None:
+            async def pump_browser() -> str:
+                nonlocal browser_disconnected
                 try:
                     while True:
                         raw = await browser.receive_text()
@@ -302,8 +319,14 @@ async def exec_stream_to_websocket(
                             data = msg["stdin"].encode()
                             if data:
                                 await k8s_ws.send_bytes(bytes([STDIN_CHANNEL]) + data)
+                        elif isinstance(msg, dict) and msg.get("cancel"):
+                            return "cancel"
+                except WebSocketDisconnect:
+                    browser_disconnected = True
+                    return "disconnect"
                 except Exception:
-                    pass
+                    browser_disconnected = True
+                    return "disconnect"
 
             async def pump_keepalive() -> None:
                 # Send a no-op frame every 30s so the gateway's idle stream
@@ -311,27 +334,45 @@ async def exec_stream_to_websocket(
                 try:
                     while True:
                         await asyncio.sleep(30)
-                        await browser.send_json({"keepalive": True})
+                        await send_browser_json({"keepalive": True})
                 except Exception:
-                    pass
+                    browser_disconnected = True
 
             pod_task: asyncio.Task[dict[str, str] | None] = asyncio.create_task(pump_pod())
-            browser_task: asyncio.Task[None] = asyncio.create_task(pump_browser())
+            browser_task: asyncio.Task[str] = asyncio.create_task(pump_browser())
             keepalive_task: asyncio.Task[None] = asyncio.create_task(pump_keepalive())
 
-            done, pending = await asyncio.wait(
+            # A tab refresh closes the browser WebSocket. The pod-side command
+            # must keep running so the user can reload without killing the
+            # headless agent. An explicit {"cancel":true} control frame still
+            # cancels the Kubernetes exec stream for the Stop button.
+            done, _pending = await asyncio.wait(
                 {pod_task, browser_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            cancelled_by_browser = False
+            if browser_task in done:
+                try:
+                    cancelled_by_browser = browser_task.result() == "cancel"
+                except Exception:
+                    cancelled_by_browser = False
+                if cancelled_by_browser:
+                    pod_task.cancel()
+                    try:
+                        await pod_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                else:
+                    await pod_task
             keepalive_task.cancel()
             try:
                 await keepalive_task
             except (asyncio.CancelledError, Exception):
                 pass
-            for task in pending:
-                task.cancel()
+            if browser_task not in done:
+                browser_task.cancel()
                 try:
-                    await task
+                    await browser_task
                 except (asyncio.CancelledError, Exception):
                     pass
 
@@ -339,16 +380,27 @@ async def exec_stream_to_websocket(
                 error_status = pod_task.result()
             except (asyncio.CancelledError, Exception):
                 error_status = None
+            if cancelled_by_browser:
+                return
     except Exception as e:
-        await browser.send_json({"status": "error", "detail": str(e)})
+        try:
+            await browser.send_json({"status": "error", "detail": str(e)})
+        except Exception:
+            pass
         return
     finally:
         await ws_client.close()
 
     if error_status is not None and error_status.get("status") != "Success":
-        await browser.send_json({"status": "error", "detail": str(error_status)})
+        try:
+            await browser.send_json({"status": "error", "detail": str(error_status)})
+        except Exception:
+            pass
         return
-    await browser.send_json({"status": "done"})
+    try:
+        await browser.send_json({"status": "done"})
+    except Exception:
+        pass
 
 
 async def bridge(browser: WebSocket, pod_ip: str, terminal_port: int) -> None:
