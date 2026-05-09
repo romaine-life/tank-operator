@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator
 
 from kubernetes_asyncio import client, config
 
-from .profiles import SessionRecord, SessionRegistryStore
+from .profiles import ActiveRunStore, SessionRecord, SessionRegistryStore
 
 log = logging.getLogger(__name__)
 
@@ -313,13 +313,17 @@ class SessionManager:
     """
 
     def __init__(
-        self, registry: SessionRegistryStore | None = None, events: Any | None = None
+        self,
+        registry: SessionRegistryStore | None = None,
+        events: Any | None = None,
+        active_runs: ActiveRunStore | None = None,
     ) -> None:
         self._api: client.ApiClient | None = None
         self._apps: client.AppsV1Api | None = None
         self._core: client.CoreV1Api | None = None
         self._registry = registry
         self._events = events
+        self._active_runs = active_runs
         # In-memory connection tracking for the idle reaper. Single replica
         # only (values.yaml pins replicas: 1) — stateful, restart-tolerant
         # via the "adopt with now" branch in _reap_idle.
@@ -335,6 +339,9 @@ class SessionManager:
 
     def set_registry(self, registry: SessionRegistryStore) -> None:
         self._registry = registry
+
+    def set_active_runs(self, active_runs: ActiveRunStore) -> None:
+        self._active_runs = active_runs
 
     def _publish_changed(self, owner: str) -> None:
         if self._events is not None:
@@ -746,14 +753,23 @@ class SessionManager:
         spawned on the pod — does not wait for the agent run to complete.
         Conversation output lands in claude-code's session JSONL, which the
         existing /api/sessions/{id}/run/history endpoint reads back.
-        /tmp/tank-headless-<token>.log captures stdout+stderr for
-        post-mortem if the run misbehaves.
+        Output is written to the same /tmp/tank-run-<id>.stream and pid-file
+        shape used by live WebSocket runs, so the browser can discover and
+        attach to a fire-and-forget follow-up after it starts.
         """
         # Late import to dodge an api.py → sessions.py → api.py cycle. The
         # script-shape helpers live next to the WS endpoint that introduced
         # them, but dispatch_headless reuses them so both paths produce the
         # exact same on-pod command.
-        from .api import _build_headless_script, _new_prompt_path, _validate_headless_arg
+        from .api import (
+            _build_headless_script,
+            _build_live_run_script,
+            _new_prompt_path,
+            _run_pid_path,
+            _run_stream_path,
+            _validate_headless_arg,
+            _validate_run_id,
+        )
         from .exec_proxy import exec_launch_detached, exec_write_file
 
         session = await self.get_session(owner=owner, session_id=session_id)
@@ -773,7 +789,9 @@ class SessionManager:
 
         provider = "codex" if mode == CODEX_HEADLESS_MODE else "claude"
         prompt_path = _new_prompt_path()
-        log_path = f"/tmp/tank-headless-{uuid.uuid4().hex[:12]}.log"
+        run_id = _validate_run_id(None)
+        stream_path = _run_stream_path(run_id)
+        pid_path = _run_pid_path(run_id)
         await exec_write_file(
             SESSIONS_NAMESPACE, pod_name, prompt_path, prompt.encode()
         )
@@ -787,9 +805,23 @@ class SessionManager:
         await exec_launch_detached(
             namespace=SESSIONS_NAMESPACE,
             pod_name=pod_name,
-            command=script,
-            log_path=log_path,
+            command=_build_live_run_script(script, pid_path),
+            log_path=stream_path,
         )
+        if self._active_runs is not None:
+            try:
+                await self._active_runs.start(
+                    email=owner,
+                    session_id=session_id,
+                    run_id=run_id,
+                    pod_name=pod_name,
+                    provider=provider,
+                    stream_path=stream_path,
+                    pid_path=pid_path,
+                )
+            except Exception as exc:
+                log.warning("failed to persist active run %s: %s", run_id, exc)
+        self._publish_changed(owner)
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._core is not None

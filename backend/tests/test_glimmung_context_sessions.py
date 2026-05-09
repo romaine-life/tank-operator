@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tank_operator.profiles import SessionRegistryStore
+from tank_operator.profiles import ActiveRunStore, SessionRegistryStore
 from tank_operator.sessions import GLIMMUNG_CONTEXT_ANNOTATION, SessionManager
 
 
@@ -201,6 +201,32 @@ def test_session_registry_scope_isolates_environments() -> None:
     assert [session.pod_name for session in slot_list] == ["session-slot"]
     assert asyncio.run(prod.get("operator@example.test", "shared-id")).pod_name == "session-prod"
     assert asyncio.run(slot.get("operator@example.test", "shared-id")).pod_name == "session-slot"
+
+
+def test_active_run_store_tracks_edge_status_without_heartbeats() -> None:
+    store = ActiveRunStore()
+
+    started = asyncio.run(
+        store.start(
+            email="Operator@Example.Test",
+            session_id="abc123",
+            run_id="run-1",
+            pod_name="session-abc123",
+            provider="claude",
+            stream_path="/tmp/tank-run-run-1.stream",
+            pid_path="/tmp/tank-run-run-1.pid",
+        )
+    )
+    active = asyncio.run(store.get_active("abc123"))
+
+    assert started.email == "operator@example.test"
+    assert active is not None
+    assert active.run_id == "run-1"
+    assert active.status == "running"
+
+    asyncio.run(store.mark_stale("abc123", "run-1"))
+
+    assert asyncio.run(store.get_active("abc123")) is None
 
 
 def test_session_list_reports_request_creation_and_ready_timestamps() -> None:
