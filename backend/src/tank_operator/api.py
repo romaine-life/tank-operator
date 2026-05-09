@@ -550,6 +550,18 @@ class SkillListing(BaseModel):
     entries: list[SkillEntry]
 
 
+class McpServerEntry(BaseModel):
+    name: str
+    transport: str
+    target: str
+    source: str
+    enabled: bool
+
+
+class McpServerListing(BaseModel):
+    entries: list[McpServerEntry]
+
+
 class WriteFileBody(BaseModel):
     text: str
 
@@ -655,6 +667,82 @@ async def list_session_skills(
             )
         )
     return SkillListing(entries=entries)
+
+
+@app.get("/api/sessions/{session_id}/mcp-servers", response_model=McpServerListing)
+async def list_session_mcp_servers(
+    session_id: str,
+    user: User = Depends(current_user),
+) -> McpServerListing:
+    """List MCP servers configured inside the session pod.
+
+    GUI/headless sessions hide the agent startup inventory, so the web UI needs
+    its own view over the mounted MCP config just like it does for skills.
+    """
+    try:
+        await sessions.get_session(owner=user.email, session_id=session_id)
+        pod_name = await sessions.get_pod_name(
+            owner=user.email, session_id=session_id
+        )
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except PodNotReady:
+        raise HTTPException(status_code=503, detail="pod not ready")
+
+    scan_script = (
+        "import json\n"
+        "path = '/workspace/.mcp.json'\n"
+        "out = []\n"
+        "try:\n"
+        "    config = json.load(open(path, encoding='utf-8'))\n"
+        "except Exception:\n"
+        "    config = {}\n"
+        "servers = config.get('mcpServers') or {}\n"
+        "if isinstance(servers, dict):\n"
+        "    for name, value in servers.items():\n"
+        "        if not isinstance(value, dict):\n"
+        "            continue\n"
+        "        transport = str(value.get('type') or "
+        "('stdio' if value.get('command') else 'unknown'))\n"
+        "        target = str(value.get('url') or value.get('command') or '')\n"
+        "        out.append({\n"
+        "            'name': str(name),\n"
+        "            'transport': transport,\n"
+        "            'target': target,\n"
+        "            'source': path,\n"
+        "            'enabled': True,\n"
+        "        })\n"
+        "out.sort(key=lambda x: x['name'].lower())\n"
+        "print(json.dumps(out))\n"
+    )
+    try:
+        out = await exec_capture(
+            SESSIONS_NAMESPACE, pod_name, ["python3", "-c", scan_script]
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=f"mcp scan failed: {exc}")
+
+    import json as _json
+    try:
+        raw_entries = _json.loads(out.decode("utf-8", errors="replace") or "[]")
+    except _json.JSONDecodeError:
+        raw_entries = []
+    entries: list[McpServerEntry] = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            continue
+        entries.append(
+            McpServerEntry(
+                name=str(item.get("name") or ""),
+                transport=str(item.get("transport") or ""),
+                target=str(item.get("target") or ""),
+                source=str(item.get("source") or ""),
+                enabled=bool(item.get("enabled")),
+            )
+        )
+    return McpServerListing(entries=entries)
 
 
 @app.get("/api/sessions/{session_id}/files", response_model=FileListing)
