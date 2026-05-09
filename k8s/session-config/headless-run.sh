@@ -122,6 +122,8 @@ EOF
 
 bash /opt/tank/write-glimmung-context.sh
 configure_git_identity
+source /opt/tank/session-config/install-tank-skills.sh
+install_tank_skills
 
 case "$provider" in
   claude)
