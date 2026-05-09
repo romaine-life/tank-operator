@@ -10,10 +10,6 @@ import type {
 } from "react";
 import type { TranscriptEntry } from "@sandbox-agent/react";
 import {
-  CodeBlock,
-  CodeBlockContainer,
-  CodeBlockCopyButton,
-  CodeBlockHeader,
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
@@ -2424,41 +2420,16 @@ function textFromCodeChildren(children: ReactNode): string {
   return "";
 }
 
-type RunMarkdownCodeProps = ComponentProps<"code"> & {
-  "data-block"?: boolean | string;
+type RunMarkdownInlineCodeProps = ComponentProps<"code"> & {
   node?: unknown;
 };
 
-function RunMarkdownCode({ children, className, node: _node, ...props }: RunMarkdownCodeProps) {
+function RunMarkdownInlineCode({ children, className, node: _node, ...props }: RunMarkdownInlineCodeProps) {
   const code = textFromCodeChildren(children);
-  const isBlock = "data-block" in props;
-  const language = className?.match(/language-(\S+)/)?.[1] ?? "";
-  if (!isBlock) {
-    return (
-      <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
-        {hasUrl(code) ? linkifyUrls(code) : children}
-      </code>
-    );
-  }
-  if (!hasUrl(code)) {
-    return (
-      <CodeBlock code={code} language={language}>
-        <CodeBlockCopyButton code={code} />
-      </CodeBlock>
-    );
-  }
   return (
-    <CodeBlockContainer className="run-markdown-linked-code" language={language}>
-      <CodeBlockHeader language={language} />
-      <div className="run-markdown-code-actions" data-streamdown="code-block-actions">
-        <CodeBlockCopyButton code={code} />
-      </div>
-      <div className="run-markdown-linked-code-body" data-streamdown="code-block-body">
-        <pre>
-          <code className={className}>{linkifyUrls(code.replace(/\n$/, ""))}</code>
-        </pre>
-      </div>
-    </CodeBlockContainer>
+    <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
+      {hasUrl(code) ? linkifyUrls(code) : children}
+    </code>
   );
 }
 
@@ -2468,7 +2439,7 @@ function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
 
 const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
   a: RunMarkdownLink,
-  code: RunMarkdownCode,
+  inlineCode: RunMarkdownInlineCode,
 } as StreamdownComponents;
 
 function RunMarkdown({ children }: { children: string }) {
