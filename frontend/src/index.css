@@ -1251,21 +1251,19 @@ button:disabled {
 }
 
 .session-provider-icon {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  display: block;
-  opacity: 0.7;
-}
-
-.sessions li.is-open:not(.is-closing) .session-provider-icon {
-  opacity: 1;
+  display: none;
 }
 
 .sidebar.is-collapsed .session-provider-icon {
+  display: block;
   width: 18px;
   height: 18px;
+  flex-shrink: 0;
   opacity: 0.85;
+}
+
+.sidebar.is-collapsed .sessions li.is-open:not(.is-closing) .session-provider-icon {
+  opacity: 1;
 }
 
 .session-closing-chip {

@@ -54,7 +54,6 @@ import {
   Loader2Icon,
   MessageSquareIcon,
   MinusIcon,
-  MonitorIcon,
   PlugIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -984,7 +983,7 @@ function InteractionIcon({
   interaction: SessionInteraction;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "gui" ? MonitorIcon : TerminalIcon;
+  const Icon: LucideIcon = interaction === "run" ? BotIcon : TerminalIcon;
   return <Icon className={className} aria-hidden="true" />;
 }
 
