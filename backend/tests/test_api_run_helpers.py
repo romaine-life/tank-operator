@@ -11,8 +11,11 @@ Covers:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -34,6 +37,7 @@ from tank_operator.api import (
     _validate_skill_name,
     _validate_run_id,
 )
+from tank_operator import api as api_module
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +133,85 @@ def test_live_run_script_normal_path_removes_pid_file() -> None:
 def test_live_run_script_normal_path_writes_exit_marker() -> None:
     script = _build_live_run_script("echo hi", "/tmp/test.pid")
     assert _HEADLESS_RUN_EXIT_MARKER in script
+
+
+def test_live_run_script_records_nonzero_exit_in_history() -> None:
+    script = _build_live_run_script("echo hi", "/tmp/test.pid")
+    assert "tank.run_started" in script
+    assert "tank.run_failed" in script
+    assert "Agent process exited with status %s" in script
+    assert "diagnostics_path" in script
+    assert "operator_pod" in script
+    assert "operator_started_at" in script
+    assert "_tank_record_failure \"$rc\"" in script
+    assert "/tmp/tank-run-history.ndjson" in script
+
+
+def test_live_run_script_writes_failure_diagnostics_bundle() -> None:
+    script = _build_live_run_script("echo hi", "/tmp/test.pid")
+    assert "/workspace/.tank-diagnostics" in script
+    assert "latest_core" in script
+    assert "core_files" in script
+    assert "operator_pod" in script
+    assert "operator_started_at" in script
+    assert "node --version" in script
+    assert "codex --version" in script
+    assert "recent_history" in script
+
+
+def test_live_run_script_names_common_transport_signals() -> None:
+    script = _build_live_run_script("echo hi", "/tmp/test.pid")
+    assert "1) signal=SIGHUP" in script
+    assert "13) signal=SIGPIPE" in script
+    assert "15) signal=SIGTERM" in script
+
+
+def test_live_run_script_records_failure_before_exit_marker() -> None:
+    script = _build_live_run_script("echo hi", "/tmp/test.pid")
+    record_pos = script.index("_tank_record_failure \"$rc\"")
+    marker_pos = script.rindex(_HEADLESS_RUN_EXIT_MARKER)
+    assert record_pos < marker_pos
+
+
+def test_live_run_script_decodes_pty_negative_signal_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    history_path = tmp_path / "history.ndjson"
+    diagnostics_dir = tmp_path / "diagnostics"
+    pid_path = tmp_path / "run.pid"
+
+    monkeypatch.setattr(api_module, "_HEADLESS_RUN_HISTORY_PATH", str(history_path))
+    monkeypatch.setattr(
+        api_module, "_HEADLESS_RUN_DIAGNOSTICS_DIR", str(diagnostics_dir)
+    )
+
+    script = api_module._build_live_run_script(
+        "python3 -c 'import sys; sys.exit(-11)'", str(pid_path)
+    )
+    result = subprocess.run(
+        ["bash", "-lc", script],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert result.returncode == 245
+    events = [json.loads(line) for line in history_path.read_text().splitlines()]
+    assert events[0]["type"] == "tank.run_started"
+    assert events[0]["pid_path"] == str(pid_path)
+    failed = events[1]
+    assert failed["type"] == "tank.run_failed"
+    assert failed["exit_code"] == 245
+    assert failed["signal"] == "SIGSEGV"
+    assert "operator_pod" in failed
+    assert "operator_started_at" in failed
+    diagnostics_path = Path(failed["diagnostics_path"])
+    assert diagnostics_path.parent == diagnostics_dir
+    diagnostics = diagnostics_path.read_text()
+    assert "signal=SIGSEGV" in diagnostics
+    assert "operator_pod=" in diagnostics
+    assert "operator_started_at=" in diagnostics
 
 
 def test_live_run_script_sigterm_trap_writes_exit_marker() -> None:

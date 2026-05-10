@@ -104,6 +104,9 @@ EOF
 
 configure_codex() {
   mkdir -p "$HOME/.codex"
+  mkdir -p /workspace/.tank-diagnostics
+  export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
+  export NODE_OPTIONS="${NODE_OPTIONS:-} --report-on-fatalerror --report-uncaught-exception --report-directory=/workspace/.tank-diagnostics"
   local mcp_blocks=""
   if [ -f /workspace/.mcp.json ]; then
     mcp_blocks=$(jq -r '.mcpServers | to_entries[] |

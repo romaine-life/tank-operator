@@ -141,7 +141,11 @@ _HEADLESS_ARG_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _SKILL_NAME_PATTERN = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _RUN_ID_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
+_HEADLESS_RUN_DIAGNOSTICS_DIR = "/workspace/.tank-diagnostics"
+_HEADLESS_RUN_HISTORY_PATH = "/tmp/tank-run-history.ndjson"
 _HEADLESS_RUN_EXIT_MARKER = "__TANK_RUN_EXIT__:"
+_OPERATOR_POD_NAME = os.environ.get("HOSTNAME", "")
+_OPERATOR_STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 _RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
 _SESSION_EVENTS_KEEPALIVE_SECONDS = 10
 
@@ -234,15 +238,72 @@ def _build_headless_script(
 def _build_live_run_script(script: str, pid_path: str) -> str:
     marker = _shlex.quote(_HEADLESS_RUN_EXIT_MARKER)
     quoted_pid_path = _shlex.quote(pid_path)
+    quoted_diagnostics_dir = _shlex.quote(_HEADLESS_RUN_DIAGNOSTICS_DIR)
+    quoted_history_path = _shlex.quote(_HEADLESS_RUN_HISTORY_PATH)
+    quoted_operator_pod = _shlex.quote(_OPERATOR_POD_NAME)
+    quoted_operator_started_at = _shlex.quote(_OPERATOR_STARTED_AT)
     # Use bash variables so the trap body doesn't need nested single-quotes.
     # The trap writes the exit marker even on SIGTERM so the tail script's
     # grep loop always terminates rather than hanging after a cancel.
     return (
         f"echo $$ > {quoted_pid_path}; "
         f"_tank_pid={quoted_pid_path}; _tank_marker={marker}; "
+        f"_tank_diag_dir={quoted_diagnostics_dir}; "
+        f"_tank_history={quoted_history_path}; "
+        f"_tank_operator_pod={quoted_operator_pod}; "
+        f"_tank_operator_started_at={quoted_operator_started_at}; "
+        "_tank_record_failure() { "
+        "rc=\"$1\"; [ \"$rc\" -eq 0 ] && return 0; "
+        "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true); "
+        "file_ts=$(date -u +%Y%m%dT%H%M%SZ 2>/dev/null || echo unknown); "
+        "mkdir -p \"$_tank_diag_dir\" 2>/dev/null || true; "
+        "diag=\"$_tank_diag_dir/tank-run-failed-${file_ts}-$$.txt\"; "
+        "signal=\"\"; if [ \"$rc\" -gt 192 ]; then "
+        "sig_num=$((256 - rc)); "
+        "elif [ \"$rc\" -ge 128 ]; then "
+        "sig_num=$((rc - 128)); "
+        "fi; "
+        "if [ -n \"$signal\" ] || [ -n \"${sig_num:-}\" ]; then "
+        "case \"$sig_num\" in "
+        "1) signal=SIGHUP ;; 2) signal=SIGINT ;; 3) signal=SIGQUIT ;; "
+        "6) signal=SIGABRT ;; 9) signal=SIGKILL ;; 11) signal=SIGSEGV ;; "
+        "13) signal=SIGPIPE ;; 15) signal=SIGTERM ;; *) signal=\"SIG${sig_num}\" ;; "
+        "esac; "
+        "fi; "
+        "{ "
+        "printf 'timestamp=%s\\n' \"$ts\"; "
+        "printf 'exit_code=%s\\n' \"$rc\"; "
+        "printf 'signal=%s\\n' \"$signal\"; "
+        "printf 'pid_path=%s\\n' \"$_tank_pid\"; "
+        "printf 'history_path=%s\\n' \"$_tank_history\"; "
+        "printf 'operator_pod=%s\\n' \"$_tank_operator_pod\"; "
+        "printf 'operator_started_at=%s\\n' \"$_tank_operator_started_at\"; "
+        "printf '\\nlatest_core=\\n'; ls -t /workspace/core.* 2>/dev/null | head -1 || true; "
+        "printf '\\ncore_files=\\n'; ls -lh /workspace/core.* 2>/dev/null || true; "
+        "printf '\\nnode_version=\\n'; node --version 2>&1 || true; "
+        "printf '\\ncodex_version=\\n'; codex --version 2>&1 || true; "
+        "printf '\\nprocesses=\\n'; "
+        "ps -eo pid,ppid,stat,etime,args 2>/dev/null "
+        "| grep -E 'codex|node|headless-run' | grep -v grep || true; "
+        "printf '\\nrecent_history=\\n'; tail -n 80 \"$_tank_history\" 2>/dev/null || true; "
+        "} > \"$diag\" 2>&1 || true; "
+        "printf '{\"type\":\"tank.run_failed\",\"exit_code\":%s,"
+        "\"message\":\"Agent process exited with status %s\","
+        "\"signal\":\"%s\",\"diagnostics_path\":\"%s\","
+        "\"operator_pod\":\"%s\",\"operator_started_at\":\"%s\","
+        "\"timestamp\":\"%s\"}\\n' \"$rc\" \"$rc\" \"$signal\" \"$diag\" "
+        "\"$_tank_operator_pod\" \"$_tank_operator_started_at\" \"$ts\" "
+        ">> \"$_tank_history\" 2>/dev/null || true; "
+        "}; "
+        "ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true); "
+        "printf '{\"type\":\"tank.run_started\",\"pid_path\":\"%s\","
+        "\"operator_pod\":\"%s\",\"operator_started_at\":\"%s\","
+        "\"timestamp\":\"%s\"}\\n' \"$_tank_pid\" \"$_tank_operator_pod\" "
+        "\"$_tank_operator_started_at\" \"$ts\" >> \"$_tank_history\" 2>/dev/null || true; "
         "trap 'rc=$?; rm -f \"$_tank_pid\"; "
         "printf \"\\n%s%s\\n\" \"$_tank_marker\" \"$rc\"; exit $rc' TERM INT; "
         f"{script}; rc=$?; "
+        "_tank_record_failure \"$rc\"; "
         f"rm -f {quoted_pid_path}; "
         f"printf '\\n%s%s\\n' {marker} \"$rc\"; "
         f"exit $rc"
