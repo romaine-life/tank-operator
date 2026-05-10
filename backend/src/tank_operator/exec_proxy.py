@@ -201,7 +201,12 @@ async def exec_launch_detached(
         f"disown $! 2>/dev/null || true; "
         f"echo launched"
     )
-    await exec_capture(namespace, pod_name, ["bash", "-lc", launcher])
+    try:
+        await exec_capture(namespace, pod_name, ["bash", "-lc", launcher])
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"detached launch failed: {exc}") from exc
 
 
 async def exec_stream_to_websocket(

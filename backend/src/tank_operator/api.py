@@ -1885,6 +1885,15 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             session_events.publish(user.email)
         except Exception as exc:
             log.warning("failed to persist active run %s: %s", run_id, exc)
+    else:
+        live = await _check_active_run_on_pod(pod_name, run_id)
+        if live is None:
+            await ws.send_json({"status": "error", "detail": "run is no longer active"})
+            await ws.close(
+                code=status.WS_1011_INTERNAL_ERROR,
+                reason="run is no longer active",
+            )
+            return
     await ws.send_json({"status": "attached", "run_id": run_id})
     command = ["bash", "-lc", _build_tail_run_script(stream_path, tail_offset)]
     async with sessions.track_ws(session_id):
