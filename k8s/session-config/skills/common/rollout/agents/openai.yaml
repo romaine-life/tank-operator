@@ -1,6 +1,8 @@
 interface:
   display_name: "Rollout"
   short_description: "Merge changes and watch builds through ArgoCD"
+  icon_small: "./assets/tank.svg"
+  icon_large: "./assets/tank.svg"
   default_prompt: "Use $rollout to land this change, follow the build, and watch ArgoCD until the new image is deployed."
 
 dependencies:
