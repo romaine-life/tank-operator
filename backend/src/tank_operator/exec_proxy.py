@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import shlex
+from collections.abc import Awaitable, Callable
 
 import aiohttp
 from fastapi import WebSocket, WebSocketDisconnect
@@ -31,6 +32,8 @@ STDOUT_CHANNEL = 1
 STDERR_CHANNEL = 2
 ERROR_CHANNEL = 3
 RESIZE_CHANNEL = 4
+DETACHED_LAUNCH_ATTEMPTS = 3
+DETACHED_LAUNCH_RETRY_DELAYS = (0.5, 1.5)
 
 
 async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> bytes:
@@ -184,6 +187,8 @@ async def exec_launch_detached(
     pod_name: str,
     command: str,
     log_path: str,
+    *,
+    capture: Callable[[str, str, list[str]], Awaitable[bytes]] | None = None,
 ) -> None:
     """Launch a shell command on the pod and detach immediately.
 
@@ -201,12 +206,33 @@ async def exec_launch_detached(
         f"disown $! 2>/dev/null || true; "
         f"echo launched"
     )
-    try:
-        await exec_capture(namespace, pod_name, ["bash", "-lc", launcher])
-    except RuntimeError:
-        raise
-    except Exception as exc:
-        raise RuntimeError(f"detached launch failed: {exc}") from exc
+    launch_command = ["bash", "-lc", launcher]
+    capture = capture or exec_capture
+    last_exc: Exception | None = None
+    for attempt in range(DETACHED_LAUNCH_ATTEMPTS):
+        try:
+            await capture(namespace, pod_name, launch_command)
+            return
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= DETACHED_LAUNCH_ATTEMPTS - 1:
+                break
+            delay = DETACHED_LAUNCH_RETRY_DELAYS[
+                min(attempt, len(DETACHED_LAUNCH_RETRY_DELAYS) - 1)
+            ]
+            log.warning(
+                "detached launch transport failure for %s/%s, retrying in %.1fs: %s",
+                namespace,
+                pod_name,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
+
+    assert last_exc is not None
+    raise RuntimeError(f"detached launch failed: {last_exc}") from last_exc
 
 
 async def exec_stream_to_websocket(

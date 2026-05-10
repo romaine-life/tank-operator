@@ -78,6 +78,10 @@ class _FakeWsApiClient:
         pass
 
 
+async def _fast_sleep(_delay: float) -> None:
+    return None
+
+
 def test_exec_stream_continues_after_browser_disconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,15 +114,49 @@ def test_exec_stream_continues_after_browser_disconnect(
     assert fake_k8s_ws.completed is True
 
 
-def test_exec_launch_detached_wraps_transport_failures(
+def test_exec_launch_detached_retries_transport_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls = 0
+
+    async def _flaky_exec_capture(
+        namespace: str, pod_name: str, command: list[str]
+    ) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise aiohttp.ClientConnectionError("connect failed")
+        return b"launched\n"
+
+    monkeypatch.setattr(exec_proxy, "exec_capture", _flaky_exec_capture)
+    monkeypatch.setattr(exec_proxy.asyncio, "sleep", _fast_sleep)
+
+    asyncio.run(
+        exec_proxy.exec_launch_detached(
+            namespace="tank-operator-sessions",
+            pod_name="session-abc",
+            command="echo hi",
+            log_path="/tmp/run.stream",
+        )
+    )
+
+    assert calls == 2
+
+
+def test_exec_launch_detached_wraps_repeated_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
     async def _raise_transport_error(
         namespace: str, pod_name: str, command: list[str]
     ) -> bytes:
+        nonlocal calls
+        calls += 1
         raise aiohttp.ClientConnectionError("connect failed")
 
     monkeypatch.setattr(exec_proxy, "exec_capture", _raise_transport_error)
+    monkeypatch.setattr(exec_proxy.asyncio, "sleep", _fast_sleep)
 
     with pytest.raises(RuntimeError, match="detached launch failed"):
         asyncio.run(
@@ -129,6 +167,8 @@ def test_exec_launch_detached_wraps_transport_failures(
                 log_path="/tmp/run.stream",
             )
         )
+
+    assert calls == exec_proxy.DETACHED_LAUNCH_ATTEMPTS
 
 
 def test_exec_stream_cancel_frame_stops_pod_stream(
