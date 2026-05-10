@@ -983,7 +983,7 @@ function InteractionIcon({
   interaction: SessionInteraction;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "run" ? BotIcon : TerminalIcon;
+  const Icon: LucideIcon = interaction === "gui" ? BotIcon : TerminalIcon;
   return <Icon className={className} aria-hidden="true" />;
 }
 
