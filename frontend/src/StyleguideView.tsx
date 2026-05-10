@@ -26,9 +26,9 @@ const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   config: "Claude config",
   codex_cli: "Codex CLI",
 };
-const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "openai">> = {
+const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">> = {
   claude_cli: "anthropic",
-  codex_cli: "openai",
+  codex_cli: "codex",
 };
 const STATUSES = ["active", "pending", "error"] as const;
 
@@ -381,7 +381,7 @@ export function StyleguideView() {
                 </li>
                 <li>
                   <button type="button" aria-label="Codex">
-                    <ProviderIcon provider="openai" className="dropdown-provider-icon" />
+                    <ProviderIcon provider="codex" className="dropdown-provider-icon" />
                     <span className="sr-only">Codex</span>
                   </button>
                 </li>

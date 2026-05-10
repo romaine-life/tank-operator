@@ -161,7 +161,14 @@ async def exchange_microsoft_token(id_token: str) -> tuple[str, User]:
     if not email:
         raise HTTPException(status_code=401, detail="token has no email or preferred_username claim")
     if email not in ALLOWED_EMAILS:
-        raise HTTPException(status_code=403, detail="email not allowed")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "email_not_allowed",
+                "email": email,
+                "message": "This Microsoft account is not allowed.",
+            },
+        )
 
     user = User(
         sub=str(payload.get("sub", "")),

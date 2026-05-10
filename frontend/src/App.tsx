@@ -54,6 +54,7 @@ import {
   Loader2Icon,
   MessageSquareIcon,
   MinusIcon,
+  MonitorIcon,
   PlugIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -90,7 +91,7 @@ type DefaultSessionMode = Extract<
   | "codex_gui"
   | "pi_cli"
 >;
-type Provider = "anthropic" | "openai" | "pi";
+type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 
 interface Session {
@@ -142,8 +143,8 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
-  codex_cli: "openai",
-  codex_gui: "openai",
+  codex_cli: "codex",
+  codex_gui: "codex",
   pi_cli: "pi",
 };
 
@@ -152,9 +153,9 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
   config: "anthropic",
-  codex_cli: "openai",
-  codex_gui: "openai",
-  codex_config: "openai",
+  codex_cli: "codex",
+  codex_gui: "codex",
+  codex_config: "codex",
   pi_cli: "pi",
   pi_config: "pi",
 };
@@ -164,7 +165,7 @@ const PROVIDER_INTERACTION_MODES: Record<
   Partial<Record<SessionInteraction, DefaultSessionMode | null>>
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
-  openai: { gui: "codex_gui", cli: "codex_cli" },
+  codex: { gui: "codex_gui", cli: "codex_cli" },
   pi: { gui: null, cli: "pi_cli" },
 };
 
@@ -177,7 +178,7 @@ const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 
 const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
   anthropic: "config",
-  openai: "codex_config",
+  codex: "codex_config",
   pi: "pi_config",
 };
 
@@ -604,7 +605,7 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "openai", "pi"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "pi"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
@@ -612,6 +613,10 @@ function defaultModeFor(provider: Provider, interaction: SessionInteraction): De
     PROVIDER_INTERACTION_MODES[provider][interaction] ??
     PROVIDER_INTERACTION_MODES[provider].cli!
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 interface SessionUser {
@@ -982,7 +987,7 @@ function InteractionIcon({
   interaction: SessionInteraction;
   className?: string;
 }) {
-  const Icon: LucideIcon = interaction === "gui" ? BotIcon : TerminalIcon;
+  const Icon: LucideIcon = interaction === "gui" ? MonitorIcon : TerminalIcon;
   return <Icon className={className} aria-hidden="true" />;
 }
 
@@ -2591,10 +2596,12 @@ const RunContext = createContext<{ sendStdin: (text: string) => void; user: Sess
 
 function RunMessageBubble({
   entry,
+  provider,
   showTimestamps,
   showDuration,
 }: {
   entry: TranscriptEntry;
+  provider: Provider;
   showTimestamps: boolean;
   showDuration: boolean;
 }) {
@@ -2616,7 +2623,7 @@ function RunMessageBubble({
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
-          <BotIcon size={14} strokeWidth={2} />
+          <ProviderIcon provider={provider} className="run-msg-ai-icon" />
         </span>
       )}
       <div
@@ -3088,12 +3095,14 @@ function RunToolGroup({
 
 function RunMessages({
   entries,
+  provider,
   showThinking,
   autoExpandTools,
   showTimestamps,
   showDuration,
 }: {
   entries: TranscriptEntry[];
+  provider: Provider;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -3128,6 +3137,7 @@ function RunMessages({
           <RunMessageBubble
             key={g.entry.id}
             entry={g.entry}
+            provider={provider}
             showTimestamps={showTimestamps}
             showDuration={showDuration}
           />
@@ -4410,7 +4420,7 @@ function HeadlessRun({
         ? "error"
         : undefined;
 
-  const provider: Provider = isClaude ? "anthropic" : "openai";
+  const provider: Provider = isClaude ? "anthropic" : "codex";
   const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
   const selectedModel =
@@ -4977,6 +4987,7 @@ function HeadlessRun({
             )}
             <RunMessages
               entries={entries}
+              provider={provider}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               showTimestamps={runPrefs.showTimestamps}
@@ -5636,7 +5647,7 @@ export function App() {
         setBooted(true);
       })
       .catch((e) => {
-        setAuthError(String(e));
+        setAuthError(errorMessage(e));
         setBooted(true);
       });
   }, []);
