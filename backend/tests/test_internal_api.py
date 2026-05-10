@@ -561,7 +561,6 @@ def test_internal_set_test_state_records_slot_and_url() -> None:
             "active": True,
             "slot_index": 2,
             "url": "https://tank-slot-2.tank.dev.romaine.life",
-            "lease_id": "lease-123",
         },
     )
 
@@ -573,7 +572,6 @@ def test_internal_set_test_state_records_slot_and_url() -> None:
         "active": True,
         "slot_index": 2,
         "url": "https://tank-slot-2.tank.dev.romaine.life",
-        "lease_id": "lease-123",
     }
 
 

@@ -111,7 +111,6 @@ interface TestState {
   active?: boolean;
   slot_index?: number | null;
   url?: string | null;
-  lease_id?: string | null;
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
