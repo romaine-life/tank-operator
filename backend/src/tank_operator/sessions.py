@@ -952,7 +952,6 @@ class SessionManager:
         active: bool = True,
         slot_index: int | None = None,
         url: str | None = None,
-        lease_id: str | None = None,
     ) -> SessionInfo:
         """Set or clear the GUI test-environment state for a session."""
         assert self._core is not None
@@ -970,9 +969,6 @@ class SessionManager:
             clean_url = (url or "").strip()
             if clean_url:
                 state["url"] = clean_url[:MAX_TEST_URL_LENGTH]
-            clean_lease_id = (lease_id or "").strip()
-            if clean_lease_id:
-                state["lease_id"] = clean_lease_id[:128]
             annotation_value: str | None = json.dumps(
                 state, sort_keys=True, separators=(",", ":")
             )

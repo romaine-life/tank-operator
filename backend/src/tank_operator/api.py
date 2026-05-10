@@ -650,7 +650,6 @@ class TestStateBody(BaseModel):
     active: bool = True
     slot_index: int | None = None
     url: str | None = None
-    lease_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1358,7 +1357,6 @@ async def update_test_state(
             active=body.active,
             slot_index=body.slot_index,
             url=body.url,
-            lease_id=body.lease_id,
         )
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")
