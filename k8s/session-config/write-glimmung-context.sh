@@ -18,9 +18,9 @@ cat > /workspace/GLIMMUNG_CONTEXT.md <<EOF
 
 This session was launched from glimmung for an attended pickup.
 
-- Run id: ${TANK_GLIMMUNG_RUN_ID:-}
-- Issue id: ${TANK_GLIMMUNG_ISSUE_ID:-}
-- PR id: ${TANK_GLIMMUNG_PR_ID:-}
+- Run ref: ${TANK_GLIMMUNG_RUN_REF:-}
+- Issue ref: ${TANK_GLIMMUNG_ISSUE_REF:-}
+- Touchpoint ref: ${TANK_GLIMMUNG_TOUCHPOINT_REF:-}
 - Validation URL: ${TANK_GLIMMUNG_VALIDATION_URL:-}
 
 Use the glimmung MCP server to read the canonical Issue, Run, PR, graph,
