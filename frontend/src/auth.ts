@@ -35,6 +35,54 @@ async function fetchConfig(): Promise<AppConfig> {
   return res.json();
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const part = token.split(".")[1];
+  if (!part) return null;
+  try {
+    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    return JSON.parse(atob(padded)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function emailFromIdToken(idToken: string): string | null {
+  const payload = decodeJwtPayload(idToken);
+  const email = payload?.email ?? payload?.preferred_username;
+  return typeof email === "string" && email ? email.toLowerCase() : null;
+}
+
+async function loginErrorMessage(res: Response, attemptedEmail: string | null): Promise<string> {
+  const fallback = `Sign-in failed (${res.status}).`;
+  const text = await res.text();
+  if (!text) return fallback;
+  const notAllowed = attemptedEmail
+    ? `This Microsoft account is not allowed for Tank Operator: ${attemptedEmail}`
+    : "This Microsoft account is not allowed for Tank Operator.";
+  try {
+    const body = JSON.parse(text) as {
+      detail?: string | { code?: string; email?: string; message?: string };
+    };
+    const detail = body.detail;
+    if (typeof detail === "string") {
+      if (detail === "email not allowed") {
+        return notAllowed;
+      }
+      return detail;
+    }
+    if (detail?.code === "email_not_allowed") {
+      return detail.email
+        ? `This Microsoft account is not allowed for Tank Operator: ${detail.email}`
+        : "This Microsoft account is not allowed for Tank Operator.";
+    }
+    if (detail?.message) return detail.message;
+  } catch {
+    // Fall through to the compact status message below.
+  }
+  return fallback;
+}
+
 async function getMsal(): Promise<PublicClientApplication> {
   if (msal) return msal;
   const config = await fetchConfig();
@@ -57,7 +105,7 @@ async function exchange(idToken: string): Promise<SessionUser> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ credential: idToken }),
   });
-  if (!res.ok) throw new Error(`backend login failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(await loginErrorMessage(res, emailFromIdToken(idToken)));
   const body = await res.json();
   localStorage.setItem(TOKEN_KEY, body.token);
   return body.user;

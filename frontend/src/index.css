@@ -4103,8 +4103,13 @@ textarea.run-files-viewer-editor:focus {
   justify-content: center;
   background: var(--mode-codex-cli-bg);
   color: var(--mode-codex-cli-fg);
-  border: 1px solid rgba(120, 200, 180, 0.36);
   flex-shrink: 0;
+}
+
+.run-msg-ai-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 
 .run-transcript-message[data-variant="assistant"]::before {
