@@ -11,6 +11,7 @@
 // not "the styleguide drifted from the live UI."
 
 import { useState } from "react";
+import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
 
 const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
@@ -265,6 +266,29 @@ export function StyleguideView() {
                 )}
               </span>
             ))}
+          </div>
+        </section>
+
+        {/* === MCP icon === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>mcp icon</h2>
+          <p style={captionStyle}>
+            Used for MCP server controls and MCP tool calls. The glyph follows
+            the Model Context Protocol mark and inherits the surrounding icon
+            color.
+          </p>
+          <div style={rowStyle}>
+            <button
+              type="button"
+              className="run-composer-icon-btn"
+              aria-label="Show MCP servers"
+              title="Show MCP servers"
+            >
+              <McpIcon className="run-composer-icon" aria-hidden="true" />
+            </button>
+            <span className="run-tool-icon-glyph tool-color-mcp" aria-hidden="true">
+              <McpIcon size={14} strokeWidth={2} />
+            </span>
           </div>
         </section>
 
