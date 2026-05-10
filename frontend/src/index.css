@@ -1038,14 +1038,15 @@ button:disabled {
 .session-open {
   background: transparent;
   display: flex;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
   text-align: left;
-  padding: 0;
+  padding: 1px var(--space-1);
   font-family: var(--font-primary);
   font-size: 13px;
-  min-width: 0;
-  border-radius: 0;
+  min-width: 2rem;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: text;
 }
@@ -1055,7 +1056,8 @@ button:disabled {
 .session-open:disabled { cursor: default; color: var(--text-faint); }
 
 .session-id {
-  flex: 1;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1692,7 +1694,7 @@ button:disabled {
 
 /* Inline rename input — replaces the session-id span after clicking the name. */
 .session-name-input {
-  flex: 1;
+  flex: 1 1 auto;
   background: transparent;
   border: 1px solid var(--gray-700);
   border-radius: var(--radius-sm);
@@ -1700,7 +1702,7 @@ button:disabled {
   font-family: var(--font-primary);
   font-size: 13px;
   color: var(--text-primary);
-  min-width: 0;
+  min-width: 7rem;
   outline: none;
 }
 .session-name-input:focus { border-color: var(--accent); }
