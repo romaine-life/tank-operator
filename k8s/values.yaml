@@ -153,7 +153,7 @@ host:
 # extend here when adding future in-cluster MCP servers that need the
 # resolve-caller or internal-session APIs.
 internalApi:
-  allowedSubjects: "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator"
+  allowedSubjects: "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"
   # Public hostname used to build session URLs returned by internal session endpoints.
   tankUiHost: "https://tank.romaine.life"
 
