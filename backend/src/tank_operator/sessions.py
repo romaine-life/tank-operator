@@ -499,21 +499,21 @@ class SessionManager:
                             "value": context_json,
                         },
                         {
-                            "name": "TANK_GLIMMUNG_RUN_ID",
+                            "name": "TANK_GLIMMUNG_RUN_REF",
                             "value": str(
-                                (glimmung_context or {}).get("glimmung_run_id") or ""
+                                (glimmung_context or {}).get("glimmung_run_ref") or ""
                             ),
                         },
                         {
-                            "name": "TANK_GLIMMUNG_ISSUE_ID",
+                            "name": "TANK_GLIMMUNG_ISSUE_REF",
                             "value": str(
-                                (glimmung_context or {}).get("glimmung_issue_id") or ""
+                                (glimmung_context or {}).get("glimmung_issue_ref") or ""
                             ),
                         },
                         {
-                            "name": "TANK_GLIMMUNG_PR_ID",
+                            "name": "TANK_GLIMMUNG_TOUCHPOINT_REF",
                             "value": str(
-                                (glimmung_context or {}).get("glimmung_pr_id") or ""
+                                (glimmung_context or {}).get("glimmung_touchpoint_ref") or ""
                             ),
                         },
                         {

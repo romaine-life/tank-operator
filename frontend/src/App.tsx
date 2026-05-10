@@ -627,9 +627,9 @@ interface SessionUser {
 }
 
 type GlimmungLaunchContext = {
-  glimmung_run_id: string;
-  glimmung_issue_id: string;
-  glimmung_pr_id: string | null;
+  glimmung_run_ref: string;
+  glimmung_issue_ref: string;
+  glimmung_touchpoint_ref: string | null;
   validation_url: string | null;
 };
 
@@ -746,18 +746,18 @@ function sessionBootTitle(session: Session, nowMs: number): string {
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   const params = new URLSearchParams(window.location.search);
-  const runId = params.get("glimmung_run_id");
-  const issueId = params.get("glimmung_issue_id");
+  const runId = params.get("glimmung_run_ref");
+  const issueId = params.get("glimmung_issue_ref");
   if (!runId || !issueId) {
     try {
       const stored = window.sessionStorage.getItem(GLIMMUNG_LAUNCH_CONTEXT_KEY);
       if (!stored) return null;
       const parsed = JSON.parse(stored) as Partial<GlimmungLaunchContext>;
-      if (!parsed.glimmung_run_id || !parsed.glimmung_issue_id) return null;
+      if (!parsed.glimmung_run_ref || !parsed.glimmung_issue_ref) return null;
       return {
-        glimmung_run_id: parsed.glimmung_run_id,
-        glimmung_issue_id: parsed.glimmung_issue_id,
-        glimmung_pr_id: parsed.glimmung_pr_id ?? null,
+        glimmung_run_ref: parsed.glimmung_run_ref,
+        glimmung_issue_ref: parsed.glimmung_issue_ref,
+        glimmung_touchpoint_ref: parsed.glimmung_touchpoint_ref ?? null,
         validation_url: parsed.validation_url ?? null,
       };
     } catch {
@@ -766,9 +766,9 @@ function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   }
 
   const context = {
-    glimmung_run_id: runId,
-    glimmung_issue_id: issueId,
-    glimmung_pr_id: params.get("glimmung_pr_id"),
+    glimmung_run_ref: runId,
+    glimmung_issue_ref: issueId,
+    glimmung_touchpoint_ref: params.get("glimmung_touchpoint_ref"),
     validation_url: params.get("validation_url"),
   };
   try {
@@ -787,9 +787,9 @@ function clearGlimmungLaunchContext(): void {
   }
   const url = new URL(window.location.href);
   for (const key of [
-    "glimmung_run_id",
-    "glimmung_issue_id",
-    "glimmung_pr_id",
+    "glimmung_run_ref",
+    "glimmung_issue_ref",
+    "glimmung_touchpoint_ref",
     "validation_url",
   ]) {
     url.searchParams.delete(key);

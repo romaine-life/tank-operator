@@ -540,9 +540,9 @@ class CreateSessionBody(BaseModel):
 
 
 class CreateSessionWithContextBody(BaseModel):
-    glimmung_run_id: str
-    glimmung_issue_id: str
-    glimmung_pr_id: str | None = None
+    glimmung_run_ref: str
+    glimmung_issue_ref: str
+    glimmung_touchpoint_ref: str | None = None
     validation_url: str | None = None
     caller_email: str | None = None
     mode: str = DEFAULT_SESSION_MODE
@@ -575,9 +575,9 @@ async def create_session_with_context(
 ) -> CreateSessionWithContextResponse:
     """Create a fresh session preloaded with canonical glimmung context.
 
-    Glimmung passes ids, not rendered text. The session pod can then use
-    mcp-glimmung to read the Issue / Run / PR details from the source of
-    truth while still booting with enough context to orient the operator.
+    Glimmung passes public refs. The session pod can then use mcp-glimmung to
+    read the Issue / Run / PR details from the source of truth while still
+    booting with enough context to orient the operator.
     """
     if body.mode not in ACCEPTED_SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")
@@ -588,9 +588,9 @@ async def create_session_with_context(
         )
 
     context = {
-        "glimmung_run_id": body.glimmung_run_id,
-        "glimmung_issue_id": body.glimmung_issue_id,
-        "glimmung_pr_id": body.glimmung_pr_id,
+        "glimmung_run_ref": body.glimmung_run_ref,
+        "glimmung_issue_ref": body.glimmung_issue_ref,
+        "glimmung_touchpoint_ref": body.glimmung_touchpoint_ref,
         "validation_url": body.validation_url,
         "caller_email": user.email,
     }
