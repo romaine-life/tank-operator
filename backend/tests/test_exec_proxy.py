@@ -110,6 +110,27 @@ def test_exec_stream_continues_after_browser_disconnect(
     assert fake_k8s_ws.completed is True
 
 
+def test_exec_launch_detached_wraps_transport_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _raise_transport_error(
+        namespace: str, pod_name: str, command: list[str]
+    ) -> bytes:
+        raise aiohttp.ClientConnectionError("connect failed")
+
+    monkeypatch.setattr(exec_proxy, "exec_capture", _raise_transport_error)
+
+    with pytest.raises(RuntimeError, match="detached launch failed"):
+        asyncio.run(
+            exec_proxy.exec_launch_detached(
+                namespace="tank-operator-sessions",
+                pod_name="session-abc",
+                command="echo hi",
+                log_path="/tmp/run.stream",
+            )
+        )
+
+
 def test_exec_stream_cancel_frame_stops_pod_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
