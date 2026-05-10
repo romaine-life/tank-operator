@@ -575,9 +575,10 @@ async def create_session_with_context(
 ) -> CreateSessionWithContextResponse:
     """Create a fresh session preloaded with canonical glimmung context.
 
-    Glimmung passes public refs. The session pod can then use mcp-glimmung to
-    read the Issue / Run / PR details from the source of truth while still
-    booting with enough context to orient the operator.
+    Glimmung passes public refs, not rendered text. The session pod can then
+    use mcp-glimmung to read the Issue / Run / touchpoint details from the
+    source of truth while still booting with enough context to orient the
+    operator.
     """
     if body.mode not in ACCEPTED_SESSION_MODES:
         raise HTTPException(status_code=400, detail=f"unknown mode: {body.mode}")

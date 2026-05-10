@@ -6,7 +6,7 @@
 //
 // When you change a component (button voice, status dot, mode chip,
 // session row layout), update its entry here in the same PR. There's
-// no automated drift check — the env-prep phase's /_styleguide curl
+// no automated drift check; the workflow's /_styleguide curl
 // is the floor that catches "the route doesn't even render anymore",
 // not "the styleguide drifted from the live UI."
 

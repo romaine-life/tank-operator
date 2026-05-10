@@ -26,9 +26,7 @@ backend
 frontend
 infra
 k8s
-k8s-arc-runners
 k8s-sessions
-runner
 scripts
 
 # Top-level non-source

@@ -751,9 +751,10 @@ function sessionBootTitle(session: Session, nowMs: number): string {
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   const params = new URLSearchParams(window.location.search);
-  const runId = params.get("glimmung_run_ref");
-  const issueId = params.get("glimmung_issue_ref");
-  if (!runId || !issueId) {
+  const runRef = params.get("glimmung_run_ref");
+  const issueRef = params.get("glimmung_issue_ref");
+  const touchpointRef = params.get("glimmung_touchpoint_ref");
+  if (!runRef || !issueRef) {
     try {
       const stored = window.sessionStorage.getItem(GLIMMUNG_LAUNCH_CONTEXT_KEY);
       if (!stored) return null;
@@ -771,9 +772,9 @@ function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
   }
 
   const context = {
-    glimmung_run_ref: runId,
-    glimmung_issue_ref: issueId,
-    glimmung_touchpoint_ref: params.get("glimmung_touchpoint_ref"),
+    glimmung_run_ref: runRef,
+    glimmung_issue_ref: issueRef,
+    glimmung_touchpoint_ref: touchpointRef,
     validation_url: params.get("validation_url"),
   };
   try {

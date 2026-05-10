@@ -47,20 +47,19 @@ machine-readable JSON (consumed by the wrapper to gate transitions
 and by the next stage as input context) and human-readable Markdown
 (appended to the run summary).
 
-## Canonical reference
+## Canonical shape
 
-[`nelsong6/spirelens/.github/workflows/issue-agent.yaml`](https://github.com/nelsong6/spirelens/blob/main/.github/workflows/issue-agent.yaml)
-runs each stage as a separate GitHub Actions job:
+Tank's default Glimmung workflow runs as native Kubernetes jobs and
+keeps each stage explicit:
 
-- `LLM: Plan validation evidence` → `issue-agent-test-plan.json` / `.md`
-- `LLM: Implement code change` → `issue-agent-implementation.json` / `.md`
-- `LLM: Verify in STS2` → `issue-agent-verification.json` / `.md`
+- `prepare` establishes the validation target.
+- `implement` makes and pushes the code change.
+- `verify` records the validation result.
 
-The wrapper enforces the test plan's `required_evidence` contract
-against the verifier's claimed pass before opening a PR. See
-[`nelsong6/spirelens/docs/issue-agent.md`](https://github.com/nelsong6/spirelens/blob/main/docs/issue-agent.md)
-for the architecture write-up and the abort-reason taxonomies for
-each stage.
+The wrapper should enforce the verifier's claimed pass before opening
+a PR. The important contract is the phase boundary and the evidence
+handoff, not whether a project uses Kubernetes Jobs or GitHub Actions
+underneath.
 
 ## When *not* to split
 
