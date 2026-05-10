@@ -5815,6 +5815,10 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function goHome() {
+    setActive(null);
+  }
+
   function openSession(id: string, e: ReactMouseEvent) {
     if (e.ctrlKey || e.metaKey) {
       window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
@@ -6063,7 +6067,15 @@ export function App() {
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className={`sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
         <div className="sidebar-brand">
-          <h1>tank-operator</h1>
+          <button
+            className={`sidebar-home${active == null ? " is-active" : ""}`}
+            onClick={goHome}
+            title="Home"
+            aria-label="Home"
+            aria-current={active == null ? "page" : undefined}
+          >
+            <span className="sidebar-home-label">tank-operator</span>
+          </button>
           <button
             className="sidebar-collapse"
             onClick={() => setSidebarCollapsed((v) => !v)}
@@ -6345,23 +6357,106 @@ export function App() {
 
       <main className="workspace">
         {active == null ? (
-          <div className="welcome">
-            <div className="welcome-inner">
-              <h2 className="welcome-title">tank-operator</h2>
-              <p className="welcome-sub">Spin up an agent session</p>
-              <div className="welcome-cards" role="list">
-                {MODE_ORDER.map((m) => (
+          <div className="home">
+            <div className="home-inner">
+              <section className="home-hero" aria-labelledby="home-title">
+                <div>
+                  <h2 id="home-title" className="home-title">tank-operator</h2>
+                  <p className="home-sub">Launchers, credentials, and active sessions</p>
+                </div>
+                <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
+              </section>
+
+              <div className="home-grid">
+                <section className="home-panel home-panel-start" aria-labelledby="home-start-title">
+                  <div className="home-panel-head">
+                    <h3 id="home-start-title">Start</h3>
+                    <span className="home-panel-meta">{INTERACTION_LABELS[defaultInteraction]}</span>
+                  </div>
                   <button
-                    key={m}
-                    className="welcome-card"
-                    onClick={() => createSession(m)}
+                    className="home-primary-action"
+                    onClick={() => createSession(defaultSessionMode)}
                     disabled={busy}
-                    role="listitem"
                   >
-                    <span className="welcome-card-title">{MODE_LABELS[m]}</span>
-                    <span className="welcome-card-sub">{MODE_HINTS[m]}</span>
+                    <span className="home-action-icons">
+                      <ProviderIcon provider={selectedProvider} className="home-provider-icon" />
+                      <InteractionIcon interaction={defaultInteraction} className="home-interaction-icon" />
+                    </span>
+                    <span>
+                      <span className="home-action-title">{MODE_LABELS[defaultSessionMode]}</span>
+                      <span className="home-action-sub">{MODE_HINTS[defaultSessionMode]}</span>
+                    </span>
                   </button>
-                ))}
+                  <div className="home-quick-actions">
+                    <button
+                      className="home-quick-action"
+                      onClick={() => createSession("api_key")}
+                      disabled={busy}
+                    >
+                      <IconKey className="home-quick-icon" />
+                      <span>API key</span>
+                    </button>
+                    <button
+                      className="home-quick-action"
+                      onClick={() => createSession(configMode)}
+                      disabled={busy}
+                    >
+                      <IconWrench className="home-quick-icon" />
+                      <span>{MODE_LABELS[configMode]}</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="home-panel" aria-labelledby="home-modes-title">
+                  <div className="home-panel-head">
+                    <h3 id="home-modes-title">Launchers</h3>
+                  </div>
+                  <div className="home-mode-list" role="list">
+                    {MODE_ORDER.map((m) => (
+                      <button
+                        key={m}
+                        className="home-mode"
+                        onClick={() => createSession(m)}
+                        disabled={busy}
+                        role="listitem"
+                      >
+                        <ProviderIcon provider={MODE_MENU_ICONS[m]} className="home-mode-icon" />
+                        <span>
+                          <span className="home-mode-title">{MODE_LABELS[m]}</span>
+                          <span className="home-mode-sub">{MODE_HINTS[m]}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="home-panel" aria-labelledby="home-sessions-title">
+                  <div className="home-panel-head">
+                    <h3 id="home-sessions-title">Sessions</h3>
+                    <span className="home-panel-meta">{sessions.filter((s) => !closingIds.has(s.id)).length} available</span>
+                  </div>
+                  <div className="home-session-list">
+                    {sessions.length === 0 ? (
+                      <div className="home-empty">No sessions</div>
+                    ) : (
+                      sessions.slice(0, 6).map((s) => (
+                        <button
+                          key={s.id}
+                          className="home-session"
+                          onClick={() => activate(s.id)}
+                          disabled={closingIds.has(s.id)}
+                        >
+                          <span className={`status-dot status-${s.status.toLowerCase()}`} />
+                          <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
+                          <span className="home-session-main">
+                            <span className="home-session-title">{sessionDisplayName(s)}</span>
+                            <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </section>
               </div>
             </div>
           </div>
