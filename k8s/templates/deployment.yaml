@@ -27,6 +27,7 @@ spec:
         - name: tank-operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          terminationMessagePolicy: FallbackToLogsOnError
           ports:
             - name: http
               containerPort: 8000
@@ -126,6 +127,8 @@ spec:
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
               value: {{ .Values.internalApi.tankUiHost | quote }}
+            - name: PYTHONFAULTHANDLER
+              value: "1"
           envFrom:
             - secretRef:
                 name: {{ include "tank-operator.authSecret" . }}

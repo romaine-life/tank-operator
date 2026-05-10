@@ -213,6 +213,17 @@ def test_codex_gui_runner_mirrors_json_stream_to_history() -> None:
     assert "pty.spawn(args, master_read=master_read)" in script
 
 
+def test_codex_gui_runner_enables_crash_diagnostics() -> None:
+    runner = Path(__file__).resolve().parents[2] / "k8s/session-config/headless-run.sh"
+    script = runner.read_text()
+
+    assert "mkdir -p /workspace/.tank-diagnostics" in script
+    assert "RUST_BACKTRACE" in script
+    assert "--report-on-fatalerror" in script
+    assert "--report-uncaught-exception" in script
+    assert "--report-directory=/workspace/.tank-diagnostics" in script
+
+
 # ---------------------------------------------------------------------------
 # session_run resume path — helper-level coverage
 #
