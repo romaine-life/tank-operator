@@ -2583,9 +2583,15 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
   inlineCode: RunMarkdownInlineCode,
 } as StreamdownComponents;
 
+const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
+
 function RunMarkdown({ children }: { children: string }) {
   return (
-    <Streamdown components={RUN_MARKDOWN_COMPONENTS} linkSafety={{ enabled: false }}>
+    <Streamdown
+      components={RUN_MARKDOWN_COMPONENTS}
+      linkSafety={{ enabled: false }}
+      shikiTheme={STREAMDOWN_DARK_THEME}
+    >
       {children}
     </Streamdown>
   );
@@ -4748,7 +4754,7 @@ function HeadlessRun({
                         switches to the textarea on first focus. */}
                     {selectedFile.truncated ? (
                       <div className="run-files-viewer-content">
-                        <Streamdown linkSafety={{ enabled: false }}>
+                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
                           {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
                         </Streamdown>
                       </div>
@@ -4766,7 +4772,7 @@ function HeadlessRun({
                         }}
                         title="Click to edit"
                       >
-                        <Streamdown linkSafety={{ enabled: false }}>
+                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
                           {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
                         </Streamdown>
                       </div>

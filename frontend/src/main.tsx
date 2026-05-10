@@ -5,6 +5,11 @@ import { StyleguideView } from "./StyleguideView";
 import "./fonts.css";
 import "./index.css";
 
+if (typeof document !== "undefined") {
+  document.documentElement.classList.add("dark");
+  document.documentElement.style.colorScheme = "dark";
+}
+
 // Tiny path-based routing — the only route we mount that isn't App is
 // the glimmung styleguide pilot's /_styleguide visual catalog. Avoids
 // pulling in react-router for this single split.
