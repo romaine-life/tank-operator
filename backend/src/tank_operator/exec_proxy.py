@@ -36,6 +36,23 @@ DETACHED_LAUNCH_ATTEMPTS = 3
 DETACHED_LAUNCH_RETRY_DELAYS = (0.5, 1.5)
 
 
+def _build_detached_launcher(command: str, log_path: str) -> str:
+    """Build the shell snippet that starts a long-running pod command.
+
+    The stream file remains the live UI source of truth. The tee to PID 1's
+    stdout gives the cluster log collector a best-effort recovery copy in Loki
+    without putting Loki on the browser streaming path.
+    """
+    quoted_log_path = shlex.quote(log_path)
+    return (
+        f"set -uo pipefail; "
+        f"nohup bash -c {shlex.quote(command)} "
+        f"> >(tee -a {quoted_log_path} > /proc/1/fd/1) 2>&1 < /dev/null & "
+        f"disown $! 2>/dev/null || true; "
+        f"echo launched"
+    )
+
+
 async def exec_capture(namespace: str, pod_name: str, command: list[str]) -> bytes:
     """Run a one-shot command in `pod_name` and return its stdout as bytes.
 
@@ -199,13 +216,7 @@ async def exec_launch_detached(
     Used by the headless run endpoints — the calling agent doesn't want
     to block on the receiving agent's run completion.
     """
-    launcher = (
-        f"set -uo pipefail; "
-        f"nohup bash -c {shlex.quote(command)} "
-        f"> {shlex.quote(log_path)} 2>&1 < /dev/null & "
-        f"disown $! 2>/dev/null || true; "
-        f"echo launched"
-    )
+    launcher = _build_detached_launcher(command, log_path)
     launch_command = ["bash", "-lc", launcher]
     capture = capture or exec_capture
     last_exc: Exception | None = None
