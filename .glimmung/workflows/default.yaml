@@ -1,4 +1,8 @@
-# Default native Glimmung workflow for tank-operator.
+# Desired-state registration manifest for Tank's default native Glimmung
+# workflow. Glimmung does not execute this file from GitHub at runtime; dispatch
+# reads the Workflow registration stored in Glimmung's database. Run
+# sync_workflow(project="tank-operator", workflow="default") after changes to
+# validate and promote this desired state into the live registration.
 ---
 trigger_label: null
 budget:

@@ -34,8 +34,15 @@ phase, an implementation phase, and a verification phase — each running as
 its own narrowly-scoped LLM call with its own prompt, tool permissions,
 timeout, and JSON+Markdown handoff artifacts. See
 [docs/agent-llm-task-splitting.md](docs/agent-llm-task-splitting.md) for the
-rationale and stage shape; use a repo-owned `.glimmung/workflows/default.yaml`
-as the canonical workflow entrypoint.
+rationale and stage shape.
+
+Glimmung workflow runtime is database-backed. The live workflow shape is the
+Workflow row registered in Glimmung's Cosmos database, not a GitHub Actions
+workflow and not a file read from this repo at dispatch time. This repo keeps
+`.glimmung/workflows/default.yaml` only as a desired-state registration
+manifest so `sync_workflow(project="tank-operator", workflow="default")` can
+validate and promote the app-owned shape into Glimmung. Changing that file does
+nothing until it is synced into Glimmung.
 
 A single LLM doing code + tests + screenshots in one run carries each
 phase's noise into the next decision. The split is the load-bearing
