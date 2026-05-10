@@ -7,7 +7,6 @@ import logging
 import os
 import socket
 import time
-import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, AsyncIterator
 
@@ -330,6 +329,8 @@ class SessionManager:
         self._ws_count: dict[str, int] = {}
         self._activity: dict[str, float] = {}
         self._reaper_task: asyncio.Task[None] | None = None
+        self._local_session_counter = 0
+        self._local_session_counter_lock = asyncio.Lock()
         # ClusterIP of the OAuth gateway Service — resolved once at startup
         # and stamped onto each Pod as a hostAlias, since K8s
         # hostAliases require an IP literal, not a DNS name.
@@ -701,7 +702,7 @@ class SessionManager:
         # Session pods carry a placeholder Bearer; the proxy strips it
         # and injects the real one, refreshing against platform.claude.com
         # behind the scenes when it observes a 401.
-        session_id = uuid.uuid4().hex[:10]
+        session_id = await self._next_session_id()
         created = await self._core.create_namespaced_pod(
             namespace=SESSIONS_NAMESPACE,
             body=self._pod_manifest(session_id, owner, mode, glimmung_context),
@@ -735,6 +736,13 @@ class SessionManager:
             )
         self._publish_changed(owner)
         return info
+
+    async def _next_session_id(self) -> str:
+        if self._registry is not None:
+            return await self._registry.next_session_id()
+        async with self._local_session_counter_lock:
+            self._local_session_counter += 1
+            return str(self._local_session_counter)
 
     async def dispatch_headless(
         self,
