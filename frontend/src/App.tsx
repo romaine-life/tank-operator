@@ -5539,9 +5539,8 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
-  // Inline rename state. `editingId` is the session whose row is currently
-  // an <input>; `editingValue` holds the in-progress name. Reset on commit
-  // or cancel. Triggered by clicking the session name.
+  // Inline rename state. The idle name control is intentionally only as wide
+  // as the label plus a small floor so the rest of the row remains a tab target.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const initialSessionId = useRef<string | null>(readInitialSessionId());
