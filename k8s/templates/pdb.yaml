@@ -3,7 +3,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: tank-operator
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
   labels:
     app.kubernetes.io/name: tank-operator
 spec:

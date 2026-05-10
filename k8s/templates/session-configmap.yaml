@@ -1,8 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Values.session.configMap }}
-  namespace: {{ .Values.namespaces.sessions }}
+  name: {{ include "tank-operator.sessionConfigMap" . }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
   labels:
     app.kubernetes.io/name: tank-operator
 data:

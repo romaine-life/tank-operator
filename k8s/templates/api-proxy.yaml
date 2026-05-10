@@ -30,7 +30,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: claude-api-proxy-leaf
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   secretName: claude-api-proxy-leaf
   duration: 2160h  # 90 days
@@ -53,13 +53,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Values.apiProxy.serviceAccount }}
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: claude-api-proxy
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   selector:
     app.kubernetes.io/name: claude-api-proxy
@@ -94,7 +94,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: claude-api-proxy-envoy
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 data:
   envoy.yaml: |
     admin:
@@ -225,15 +225,15 @@ the rotated-blob write.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: {{ .Values.apiProxy.configSecret }}
-  namespace: {{ .Values.namespaces.orchestrator }}
+  name: {{ include "tank-operator.apiProxyConfigSecret" . }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: {{ .Values.externalSecret.storeName }}
     kind: {{ .Values.externalSecret.storeKind }}
   target:
-    name: {{ .Values.apiProxy.configSecret }}
+    name: {{ include "tank-operator.apiProxyConfigSecret" . }}
     creationPolicy: Owner
     deletionPolicy: Retain
   data:
@@ -256,7 +256,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: claude-api-proxy
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
   labels:
     app.kubernetes.io/name: claude-api-proxy
 spec:
@@ -315,7 +315,7 @@ spec:
               value: https://login.microsoftonline.com/
           envFrom:
             - secretRef:
-                name: {{ .Values.apiProxy.configSecret }}
+                name: {{ include "tank-operator.apiProxyConfigSecret" . }}
           volumeMounts:
             - name: claude-credentials
               mountPath: /etc/claude-credentials
@@ -330,5 +330,5 @@ spec:
             optional: true  # cert-manager hasn't issued yet on first install
         - name: claude-credentials
           secret:
-            secretName: {{ .Values.externalSecret.claudeCredentials.secretName }}
+            secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
             optional: true

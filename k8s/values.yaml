@@ -6,6 +6,17 @@ image:
   tag: "7b4ac9d"
   pullPolicy: IfNotPresent
 
+testEnv:
+  # First-class chart mode for Glimmung/native validation slots. Glimmung should
+  # only need to pass `--set testEnv.enabled=true`; the chart derives slot-local
+  # names from the Helm release name/namespace and keeps shared credentials
+  # pointed at their production KV keys.
+  enabled: false
+  recordBase: tank.dev.romaine.life
+  sessionsGatewayIP: 172.179.163.96
+  authClientIdKvKey: tank-operator-test-oauth-client-id
+  claudeCredentialsKvKey: claude-code-credentials
+
 namespaces:
   orchestrator: tank-operator
   sessions: tank-operator-sessions

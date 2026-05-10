@@ -6,7 +6,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: tank-operator-sessions-mgr
-  namespace: {{ .Values.namespaces.sessions }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -22,11 +22,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: tank-operator-sessions-mgr
-  namespace: {{ .Values.namespaces.sessions }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.orchestrator.serviceAccount }}
-    namespace: {{ .Values.namespaces.orchestrator }}
+    name: {{ include "tank-operator.orchestratorServiceAccount" . }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -47,11 +47,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: tank-operator-terminal-invoker
-  namespace: {{ .Values.namespaces.sessions }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.orchestrator.serviceAccount }}
-    namespace: {{ .Values.namespaces.orchestrator }}
+    name: {{ include "tank-operator.orchestratorServiceAccount" . }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -62,11 +62,11 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Values.session.serviceAccount }}-auth-delegator
+  name: {{ include "tank-operator.sessionServiceAccount" . }}-auth-delegator
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.session.serviceAccount }}
-    namespace: {{ .Values.namespaces.sessions }}
+    name: {{ include "tank-operator.sessionServiceAccount" . }}
+    namespace: {{ include "tank-operator.sessionsNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -78,11 +78,11 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Values.orchestrator.serviceAccount }}-auth-delegator
+  name: {{ include "tank-operator.orchestratorServiceAccount" . }}-auth-delegator
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.orchestrator.serviceAccount }}
-    namespace: {{ .Values.namespaces.orchestrator }}
+    name: {{ include "tank-operator.orchestratorServiceAccount" . }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -96,11 +96,11 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Values.session.serviceAccount }}-cluster-admin
+  name: {{ include "tank-operator.sessionServiceAccount" . }}-cluster-admin
 subjects:
   - kind: ServiceAccount
-    name: {{ .Values.session.serviceAccount }}
-    namespace: {{ .Values.namespaces.sessions }}
+    name: {{ include "tank-operator.sessionServiceAccount" . }}
+    namespace: {{ include "tank-operator.sessionsNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

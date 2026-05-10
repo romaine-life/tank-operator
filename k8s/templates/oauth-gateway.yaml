@@ -31,7 +31,7 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   name: claude-oauth-bootstrap
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   selfSigned: {}
 ---
@@ -39,7 +39,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: claude-oauth-ca
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   isCA: true
   commonName: tank-operator-claude-oauth-ca
@@ -57,7 +57,7 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   name: claude-oauth-ca-issuer
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   ca:
     secretName: claude-oauth-ca
@@ -66,7 +66,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: claude-oauth-leaf
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   secretName: claude-oauth-leaf
   duration: 2160h  # 90 days
@@ -98,13 +98,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: claude-oauth-ca-reflector
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: claude-oauth-ca-reflector
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -115,11 +115,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: claude-oauth-ca-reflector
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 subjects:
   - kind: ServiceAccount
     name: claude-oauth-ca-reflector
-    namespace: {{ .Values.namespaces.orchestrator }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -129,7 +129,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: claude-oauth-ca-reflector-write
-  namespace: {{ .Values.namespaces.sessions }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
 rules:
   # `kubectl apply` does a get-then-patch under the hood, so we need both
   # read and write verbs on the target ConfigMap.
@@ -141,11 +141,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: claude-oauth-ca-reflector-write
-  namespace: {{ .Values.namespaces.sessions }}
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
 subjects:
   - kind: ServiceAccount
     name: claude-oauth-ca-reflector
-    namespace: {{ .Values.namespaces.orchestrator }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -155,7 +155,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: claude-oauth-ca-reflect
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
   annotations:
     # Re-run on every helm upgrade to pick up CA rotations.
     "helm.sh/hook": post-install,post-upgrade
@@ -185,13 +185,13 @@ spec:
               # Wait for cert-manager to issue the CA — on first install the
               # Secret doesn't exist yet when this Job fires.
               for i in $(seq 1 60); do
-                if kubectl -n {{ .Values.namespaces.orchestrator }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' >/dev/null 2>&1; then
+                if kubectl -n {{ include "tank-operator.orchestratorNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' >/dev/null 2>&1; then
                   break
                 fi
                 echo "waiting for cert-manager to issue claude-oauth-ca... ($i/60)" >&2
                 sleep 5
               done
-              CA=$(kubectl -n {{ .Values.namespaces.orchestrator }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+              CA=$(kubectl -n {{ include "tank-operator.orchestratorNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
               if [ -z "$CA" ]; then
                 echo "claude-oauth-ca secret never appeared — failing." >&2
                 exit 1
@@ -201,7 +201,7 @@ spec:
               kind: ConfigMap
               metadata:
                 name: claude-oauth-ca
-                namespace: {{ .Values.namespaces.sessions }}
+                namespace: {{ include "tank-operator.sessionsNamespace" . }}
                 annotations:
                   # Reflector publishes this ConfigMap into per-issue
                   # agent namespaces (ambience-issue-*, tank-operator-issue-*,
@@ -222,7 +222,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: claude-oauth-gateway
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   selector:
     app.kubernetes.io/name: tank-operator
@@ -249,15 +249,15 @@ on the next refresh.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: {{ .Values.externalSecret.claudeCredentials.secretName }}
-  namespace: {{ .Values.namespaces.orchestrator }}
+  name: {{ include "tank-operator.claudeCredentialsSecret" . }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   refreshInterval: 1m
   secretStoreRef:
     name: {{ .Values.externalSecret.storeName }}
     kind: {{ .Values.externalSecret.storeKind }}
   target:
-    name: {{ .Values.externalSecret.claudeCredentials.secretName }}
+    name: {{ include "tank-operator.claudeCredentialsSecret" . }}
     creationPolicy: Owner
     deletionPolicy: Retain
   data:
@@ -281,15 +281,15 @@ caller.
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
-  name: {{ .Values.credentialRefresher.configSecret }}
-  namespace: {{ .Values.namespaces.orchestrator }}
+  name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   refreshInterval: 1h
   secretStoreRef:
     name: {{ .Values.externalSecret.storeName }}
     kind: {{ .Values.externalSecret.storeKind }}
   target:
-    name: {{ .Values.credentialRefresher.configSecret }}
+    name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
     creationPolicy: Owner
     deletionPolicy: Retain
   data:
