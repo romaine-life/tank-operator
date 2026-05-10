@@ -55,7 +55,6 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
-  PlugIcon,
   PlusIcon,
   RotateCcwIcon,
   SearchIcon,
@@ -70,6 +69,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
@@ -1863,7 +1863,7 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
     return { Icon: ClipboardListIcon, colorClass: "tool-color-plan" };
   }
   if (name.toLowerCase().includes("mcp")) {
-    return { Icon: PlugIcon, colorClass: "tool-color-mcp" };
+    return { Icon: McpIcon, colorClass: "tool-color-mcp" };
   }
   return { Icon: WrenchIcon, colorClass: "tool-color-default" };
 }
@@ -5437,7 +5437,7 @@ function HeadlessRun({
                     setMcpOpen((open) => !open);
                   }}
                 >
-                  <PlugIcon className="run-composer-icon" aria-hidden="true" />
+                  <McpIcon className="run-composer-icon" aria-hidden="true" />
                   {mcpServers && mcpServers.length > 0 && (
                     <span className="run-command-menu-count">
                       {mcpServers.length}
