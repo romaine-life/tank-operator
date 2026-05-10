@@ -138,6 +138,7 @@ MAX_HEADLESS_PROMPT_BYTES = int(
 import secrets as _secrets
 import shlex as _shlex
 _HEADLESS_ARG_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_SKILL_NAME_PATTERN = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _RUN_ID_PATTERN = _re.compile(r"^[A-Za-z0-9._-]{1,80}$")
 _HEADLESS_PROMPT_DIR = "/tmp"
 _HEADLESS_RUN_EXIT_MARKER = "__TANK_RUN_EXIT__:"
@@ -161,6 +162,16 @@ def _validate_run_id(value: str | None) -> str:
     if isinstance(value, str) and _RUN_ID_PATTERN.match(value):
         return value
     return _secrets.token_hex(12)
+
+
+def _validate_skill_name(value: str | None) -> str:
+    if isinstance(value, str) and _SKILL_NAME_PATTERN.match(value):
+        return value
+    return ""
+
+
+def _skill_trigger(provider: str, skill_name: str) -> str:
+    return f"${skill_name}" if provider == "codex" else f"/{skill_name}"
 
 
 def _run_stream_path(run_id: str) -> str:
@@ -200,6 +211,7 @@ def _build_headless_script(
     follow_up: bool,
     model: str,
     permission_mode: str,
+    skill_name: str = "",
 ) -> str:
     """Bash one-liner that runs headless-run.sh against an on-pod prompt file.
 
@@ -210,9 +222,11 @@ def _build_headless_script(
     splicing them into the literal is safe.
     """
     quoted_path = _shlex.quote(prompt_path)
+    quoted_skill_name = _shlex.quote(skill_name)
     return (
         f"bash /opt/tank/headless-run.sh {provider} {quoted_path} "
         f"{'true' if follow_up else 'false'} '{model}' '{permission_mode}'"
+        f" {quoted_skill_name}"
         f"; rc=$?; rm -f {quoted_path}; (exit $rc)"
     )
 
@@ -1238,6 +1252,7 @@ async def get_run_history(
         cmd = [
             "bash",
             "-lc",
+            "cat /tmp/tank-run-history.ndjson 2>/dev/null || true; "
             "ls -t /home/node/.claude/projects/*/*.jsonl 2>/dev/null | head -1 | xargs -I{} cat {} 2>/dev/null",
         ]
     try:
@@ -1795,8 +1810,18 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     resume = bool(first.get("resume")) if isinstance(first, dict) else False
     run_id = _validate_run_id(first.get("run_id") if isinstance(first, dict) else None)
     prompt = first.get("prompt") if isinstance(first, dict) else None
+    provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
+    raw_skill_name = first.get("skill_name") if isinstance(first, dict) else None
+    skill_name = _validate_skill_name(
+        raw_skill_name if isinstance(raw_skill_name, str) else None
+    )
+    if raw_skill_name and not skill_name:
+        await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="invalid skill name")
+        return
     prompt_bytes = b""
     if not resume:
+        if skill_name:
+            prompt = _skill_trigger(provider, skill_name)
         if not isinstance(prompt, str) or not prompt.strip():
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
             return
@@ -1830,7 +1855,6 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         return
 
-    provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
     stream_path = _run_stream_path(run_id)
     pid_path = _run_pid_path(run_id)
     if not resume:
@@ -1860,6 +1884,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             follow_up=follow_up,
             model=model,
             permission_mode=permission_mode,
+            skill_name=skill_name,
         )
         try:
             await exec_launch_detached(

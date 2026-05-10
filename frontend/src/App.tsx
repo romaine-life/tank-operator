@@ -1446,6 +1446,54 @@ function appendAssistantMessage(
   ];
 }
 
+function skillInvocationTitle(name: string): string {
+  return `You started ${name} skill`;
+}
+
+function skillActionText(name: string): string {
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} skill`;
+}
+
+function skillNameFromTrigger(text: string): string | null {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^[$/]([A-Za-z0-9_-]{1,64})$/);
+  return match ? match[1] : null;
+}
+
+function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
+  return entries.some(
+    (entry) =>
+      entry.kind === "meta" &&
+      entry.meta?.title === skillInvocationTitle(name),
+  );
+}
+
+function appendSkillInvocation(
+  entries: TranscriptEntry[],
+  name: string,
+  time: string = nowIso(),
+): TranscriptEntry[] {
+  if (!name) return entries;
+  const suffix = Date.parse(time) || Date.now();
+  const userAction = {
+    id: `skill-action-${name}-${suffix}`,
+    kind: "message" as const,
+    role: "user" as const,
+    text: skillActionText(name),
+    time,
+    messageKind: "skill-action",
+    skillName: name,
+  } as TranscriptEntry;
+  return appendMeta(
+    [...entries, userAction],
+    `skill-invocation-${name}-${suffix}`,
+    skillInvocationTitle(name),
+    undefined,
+    "info",
+    time,
+  );
+}
+
 function describeUsage(usage: unknown): string {
   if (!isJsonObject(usage)) return "";
   const input = usage.input_tokens;
@@ -1527,6 +1575,8 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
   const time = eventTime(event);
   if (type === "tank.user_message") {
     const text = typeof event.message === "string" ? event.message.trim() : "";
+    const skillName = skillNameFromTrigger(text);
+    if (skillName && hasSkillInvocation(entries, skillName)) return entries;
     if (!text || entries.some((entry) => entry.kind === "message" && entry.role === "user" && entry.text === text)) {
       return entries;
     }
@@ -1711,6 +1761,8 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
         }
       }
       for (const text of texts) {
+        const skillName = skillNameFromTrigger(text);
+        if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
         if (!nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
           nextEntries = [
             ...nextEntries,
@@ -1757,6 +1809,10 @@ function applyProviderEvent(
   mode: SessionMode,
   event: JsonObject,
 ): TranscriptEntry[] {
+  if (event.type === "tank.skill_invocation") {
+    const name = typeof event.name === "string" ? event.name.trim() : "";
+    return name ? appendSkillInvocation(entries, name, eventTime(event)) : entries;
+  }
   if (mode === "codex_gui") return applyCodexEvent(entries, event);
   return applyClaudeEvent(entries, event);
 }
@@ -1864,6 +1920,13 @@ interface SkillEntry {
   source: string;
   description: string;
   body_preview: string;
+}
+
+interface QueuedMessage {
+  id: string;
+  text: string;
+  displayText?: string;
+  skillName?: string;
 }
 
 interface McpServerEntry {
@@ -2538,6 +2601,8 @@ function RunMessageBubble({
   const variant = entry.role === "user" ? "user" : "assistant";
   const { user } = useContext(RunContext);
   const text = entry.text ?? "";
+  const messageKind = (entry as Record<string, unknown>).messageKind;
+  const isSkillAction = messageKind === "skill-action";
   const time = formatMessageTime(entry.time);
   const durationMs = (entry as Record<string, unknown>).durationMs as number | undefined;
   const alwaysVisible = showTimestamps || showDuration;
@@ -2547,7 +2612,7 @@ function RunMessageBubble({
       data-slot="message"
       data-variant={variant}
       data-role={variant}
-      data-kind="message"
+      data-kind={isSkillAction ? "skill-action" : "message"}
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
@@ -2559,7 +2624,14 @@ function RunMessageBubble({
         data-slot="message-content"
       >
         <div className="run-transcript-message-text" data-slot="message-text">
-          <RunMarkdown>{text}</RunMarkdown>
+          {isSkillAction ? (
+            <span className="run-skill-action-text">
+              <FlaskConicalIcon size={15} strokeWidth={2.2} aria-hidden="true" />
+              <span>{text}</span>
+            </span>
+          ) : (
+            <RunMarkdown>{text}</RunMarkdown>
+          )}
         </div>
         <div
           className="run-msg-footer"
@@ -3108,9 +3180,7 @@ function HeadlessRun({
   // applyStdoutLine when an `assistant` or `result` event with usage info
   // arrives. Drives the % ring in the composer footer.
   const [tokensUsed, setTokensUsed] = useState(0);
-  const [queuedMessages, setQueuedMessages] = useState<
-    { id: string; text: string }[]
-  >([]);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
   const [slashOpen, setSlashOpen] = useState(false);
@@ -3178,6 +3248,7 @@ function HeadlessRun({
   const currentRunRef = useRef<{
     id: string;
     prompt: string;
+    skillName?: string;
     followUp: boolean;
     model: string;
     permissionMode: string;
@@ -3240,7 +3311,7 @@ function HeadlessRun({
     if (!running && queuedMessages.length > 0) {
       const [nextMessage, ...remaining] = queuedMessages;
       setQueuedMessages(remaining);
-      startRun(nextMessage.text);
+      startRun(nextMessage.text, nextMessage.displayText, nextMessage.skillName);
     }
   // startRun is intentionally omitted — it's redefined each render, and
   // useEffect's closure gives us the fresh version when deps actually change.
@@ -4118,15 +4189,16 @@ function HeadlessRun({
     startRun(composed);
   }
 
-  function submitSkillPrompt(prompt: string) {
+  function submitSkillInvocation(skillName: string) {
+    const displayText = skillInvocationTitle(skillName);
     if (running) {
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: prompt },
+        { id: nextQueuedMessageId(), text: "", displayText, skillName },
       ]);
       return;
     }
-    startRun(prompt);
+    startRun("", displayText, skillName);
   }
 
   async function markTestState(state: TestState) {
@@ -4148,18 +4220,15 @@ function HeadlessRun({
         appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
       );
     });
-    const skillRef = isClaude ? "/test" : "$test";
-    submitSkillPrompt(
-      `${skillRef}\n\nAcquire a Glimmung test slot for this repo, hot-swap the current work into it, then call the tank-operator.set_test_environment MCP tool with the slot index and test URL once it is ready.`,
-    );
+    submitSkillInvocation("test");
   }
 
   function startGuiRollout() {
     if (session.status !== "Active") return;
-    submitSkillPrompt(isClaude ? "/rollout" : "$rollout");
+    submitSkillInvocation("rollout");
   }
 
-  function startRun(trimmed: string) {
+  function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
     const followUp = entries.length > 0;
@@ -4167,6 +4236,7 @@ function HeadlessRun({
     const run = {
       id: newRunId(),
       prompt: trimmed,
+      skillName,
       followUp,
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
       permissionMode: composerMode,
@@ -4176,16 +4246,20 @@ function HeadlessRun({
       cancelled: false,
     };
     currentRunRef.current = run;
-    setEntries((prev) => [
-      ...prev,
-      {
-        id: nextEntryId("user"),
-        kind: "message",
-        role: "user",
-        text: trimmed,
-        time: nowIso(),
-      },
-    ]);
+    if (skillName) {
+      setEntries((prev) => appendSkillInvocation(prev, skillName, nowIso()));
+    } else {
+      setEntries((prev) => [
+        ...prev,
+        {
+          id: nextEntryId("user"),
+          kind: "message",
+          role: "user",
+          text: displayText,
+          time: nowIso(),
+        },
+      ]);
+    }
     setRunStatus("running");
     setRunning(true);
     activeToolNameRef.current = null;
@@ -4213,6 +4287,7 @@ function HeadlessRun({
           run_id: run.id,
           resume,
           prompt: resume ? "" : run.prompt,
+          skill_name: resume ? undefined : run.skillName,
           offset: resume ? run.offset : 0,
           follow_up: run.followUp,
           model: run.model,
@@ -5162,8 +5237,11 @@ function HeadlessRun({
                     <div className="run-queued-followup-index">
                       {index + 1}
                     </div>
-                    <div className="run-queued-followup-text" title={message.text}>
-                      {message.text}
+                    <div
+                      className="run-queued-followup-text"
+                      title={message.displayText ?? message.text}
+                    >
+                      {message.displayText ?? message.text}
                     </div>
                     <button
                       type="button"
@@ -5175,7 +5253,11 @@ function HeadlessRun({
                         setQueuedMessages((prev) =>
                           prev.filter((item) => item.id !== message.id),
                         );
-                        setComposerValue(message.text);
+                        setComposerValue(
+                          message.skillName
+                            ? `${isClaude ? "/" : "$"}${message.skillName}`
+                            : message.text,
+                        );
                       }}
                     >
                       <SquarePenIcon size={13} aria-hidden="true" />

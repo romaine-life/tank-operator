@@ -27,8 +27,11 @@ os.environ.setdefault("INTERNAL_API_ALLOWED_SUBJECTS", "mcp-github/mcp-github")
 from tank_operator.api import (
     _HEADLESS_RUN_EXIT_MARKER,
     _build_cancel_run_command,
+    _build_headless_script,
     _build_live_run_script,
     _build_tail_run_script,
+    _skill_trigger,
+    _validate_skill_name,
     _validate_run_id,
 )
 
@@ -74,6 +77,38 @@ def test_validate_run_id_rejects_too_long() -> None:
     result = _validate_run_id(long_id)
     assert result != long_id
     assert re.match(r"^[0-9a-f]{24}$", result)
+
+
+# ---------------------------------------------------------------------------
+# skill invocation helpers
+# ---------------------------------------------------------------------------
+
+
+def test_validate_skill_name_accepts_simple_names() -> None:
+    assert _validate_skill_name("test") == "test"
+    assert _validate_skill_name("rollout_v2") == "rollout_v2"
+
+
+def test_validate_skill_name_rejects_paths_and_shell() -> None:
+    assert _validate_skill_name("../test") == ""
+    assert _validate_skill_name("test;echo nope") == ""
+
+
+def test_skill_trigger_is_provider_specific() -> None:
+    assert _skill_trigger("codex", "test") == "$test"
+    assert _skill_trigger("claude", "test") == "/test"
+
+
+def test_headless_script_passes_skill_name() -> None:
+    script = _build_headless_script(
+        provider="codex",
+        prompt_path="/tmp/prompt",
+        follow_up=False,
+        model="",
+        permission_mode="",
+        skill_name="test",
+    )
+    assert "/opt/tank/headless-run.sh codex /tmp/prompt false '' '' test" in script
 
 
 # ---------------------------------------------------------------------------

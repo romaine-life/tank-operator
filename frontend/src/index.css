@@ -4145,6 +4145,27 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.run-transcript [data-slot="message"][data-kind="skill-action"] .run-transcript-message-content {
+  max-width: min(18rem, 72%);
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(163, 230, 53, 0.1);
+  color: #d9f99d;
+  border-color: rgba(163, 230, 53, 0.28);
+}
+
+.run-skill-action-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.run-skill-action-text svg {
+  flex: 0 0 auto;
+}
+
 .run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;

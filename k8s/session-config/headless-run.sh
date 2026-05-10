@@ -8,11 +8,36 @@ follow_up="${3:-false}"
 # pre-validated against [A-Za-z0-9._-]{1,64} in api.py before getting here.
 model="${4:-}"
 permission_mode="${5:-}"
+skill_name="${6:-}"
 
 if [ -z "$provider" ] || [ -z "$prompt_file" ] || [ ! -f "$prompt_file" ]; then
-  echo "usage: headless-run.sh <claude|codex> <prompt-file> [follow_up] [model] [permission_mode]" >&2
+  echo "usage: headless-run.sh <claude|codex> <prompt-file> [follow_up] [model] [permission_mode] [skill_name]" >&2
   exit 64
 fi
+
+write_skill_invocation_history() {
+  if [ -z "$skill_name" ]; then
+    return
+  fi
+  python3 - "$skill_name" "$prompt_file" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+skill_name = sys.argv[1]
+prompt_path = sys.argv[2]
+with open(prompt_path, encoding="utf-8") as f:
+    trigger = f.read()
+
+with open("/tmp/tank-run-history.ndjson", "a", encoding="utf-8") as history:
+    history.write(json.dumps({
+        "type": "tank.skill_invocation",
+        "name": skill_name,
+        "trigger": trigger,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }) + "\n")
+PY
+}
 
 configure_git_identity() {
   case "$provider" in
@@ -127,6 +152,7 @@ install_tank_skills
 
 case "$provider" in
   claude)
+    write_skill_invocation_history
     configure_claude
     claude_args=(-p --verbose --output-format stream-json)
     if [ "$follow_up" = "true" ]; then
@@ -152,7 +178,7 @@ case "$provider" in
     ;;
   codex)
     configure_codex
-    exec python3 - "$prompt_file" "$follow_up" "$model" <<'PY'
+    exec python3 - "$prompt_file" "$follow_up" "$model" "$skill_name" <<'PY'
 import json
 import os
 import pty
@@ -162,6 +188,7 @@ from datetime import datetime, timezone
 prompt_path = sys.argv[1]
 follow_up = sys.argv[2] == "true"
 model = sys.argv[3]
+skill_name = sys.argv[4]
 history_path = "/tmp/tank-run-history.ndjson"
 with open(prompt_path, encoding="utf-8") as f:
     prompt = f.read()
@@ -187,11 +214,19 @@ with open(history_path, "a", encoding="utf-8") as history:
             return json.dumps(event)
         return line
 
-    history.write(json.dumps({
-        "type": "tank.user_message",
-        "message": prompt,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }) + "\n")
+    if skill_name:
+        history.write(json.dumps({
+            "type": "tank.skill_invocation",
+            "name": skill_name,
+            "trigger": prompt,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }) + "\n")
+    else:
+        history.write(json.dumps({
+            "type": "tank.user_message",
+            "message": prompt,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }) + "\n")
     history.flush()
     history_line_buffer = [""]
 

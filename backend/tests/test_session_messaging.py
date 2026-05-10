@@ -199,6 +199,7 @@ def test_codex_gui_runner_resumes_on_follow_up() -> None:
     assert 'follow_up = sys.argv[2] == "true"' in script
     assert 'args.extend(["resume", "--last"])' in script
     assert 'args.extend(["--model", model])' in script
+    assert 'skill_name = sys.argv[4]' in script
 
 
 def test_codex_gui_runner_mirrors_json_stream_to_history() -> None:
@@ -207,7 +208,8 @@ def test_codex_gui_runner_mirrors_json_stream_to_history() -> None:
 
     assert 'history_path = "/tmp/tank-run-history.ndjson"' in script
     assert '"type": "tank.user_message"' in script
-    assert "history.buffer.write(data)" in script
+    assert '"type": "tank.skill_invocation"' in script
+    assert "history.write(stamped_line(line)" in script
     assert "pty.spawn(args, master_read=master_read)" in script
 
 
