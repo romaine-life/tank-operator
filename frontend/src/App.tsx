@@ -4061,17 +4061,9 @@ function HeadlessRun({
     try {
       providerEvent = JSON.parse(trimmed);
     } catch {
-      setEntries((prev) =>
-        appendMeta(prev, nextEntryId("raw-stdout"), "Output", line),
-      );
       return;
     }
-    if (!isJsonObject(providerEvent)) {
-      setEntries((prev) =>
-        appendMeta(prev, nextEntryId("raw-stdout"), "Output", shortJson(providerEvent)),
-      );
-      return;
-    }
+    if (!isJsonObject(providerEvent)) return;
     // Track context-window usage from claude's stream-json events. The
     // assistant message and the final result both carry a `usage` block;
     // the result is the most accurate "final state" so prefer it.
