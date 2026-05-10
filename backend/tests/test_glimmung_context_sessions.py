@@ -65,9 +65,23 @@ def _session_pod(
 class _FakeCore:
     def __init__(self, pods: list[SimpleNamespace]) -> None:
         self._pods = pods
+        self.created_bodies: list[dict] = []
 
     async def list_namespaced_pod(self, **_kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(items=self._pods)
+
+    async def create_namespaced_pod(
+        self, *, namespace: str, body: dict
+    ) -> SimpleNamespace:
+        self.created_bodies.append({"namespace": namespace, "body": body})
+        session_id = body["metadata"]["labels"]["tank-operator/session-id"]
+        pod = _session_pod(
+            session_id,
+            ["mcp-auth-proxy", "terminal-proxy", "claude"],
+            created_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+        self._pods.append(pod)
+        return pod
 
 
 class _ReaperSessionManager(SessionManager):
@@ -201,6 +215,21 @@ def test_session_registry_scope_isolates_environments() -> None:
     assert [session.pod_name for session in slot_list] == ["session-slot"]
     assert asyncio.run(prod.get("operator@example.test", "shared-id")).pod_name == "session-prod"
     assert asyncio.run(slot.get("operator@example.test", "shared-id")).pod_name == "session-slot"
+
+
+def test_session_create_uses_incrementing_registry_ids() -> None:
+    registry = SessionRegistryStore()
+    manager = _ReaperSessionManager([], registry=registry)
+
+    first = asyncio.run(manager.create(owner="operator@example.test"))
+    second = asyncio.run(manager.create(owner="operator@example.test"))
+
+    assert first.id == "1"
+    assert first.pod_name == "session-1"
+    assert second.id == "2"
+    assert second.pod_name == "session-2"
+    assert asyncio.run(registry.get("operator@example.test", "1")) is not None
+    assert asyncio.run(registry.get("operator@example.test", "2")) is not None
 
 
 def test_active_run_store_tracks_edge_status_without_heartbeats() -> None:

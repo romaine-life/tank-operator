@@ -26,14 +26,20 @@ has local_authentication_disabled = true, so this is the only auth path.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 import os
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from azure.core import MatchConditions
 from azure.cosmos.aio import CosmosClient
-from azure.cosmos.exceptions import CosmosResourceNotFoundError
+from azure.cosmos.exceptions import (
+    CosmosAccessConditionFailedError,
+    CosmosResourceExistsError,
+    CosmosResourceNotFoundError,
+)
 from azure.identity.aio import DefaultAzureCredential
 
 log = logging.getLogger(__name__)
@@ -262,6 +268,8 @@ class SessionRegistryStore:
         self._enabled = bool(COSMOS_ENDPOINT)
         self._scope = (scope or SESSION_REGISTRY_SCOPE).strip() or "default"
         self._memory: dict[str, dict[str, dict[str, SessionRecord]]] = {}
+        self._memory_counters: dict[str, int] = {}
+        self._counter_lock = asyncio.Lock()
 
     async def startup(self) -> None:
         if not self._enabled:
@@ -312,6 +320,54 @@ class SessionRegistryStore:
             return record
         await self._container.upsert_item(body=_session_doc(record))
         return record
+
+    async def next_session_id(self) -> str:
+        """Allocate the next human-sized session id for this registry scope."""
+        if not self._enabled or self._container is None:
+            async with self._counter_lock:
+                next_number = self._memory_counters.get(self._scope, 1)
+                self._memory_counters[self._scope] = next_number + 1
+                return str(next_number)
+
+        counter_id = _session_counter_doc_id(self._scope)
+        partition_key = _session_counter_partition_key()
+        for _ in range(20):
+            now = _now_iso()
+            try:
+                doc = await self._container.read_item(
+                    item=counter_id,
+                    partition_key=partition_key,
+                )
+            except CosmosResourceNotFoundError:
+                doc = {
+                    "id": counter_id,
+                    "type": "session_counter",
+                    "email": partition_key,
+                    "session_scope": self._scope,
+                    "next_session_number": 2,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+                try:
+                    await self._container.create_item(body=doc)
+                    return "1"
+                except CosmosResourceExistsError:
+                    continue
+
+            next_number = int(doc.get("next_session_number") or 1)
+            doc["next_session_number"] = next_number + 1
+            doc["updated_at"] = now
+            try:
+                await self._container.replace_item(
+                    item=counter_id,
+                    body=doc,
+                    etag=doc.get("_etag"),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                return str(next_number)
+            except CosmosAccessConditionFailedError:
+                continue
+        raise RuntimeError("failed to allocate session id after concurrent retries")
 
     async def get(self, email: str, session_id: str) -> SessionRecord | None:
         normalized = email.lower()
@@ -422,6 +478,16 @@ def _session_doc_id(scope: str, session_id: str) -> str:
     if scope == "default":
         return f"session:{session_id}"
     return f"session:{scope}:{session_id}"
+
+
+def _session_counter_partition_key() -> str:
+    return "__tank_operator_system__"
+
+
+def _session_counter_doc_id(scope: str) -> str:
+    if scope == "default":
+        return "session-counter"
+    return f"session-counter:{scope}"
 
 
 class ActiveRunStore:
