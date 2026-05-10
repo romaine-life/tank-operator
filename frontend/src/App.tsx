@@ -1888,7 +1888,7 @@ function normalizeToolState(status: string | undefined): string {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "files";
+type RunTab = "chat" | "files" | "settings" | "help";
 
 interface ComposerAttachment {
   id: string; // local-only id for keying
@@ -4463,6 +4463,9 @@ function HeadlessRun({
   const sendStdin = (text: string) => {
     wsRef.current?.send(JSON.stringify({ stdin: text }));
   };
+  const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
+    setActiveTab((current) => (current === tab ? "chat" : tab));
+  };
 
   return (
     <RunContext.Provider value={{ sendStdin, user }}>
@@ -4508,214 +4511,56 @@ function HeadlessRun({
           )}
         </div>
         <nav className="run-tabs" aria-label="Session actions">
-          {GUI_ROLLOUT_MODES.has(session.mode) && (
+          {activeTab !== "chat" && (
             <button
               type="button"
-              className="run-tab run-tab-icononly run-tab-action"
-              onClick={startGuiRollout}
-              disabled={!ready}
-              aria-label="Start rollout"
-              title={isClaude ? "Use /rollout in this run" : "Use $rollout in this run"}
+              className="run-tab run-tab-back"
+              onClick={() => setActiveTab("chat")}
+              aria-label="Back to chat"
+              title="Back to chat"
             >
-              <TankIcon className="run-tab-icon" />
-            </button>
-          )}
-          {testState?.active && testState.url ? (
-            <a
-              className="run-skill-pill run-test-pill is-active"
-              href={testState.url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open test environment"
-            >
-              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Test</span>
-              {testState.slot_index != null && (
-                <span className="run-test-slot">{testState.slot_index}</span>
-              )}
-            </a>
-          ) : (
-            <button
-              type="button"
-              className={`run-skill-pill run-test-pill${testState?.active ? " is-active" : ""}`}
-              onClick={startTestSkill}
-              disabled={!ready}
-              aria-label="Start test skill"
-              title={testState?.active ? "Test skill is active" : "Use the test skill"}
-            >
-              <FlaskConicalIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Test</span>
-              {testState?.slot_index != null && (
-                <span className="run-test-slot">{testState.slot_index}</span>
-              )}
-            </button>
-          )}
-          <button
-            type="button"
-            className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
-            onClick={() => {
-              if (activeTab === "files") {
-                setActiveTab("chat");
-                return;
-              }
-              setActiveTab("files");
-            }}
-            title={activeTab === "files" ? "Return to previous view" : "Browse files in /workspace"}
-          >
-            {activeTab === "files" ? (
               <ArrowLeftIcon
                 className="run-tab-icon"
                 strokeWidth={2.2}
                 aria-hidden="true"
               />
-            ) : (
-              <FolderIcon
-                className="run-tab-icon"
-                strokeWidth={1.8}
-                aria-hidden="true"
-              />
-            )}
-            <span>{activeTab === "files" ? "Back" : "Files"}</span>
+              <span>Back</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
+            onClick={() => toggleRunTab("files")}
+            aria-pressed={activeTab === "files"}
+            title="Browse files in /workspace"
+          >
+            <FolderIcon
+              className="run-tab-icon"
+              strokeWidth={1.8}
+              aria-hidden="true"
+            />
+            <span>Files</span>
           </button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="run-tab run-tab-icononly"
-                aria-label="Run settings"
-                title="Settings"
-              >
-                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="run-settings-menu">
-              <DropdownMenuLabel>Composer</DropdownMenuLabel>
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter);
-                }}
-              >
-                <span className="run-settings-row">
-                  <span className="run-settings-label">
-                    Send with ⌘/Ctrl+Enter
-                  </span>
-                  {runPrefs.sendByCtrlEnter && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuLabel>Transcript</DropdownMenuLabel>
-              <DropdownMenuItem
-                className="run-settings-zoom-item"
-                onSelect={(e) => e.preventDefault()}
-              >
-                <span className="run-settings-zoom-row">
-                  <span className="run-settings-label">Text zoom</span>
-                  <span className="run-settings-zoom-controls">
-                    <button
-                      type="button"
-                      className="run-settings-zoom-btn"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP);
-                      }}
-                      disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
-                      aria-label="Decrease pane text size"
-                      title="Decrease text size"
-                    >
-                      <MinusIcon aria-hidden="true" />
-                    </button>
-                    <span className="run-settings-zoom-value" aria-live="polite">
-                      {paneFontScalePct}%
-                    </span>
-                    <button
-                      type="button"
-                      className="run-settings-zoom-btn"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP);
-                      }}
-                      disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
-                      aria-label="Increase pane text size"
-                      title="Increase text size"
-                    >
-                      <PlusIcon aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-settings-zoom-btn"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale);
-                      }}
-                      disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
-                      aria-label="Reset pane text size"
-                      title="Reset text size"
-                    >
-                      <RotateCcwIcon aria-hidden="true" />
-                    </button>
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuLabel>Transcript</DropdownMenuLabel>
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  setRunPref("showThinking", !runPrefs.showThinking);
-                }}
-              >
-                <span className="run-settings-row">
-                  <span className="run-settings-label">Show reasoning</span>
-                  {runPrefs.showThinking && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  setRunPref("autoExpandTools", !runPrefs.autoExpandTools);
-                }}
-              >
-                <span className="run-settings-row">
-                  <span className="run-settings-label">Auto-expand tools</span>
-                  {runPrefs.autoExpandTools && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  setRunPref("showTimestamps", !runPrefs.showTimestamps);
-                }}
-              >
-                <span className="run-settings-row">
-                  <span className="run-settings-label">Show timestamps</span>
-                  {runPrefs.showTimestamps && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </span>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  setRunPref("showDuration", !runPrefs.showDuration);
-                }}
-              >
-                <span className="run-settings-row">
-                  <span className="run-settings-label">Show duration</span>
-                  {runPrefs.showDuration && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </span>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <button
+            type="button"
+            className={`run-tab${activeTab === "settings" ? " run-tab-active" : ""}`}
+            onClick={() => toggleRunTab("settings")}
+            aria-pressed={activeTab === "settings"}
+            title="Settings"
+          >
+            <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Settings</span>
+          </button>
+          <button
+            type="button"
+            className={`run-tab${activeTab === "help" ? " run-tab-active" : ""}`}
+            onClick={() => toggleRunTab("help")}
+            aria-pressed={activeTab === "help"}
+            title="Help"
+          >
+            <InfoIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Help</span>
+          </button>
         </nav>
       </header>
 
@@ -4939,6 +4784,103 @@ function HeadlessRun({
           <div className="run-empty">
             <Loader2Icon size={20} className="run-spin" aria-hidden="true" />
             <span className="run-muted">waiting for session pod…</span>
+          </div>
+        ) : activeTab === "settings" ? (
+          <div className="run-settings-screen">
+            <section className="run-settings-section">
+              <h2 className="run-settings-title">Composer</h2>
+              <button
+                type="button"
+                className="run-settings-toggle"
+                onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
+                aria-pressed={runPrefs.sendByCtrlEnter}
+              >
+                <span>Send with Cmd/Ctrl+Enter</span>
+                {runPrefs.sendByCtrlEnter && (
+                  <CheckIcon className="run-settings-check" aria-hidden="true" />
+                )}
+              </button>
+            </section>
+            <section className="run-settings-section">
+              <h2 className="run-settings-title">Transcript</h2>
+              <div className="run-settings-panel-row">
+                <span className="run-settings-label">Text zoom</span>
+                <span className="run-settings-zoom-controls">
+                  <button
+                    type="button"
+                    className="run-settings-zoom-btn"
+                    onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
+                    disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+                    aria-label="Decrease pane text size"
+                    title="Decrease text size"
+                  >
+                    <MinusIcon aria-hidden="true" />
+                  </button>
+                  <span className="run-settings-zoom-value" aria-live="polite">
+                    {paneFontScalePct}%
+                  </span>
+                  <button
+                    type="button"
+                    className="run-settings-zoom-btn"
+                    onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
+                    disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+                    aria-label="Increase pane text size"
+                    title="Increase text size"
+                  >
+                    <PlusIcon aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="run-settings-zoom-btn"
+                    onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
+                    disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+                    aria-label="Reset pane text size"
+                    title="Reset text size"
+                  >
+                    <RotateCcwIcon aria-hidden="true" />
+                  </button>
+                </span>
+              </div>
+              {([
+                ["showThinking", "Show reasoning"],
+                ["autoExpandTools", "Auto-expand tools"],
+                ["showTimestamps", "Show timestamps"],
+                ["showDuration", "Show duration"],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="run-settings-toggle"
+                  onClick={() => setRunPref(key, !runPrefs[key])}
+                  aria-pressed={runPrefs[key]}
+                >
+                  <span>{label}</span>
+                  {runPrefs[key] && (
+                    <CheckIcon className="run-settings-check" aria-hidden="true" />
+                  )}
+                </button>
+              ))}
+            </section>
+          </div>
+        ) : activeTab === "help" ? (
+          <div className="run-help-screen">
+            <section className="run-help-section">
+              <h2 className="run-help-title">Session Help</h2>
+              <div className="run-help-list">
+                <div className="run-help-row">
+                  <span className="run-help-key">/</span>
+                  <span>Open commands from the composer.</span>
+                </div>
+                <div className="run-help-row">
+                  <span className="run-help-key">@</span>
+                  <span>Mention files from the workspace.</span>
+                </div>
+                <div className="run-help-row">
+                  <span className="run-help-key">MCP</span>
+                  <span>Inspect available MCP servers from the lower toolbar.</span>
+                </div>
+              </div>
+            </section>
           </div>
         ) : entries.length === 0 ? (
           <div className="run-empty run-empty-launchpad">
@@ -5408,6 +5350,51 @@ function HeadlessRun({
                     {usagePct.toFixed(usagePct < 10 ? 1 : 0)}%
                   </span>
                 </span>
+                {GUI_ROLLOUT_MODES.has(session.mode) && (
+                  <button
+                    type="button"
+                    className="run-composer-icon-btn run-composer-action-btn"
+                    onClick={startGuiRollout}
+                    disabled={!ready}
+                    aria-label="Start rollout"
+                    title={isClaude ? "Use /rollout in this run" : "Use $rollout in this run"}
+                  >
+                    <TankIcon className="run-composer-icon" />
+                  </button>
+                )}
+                {testState?.active && testState.url ? (
+                  <a
+                    className="run-composer-icon-btn run-composer-action-btn run-test-action-btn is-active"
+                    href={testState.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Open test environment"
+                    title="Open test environment"
+                  >
+                    <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                    {testState.slot_index != null && (
+                      <span className="run-command-menu-count">
+                        {testState.slot_index}
+                      </span>
+                    )}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testState?.active ? " is-active" : ""}`}
+                    onClick={startTestSkill}
+                    disabled={!ready}
+                    aria-label="Start test skill"
+                    title={testState?.active ? "Test skill is active" : "Use the test skill"}
+                  >
+                    <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                    {testState?.slot_index != null && (
+                      <span className="run-command-menu-count">
+                        {testState.slot_index}
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="run-composer-icon-btn run-command-menu-btn"

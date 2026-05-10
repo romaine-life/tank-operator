@@ -1841,6 +1841,20 @@ button:disabled {
   border-color: var(--border-soft, rgba(255, 255, 255, 0.12));
 }
 
+.run-tab-back {
+  margin-right: var(--space-1);
+  padding-inline: 0.25rem 0.55rem;
+  color: var(--text-muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.run-tab-back:hover {
+  color: var(--text-primary);
+  background: transparent;
+  border-color: transparent;
+}
+
 .run-tab:disabled {
   opacity: 0.42;
   cursor: default;
@@ -1855,70 +1869,6 @@ button:disabled {
 .run-tab-icononly {
   padding: 0.45rem 0.5rem;
   margin-left: 0.2rem;
-}
-
-.run-tab-action {
-  color: var(--gray-200);
-  background: rgba(120, 200, 180, 0.12);
-}
-.run-tab-action:hover:not(:disabled) {
-  color: var(--gray-50);
-  background: rgba(120, 200, 180, 0.22);
-}
-
-.run-skill-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0.35rem 0.75rem;
-  border-radius: var(--radius-md, 0.5rem);
-  border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.035);
-  color: var(--text-muted);
-  font-family: var(--font-primary);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    color var(--motion-fast, 120ms) ease,
-    background var(--motion-fast, 120ms) ease,
-    border-color var(--motion-fast, 120ms) ease;
-}
-.run-skill-pill:hover:not(:disabled) {
-  color: var(--text-body);
-  background: rgba(255, 255, 255, 0.055);
-}
-.run-skill-pill:disabled {
-  opacity: 0.42;
-  cursor: default;
-}
-.run-skill-pill.is-active {
-  color: #bef264;
-  background: rgba(132, 204, 22, 0.16);
-  border-color: rgba(190, 242, 100, 0.24);
-}
-.run-skill-pill.is-active:hover:not(:disabled) {
-  color: #d9f99d;
-  background: rgba(132, 204, 22, 0.22);
-}
-.run-test-slot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.05rem;
-  height: 1.05rem;
-  padding: 0 0.25rem;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.24);
-  color: currentColor;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 720px) {
@@ -1940,22 +1890,6 @@ button:disabled {
     flex: 0 0 auto;
   }
 
-  .run-skill-pill {
-    flex: 0 0 auto;
-  }
-}
-
-/* Settings menu — wider rows for label + check. */
-.run-settings-menu {
-  min-width: 18rem;
-}
-
-.run-settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 0.6rem;
 }
 
 .run-settings-label {
@@ -1967,18 +1901,6 @@ button:disabled {
   height: 1rem;
   color: var(--accent, #2563eb);
   flex: 0 0 auto;
-}
-
-.run-settings-zoom-item {
-  cursor: default;
-}
-
-.run-settings-zoom-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 0.85rem;
 }
 
 .run-settings-zoom-controls {
@@ -2035,6 +1957,94 @@ button:disabled {
   font-size: 0.72rem;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+.run-settings-screen,
+.run-help-screen {
+  width: min(46rem, 100%);
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+.run-settings-section,
+.run-help-section {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.run-settings-title,
+.run-help-title {
+  margin: 0 0 0.35rem;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.run-settings-panel-row,
+.run-settings-toggle {
+  min-height: 2.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+}
+
+.run-settings-toggle {
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-settings-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.run-settings-toggle[aria-pressed="true"] {
+  border-color: rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.11);
+  color: var(--text-primary);
+}
+
+.run-help-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.run-help-row {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+}
+
+.run-help-key {
+  color: #93c5fd;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 /* Main content area — empty state or transcript. */
@@ -2699,6 +2709,20 @@ button:disabled {
 .run-composer-icon {
   width: 1.1rem;
   height: 1.1rem;
+}
+
+.run-composer-action-btn {
+  text-decoration: none;
+}
+
+.run-test-action-btn.is-active {
+  color: #bef264;
+  background: rgba(132, 204, 22, 0.14);
+}
+
+.run-test-action-btn.is-active:hover {
+  color: #d9f99d;
+  background: rgba(132, 204, 22, 0.2);
 }
 
 .run-command-menu-count {
