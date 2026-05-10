@@ -1833,39 +1833,40 @@ interface ToolVisualConfig {
   Icon: LucideIcon;
   /** CSS class added to the icon span — drives the color stripe + icon hue. */
   colorClass: string;
+  tooltip: string;
 }
 
 /** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
   if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
-    return { Icon: TerminalIcon, colorClass: "tool-color-bash" };
+    return { Icon: TerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
   }
   if (name === "Read") {
-    return { Icon: FileTextIcon, colorClass: "tool-color-read" };
+    return { Icon: FileTextIcon, colorClass: "tool-color-read", tooltip: "File read tool call" };
   }
   if (name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch") {
-    return { Icon: SquarePenIcon, colorClass: "tool-color-edit" };
+    return { Icon: SquarePenIcon, colorClass: "tool-color-edit", tooltip: "File edit tool call" };
   }
   if (name === "Glob" || name === "Grep") {
-    return { Icon: SearchIcon, colorClass: "tool-color-search" };
+    return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
   }
   if (name === "TodoWrite" || name === "Todo") {
-    return { Icon: ListChecksIcon, colorClass: "tool-color-todo" };
+    return { Icon: ListChecksIcon, colorClass: "tool-color-todo", tooltip: "Todo list tool call" };
   }
   if (name === "Task" || name === "Agent") {
-    return { Icon: BotIcon, colorClass: "tool-color-task" };
+    return { Icon: BotIcon, colorClass: "tool-color-task", tooltip: "Agent task tool call" };
   }
   if (isScheduleWakeupToolName(name)) {
-    return { Icon: TimerIcon, colorClass: "tool-color-plan" };
+    return { Icon: TimerIcon, colorClass: "tool-color-plan", tooltip: "Scheduled wakeup tool call" };
   }
   if (name === "ExitPlanMode" || name === "EnterPlanMode") {
-    return { Icon: ClipboardListIcon, colorClass: "tool-color-plan" };
+    return { Icon: ClipboardListIcon, colorClass: "tool-color-plan", tooltip: "Planning mode tool call" };
   }
   if (name.toLowerCase().includes("mcp")) {
-    return { Icon: McpIcon, colorClass: "tool-color-mcp" };
+    return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
   }
-  return { Icon: WrenchIcon, colorClass: "tool-color-default" };
+  return { Icon: WrenchIcon, colorClass: "tool-color-default", tooltip: "Tool call" };
 }
 
 function normalizeToolState(status: string | undefined): string {
@@ -2997,6 +2998,8 @@ function RunToolItem({
           <span
             className="run-transcript-tool-icon"
             data-slot="tool-item-icon"
+            title={cfg.tooltip}
+            aria-label={cfg.tooltip}
           >
             <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
               <cfg.Icon size={14} strokeWidth={2} />
@@ -3070,8 +3073,16 @@ function RunToolGroup({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >
-        <span className="run-transcript-tools-icon">
-          <WrenchIcon size={14} strokeWidth={2} aria-hidden="true" />
+        <span
+          className="run-transcript-tools-icon"
+          title="Tool usage summary"
+          aria-label="Tool usage summary"
+        >
+          <WrenchIcon
+            size={14}
+            strokeWidth={2}
+            aria-hidden="true"
+          />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
         <span className="run-transcript-tools-chevron">
