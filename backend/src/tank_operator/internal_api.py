@@ -49,9 +49,13 @@ from .sessions import (
 log = logging.getLogger(__name__)
 
 # Comma-separated ``namespace/serviceaccount`` pairs allowed to call the
-# internal endpoints. Default is just mcp-github; widen via env to add
-# future MCP servers (mcp-azure-personal, etc.) that need the same lookup.
-_DEFAULT_ALLOWED_SUBJECTS = "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator"
+# internal endpoints. Defaults cover the in-cluster MCP servers that need
+# resolve-caller or internal-session APIs; widen via env for slot overlays.
+_DEFAULT_ALLOWED_SUBJECTS = (
+    "mcp-github/mcp-github,"
+    "mcp-tank-operator/mcp-tank-operator,"
+    "mcp-glimmung/mcp-glimmung"
+)
 ALLOWED_CALLER_SUBJECTS = frozenset(
     s.strip().lower()
     for s in os.environ.get(
