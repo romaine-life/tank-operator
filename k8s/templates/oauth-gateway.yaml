@@ -203,9 +203,9 @@ spec:
                 name: claude-oauth-ca
                 namespace: {{ include "tank-operator.sessionsNamespace" . }}
                 annotations:
-                  # Reflector publishes this ConfigMap into per-issue
-                  # agent namespaces (ambience-issue-*, tank-operator-issue-*,
-                  # glimmung-issue-*) so each per-issue agent Job
+                  # Reflector publishes this ConfigMap into validation
+                  # namespaces (ambience-issue-*, tank-operator-issue-*,
+                  # glimmung-issue-*) so each app automation Job
                   # can mount ca.crt as NODE_EXTRA_CA_CERTS and trust the
                   # in-cluster claude-api-proxy's TLS leaf. The CA private
                   # key never leaves tank-operator.

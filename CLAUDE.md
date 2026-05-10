@@ -27,15 +27,15 @@ publishes images.
 
 ## Agentic flows ship as multi-stage LLM splits
 
-When a project on this platform ships an autonomous agent flow (issue-agent
-runs in spirelens, glimmung-dispatched native-k8s runs in ambience, etc.),
+When a project on this platform ships an autonomous change workflow
+(Glimmung native-k8s runs in Tank, Ambience, etc.),
 the LLM work should be **split into stages** — typically a plan / test-design
 phase, an implementation phase, and a verification phase — each running as
 its own narrowly-scoped LLM call with its own prompt, tool permissions,
 timeout, and JSON+Markdown handoff artifacts. See
 [docs/agent-llm-task-splitting.md](docs/agent-llm-task-splitting.md) for the
-rationale and stage shape; spirelens's `issue-agent.yaml` workflow is the
-canonical example.
+rationale and stage shape; use a repo-owned `.glimmung/workflows/default.yaml`
+as the canonical workflow entrypoint.
 
 A single LLM doing code + tests + screenshots in one run carries each
 phase's noise into the next decision. The split is the load-bearing

@@ -283,9 +283,9 @@ def test_delete_hides_registry_session_when_runtime_pod_is_gone() -> None:
 
 def test_glimmung_context_is_stamped_on_session_pod() -> None:
     context = {
-        "glimmung_run_ref": "run-1",
-        "glimmung_issue_ref": "issue-1",
-        "glimmung_touchpoint_ref": "pr-1",
+        "glimmung_run_ref": "ambience#42/runs/1",
+        "glimmung_issue_ref": "ambience#42",
+        "glimmung_touchpoint_ref": "nelsong6/ambience#14",
         "validation_url": "https://preview.example.test",
         "caller_email": "operator@example.test",
     }
@@ -302,9 +302,9 @@ def test_glimmung_context_is_stamped_on_session_pod() -> None:
 
     env = _claude_env(manifest)
     assert json.loads(env["TANK_GLIMMUNG_CONTEXT_JSON"]) == context
-    assert env["TANK_GLIMMUNG_RUN_REF"] == "run-1"
-    assert env["TANK_GLIMMUNG_ISSUE_REF"] == "issue-1"
-    assert env["TANK_GLIMMUNG_TOUCHPOINT_REF"] == "pr-1"
+    assert env["TANK_GLIMMUNG_RUN_REF"] == "ambience#42/runs/1"
+    assert env["TANK_GLIMMUNG_ISSUE_REF"] == "ambience#42"
+    assert env["TANK_GLIMMUNG_TOUCHPOINT_REF"] == "nelsong6/ambience#14"
     assert env["TANK_GLIMMUNG_VALIDATION_URL"] == "https://preview.example.test"
     assert _claude_container(manifest)["command"] == [
         "bash",

@@ -73,14 +73,6 @@ jobs:
             image-repo: pi-container
             fingerprint-image: pi
             fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-container/terminald
-          - name: issue-agent-runner
-            file: runner/Dockerfile
-            context: runner
-            build_args: ""
-            cache-ref: romainecr.azurecr.io/tank-operator-issue-agent-runner-build-cache:issue-agent-runner
-            image-repo: tank-operator-issue-agent-runner
-            fingerprint-image: issue-agent-runner
-            fingerprint-paths: runner/Dockerfile
     steps:
       - name: Checkout
         uses: actions/checkout@v4
