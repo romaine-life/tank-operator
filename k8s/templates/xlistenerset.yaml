@@ -4,7 +4,7 @@ apiVersion: gateway.networking.x-k8s.io/v1alpha1
 kind: XListenerSet
 metadata:
   name: tank-operator
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   parentRef:
     group: gateway.networking.k8s.io
@@ -15,10 +15,10 @@ spec:
     - name: https
       protocol: HTTPS
       port: 443
-      hostname: {{ .Values.ingress.hostname }}
+      hostname: {{ include "tank-operator.ingressHostname" . }}
       tls:
         mode: Terminate
         certificateRefs:
           - group: ""
             kind: Secret
-            name: {{ .Values.ingress.tlsSecret }}
+            name: {{ include "tank-operator.ingressTlsSecret" . }}

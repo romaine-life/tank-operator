@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: tank-operator
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
   labels:
     app.kubernetes.io/name: tank-operator
 spec:
@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/name: tank-operator
         azure.workload.identity/use: "true"
     spec:
-      serviceAccountName: {{ .Values.orchestrator.serviceAccount }}
+      serviceAccountName: {{ include "tank-operator.orchestratorServiceAccount" . }}
       terminationGracePeriodSeconds: {{ .Values.orchestrator.terminationGracePeriodSeconds }}
       containers:
         - name: tank-operator
@@ -34,7 +34,7 @@ spec:
               containerPort: 8443
           env:
             - name: SESSIONS_NAMESPACE
-              value: {{ .Values.namespaces.sessions | quote }}
+              value: {{ include "tank-operator.sessionsNamespace" . | quote }}
             - name: SESSION_IMAGE
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
@@ -42,11 +42,11 @@ spec:
             - name: PI_SESSION_IMAGE
               value: {{ .Values.session.piImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
-              value: {{ .Values.session.serviceAccount | quote }}
+              value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP
-              value: {{ .Values.session.configMap | quote }}
+              value: {{ include "tank-operator.sessionConfigMap" . | quote }}
             - name: SESSION_REGISTRY_SCOPE
-              value: {{ .Values.session.registryScope | quote }}
+              value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TERMINAL_PROXY_CONFIGMAP
               value: {{ .Values.terminalProxy.configMap | quote }}
             - name: TERMINAL_PROXY_IMAGE
@@ -56,9 +56,9 @@ spec:
             - name: TERMINAL_PROXY_PORT
               value: {{ .Values.terminalProxy.proxyPort | quote }}
             - name: GITHUB_APP_SECRET
-              value: {{ .Values.externalSecret.githubApp.secretName | quote }}
+              value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDS_SECRET
-              value: {{ .Values.externalSecret.codexCredentials.secretName | quote }}
+              value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -68,9 +68,9 @@ spec:
             - name: CLAUDE_CREDENTIALS_FILE
               value: /etc/claude-credentials/{{ .Values.externalSecret.claudeCredentials.secretKey }}
             - name: CLAUDE_OAUTH_GATEWAY_HOST
-              value: {{ .Values.oauthGateway.serviceHost | quote }}
+              value: {{ include "tank-operator.oauthGatewayHost" . | quote }}
             - name: CLAUDE_API_PROXY_HOST
-              value: {{ .Values.apiProxy.serviceHost | quote }}
+              value: {{ include "tank-operator.apiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
@@ -128,9 +128,9 @@ spec:
               value: {{ .Values.internalApi.tankUiHost | quote }}
           envFrom:
             - secretRef:
-                name: {{ .Values.externalSecret.auth.secretName }}
+                name: {{ include "tank-operator.authSecret" . }}
             - secretRef:
-                name: {{ .Values.credentialRefresher.configSecret }}
+                name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
           volumeMounts:
             - name: oauth-gateway-tls
               mountPath: /etc/oauth-gateway-tls
@@ -168,14 +168,14 @@ spec:
             # to KV and ESO mirrors KV → here within ~1m. Marked optional
             # so first install doesn't crash-loop the pod before ESO has
             # synced (or before "+ config sub" has seeded credentials).
-            secretName: {{ .Values.externalSecret.claudeCredentials.secretName }}
+            secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
             optional: true
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: tank-operator
-  namespace: {{ .Values.namespaces.orchestrator }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   selector:
     app.kubernetes.io/name: tank-operator
