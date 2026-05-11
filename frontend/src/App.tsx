@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -93,6 +93,7 @@ type DefaultSessionMode = Extract<
 >;
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
+type AgentSessionActivity = "waiting" | "working";
 
 interface Session {
   id: string;
@@ -613,6 +614,26 @@ function defaultModeFor(provider: Provider, interaction: SessionInteraction): De
     PROVIDER_INTERACTION_MODES[provider][interaction] ??
     PROVIDER_INTERACTION_MODES[provider].cli!
   );
+}
+
+function sessionStatusDotClass(
+  session: Session,
+  activity?: AgentSessionActivity,
+): string {
+  if (session.status === "Active" && HEADLESS_MODES.has(session.mode)) {
+    return `status-dot status-agent-${activity === "working" ? "working" : "waiting"}`;
+  }
+  return `status-dot status-${session.status.toLowerCase()}`;
+}
+
+function sessionStatusLabel(
+  session: Session,
+  activity?: AgentSessionActivity,
+): string {
+  if (session.status === "Active" && HEADLESS_MODES.has(session.mode)) {
+    return activity === "working" ? "Working" : "Waiting";
+  }
+  return session.status;
 }
 
 function errorMessage(error: unknown): string {
@@ -1264,9 +1285,7 @@ function DemoLanding() {
           <ul className="sessions">
             {demoSessions.map((s) => {
               const isActive = s.id === selected?.id;
-              const statusDotClass = s.mode.startsWith("codex")
-                ? "status-dot status-codex-waiting"
-                : `status-dot status-${s.status.toLowerCase()}`;
+              const statusDotClass = sessionStatusDotClass(s, "waiting");
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
               return (
@@ -3172,6 +3191,7 @@ function HeadlessRun({
   runPrefs,
   setRunPref,
   user,
+  onActivityChange,
 }: {
   session: Session;
   visible: boolean;
@@ -3179,6 +3199,7 @@ function HeadlessRun({
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
+  onActivityChange?: (id: string, activity: AgentSessionActivity) => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     loadStoredEntries(session.id),
@@ -3214,6 +3235,10 @@ function HeadlessRun({
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
+
+  useEffect(() => {
+    onActivityChange?.(session.id, running ? "working" : "waiting");
+  }, [onActivityChange, running, session.id]);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
@@ -5618,6 +5643,7 @@ export function App() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [sessionActivities, setSessionActivities] = useState<Record<string, AgentSessionActivity>>({});
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -5635,6 +5661,16 @@ export function App() {
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
+  );
+
+  const updateSessionActivity = useCallback(
+    (id: string, activity: AgentSessionActivity) => {
+      setSessionActivities((prev) => {
+        if (prev[id] === activity) return prev;
+        return { ...prev, [id]: activity };
+      });
+    },
+    [],
   );
 
   useEffect(() => {
@@ -5779,6 +5815,19 @@ export function App() {
         if (existing.has(id)) next.add(id);
         else changed = true;
       });
+      return changed ? next : prev;
+    });
+    setSessionActivities((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next: Record<string, AgentSessionActivity> = {};
+      for (const [id, activity] of Object.entries(prev)) {
+        if (existing.has(id) && !closingIds.has(id)) {
+          next[id] = activity;
+        } else {
+          changed = true;
+        }
+      }
       return changed ? next : prev;
     });
   }, [sessions, active, closingIds]);
@@ -6200,8 +6249,8 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const statusDotClass = `status-dot status-${s.status.toLowerCase()}`;
-              const statusLabel = s.status;
+              const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
+              const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               return (
@@ -6443,7 +6492,7 @@ export function App() {
                           onClick={() => activate(s.id)}
                           disabled={closingIds.has(s.id)}
                         >
-                          <span className={`status-dot status-${s.status.toLowerCase()}`} />
+                          <span className={sessionStatusDotClass(s, sessionActivities[s.id])} />
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
                           <span className="home-session-main">
                             <span className="home-session-title">{sessionDisplayName(s)}</span>
@@ -6475,6 +6524,7 @@ export function App() {
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
+                      onActivityChange={updateSessionActivity}
                     />
                   </div>
                 ) : (
