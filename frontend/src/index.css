@@ -1091,24 +1091,32 @@ button:disabled {
 
 .sessions li.is-skill-test:not(.is-closing) {
   background: #84cc161a;
-  box-shadow: inset 2px 0 0 var(--skill-test-fg), inset 0 0 0 1px #bef26424;
+  box-shadow: inset 0 0 0 1px #bef26424;
 }
 
-.sessions li.is-skill-test.is-open:not(.is-closing),
 .sessions li.is-skill-test:not(.is-closing):hover {
   background: #84cc1624;
-  box-shadow: inset 2px 0 0 var(--skill-test-fg), inset 0 0 0 1px #bef26433;
+  box-shadow: inset 0 0 0 1px #bef26433;
+}
+
+.sessions li.is-skill-test.is-open:not(.is-closing) {
+  background: #84cc1624;
+  box-shadow: inset 2px 0 0 var(--accent-fg), inset 0 0 0 1px #bef26433;
 }
 
 .sessions li.is-skill-rollout:not(.is-closing) {
   background: #7e532b21;
-  box-shadow: inset 2px 0 0 var(--skill-rollout-fg), inset 0 0 0 1px #d6a16b29;
+  box-shadow: inset 0 0 0 1px #d6a16b29;
 }
 
-.sessions li.is-skill-rollout.is-open:not(.is-closing),
 .sessions li.is-skill-rollout:not(.is-closing):hover {
   background: #7e532b2e;
-  box-shadow: inset 2px 0 0 var(--skill-rollout-fg), inset 0 0 0 1px #d6a16b3d;
+  box-shadow: inset 0 0 0 1px #d6a16b3d;
+}
+
+.sessions li.is-skill-rollout.is-open:not(.is-closing) {
+  background: #7e532b2e;
+  box-shadow: inset 2px 0 0 var(--accent-fg), inset 0 0 0 1px #d6a16b3d;
 }
 
 .session-open {
