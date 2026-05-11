@@ -1695,6 +1695,7 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
   );
 }
 
+
 function appendSkillInvocation(
   entries: TranscriptEntry[],
   name: string,
@@ -2001,10 +2002,18 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
         const t = message.content.trim();
         if (t) texts.push(t);
       } else if (Array.isArray(message.content)) {
-        for (const block of message.content as unknown[]) {
-          if (!isJsonObject(block) || block.type !== "text") continue;
-          const t = typeof block.text === "string" ? block.text.trim() : "";
-          if (t) texts.push(t);
+        // A user event with tool_result blocks is a tool-response turn; any
+        // text blocks alongside them are echoed context (e.g. agent prompts),
+        // not human input — skip text extraction entirely for those events.
+        const hasToolResults = (message.content as unknown[]).some(
+          (b) => isJsonObject(b) && b.type === "tool_result",
+        );
+        if (!hasToolResults) {
+          for (const block of message.content as unknown[]) {
+            if (!isJsonObject(block) || block.type !== "text") continue;
+            const t = typeof block.text === "string" ? block.text.trim() : "";
+            if (t) texts.push(t);
+          }
         }
       }
       for (const text of texts) {
