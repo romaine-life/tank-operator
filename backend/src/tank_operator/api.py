@@ -257,7 +257,10 @@ class _RunStdoutEventObserver:
         self._output_started = False
         self._started_tools: set[str] = set()
         self._completed_tools: set[str] = set()
+        self._emitted_messages: set[str] = set()
+        self._emitted_message_texts: set[str] = set()
         self._tool_seq = 0
+        self._message_seq = 0
 
     async def observe_stdout(self, text: str) -> None:
         if text and not self._output_started:
@@ -301,6 +304,8 @@ class _RunStdoutEventObserver:
             await self._observe_assistant(event)
         elif event_type == "user":
             await self._observe_user(event)
+        elif event_type == "result":
+            await self._observe_result(event)
 
     async def _observe_assistant(self, event: dict[str, Any]) -> None:
         message = event.get("message")
@@ -326,24 +331,131 @@ class _RunStdoutEventObserver:
                 "run.tool.started",
                 {"tool_use_id": tool_use_id, "name": name},
             )
+        await self._append_message(
+            role="assistant",
+            text=_claude_text_from_content(content),
+            event=event,
+        )
 
     async def _observe_user(self, event: dict[str, Any]) -> None:
         message = event.get("message")
         if not isinstance(message, dict):
             return
         content = message.get("content")
-        if not isinstance(content, list):
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                tool_use_id = block.get("tool_use_id")
+                if not isinstance(tool_use_id, str) or not tool_use_id:
+                    continue
+                if tool_use_id in self._completed_tools:
+                    continue
+                self._completed_tools.add(tool_use_id)
+                payload: dict[str, Any] = {"tool_use_id": tool_use_id}
+                output = _claude_tool_result_text(block.get("content"))
+                if output:
+                    payload["output"] = output
+                if block.get("is_error") is True:
+                    payload["is_error"] = True
+                await self._append("run.tool.completed", payload)
+        await self._append_message(
+            role="user",
+            text=_claude_text_from_content(content),
+            event=event,
+        )
+
+    async def _observe_result(self, event: dict[str, Any]) -> None:
+        result = event.get("result")
+        if not isinstance(result, str) or not result.strip():
             return
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
-                continue
-            tool_use_id = block.get("tool_use_id")
-            if not isinstance(tool_use_id, str) or not tool_use_id:
-                continue
-            if tool_use_id in self._completed_tools:
-                continue
-            self._completed_tools.add(tool_use_id)
-            await self._append("run.tool.completed", {"tool_use_id": tool_use_id})
+        await self._append_message(role="assistant", text=result, event=event)
+
+    async def _append_message(
+        self,
+        *,
+        role: str,
+        text: str,
+        event: dict[str, Any],
+    ) -> None:
+        text = text.strip()
+        if not text:
+            return
+        message_id = _claude_message_id(event)
+        if message_id is None:
+            self._message_seq += 1
+            message_id = f"{role}-{self._message_seq}"
+        dedupe_key = f"{role}:{message_id}"
+        text_key = f"{role}:{text}"
+        if dedupe_key in self._emitted_messages or text_key in self._emitted_message_texts:
+            return
+        self._emitted_messages.add(dedupe_key)
+        self._emitted_message_texts.add(text_key)
+        payload: dict[str, Any] = {
+            "message_id": message_id,
+            "role": role,
+            "text": text,
+            "source": "claude",
+        }
+        timestamp = _event_timestamp(event)
+        if timestamp:
+            payload["time"] = timestamp
+        await self._append("run.message.created", payload)
+
+
+def _claude_message_id(event: dict[str, Any]) -> str | None:
+    value = event.get("uuid")
+    if isinstance(value, str) and value:
+        return value
+    message = event.get("message")
+    if isinstance(message, dict):
+        value = message.get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _event_timestamp(event: dict[str, Any]) -> str | None:
+    for key in ("timestamp", "time", "created_at"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _claude_text_from_content(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    return "\n\n".join(parts)
+
+
+def _claude_tool_result_text(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "text":
+            continue
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            parts.append(text.strip())
+    if parts:
+        return "\n".join(parts)
+    try:
+        return json.dumps(content, separators=(",", ":"))
+    except TypeError:
+        return str(content)
 
 
 def _parse_last_event_id(value: str | None) -> int:
