@@ -689,6 +689,47 @@ class RunEventStore:
         await self._container.create_item(body=_run_event_doc(record))
         return record
 
+    async def list_after(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        after_event_id: int,
+        limit: int = 100,
+    ) -> list[RunEventRecord]:
+        if not self._enabled or self._container is None:
+            return [
+                event
+                for event in sorted(
+                    self._memory.get(run_id, []), key=lambda item: item.event_id
+                )
+                if event.session_id == session_id
+                and event.event_id > after_event_id
+            ][:limit]
+        query = (
+            "SELECT * FROM c WHERE c.run_id = @run_id "
+            "AND c.session_id = @session_id "
+            "AND c.event_id > @after_event_id "
+            "ORDER BY c.event_id ASC"
+        )
+        params = [
+            {"name": "@run_id", "value": run_id},
+            {"name": "@session_id", "value": session_id},
+            {"name": "@after_event_id", "value": after_event_id},
+        ]
+        items = self._container.query_items(
+            query=query,
+            parameters=params,
+            partition_key=run_id,
+            max_item_count=limit,
+        )
+        out: list[RunEventRecord] = []
+        async for item in items:
+            out.append(_run_event_from_doc(item))
+            if len(out) >= limit:
+                break
+        return out
+
 
 def _run_event_doc(record: RunEventRecord) -> dict[str, Any]:
     return {
@@ -702,3 +743,15 @@ def _run_event_doc(record: RunEventRecord) -> dict[str, Any]:
         "payload": record.payload,
         "created_at": record.created_at,
     }
+
+
+def _run_event_from_doc(doc: dict[str, Any]) -> RunEventRecord:
+    return RunEventRecord(
+        run_id=doc["run_id"],
+        session_id=doc["session_id"],
+        email=doc["email"],
+        event_id=int(doc["event_id"]),
+        type=doc["event_type"],
+        payload=dict(doc.get("payload") or {}),
+        created_at=doc["created_at"],
+    )

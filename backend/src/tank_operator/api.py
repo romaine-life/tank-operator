@@ -55,7 +55,13 @@ from .exec_proxy import (
     exec_stream_to_websocket,
 )
 from .internal_api import build_router as build_internal_router
-from .profiles import ActiveRunStore, ProfileStore, RunEventStore, SessionRegistryStore
+from .profiles import (
+    ActiveRunStore,
+    ProfileStore,
+    RunEventRecord,
+    RunEventStore,
+    SessionRegistryStore,
+)
 from .session_events import SessionEventBus
 from .sessions import (
     ACCEPTED_SESSION_MODES,
@@ -150,6 +156,8 @@ _OPERATOR_POD_NAME = os.environ.get("HOSTNAME", "")
 _OPERATOR_STARTED_AT = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 _RUN_PREFLIGHT_KEEPALIVE_SECONDS = 10
 _SESSION_EVENTS_KEEPALIVE_SECONDS = 10
+_RUN_EVENTS_POLL_SECONDS = 2
+_RUN_EVENTS_KEEPALIVE_SECONDS = 15
 
 
 def _validate_headless_arg(value: str | None) -> str:
@@ -228,6 +236,56 @@ async def _append_run_event(
         )
     except Exception as exc:
         log.warning("failed to append run event %s for %s: %s", event_type, run_id, exc)
+
+
+def _parse_last_event_id(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return 0
+    return max(0, parsed)
+
+
+def _format_run_sse_event(event: RunEventRecord) -> str:
+    data = {
+        "run_id": event.run_id,
+        "session_id": event.session_id,
+        "event_id": event.event_id,
+        "type": event.type,
+        "payload": event.payload,
+        "created_at": event.created_at,
+    }
+    body = json.dumps(data, separators=(",", ":"))
+    return f"id: {event.event_id}\nevent: {event.type}\ndata: {body}\n\n"
+
+
+async def _run_event_sse_stream(
+    *,
+    session_id: str,
+    run_id: str,
+    after_event_id: int,
+) -> AsyncIterator[str]:
+    last_event_id = after_event_id
+    last_keepalive = time.monotonic()
+    while True:
+        events = await run_events.list_after(
+            run_id=run_id,
+            session_id=session_id,
+            after_event_id=last_event_id,
+            limit=100,
+        )
+        for event in events:
+            last_event_id = max(last_event_id, event.event_id)
+            yield _format_run_sse_event(event)
+        if events:
+            continue
+        now = time.monotonic()
+        if now - last_keepalive >= _RUN_EVENTS_KEEPALIVE_SECONDS:
+            last_keepalive = now
+            yield ": keepalive\n\n"
+        await asyncio.sleep(_RUN_EVENTS_POLL_SECONDS)
 
 
 def _build_headless_script(
@@ -1358,6 +1416,42 @@ async def get_run_history(
     except RuntimeError:
         out = b""
     return Response(content=out, media_type="application/x-ndjson")
+
+
+@app.get("/api/sessions/{session_id}/runs/{run_id}/events")
+async def stream_run_events(
+    session_id: str,
+    run_id: str,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    user: User = Depends(current_user),
+) -> StreamingResponse:
+    """Replay semantic run events as Server-Sent Events.
+
+    The frontend does not depend on this yet. This endpoint is the passive
+    read model for the SSE migration: clients can reconnect with
+    Last-Event-ID and receive only events newer than that id.
+    """
+    if not _RUN_ID_PATTERN.match(run_id):
+        raise HTTPException(status_code=400, detail="invalid run id")
+    try:
+        await sessions.get_session(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    return StreamingResponse(
+        _run_event_sse_stream(
+            session_id=session_id,
+            run_id=run_id,
+            after_event_id=_parse_last_event_id(last_event_id),
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/sessions/{session_id}/files/raw")
