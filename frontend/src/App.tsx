@@ -8,7 +8,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
+import { ProcessTerminal, type TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
 import { SandboxAgent } from "sandbox-agent";
 import {
   Streamdown,
@@ -97,6 +97,12 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 type AgentSessionActivity = "waiting" | "working";
+type ToolKind = "mcp";
+type TranscriptEntry = SandboxTranscriptEntry & {
+  toolKind?: ToolKind;
+  toolServer?: string;
+  toolAction?: string;
+};
 
 interface Session {
   id: string;
@@ -1673,6 +1679,9 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
     return {
       id,
       kind: "tool",
+      toolKind: "mcp",
+      toolServer: server,
+      toolAction: tool,
       toolName: `${server}.${tool}`,
       toolInput: shortJson(item.arguments),
       toolOutput: shortJson(item.result ?? item.error),
@@ -1782,11 +1791,20 @@ function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
   return message.content.flatMap((block): TranscriptEntry[] => {
     if (!isJsonObject(block) || block.type !== "tool_use") return [];
     const id = typeof block.id === "string" ? block.id : `claude-tool-${Date.now()}`;
+    const toolName = typeof block.name === "string" ? block.name : "tool";
+    const mcpMatch = /^mcp__([^_]+)__(.+)$/.exec(toolName);
     return [
       {
         id,
         kind: "tool",
-        toolName: typeof block.name === "string" ? block.name : "tool",
+        toolName,
+        ...(mcpMatch
+          ? {
+              toolKind: "mcp" as const,
+              toolServer: mcpMatch[1],
+              toolAction: mcpMatch[2],
+            }
+          : {}),
         toolInput: shortJson(block.input),
         toolStatus: "started",
         time,
@@ -1959,6 +1977,9 @@ interface ToolVisualConfig {
 /** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
+  if (entry.toolKind === "mcp") {
+    return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
+  }
   if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
     return { Icon: TerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
   }
