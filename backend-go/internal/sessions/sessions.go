@@ -44,13 +44,22 @@ type Info struct {
 type Reader struct {
 	client    kubernetes.Interface
 	namespace string
+	registry  Registry
+}
+
+type Registry interface {
+	List(ctx context.Context, owner string) ([]compat.SessionRecord, error)
 }
 
 func NewReader(client kubernetes.Interface, namespace string) *Reader {
+	return NewReaderWithRegistry(client, namespace, nil)
+}
+
+func NewReaderWithRegistry(client kubernetes.Interface, namespace string, registry Registry) *Reader {
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
-	return &Reader{client: client, namespace: namespace}
+	return &Reader{client: client, namespace: namespace, registry: registry}
 }
 
 func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
@@ -62,9 +71,37 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 		return nil, err
 	}
 
-	out := make([]Info, 0, len(pods.Items))
+	podsByID := make(map[string]*corev1.Pod, len(pods.Items))
+	podOrder := make([]*corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		podsByID[sessionIDFromPod(pod)] = pod
+		podOrder = append(podOrder, pod)
+	}
+
+	if r.registry != nil {
+		records, err := r.registry.List(ctx, owner)
+		if err != nil {
+			return nil, err
+		}
+		seen := make(map[string]struct{}, len(records))
+		out := make([]Info, 0, len(records)+len(pods.Items))
+		for _, record := range records {
+			seen[record.ID] = struct{}{}
+			out = append(out, infoFromRecord(owner, record, podsByID[record.ID]))
+		}
+		for _, pod := range podOrder {
+			id := sessionIDFromPod(pod)
+			if _, ok := seen[id]; ok || !podHasSandboxAgent(pod) {
+				continue
+			}
+			out = append(out, infoFromPod(owner, pod))
+		}
+		return out, nil
+	}
+
+	out := make([]Info, 0, len(pods.Items))
+	for _, pod := range podOrder {
 		if !podHasSandboxAgent(pod) {
 			continue
 		}
@@ -97,6 +134,29 @@ func (r *Reader) Get(ctx context.Context, owner, sessionID string) (Info, error)
 	return infoFromPod(owner, pod), nil
 }
 
+func infoFromRecord(owner string, record compat.SessionRecord, pod *corev1.Pod) Info {
+	if pod != nil {
+		info := infoFromPod(owner, pod)
+		info.ID = record.ID
+		info.Mode = compat.NormalizeSessionMode(record.Mode)
+		info.RequestedAt = firstString(record.RequestedAt, record.CreatedAt, valueString(info.RequestedAt))
+		info.CreatedAt = firstString(record.CreatedAt, valueString(info.CreatedAt))
+		info.Name = record.Name
+		return info
+	}
+	return Info{
+		ID:          record.ID,
+		PodName:     optionalString(record.PodName),
+		Owner:       owner,
+		Status:      "Failed",
+		Mode:        compat.NormalizeSessionMode(record.Mode),
+		RequestedAt: firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:   optionalString(record.CreatedAt),
+		ReadyAt:     nil,
+		Name:        record.Name,
+	}
+}
+
 func infoFromPod(owner string, pod *corev1.Pod) Info {
 	podName := pod.Name
 	createdAt := timeString(pod.CreationTimestamp.Time)
@@ -115,6 +175,29 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 	}
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func firstString(values ...string) *string {
+	for _, value := range values {
+		if value != "" {
+			return &value
+		}
+	}
+	return nil
+}
+
+func valueString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func sessionIDFromPod(pod *corev1.Pod) string {
