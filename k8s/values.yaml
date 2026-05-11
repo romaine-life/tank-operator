@@ -252,4 +252,4 @@ externalSecret:
       - envVar: JWT_SECRET
         kvKey: tank-operator-jwt-secret
       - envVar: ALLOWED_EMAILS
-        kvKey: tank-operator-oauth-allowed-emails
+        kvKey: romaine-life-admin-emails

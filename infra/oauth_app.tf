@@ -131,14 +131,6 @@ resource "azurerm_key_vault_secret" "jwt_secret" {
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
-# Comma-joined list — the backend splits on `,` and lowercases on startup.
-# KV secrets are flat strings, so this is the simplest stable encoding.
-resource "azurerm_key_vault_secret" "oauth_allowed_emails" {
-  name         = "tank-operator-oauth-allowed-emails"
-  value        = join(",", var.allowed_emails)
-  key_vault_id = data.azurerm_key_vault.main.id
-}
-
 # Allow the azure-personal MCP UAMI to patch redirect URIs on app
 # registrations it explicitly owns, without granting broad directory list
 # permissions. The test OAuth app grants ownership above; production remains
