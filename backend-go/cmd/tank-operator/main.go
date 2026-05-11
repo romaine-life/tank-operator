@@ -69,9 +69,33 @@ func main() {
 
 	// 8. Init Manager.
 	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
+
+	// Session image tags come from the chart's values.yaml session.*
+	// keys, bumped per-commit to fingerprinted tags by the
+	// claude-container-build workflow. Fail loudly at startup if any
+	// are missing — a silent `:latest` fallback hid this exact bug for
+	// 15 hours after the Go cutover (the Python orchestrator read these
+	// env vars; the Go port forgot, every new session pod fell back to
+	// an April-25 `:latest` that didn't have mcp-auth-proxy installed,
+	// every claude_gui session crashlooped).
+	sessionImage := os.Getenv("SESSION_IMAGE")
+	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
+	piSessionImage := os.Getenv("PI_SESSION_IMAGE")
+	if sessionImage == "" || codexSessionImage == "" || piSessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / PI_SESSION_IMAGE to fingerprinted tags",
+			"SESSION_IMAGE", sessionImage,
+			"CODEX_SESSION_IMAGE", codexSessionImage,
+			"PI_SESSION_IMAGE", piSessionImage,
+		)
+		os.Exit(1)
+	}
+
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
 			ArgoCDTrackingApp: envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:      sessionImage,
+			CodexSessionImage: codexSessionImage,
+			PiSessionImage:    piSessionImage,
 			// Pass the orchestrator's Cosmos config through to the pod's
 			// agent-runner via env vars — same endpoint, same database,
 			// the runner authenticates with its own UAMI (federated to

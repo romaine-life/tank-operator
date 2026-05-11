@@ -27,9 +27,14 @@ const (
 	SessionConfigMap         = "tank-session-config"
 	SandboxAgentPort         = 2468
 	AgentRunnerWSPort        = 8090
-	DefaultSessionImage      = "romainecr.azurecr.io/claude-container:latest"
-	DefaultCodexSessionImage = "romainecr.azurecr.io/codex-container:latest"
-	DefaultPiSessionImage    = "romainecr.azurecr.io/pi-container:latest"
+	// No DefaultSessionImage constants. The Helm chart owns image tags
+	// (k8s/values.yaml's session.* keys are bumped per-commit to
+	// fingerprinted tags by .github/workflows/claude-container-build.yml),
+	// passes them in via SESSION_IMAGE / CODEX_SESSION_IMAGE /
+	// PI_SESSION_IMAGE env vars. A `:latest` fallback here would silently
+	// pin every session pod to whichever stale image happened to carry
+	// that tag — which is exactly what bricked claude_gui session creation
+	// for the 15h between the Go cutover and the env-var wiring.
 	DefaultGitHubAppSecret          = "github-app-creds"
 	DefaultCodexCredsSecret         = "codex-credentials"
 	DefaultOAuthGatewayCA           = "claude-oauth-ca"
@@ -537,15 +542,10 @@ func glimmungField(contextJSON, field string) string {
 }
 
 func withManifestDefaults(opts ManifestOptions) ManifestOptions {
-	if opts.SessionImage == "" {
-		opts.SessionImage = DefaultSessionImage
-	}
-	if opts.CodexSessionImage == "" {
-		opts.CodexSessionImage = DefaultCodexSessionImage
-	}
-	if opts.PiSessionImage == "" {
-		opts.PiSessionImage = DefaultPiSessionImage
-	}
+	// Session images are caller-required. The chart owns the
+	// fingerprinted tag; the orchestrator's job is to plumb it through,
+	// not to invent a fallback. See main.go for the startup-time check
+	// that fails the pod loudly when the env vars are missing.
 	if opts.SessionsNamespace == "" {
 		opts.SessionsNamespace = SessionsNamespace
 	}
