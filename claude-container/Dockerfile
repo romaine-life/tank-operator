@@ -1,9 +1,21 @@
-# azure-mcp + github-mcp + k8s-mcp run as in-cluster HTTP MCP servers.
-# The container
-# reaches them via the mcp-auth-proxy sidecar on 127.0.0.1, which reads
-# the projected SA token fresh per request and forwards as a Bearer
-# token. No co-located MCP binaries needed in this image — keep it
-# minimal.
+# Stage 1: build the pod-side Phase B agent-runner from agent-runner/.
+# TypeScript compiled to JS; production node_modules baked into the
+# runtime image. Source at /repo/agent-runner/, build context is repo
+# root (set by .github/workflows/claude-container-build.yml).
+FROM node:20-alpine AS agent-runner-build
+WORKDIR /src/agent-runner
+COPY agent-runner/package.json agent-runner/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+COPY agent-runner/tsconfig.json ./
+COPY agent-runner/src ./src
+RUN npx tsc
+# Prune dev deps for a smaller runtime payload.
+RUN npm prune --omit=dev
+
+# Stage 2: runtime image. azure-mcp + github-mcp + k8s-mcp run as in-cluster
+# HTTP MCP servers. The container reaches them via the mcp-auth-proxy sidecar
+# on 127.0.0.1, which reads the projected SA token fresh per request and
+# forwards as a Bearer token. No co-located MCP binaries — keep it minimal.
 FROM node:20-alpine
 
 ARG TARGETARCH=amd64
@@ -106,6 +118,16 @@ RUN pip install --no-cache-dir --break-system-packages \
 # bearer in env vars.
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
+
+# Phase B agent-runner: long-lived pod-side process that drives
+# @anthropic-ai/claude-agent-sdk, fans events to Cosmos (durable) + a
+# local WebSocket (live tap). Shipped inert in Phase B — no container
+# in the pod spec invokes it yet; Phase C wires the orchestrator's
+# WebSocket reverse-proxy and the per-session opt-in label that turns
+# it on. Entrypoint: `node /opt/agent-runner/dist/index.js`.
+COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
+COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
+COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
 
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
 # bootstrap script are mounted from the chart-managed tank-session-config

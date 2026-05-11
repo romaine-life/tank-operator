@@ -68,6 +68,13 @@ func main() {
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
 			ArgoCDTrackingApp: envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			// Pass the orchestrator's Cosmos config through to the pod's
+			// agent-runner via env vars — same endpoint, same database,
+			// the runner authenticates with its own UAMI (federated to
+			// claude-session SA, see infra/tank_session_identity.tf).
+			CosmosEndpoint:               envDefault("COSMOS_ENDPOINT", ""),
+			CosmosDatabase:               envDefault("COSMOS_DATABASE", "tank-operator"),
+			CosmosSessionEventsContainer: envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
 		},
 		OAuthGatewayHost: os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:     os.Getenv("CLAUDE_API_PROXY_HOST"),

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'claude-container/**'
+      - 'agent-runner/**'
       - 'scripts/image-fingerprint.sh'
       - '.github/workflows/claude-container-build.yml'
   workflow_dispatch:
@@ -94,7 +95,7 @@ jobs:
             --image ${{ matrix.agent }} \
             --dockerfile claude-container/Dockerfile \
             --context . \
-            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy' \
+            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner' \
             | awk -F= '$1 == "fingerprint" { print $2 }')"
           echo "ALIAS_TAG=${{ matrix.agent }}-${fingerprint}" >> "$GITHUB_ENV"
 

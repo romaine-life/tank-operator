@@ -56,7 +56,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/claude-container-build-cache:claude
             image-repo: claude-container
             fingerprint-image: claude
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner
           - name: session-agent-codex
             file: claude-container/Dockerfile
             context: .
@@ -64,7 +64,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/codex-container-build-cache:codex
             image-repo: codex-container
             fingerprint-image: codex
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner
           - name: session-agent-pi
             file: claude-container/Dockerfile
             context: .
@@ -72,7 +72,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/pi-container-build-cache:pi
             image-repo: pi-container
             fingerprint-image: pi
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -94,6 +94,33 @@ resource "azurerm_cosmosdb_sql_container" "active_runs" {
   }
 }
 
+resource "azurerm_cosmosdb_sql_container" "session_events" {
+  name                = "session-events"
+  resource_group_name = data.azurerm_resource_group.main.name
+  account_name        = azurerm_cosmosdb_account.tank_operator.name
+  database_name       = azurerm_cosmosdb_sql_database.tank_operator.name
+  # Partitioned on the orchestrator's session_id (the small integer that
+  # identifies a tank-operator pod). The pod-side agent-runner stamps
+  # tank_session_id on every event so the SPA's "give me all events for
+  # this session" query becomes a single-partition read. The SDK's own
+  # session_id field rides along on each doc but isn't the partition key:
+  # multiple SDK sessions may exist within one tank-operator session
+  # (e.g., after a pod restart and resume).
+  partition_key_paths = ["/tank_session_id"]
+  default_ttl         = 2592000
+
+  indexing_policy {
+    indexing_mode = "consistent"
+    included_path { path = "/*" }
+    # Assistant message bodies and tool inputs/outputs can be large.
+    # Excluding them from indexing keeps writes cheap; the SPA never
+    # queries by content, only by tank_session_id + event uuid (the
+    # monotonic watermark).
+    excluded_path { path = "/message/*" }
+    excluded_path { path = "/result/*" }
+  }
+}
+
 resource "azurerm_cosmosdb_sql_container" "turn_queue" {
   name                = "turn-queue"
   resource_group_name = data.azurerm_resource_group.main.name
