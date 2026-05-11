@@ -204,6 +204,38 @@ def _run_pid_path(run_id: str) -> str:
     return f"/tmp/tank-run-{run_id}.pid"
 
 
+def _agent_pid_path(session_id: str) -> str:
+    return f"/tmp/tank-agent-{session_id}.pid"
+
+
+def _agent_turns_dir(session_id: str) -> str:
+    return f"/tmp/tank-turns-{session_id}"
+
+
+def _agent_turn_path(session_id: str, run_id: str) -> str:
+    return f"{_agent_turns_dir(session_id)}/{run_id}.json"
+
+
+def _build_claude_agent_launch_script(
+    *,
+    session_id: str,
+    model: str,
+    permission_mode: str,
+) -> str:
+    """Shell snippet that execs claude-agent-launch.sh (the persistent agent launcher).
+
+    Called once per session on first dispatch; subsequent turns are submitted
+    by writing a turn descriptor to the session turns directory.
+    """
+    safe_session_id = _shlex.quote(session_id)
+    safe_model = _shlex.quote(model or "")
+    safe_pm = _shlex.quote(permission_mode or "")
+    return (
+        f"bash -l /opt/tank/session-config/claude-agent-launch.sh "
+        f"{safe_session_id} {safe_model} {safe_pm}"
+    )
+
+
 async def _wait_for_run_pod_name(owner: str, session_id: str, ws: WebSocket) -> str:
     """Wait for a run pod without leaving the browser WebSocket idle."""
 

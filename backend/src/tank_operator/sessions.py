@@ -216,6 +216,8 @@ SESSION_CONFIG_MOUNTS = (
     ("write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"),
     ("tank-bootstrap.sh", "/opt/tank/bootstrap.sh"),
     ("headless-run.sh", "/opt/tank/headless-run.sh"),
+    ("claude-agent-launch.sh", "/opt/tank/session-config/claude-agent-launch.sh"),
+    ("persistent-agent.py", "/opt/tank/session-config/persistent-agent.py"),
 )
 SESSION_CONFIG_DIR_MOUNT = "/opt/tank/session-config"
 
@@ -735,22 +737,27 @@ class SessionManager:
         model: str,
         permission_mode: str,
     ) -> None:
-        """Fire-and-forget launch of headless-run.sh on a session pod.
+        """Fire-and-forget dispatch of a headless agent turn on a session pod.
 
-        Used by the HTTP handoff endpoints (POST /api/sessions/run, POST
-        /api/sessions/{id}/messages). Returns once the command has been
-        spawned on the pod — does not wait for the agent run to complete.
-        Conversation output lands in claude-code's session JSONL, which the
-        existing /api/sessions/{id}/run/history endpoint reads back.
-        Output is written to the same /tmp/tank-run-<id>.stream and pid-file
-        shape used by live WebSocket runs, so the browser can discover and
-        attach to a fire-and-forget follow-up after it starts.
+        For Claude sessions, delegates to a long-lived persistent-agent.py
+        subprocess (started on first call, reused for subsequent turns).
+        Writes a turn descriptor JSON to the session turns directory; the
+        agent polls for it and handles ScheduleWakeup natively in-process.
+
+        For Codex sessions, retains the original per-turn headless-run.sh
+        pattern.
+
+        Returns once the turn has been submitted to the pod — does not wait
+        for the agent run to complete. Output is written to the same
+        /tmp/tank-run-<id>.stream and pid-file shape used by live WebSocket
+        runs, so the browser can discover and attach to a fire-and-forget
+        follow-up after it starts.
         """
-        # Late import to dodge an api.py → sessions.py → api.py cycle. The
-        # script-shape helpers live next to the WS endpoint that introduced
-        # them, but dispatch_headless reuses them so both paths produce the
-        # exact same on-pod command.
+        # Late import to dodge an api.py → sessions.py → api.py cycle.
         from .api import (
+            _agent_pid_path,
+            _agent_turn_path,
+            _build_claude_agent_launch_script,
             _build_headless_script,
             _build_live_run_script,
             _new_prompt_path,
@@ -759,7 +766,7 @@ class SessionManager:
             _validate_headless_arg,
             _validate_run_id,
         )
-        from .exec_proxy import exec_launch_detached, exec_write_file
+        from .exec_proxy import exec_capture, exec_launch_detached, exec_write_file
 
         session = await self.get_session(owner=owner, session_id=session_id)
         mode = normalize_session_mode(session.mode)
@@ -776,40 +783,77 @@ class SessionManager:
         if permission_mode and not safe_pm:
             raise ValueError("invalid permission_mode")
 
-        provider = "codex" if mode == CODEX_HEADLESS_MODE else "claude"
-        prompt_path = _new_prompt_path()
         run_id = _validate_run_id(None)
         stream_path = _run_stream_path(run_id)
         pid_path = _run_pid_path(run_id)
-        await exec_write_file(
-            SESSIONS_NAMESPACE, pod_name, prompt_path, prompt.encode()
-        )
-        script = _build_headless_script(
-            provider=provider,
-            prompt_path=prompt_path,
-            follow_up=follow_up,
-            model=safe_model,
-            permission_mode=safe_pm,
-        )
-        await exec_launch_detached(
-            namespace=SESSIONS_NAMESPACE,
-            pod_name=pod_name,
-            command=_build_live_run_script(script, pid_path),
-            log_path=stream_path,
-        )
-        if provider == "claude":
-            asyncio.create_task(
-                self._schedule_headless_wakeup(
-                    owner=owner,
-                    session_id=session_id,
-                    pod_name=pod_name,
-                    stream_path=stream_path,
-                    pid_path=pid_path,
-                    model=safe_model or "",
-                    permission_mode=safe_pm or "",
-                ),
-                name=f"wakeup-watcher-{run_id}",
+
+        if mode == CODEX_HEADLESS_MODE:
+            # Codex: original per-turn headless-run.sh pattern (unchanged).
+            provider = "codex"
+            prompt_path = _new_prompt_path()
+            await exec_write_file(
+                SESSIONS_NAMESPACE, pod_name, prompt_path, prompt.encode()
             )
+            script = _build_headless_script(
+                provider=provider,
+                prompt_path=prompt_path,
+                follow_up=follow_up,
+                model=safe_model,
+                permission_mode=safe_pm,
+            )
+            await exec_launch_detached(
+                namespace=SESSIONS_NAMESPACE,
+                pod_name=pod_name,
+                command=_build_live_run_script(script, pid_path),
+                log_path=stream_path,
+            )
+        else:
+            # Claude: persistent-agent.py model.
+            # Ensure the persistent agent subprocess is running; start it if not.
+            provider = "claude"
+            agent_pid = _agent_pid_path(session_id)
+            quoted_pid = shlex.quote(agent_pid)
+            try:
+                liveness = await exec_capture(
+                    SESSIONS_NAMESPACE,
+                    pod_name,
+                    ["bash", "-c", f"test -f {quoted_pid} && kill -0 $(cat {quoted_pid}) 2>/dev/null && echo alive || echo dead"],
+                )
+                agent_alive = b"alive" in liveness
+            except Exception:
+                agent_alive = False
+
+            if not agent_alive:
+                log.info("starting persistent agent for session %s", session_id)
+                agent_log = f"/tmp/tank-agent-{session_id}.log"
+                await exec_launch_detached(
+                    namespace=SESSIONS_NAMESPACE,
+                    pod_name=pod_name,
+                    command=_build_claude_agent_launch_script(
+                        session_id=session_id,
+                        model=safe_model or "",
+                        permission_mode=safe_pm or "",
+                    ),
+                    log_path=agent_log,
+                )
+
+            # Write the turn descriptor; persistent-agent.py polls for it.
+            turn_descriptor = json.dumps(
+                {
+                    "run_id": run_id,
+                    "prompt": prompt,
+                    "stream_path": stream_path,
+                    "pid_path": pid_path,
+                    "follow_up": follow_up,
+                }
+            )
+            # exec_write_file runs mkdir -p on the parent dir, so writing
+            # the turn file also creates the turns dir if it doesn't exist.
+            turn_path = _agent_turn_path(session_id, run_id)
+            await exec_write_file(
+                SESSIONS_NAMESPACE, pod_name, turn_path, turn_descriptor.encode()
+            )
+
         if self._active_runs is not None:
             try:
                 await self._active_runs.start(
@@ -824,112 +868,6 @@ class SessionManager:
             except Exception as exc:
                 log.warning("failed to persist active run %s: %s", run_id, exc)
         self._publish_changed(owner)
-
-    async def _schedule_headless_wakeup(
-        self,
-        *,
-        owner: str,
-        session_id: str,
-        pod_name: str,
-        stream_path: str,
-        pid_path: str,
-        model: str,
-        permission_mode: str,
-    ) -> None:
-        """Background task: once a headless run finishes, fire ScheduleWakeup if the agent requested one.
-
-        Polls for pid-file removal (run exit), reads the completed stream JSONL,
-        and if a ScheduleWakeup tool_use is found, sleeps for the requested delay
-        then calls dispatch_headless with follow_up=True.
-        """
-        from .exec_proxy import exec_capture
-
-        quoted_pid = shlex.quote(pid_path)
-        quoted_stream = shlex.quote(stream_path)
-
-        # Poll until the pid file is gone (the agent process has exited).
-        # Max ~4 hours at 10s intervals; gives up quietly on any exec error.
-        for _ in range(1440):
-            try:
-                out = await exec_capture(
-                    SESSIONS_NAMESPACE,
-                    pod_name,
-                    ["bash", "-c", f"test -f {quoted_pid} && echo alive || echo done"],
-                )
-                if b"done" in out:
-                    break
-            except Exception:
-                return
-            await asyncio.sleep(10)
-
-        # Read the completed stream JSONL.
-        try:
-            stream_bytes = await exec_capture(
-                SESSIONS_NAMESPACE,
-                pod_name,
-                ["bash", "-c", f"cat {quoted_stream} 2>/dev/null || true"],
-            )
-        except Exception as exc:
-            log.warning("wakeup watcher could not read stream %s: %s", stream_path, exc)
-            return
-
-        # Scan for the last ScheduleWakeup tool_use in the assistant stream.
-        delay_seconds: int | None = None
-        wakeup_prompt: str | None = None
-        for raw_line in stream_bytes.decode(errors="replace").splitlines():
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(event, dict) or event.get("type") != "assistant":
-                continue
-            message = event.get("message")
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict) or block.get("type") != "tool_use":
-                    continue
-                if (block.get("name") or "").lower() != "schedulewakeup":
-                    continue
-                inp = block.get("input")
-                if not isinstance(inp, dict):
-                    continue
-                raw_delay = inp.get("delaySeconds")
-                raw_prompt = inp.get("prompt")
-                if raw_delay is not None and raw_prompt is not None:
-                    try:
-                        delay_seconds = max(0, int(raw_delay))
-                        wakeup_prompt = str(raw_prompt)
-                    except (TypeError, ValueError):
-                        pass
-
-        if delay_seconds is None or wakeup_prompt is None:
-            return
-
-        log.info(
-            "scheduling wakeup for session %s in %ds", session_id, delay_seconds
-        )
-        if delay_seconds > 0:
-            await asyncio.sleep(delay_seconds)
-
-        try:
-            await self.dispatch_headless(
-                owner=owner,
-                session_id=session_id,
-                prompt=wakeup_prompt,
-                follow_up=True,
-                model=model,
-                permission_mode=permission_mode,
-            )
-            log.info("wakeup dispatched for session %s", session_id)
-        except Exception as exc:
-            log.warning("wakeup dispatch failed for session %s: %s", session_id, exc)
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._core is not None

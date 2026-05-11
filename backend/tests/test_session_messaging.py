@@ -8,6 +8,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -133,6 +134,9 @@ def test_dispatch_headless_writes_prompt_and_backgrounds_command(
 
     monkeypatch.setattr(exec_proxy, "exec_write_file", _fake_write_file)
     monkeypatch.setattr(exec_proxy, "exec_launch_detached", _fake_launch_detached)
+    # exec_capture is used for the agent liveness check; return b"" so agent
+    # appears dead and dispatch_headless starts a new persistent agent.
+    monkeypatch.setattr(exec_proxy, "exec_capture", _fake_capture)
 
     asyncio.run(
         manager.dispatch_headless(
@@ -145,26 +149,29 @@ def test_dispatch_headless_writes_prompt_and_backgrounds_command(
         )
     )
 
+    # Persistent agent model: turn descriptor written to turns dir.
     _, pod_name, path, data = _fake_write_file.captured  # type: ignore[attr-defined]
     assert pod_name == "session-abc123"
-    assert path.startswith("/tmp/tank-prompt-")
-    assert data == b"ship it"
+    assert path.startswith("/tmp/tank-turns-abc123/")
+    assert path.endswith(".json")
+    descriptor = json.loads(data)
+    assert descriptor["prompt"] == "ship it"
+    assert descriptor["follow_up"] is True
+    assert descriptor["stream_path"].startswith("/tmp/tank-run-")
+    assert descriptor["pid_path"].startswith("/tmp/tank-run-")
 
+    # Agent launcher (not headless-run.sh) is started when agent is dead.
     _, _, script, log_path = _fake_launch_detached.captured  # type: ignore[attr-defined]
-    assert log_path.startswith("/tmp/tank-run-")
-    assert log_path.endswith(".stream")
-    assert path in script
-    assert "/tmp/tank-run-" in script
-    assert ".pid" in script
-    assert " true " in script  # follow_up flag splice
-    assert "/opt/tank/headless-run.sh" in script
-    assert "claude" in script  # claude_gui → claude provider
+    assert "claude-agent-launch.sh" in script
+    assert log_path.startswith("/tmp/tank-agent-")
+    assert log_path.endswith(".log")
+
     assert active_runs.started
     assert active_runs.started[0]["email"] == "operator@example.test"
     assert active_runs.started[0]["session_id"] == "abc123"
     assert active_runs.started[0]["pod_name"] == "session-abc123"
     assert active_runs.started[0]["provider"] == "claude"
-    assert active_runs.started[0]["stream_path"] == log_path
+    assert active_runs.started[0]["stream_path"].startswith("/tmp/tank-run-")
     assert active_runs.started[0]["pid_path"].startswith("/tmp/tank-run-")
 
 

@@ -94,7 +94,8 @@ RUN npm install -g @sandbox-agent/cli@0.4.2
 # commands exist on PATH.
 RUN pip install --no-cache-dir --break-system-packages \
         "pytest==${PYTEST_VERSION}" \
-        "ruff==${RUFF_VERSION}"
+        "ruff==${RUFF_VERSION}" \
+        "claude-code-sdk"
 
 RUN pip install --no-cache-dir --break-system-packages \
         "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}"
