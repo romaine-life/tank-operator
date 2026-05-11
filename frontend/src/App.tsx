@@ -49,6 +49,7 @@ import {
   FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
+  ExternalLinkIcon,
   ImageIcon,
   InfoIcon,
   ListChecksIcon,
@@ -993,6 +994,14 @@ function IconExternal() {
       <path d="M10 3h3v3" />
       <path d="M13 3 8 8" />
       <path d="M11.5 9V13H3V4.5h4" />
+    </svg>
+  );
+}
+
+function IconGithub() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+      <path d="M12 .5C5.7.5.7 5.6.7 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 .1.6 2.4 4 .7.1-.7.4-1.2.7-1.5-2.5-.3-5.2-1.3-5.2-5.6 0-1.2.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 .9-.3 3.1 1.2.9-.3 1.8-.4 2.8-.4s1.9.1 2.8.4c2.1-1.5 3.1-1.2 3.1-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.9 1.2 3.1 0 4.3-2.6 5.3-5.2 5.6.4.3.8 1 .8 2.1V22c0 .3.2.7.8.6 4.6-1.5 7.8-5.8 7.8-10.8C23.3 5.6 18.3.5 12 .5Z" />
     </svg>
   );
 }
@@ -2030,6 +2039,7 @@ interface FileEntry {
   name: string;
   type: "file" | "dir" | "symlink" | "other";
   size: number;
+  github_url?: string | null;
 }
 
 interface SelectedFile {
@@ -5136,28 +5146,46 @@ function HeadlessRun({
                     const Icon =
                       e.type === "dir" ? FolderIcon : FileIcon;
                     return (
-                      <button
+                      <div
                         key={e.name}
-                        type="button"
                         className={`run-files-row${
                           selectedFile?.path === joinFilesPath(filesPath, e.name)
                             ? " run-files-row-active"
                             : ""
                         }`}
-                        onClick={() => openFileEntry(e.name, e.type)}
                       >
-                        <Icon
-                          size={14}
-                          className={`run-files-row-icon run-files-row-${e.type}`}
-                          aria-hidden="true"
-                        />
-                        <span className="run-files-row-name">{e.name}</span>
-                        {e.type === "file" && (
+                        <button
+                          type="button"
+                          className="run-files-row-main"
+                          onClick={() => openFileEntry(e.name, e.type)}
+                        >
+                          <Icon
+                            size={14}
+                            className={`run-files-row-icon run-files-row-${e.type}`}
+                            aria-hidden="true"
+                          />
+                          <span className="run-files-row-name">{e.name}</span>
+                        </button>
+                        {e.github_url ? (
+                          <a
+                            className="run-files-row-link"
+                            href={e.github_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open ${e.name} on GitHub`}
+                            aria-label={`Open ${e.name} on GitHub`}
+                          >
+                            <IconGithub />
+                            <ExternalLinkIcon size={11} aria-hidden="true" />
+                          </a>
+                        ) : e.type === "file" ? (
                           <span className="run-files-row-size">
                             {humanFileSize(e.size)}
                           </span>
+                        ) : (
+                          <span aria-hidden="true" />
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 {!filesLoading &&
