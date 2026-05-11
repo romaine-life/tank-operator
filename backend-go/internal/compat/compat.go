@@ -26,6 +26,7 @@ const (
 	SessionServiceAccount    = "claude-session"
 	SessionConfigMap         = "tank-session-config"
 	SandboxAgentPort         = 2468
+	AgentRunnerWSPort        = 8090
 	DefaultSessionImage      = "romainecr.azurecr.io/claude-container:latest"
 	DefaultCodexSessionImage = "romainecr.azurecr.io/codex-container:latest"
 	DefaultPiSessionImage    = "romainecr.azurecr.io/pi-container:latest"
@@ -93,6 +94,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
 	{"tank-bootstrap.sh", "/opt/tank/bootstrap.sh"},
 	{"headless-run.sh", "/opt/tank/headless-run.sh"},
+	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 }
 
 // noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
@@ -137,6 +139,14 @@ type ManifestOptions struct {
 	// so the Phase B agent-runner can talk to Cosmos via federated SA token.
 	// May be empty in Phase A test envs where the ExternalSecret isn't wired.
 	SessionAzureConfigSecret string
+	// Phase B agent-runner — Cosmos endpoint and session-events container,
+	// passed through the pod env so the runner can connect. AgentRunnerWSPort
+	// is the localhost port the runner's WebSocket listens on (orchestrator
+	// reverse-proxies onto it in Phase C).
+	CosmosEndpoint               string
+	CosmosDatabase               string
+	CosmosSessionEventsContainer string
+	AgentRunnerWSPort            int
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 }
@@ -279,6 +289,26 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
 	}
 
+	// Phase B: shared /workspace across the claude container (sandbox-agent +
+	// the in-browser terminal pane) and the agent-runner container (drives
+	// the SDK). Without this, the agent's writes wouldn't be visible in the
+	// terminal pane and vice versa. emptyDir lives for the pod's lifetime,
+	// matching today's "pod restart loses workspace state" semantics.
+	// claude_gui is the only mode where the agent-runner exists today; the
+	// volume is harmless for the others but we keep it gated to avoid pod
+	// spec churn on legacy modes.
+	wantAgentRunner := mode == ClaudeGUIMode
+	if wantAgentRunner {
+		volumes = append(volumes, map[string]any{
+			"name":     "workspace",
+			"emptyDir": map[string]any{},
+		})
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+	}
+
 	// OAuth gateway + API proxy host aliases and CA cert.
 	var hostAliases []any
 	if !noClaudeHijackModes[mode] && (opts.OAuthGatewayIP != "" || opts.APIProxyIP != "") {
@@ -350,6 +380,85 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		claudeContainer["envFrom"] = envFrom
 	}
 
+	containers := []any{
+		map[string]any{
+			"name":            "mcp-auth-proxy",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"mcp-auth-proxy"},
+			"volumeMounts":    configMounts,
+		},
+		claudeContainer,
+	}
+
+	// Phase B agent-runner sidecar — claude_gui only. Shares /workspace
+	// with the claude container via the emptyDir above so the agent's
+	// edits show up in the terminal pane. Same image (binary baked in
+	// via the Dockerfile multi-stage build); different command + env.
+	// Ships INERT in Phase B — Phase C wires the orchestrator's
+	// reverse-proxy that actually drives the WebSocket port.
+	if wantAgentRunner {
+		runnerVolumeMounts := append([]any{}, configMounts...)
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+		runnerEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.labels['tank-operator/session-id']",
+					},
+				},
+			},
+			map[string]any{
+				"name": "POD_OWNER_EMAIL",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.annotations['tank-operator/owner-email']",
+					},
+				},
+			},
+			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
+			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
+			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
+			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
+			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
+		}
+		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
+		// container gets, so the SDK's spawned claude binary trusts the
+		// OAuth gateway's self-signed cert.
+		if !noClaudeHijackModes[mode] && opts.OAuthGatewayCAConfigMap != "" {
+			runnerEnv = append(runnerEnv,
+				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+		}
+
+		runnerContainer := map[string]any{
+			"name":            "agent-runner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/agent-runner-launch.sh"},
+			"ports": []any{map[string]any{
+				"name":          "agent-ws",
+				"containerPort": opts.AgentRunnerWSPort,
+			}},
+			"env":          runnerEnv,
+			"volumeMounts": runnerVolumeMounts,
+		}
+		if len(envFrom) > 0 {
+			runnerContainer["envFrom"] = envFrom
+		}
+		containers = append(containers, runnerContainer)
+	}
+
 	spec := map[string]any{
 		"serviceAccountName": opts.SessionServiceAccount,
 		"securityContext": map[string]any{
@@ -358,17 +467,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"runAsGroup":   1000,
 			"fsGroup":      1000,
 		},
-		"containers": []any{
-			map[string]any{
-				"name":            "mcp-auth-proxy",
-				"image":           sessionImage,
-				"imagePullPolicy": "Always",
-				"command":         []any{"mcp-auth-proxy"},
-				"volumeMounts":    configMounts,
-			},
-			claudeContainer,
-		},
-		"volumes": volumes,
+		"containers": containers,
+		"volumes":    volumes,
 	}
 	if len(hostAliases) > 0 {
 		spec["hostAliases"] = hostAliases
@@ -472,6 +572,15 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.SessionAzureConfigSecret == "" {
 		opts.SessionAzureConfigSecret = DefaultSessionAzureConfigSecret
+	}
+	if opts.CosmosDatabase == "" {
+		opts.CosmosDatabase = "tank-operator"
+	}
+	if opts.CosmosSessionEventsContainer == "" {
+		opts.CosmosSessionEventsContainer = "session-events"
+	}
+	if opts.AgentRunnerWSPort == 0 {
+		opts.AgentRunnerWSPort = AgentRunnerWSPort
 	}
 	return opts
 }
