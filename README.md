@@ -33,25 +33,24 @@ referenced here as data sources.
 ## Repo layout
 
 ```
-backend/                      FastAPI + kubernetes-asyncio orchestrator
+backend-go/                   Go orchestrator (Cosmos + KV + k8s exec)
 frontend/                     Vite + React UI
-Dockerfile                    multi-stage: vite build → python runtime
+api-proxy/                    Envoy ext_proc (Python): injects Anthropic OAuth, refreshes on 401
+agent-container/              Long-lived pod-side runner (Go) — in progress, see CLAUDE.md
+claude-container/             Claude session image bootstrap + Dockerfile
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret
+infra/                        Tofu — Cosmos, KV, UAMI, role assignments
+Dockerfile                    multi-stage: vite build → go build → alpine runtime
 .github/workflows/build.yml   OIDC az login → build → push to ACR
 ```
-
-## Phases
-
-1. **Skeleton** — orchestrator Deployment up; `POST /api/sessions` creates a
-   session pod; `GET`/`DELETE` work; frontend launcher hits the API and lists sessions.
-2. **Headless runs** — WebSocket streaming for Claude/Codex run output.
-3. **Polish** — tab UI, sidebar, idle reaper, optional per-session PVC.
 
 ## Local dev
 
 ```bash
-# Backend (needs a kube context with access to the sessions namespace, or run --dry-run)
-cd backend && pip install -e . && python -m tank_operator
+# Orchestrator
+cd backend-go && go build ./... && go test ./...
+# Run requires kube context (in-cluster or kubeconfig) plus the JWT_KV_VAULT
+# and JWT_KV_KEY_NAME envs pointing at the signing key.
 
 # Frontend
 cd frontend && npm install && npm run dev
@@ -109,7 +108,9 @@ ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 `romainecr.azurecr.io/tank-operator:<sha>` (and `:latest`) by `.github/workflows/build.yml`.
 
 Auth: the SPA uses MSAL.js to obtain an Entra ID token, POSTs it to
-`/api/auth/microsoft/login`, and the backend mints its own short-lived JWT
-(see [auth.py](backend/src/tank_operator/auth.py)). Sessions are scoped by
+`/api/auth/microsoft/login`, and the orchestrator mints an RS256 session
+JWT signed by a Key Vault Key (private bytes never leave KV; see
+[backend-go/internal/auth/](backend-go/internal/auth/) and
+[infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped by
 SHA-256 of the signed-in user's email. Allowlist is the comma-separated
 `ALLOWED_EMAILS` env var, sourced from KV via ExternalSecret.

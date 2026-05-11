@@ -9,8 +9,8 @@ issue described below and produce a coherent commit on the agent branch.
 
 1. Read the issue context (provided above). Re-read `CLAUDE.md` and
    `README.md` so your changes match the project's conventions —
-   tank-operator is a FastAPI + kubernetes-asyncio orchestrator with a
-   Vite + React frontend; respect that shape.
+   tank-operator is a Go orchestrator (`backend-go/`) with a Vite + React
+   frontend; Python only remains in the api-proxy ext_proc. Respect that shape.
 2. Identify a single bounded slice that addresses the issue. Bias toward
    the smallest change that resolves the stated request.
 3. Stage all changes with `git add` and exit cleanly. The wrapper script

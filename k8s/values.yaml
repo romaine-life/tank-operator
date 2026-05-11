@@ -223,10 +223,10 @@ externalSecret:
   # ExternalSecret is templated by externalsecret-codex.yaml.
   #
   # The orchestrator's harvest path (codex_config save-credentials) is
-  # the only writer; ESO mirrors KV → this Secret. Phase 2 will add
-  # rotation-write-back from the pod side (or move to a proxy that owns
-  # rotation centrally) — see CODEX_SUBSCRIPTION_MODE comment in
-  # backend/src/tank_operator/sessions.py.
+  # the only writer; ESO mirrors KV → this Secret. A future rotation-
+  # write-back from the pod side (or a codex proxy that owns rotation
+  # centrally) is deferred — see the codex paths in
+  # backend-go/internal/sessions/dispatch.go for the current shape.
   codexCredentials:
     secretName: codex-credentials
     # Key inside the K8s Secret. The bootstrap reads

@@ -121,9 +121,9 @@ fi
 #
 # Multi-pod gap: in-pod rotation does not flow back to KV today, so two
 # concurrent pods will both inherit the same auth.json and may race on
-# refresh — known issue, Phase 2 (write-back sidecar or codex-api-proxy)
-# decides which way. See backend/src/tank_operator/sessions.py near
-# CODEX_SUBSCRIPTION_MODE for the full picture.
+# refresh — known issue, deferred until a write-back sidecar or
+# codex-api-proxy lands. See backend-go/internal/sessions/dispatch.go's
+# codex_gui path and CLAUDE.md "Sessions" for the current shape.
 if [ "${TANK_SESSION_MODE}" = "codex_cli" ] || [ "${TANK_SESSION_MODE}" = "codex_gui" ] || [ "${TANK_SESSION_MODE}" = "codex_subscription" ] || [ "${TANK_SESSION_MODE}" = "codex_headless" ]; then
   mkdir -p $HOME/.codex
   # Translate /workspace/.mcp.json (claude shape) to codex's
