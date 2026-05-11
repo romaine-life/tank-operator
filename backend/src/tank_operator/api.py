@@ -728,6 +728,10 @@ class TestStateBody(BaseModel):
     url: str | None = None
 
 
+class RolloutStateBody(BaseModel):
+    active: bool = True
+
+
 # ---------------------------------------------------------------------------
 # Files API — read-only browsing of /workspace inside the session pod.
 # Powers the Files tab in the chat pane. Edits are out of scope for now.
@@ -1434,6 +1438,24 @@ async def update_test_state(
             active=body.active,
             slot_index=body.slot_index,
             url=body.url,
+        )
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+
+
+@app.post("/api/sessions/{session_id}/rollout-state")
+async def update_rollout_state(
+    session_id: str,
+    body: RolloutStateBody,
+    user: User = Depends(current_user),
+) -> SessionInfo:
+    try:
+        return await sessions.set_rollout_state(
+            owner=user.email,
+            session_id=session_id,
+            active=body.active,
         )
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")

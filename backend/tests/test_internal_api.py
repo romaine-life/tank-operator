@@ -309,6 +309,7 @@ class _RecordingSessions:
 
     Internal session endpoints only depend on a few SessionManager methods
     (find_pod_by_ip, create, list, delete, set_name, set_test_state,
+    set_rollout_state,
     dispatch_headless), so
     a focused stub gives deterministic tests without spinning up a fake
     apiserver. Each method records its kwargs into ``calls`` for assertion.
@@ -321,10 +322,12 @@ class _RecordingSessions:
         self.create_response: SessionInfo | None = None
         self.set_name_response: SessionInfo | None = None
         self.set_test_state_response: SessionInfo | None = None
+        self.set_rollout_state_response: SessionInfo | None = None
         self.dispatch_raises: BaseException | None = None
         self.delete_raises: BaseException | None = None
         self.set_name_raises: BaseException | None = None
         self.set_test_state_raises: BaseException | None = None
+        self.set_rollout_state_raises: BaseException | None = None
 
     async def find_pod_by_ip(self, pod_ip: str) -> SimpleNamespace | None:
         self.calls.append(("find_pod_by_ip", {"pod_ip": pod_ip}))
@@ -384,6 +387,23 @@ class _RecordingSessions:
             status="Running",
             mode=SUBSCRIPTION_HEADLESS_MODE,
             test_state={"active": kwargs.get("active", True)},
+        )
+
+    async def set_rollout_state(
+        self, owner: str, session_id: str, **kwargs: object
+    ) -> SessionInfo:
+        self.calls.append(
+            ("set_rollout_state", {"owner": owner, "session_id": session_id, **kwargs})
+        )
+        if self.set_rollout_state_raises is not None:
+            raise self.set_rollout_state_raises
+        return self.set_rollout_state_response or SessionInfo(
+            id=session_id,
+            pod_name=f"session-{session_id}",
+            owner=owner,
+            status="Running",
+            mode=SUBSCRIPTION_HEADLESS_MODE,
+            rollout_state={"active": kwargs.get("active", True)},
         )
 
     async def dispatch_headless(self, owner: str, session_id: str, prompt: str, **kwargs) -> None:
@@ -572,6 +592,26 @@ def test_internal_set_test_state_records_slot_and_url() -> None:
         "active": True,
         "slot_index": 2,
         "url": "https://tank-slot-2.tank.dev.romaine.life",
+    }
+
+
+def test_internal_set_rollout_state_records_active_state() -> None:
+    pods = [_pod_with_ip("session-x", "10.0.0.10", "alice@example.test")]
+    sessions = _RecordingSessions(pods)
+    app, _ = _build_app_with_sessions(pods, sessions=sessions)
+
+    response = TestClient(app).post(
+        "/api/internal/sessions/abc/rollout-state",
+        params={"caller_pod_ip": "10.0.0.10"},
+        json={"active": True},
+    )
+
+    assert response.status_code == 200
+    call = next(c for c in sessions.calls if c[0] == "set_rollout_state")
+    assert call[1] == {
+        "owner": "alice@example.test",
+        "session_id": "abc",
+        "active": True,
     }
 
 

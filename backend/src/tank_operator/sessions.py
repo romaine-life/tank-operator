@@ -212,6 +212,7 @@ def normalize_session_mode(mode: str | None) -> str:
 MAX_NAME_LENGTH = 80
 GLIMMUNG_CONTEXT_ANNOTATION = "tank-operator/glimmung-context"
 TEST_STATE_ANNOTATION = "tank-operator/test-state"
+ROLLOUT_STATE_ANNOTATION = "tank-operator/rollout-state"
 MAX_TEST_URL_LENGTH = 512
 
 
@@ -247,6 +248,7 @@ class SessionInfo:
     # Pod name — this is purely a display label.
     name: str | None = None
     test_state: dict[str, Any] | None = None
+    rollout_state: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -292,6 +294,23 @@ def _test_state_from_annotations(
     if not annotations:
         return None
     raw = annotations.get(TEST_STATE_ANNOTATION)
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _rollout_state_from_annotations(
+    annotations: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    if not annotations:
+        return None
+    raw = annotations.get(ROLLOUT_STATE_ANNOTATION)
     if not raw:
         return None
     try:
@@ -893,6 +912,9 @@ class SessionManager:
             ready_at=_pod_ready_at(pod),
             name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
             test_state=_test_state_from_annotations(pod.metadata.annotations or {}),
+            rollout_state=_rollout_state_from_annotations(
+                pod.metadata.annotations or {}
+            ),
         )
 
     async def set_name(
@@ -1005,6 +1027,62 @@ class SessionManager:
             ready_at=_pod_ready_at(patched),
             name=(patched.metadata.annotations or {}).get(NAME_ANNOTATION),
             test_state=state,
+            rollout_state=_rollout_state_from_annotations(
+                patched.metadata.annotations or {}
+            ),
+        )
+        self._publish_changed(owner)
+        return info
+
+    async def set_rollout_state(
+        self,
+        owner: str,
+        session_id: str,
+        *,
+        active: bool = True,
+    ) -> SessionInfo:
+        """Set or clear the GUI rollout state for a session."""
+        assert self._core is not None
+        pod = await self._read_owned_pod(owner, session_id)
+        record = (
+            await self._registry.get(owner, session_id)
+            if self._registry is not None
+            else None
+        )
+        state: dict[str, Any] | None
+        if active:
+            state = {"active": True}
+            annotation_value: str | None = json.dumps(
+                state, sort_keys=True, separators=(",", ":")
+            )
+        else:
+            state = None
+            annotation_value = None
+        patched = await self._core.patch_namespaced_pod(
+            name=pod.metadata.name,
+            namespace=SESSIONS_NAMESPACE,
+            body={
+                "metadata": {
+                    "annotations": {ROLLOUT_STATE_ANNOTATION: annotation_value}
+                }
+            },
+        )
+        mode = normalize_session_mode(
+            patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
+        )
+        info = SessionInfo(
+            id=session_id,
+            pod_name=patched.metadata.name,
+            owner=owner,
+            status=_pod_status(patched),
+            mode=mode,
+            requested_at=(record.requested_at if record else None)
+            or _pod_created_at(patched),
+            created_at=_pod_created_at(patched),
+            ready_at=_pod_ready_at(patched),
+            name=(patched.metadata.annotations or {}).get(NAME_ANNOTATION),
+            test_state=_test_state_from_annotations(patched.metadata.annotations or {}),
+            rollout_state=state,
         )
         self._publish_changed(owner)
         return info
@@ -1249,6 +1327,7 @@ def _session_info_from_pod(owner: str, pod: Any) -> SessionInfo:
         ready_at=_pod_ready_at(pod),
         name=(pod.metadata.annotations or {}).get(NAME_ANNOTATION),
         test_state=_test_state_from_annotations(pod.metadata.annotations or {}),
+        rollout_state=_rollout_state_from_annotations(pod.metadata.annotations or {}),
     )
 
 
@@ -1269,6 +1348,9 @@ def _session_info_from_record(
             ready_at=_pod_ready_at(pod),
             name=record.name,
             test_state=_test_state_from_annotations(pod.metadata.annotations or {}),
+            rollout_state=_rollout_state_from_annotations(
+                pod.metadata.annotations or {}
+            ),
         )
     return SessionInfo(
         id=record.id,
