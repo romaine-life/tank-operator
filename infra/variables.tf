@@ -31,15 +31,3 @@ variable "hostname" {
   type        = string
   default     = "tank.romaine.life"
 }
-
-variable "allowed_emails" {
-  description = "Email addresses allowed to authenticate. Joined with commas and stored in KV; backend parses on startup."
-  type        = list(string)
-  default = [
-    "nelson-devops-project@outlook.com",
-    "nelson@romaine.life",
-    "Brenden.owens39@gmail.com",
-    "gantonski@gmail.com",
-    "menacewwo@gmail.com",
-  ]
-}
