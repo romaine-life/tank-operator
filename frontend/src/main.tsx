@@ -10,16 +10,38 @@ if (typeof document !== "undefined") {
   document.documentElement.style.colorScheme = "dark";
 }
 
-// One-shot reap of pre-Phase-0 localStorage debris. The `tank-run-entries-*`
-// writer was removed in #384 (the transcript cache moved to the backend
-// replay paths) but the existing keys were left to rot — they accumulated
-// per-session, ate the 5MB quota, and broke JWT writes with a confusing
-// "exceeded the quota" auth error. Cheap to run on every boot; the
-// startsWith filter is a no-op once the keys are gone.
+// Allowlist-based reap of stale localStorage keys in our namespace.
+//
+// Generalized version of the original `tank-run-entries-*` reap: any
+// key whose name starts with `tank-` or `tank.` but isn't in the
+// known-good prefix list gets dropped on boot. This is how we close
+// the "stale key from a previous app version breaks the new version"
+// class of bug — when a writer is removed (#384 took out the transcript
+// cache writer, but #390 found 5MB of pre-removal keys still sitting
+// in users' localStorage), the keys reap themselves on next load.
+//
+// To add a new owned key/prefix: append to TANK_KEY_ALLOWLIST below.
+// Anything in our namespace not listed is treated as debris.
+// Non-tank keys are left alone — other libs/sites share this origin.
+const TANK_KEY_ALLOWLIST = [
+  "tank-operator-jwt",      // session JWT (auth.ts)
+  "tank-run-pref-",         // run-pane prefs (App.tsx)
+  "tank.defaultSessionMode",
+  "tank.defaultInteraction",
+  "tank.sessionInteraction:",
+  "tank.sessionOrder",      // matches tank.sessionOrder.<sub>
+];
+function isAllowedTankKey(key: string): boolean {
+  for (const allowed of TANK_KEY_ALLOWLIST) {
+    if (key === allowed || key.startsWith(allowed)) return true;
+  }
+  return false;
+}
 if (typeof window !== "undefined") {
   try {
     for (const key of Object.keys(window.localStorage)) {
-      if (key.startsWith("tank-run-entries-")) {
+      const isTankKey = key.startsWith("tank-") || key.startsWith("tank.");
+      if (isTankKey && !isAllowedTankKey(key)) {
         window.localStorage.removeItem(key);
       }
     }

@@ -107,8 +107,41 @@ async function exchange(idToken: string): Promise<SessionUser> {
   });
   if (!res.ok) throw new Error(await loginErrorMessage(res, emailFromIdToken(idToken)));
   const body = await res.json();
-  localStorage.setItem(TOKEN_KEY, body.token);
+  storeToken(body.token);
   return body.user;
+}
+
+// Auth must win over cache. A bloated localStorage (transcript caches,
+// stale debris, other apps sharing the origin) shouldn't be able to
+// break sign-in — the failure mode is a dead-end auth error with no
+// in-app recovery. On a QuotaExceededError we drop every other key
+// and retry. Lost prefs are server-synced and recoverable; a broken
+// auth write is not.
+function storeToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+    return;
+  } catch (err) {
+    if (!isQuotaExceeded(err)) throw err;
+  }
+  console.warn("localStorage quota exceeded on auth write; evicting and retrying");
+  for (const key of Object.keys(localStorage)) {
+    if (key === TOKEN_KEY) continue;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // best-effort
+    }
+  }
+  // Single retry; if this still fails the surrounding caller surfaces it.
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+function isQuotaExceeded(err: unknown): boolean {
+  if (!(err instanceof DOMException)) return false;
+  // Browsers spell the error name differently — Safari's legacy name
+  // was QUOTA_EXCEEDED_ERR, modern browsers throw QuotaExceededError.
+  return err.name === "QuotaExceededError" || err.name === "QUOTA_EXCEEDED_ERR";
 }
 
 export function getStoredToken(): string | null {
