@@ -1425,7 +1425,8 @@ type RunLifecycleEvent = {
     | "run.stale"
     | "run.output.started"
     | "run.tool.started"
-    | "run.tool.completed";
+    | "run.tool.completed"
+    | "run.message.created";
   payload?: JsonObject;
   created_at: string;
 };
@@ -1452,7 +1453,8 @@ function parseRunLifecycleEvent(data: string): RunLifecycleEvent | null {
     type !== "run.stale" &&
     type !== "run.output.started" &&
     type !== "run.tool.started" &&
-    type !== "run.tool.completed"
+    type !== "run.tool.completed" &&
+    type !== "run.message.created"
   ) {
     return null;
   }
@@ -1509,6 +1511,36 @@ function upsertEntry(entries: TranscriptEntry[], entry: TranscriptEntry): Transc
   const next = [...entries];
   next[index] = { ...next[index], ...entry };
   return next;
+}
+
+function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+  const payload = event.payload;
+  const role = payload?.role;
+  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
+  if ((role !== "user" && role !== "assistant") || !text) return entries;
+  const messageId =
+    typeof payload?.message_id === "string" && payload.message_id
+      ? payload.message_id
+      : `run-message-${event.event_id}`;
+  const duplicate = entries.some(
+    (entry) =>
+      entry.kind === "message" &&
+      entry.role === role &&
+      (entry.id === messageId || entry.text === text),
+  );
+  if (duplicate) return entries;
+  const id = entries.some((entry) => entry.id === messageId)
+    ? `run-message-${messageId}`
+    : messageId;
+  const payloadTime = normalizeIsoTimestamp(payload?.time);
+  const eventCreatedAt = normalizeIsoTimestamp(event.created_at);
+  return upsertEntry(entries, {
+    id,
+    kind: "message",
+    role,
+    text,
+    time: payloadTime ?? eventCreatedAt ?? nowIso(),
+  });
 }
 
 function appendMeta(
@@ -3595,6 +3627,7 @@ function HeadlessRun({
     source.addEventListener("run.output.started", onLifecycleEvent);
     source.addEventListener("run.tool.started", onLifecycleEvent);
     source.addEventListener("run.tool.completed", onLifecycleEvent);
+    source.addEventListener("run.message.created", onLifecycleEvent);
     return () => {
       source.removeEventListener("run.started", onLifecycleEvent);
       source.removeEventListener("run.completed", onLifecycleEvent);
@@ -3603,6 +3636,7 @@ function HeadlessRun({
       source.removeEventListener("run.output.started", onLifecycleEvent);
       source.removeEventListener("run.tool.started", onLifecycleEvent);
       source.removeEventListener("run.tool.completed", onLifecycleEvent);
+      source.removeEventListener("run.message.created", onLifecycleEvent);
       source.close();
       if (runEventsRef.current === source) runEventsRef.current = null;
     };
@@ -4549,6 +4583,10 @@ function HeadlessRun({
     if (event.type === "run.tool.completed") {
       const toolUseId = event.payload?.tool_use_id;
       completeActiveTool(typeof toolUseId === "string" ? toolUseId : null);
+      return;
+    }
+    if (event.type === "run.message.created") {
+      setEntries((prev) => applyRunMessageEvent(prev, event));
       return;
     }
     if (event.type === "run.completed") {
