@@ -273,6 +273,10 @@ def test_active_run_store_tracks_edge_status_without_heartbeats() -> None:
     asyncio.run(store.mark_stale("abc123", "run-1"))
 
     assert asyncio.run(store.get_active("abc123")) is None
+    latest = asyncio.run(store.get_latest("abc123"))
+    assert latest is not None
+    assert latest.run_id == "run-1"
+    assert latest.status == "stale"
 
 
 def test_run_event_store_appends_semantic_events_in_memory() -> None:

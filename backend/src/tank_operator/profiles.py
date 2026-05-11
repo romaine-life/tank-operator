@@ -575,21 +575,23 @@ class ActiveRunStore:
         return record
 
     async def get_active(self, session_id: str) -> ActiveRunRecord | None:
+        record = await self.get_latest(session_id)
+        if record is None:
+            return None
+        if record.status not in self.ACTIVE_STATUSES:
+            return None
+        return record
+
+    async def get_latest(self, session_id: str) -> ActiveRunRecord | None:
         if not self._enabled or self._container is None:
-            record = self._memory.get(session_id)
-            if record is None or record.status not in self.ACTIVE_STATUSES:
-                return None
-            return record
+            return self._memory.get(session_id)
         try:
             doc = await self._container.read_item(
                 item=session_id, partition_key=session_id
             )
         except CosmosResourceNotFoundError:
             return None
-        record = _active_run_from_doc(doc)
-        if record.status not in self.ACTIVE_STATUSES:
-            return None
-        return record
+        return _active_run_from_doc(doc)
 
     async def mark_completed(self, session_id: str, run_id: str) -> None:
         await self._mark_terminal(session_id, run_id, "completed")
