@@ -1695,6 +1695,19 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
   );
 }
 
+function isAgentToolPrompt(text: string, entries: TranscriptEntry[]): boolean {
+  return entries.some((entry) => {
+    if (entry.toolName !== "Agent" && entry.toolName !== "Task") return false;
+    if (!entry.toolInput) return false;
+    try {
+      const input = JSON.parse(entry.toolInput);
+      return isJsonObject(input) && typeof input.prompt === "string" && input.prompt.trim() === text;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function appendSkillInvocation(
   entries: TranscriptEntry[],
   name: string,
@@ -2008,6 +2021,7 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
         }
       }
       for (const text of texts) {
+        if (isAgentToolPrompt(text, nextEntries)) continue;
         const skillName = skillNameFromTrigger(text);
         if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
         if (!nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
