@@ -17,6 +17,13 @@ testEnv:
   authClientIdKvKey: tank-operator-test-oauth-client-id
   claudeCredentialsKvKey: claude-code-credentials
 
+staticOverride:
+  enabled: true
+  mountPath: /var/run/tank-operator-static-override
+  writerContainerName: static-writer
+  writerImage: alpine:3.20
+  writerImagePullPolicy: IfNotPresent
+
 namespaces:
   orchestrator: tank-operator
   sessions: tank-operator-sessions
