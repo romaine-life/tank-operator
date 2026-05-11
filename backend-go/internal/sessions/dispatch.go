@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
@@ -22,6 +23,7 @@ type DispatchParams struct {
 	PermissionMode string // already validated against [A-Za-z0-9._-]{1,64}
 	SkillName      string // already validated against [A-Za-z0-9_-]{1,64}
 	ActiveRuns     store.ActiveRunStore // may be nil
+	TurnQueue      store.TurnQueueStore // may be nil; only the claude path consumes this in Phase 2
 	Events         *EventBus
 }
 
@@ -56,6 +58,31 @@ func (m *Manager) DispatchHeadless(ctx context.Context, p DispatchParams) error 
 	promptPath := "/tmp/tank-prompt-" + auth.RandomHex(8)
 	streamPath := compat.RunStreamPath(runID)
 	pidPath := compat.RunPIDPath(runID)
+
+	// Phase 1 of the SDK migration: enqueue a turn descriptor for every
+	// claude dispatch. The pod-side runner (Phase 2) will consume these
+	// rows; for now this is a write-only record that the headless-run.sh
+	// path continues to do the actual work. Codex skipped — its dispatch
+	// shape stays per-turn, no long-lived runner.
+	if provider == "claude" && p.TurnQueue != nil {
+		if enqErr := p.TurnQueue.Enqueue(ctx, store.TurnRecord{
+			RunID:          runID,
+			SessionID:      p.SessionID,
+			Email:          p.Email,
+			Provider:       provider,
+			Prompt:         p.Prompt,
+			Model:          p.Model,
+			PermissionMode: p.PermissionMode,
+			SkillName:      p.SkillName,
+			FollowUp:       p.FollowUp,
+		}); enqErr != nil {
+			// Non-fatal in Phase 1: the headless-run.sh path is still the
+			// load-bearing dispatch. Surfaces as a slog.Warn so a real
+			// Cosmos outage shows up in logs without breaking sessions.
+			slog.Warn("turn queue enqueue failed",
+				"session", p.SessionID, "run_id", runID, "err", enqErr)
+		}
+	}
 
 	// Write prompt to pod.
 	if err := kubeexec.WriteFile(ctx, m.client, m.restCfg, namespace, podName, promptPath, []byte(p.Prompt)); err != nil {

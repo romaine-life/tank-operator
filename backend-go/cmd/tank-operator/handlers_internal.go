@@ -289,6 +289,7 @@ func (s *appServer) doInternalSendMessage(w http.ResponseWriter, r *http.Request
 			PermissionMode: permMode,
 			SkillName:      skillName,
 			ActiveRuns:     s.activeRuns,
+			TurnQueue:      s.turnQueue,
 			Events:         s.eventBus,
 		}); err != nil {
 			slog.Warn("internal send message dispatch failed", "session", sessionID, "err", err)
@@ -345,6 +346,7 @@ func (s *appServer) doInternalRunSession(w http.ResponseWriter, r *http.Request)
 			PermissionMode: permMode,
 			SkillName:      skillName,
 			ActiveRuns:     s.activeRuns,
+			TurnQueue:      s.turnQueue,
 			Events:         s.eventBus,
 		}); err != nil {
 			slog.Warn("internal run session dispatch failed", "session", info.ID, "err", err)

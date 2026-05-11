@@ -109,6 +109,26 @@ func (s *appServer) handleRunWebSocket(w http.ResponseWriter, r *http.Request) {
 	pidPath := compat.RunPIDPath(runID)
 
 	if !params.Resume {
+		// Phase 1: enqueue a turn descriptor for every claude WS dispatch.
+		// Producer-only; the Phase 2 pod-side runner is the consumer. Codex
+		// path skipped — it stays per-turn with no long-lived runner.
+		if provider == "claude" && s.turnQueue != nil {
+			if enqErr := s.turnQueue.Enqueue(ctx, store.TurnRecord{
+				RunID:          runID,
+				SessionID:      sessionID,
+				Email:          user.Email,
+				Provider:       provider,
+				Prompt:         params.Prompt,
+				Model:          model,
+				PermissionMode: permMode,
+				SkillName:      skillName,
+				FollowUp:       params.FollowUp,
+			}); enqErr != nil {
+				slog.Warn("turn queue enqueue failed",
+					"session", sessionID, "run_id", runID, "err", enqErr)
+			}
+		}
+
 		// Write prompt file and launch live run script.
 		promptPath := "/tmp/tank-prompt-" + auth.RandomHex(8)
 		if writeErr := kubeexec.WriteFile(ctx, s.k8s, s.restCfg, s.namespace, podName, promptPath, []byte(params.Prompt)); writeErr != nil {

@@ -57,6 +57,9 @@ func main() {
 	// 6. Init run events store.
 	runEventsStore := buildRunEventStore(azCred)
 
+	// 6b. Init turn queue store (Phase 1 of SDK migration).
+	turnQueueStore := buildTurnQueueStore(azCred)
+
 	// 7. Init event bus.
 	eventBus := sessions.NewEventBus()
 
@@ -99,6 +102,7 @@ func main() {
 		profiles:                profileStore,
 		activeRuns:              activeRunsStore,
 		runEvents:               runEventsStore,
+		turnQueue:               turnQueueStore,
 		eventBus:                eventBus,
 		verifier:                verifier,
 		minter:                  minter,
@@ -203,6 +207,24 @@ func buildActiveRunStore(azCred *azidentity.DefaultAzureCredential) store.Active
 	if err != nil {
 		slog.Warn("active run store disabled", "error", err)
 		return store.StubActiveRunStore{}
+	}
+	return s
+}
+
+func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential) store.TurnQueueStore {
+	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
+	if endpoint == "" || azCred == nil {
+		return store.StubTurnQueueStore{}
+	}
+	s, err := store.NewCosmosTurnQueueStore(
+		endpoint,
+		envDefault("COSMOS_DATABASE", "tank-operator"),
+		envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
+		azCred,
+	)
+	if err != nil {
+		slog.Warn("turn queue store disabled", "error", err)
+		return store.StubTurnQueueStore{}
 	}
 	return s
 }
