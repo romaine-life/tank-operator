@@ -126,6 +126,13 @@ spec:
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
               value: {{ .Values.internalApi.tankUiHost | quote }}
+            # Session-JWT signing key in Key Vault. The orchestrator never
+            # holds the private bytes — it calls KV's Sign operation per mint
+            # via workload identity. See infra/jwt_signing_key.tf.
+            - name: JWT_KV_VAULT
+              value: {{ .Values.jwt.kvVault | quote }}
+            - name: JWT_KV_KEY_NAME
+              value: {{ .Values.jwt.kvKeyName | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "tank-operator.authSecret" . }}

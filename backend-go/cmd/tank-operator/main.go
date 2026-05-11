@@ -70,11 +70,15 @@ func main() {
 		APIProxyHost:     os.Getenv("CLAUDE_API_PROXY_HOST"),
 	})
 
-	// 9. Init auth verifier and minter.
-	jwtSecret := os.Getenv("JWT_SECRET")
+	// 9. Init auth signer + verifier (RS256, signing key in KV).
+	jwtKey, err := buildJWTSigner(azCred)
+	if err != nil {
+		slog.Error("JWT signing key failed", "error", err)
+		os.Exit(1)
+	}
 	allowedEmails := os.Getenv("ALLOWED_EMAILS")
-	verifier := auth.NewVerifier(jwtSecret, allowedEmails)
-	minter := auth.NewMinter(jwtSecret, allowedEmails)
+	verifier := auth.NewVerifier(jwtKey, allowedEmails)
+	minter := auth.NewMinter(jwtKey, jwtKey, allowedEmails)
 
 	// 10. Start reaper.
 	ctx := context.Background()
@@ -128,6 +132,23 @@ func loadKubeConfig() (*rest.Config, error) {
 		}
 	}
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
+}
+
+// buildJWTSigner constructs the Key Vault-backed JWT signer/verifier the
+// orchestrator uses for its session and install-state tokens. Required:
+// JWT_KV_VAULT (vault DNS URL) and JWT_KV_KEY_NAME (key name within the
+// vault). Returns an error if either is unset or KV is unreachable —
+// the orchestrator must not silently fall back to an unsigned/HS256 path.
+func buildJWTSigner(azCred *azidentity.DefaultAzureCredential) (*auth.KeyVaultJWT, error) {
+	vaultURL := strings.TrimSpace(os.Getenv("JWT_KV_VAULT"))
+	keyName := strings.TrimSpace(os.Getenv("JWT_KV_KEY_NAME"))
+	if vaultURL == "" || keyName == "" {
+		return nil, fmt.Errorf("JWT_KV_VAULT and JWT_KV_KEY_NAME must be set")
+	}
+	if azCred == nil {
+		return nil, fmt.Errorf("azure credential not available")
+	}
+	return auth.NewKeyVaultJWT(vaultURL, keyName, azCred)
 }
 
 func buildProfileStore(azCred *azidentity.DefaultAzureCredential) profilesStore {

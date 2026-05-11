@@ -65,7 +65,7 @@ func TestConfig(t *testing.T) {
 
 func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{listOut: []sessions.Info{{ID: "1", Owner: "user@example.com"}}}
-	handler := authenticatedListSessions(auth.NewVerifier("secret", "user@example.com"), reader)
+	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	response := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 
 func TestAuthenticatedGetSessionUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{getOut: sessions.Info{ID: "2", Owner: "user@example.com"}}
-	handler := authenticatedGetSession(auth.NewVerifier("secret", "user@example.com"), reader)
+	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/2", nil)
 	request.SetPathValue("session_id", "2")
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
@@ -107,7 +107,7 @@ func TestAuthenticatedGetSessionUsesTokenEmail(t *testing.T) {
 
 func TestAuthenticatedGetSessionHidesNotOwned(t *testing.T) {
 	reader := &fakeSessionReader{getErr: sessions.ErrNotOwned}
-	handler := authenticatedGetSession(auth.NewVerifier("secret", "user@example.com"), reader)
+	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/2", nil)
 	request.SetPathValue("session_id", "2")
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
@@ -121,7 +121,7 @@ func TestAuthenticatedGetSessionHidesNotOwned(t *testing.T) {
 }
 
 func TestAuthenticatedListSessionsRejectsUnauthenticated(t *testing.T) {
-	handler := authenticatedListSessions(auth.NewVerifier("secret", "user@example.com"), &fakeSessionReader{})
+	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), &fakeSessionReader{})
 	response := httptest.NewRecorder()
 
 	handler(response, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
@@ -134,7 +134,7 @@ func TestAuthenticatedListSessionsRejectsUnauthenticated(t *testing.T) {
 func TestMe(t *testing.T) {
 	login := "octocat"
 	installationID := int64(123)
-	verifier := auth.NewVerifier("secret", "user@example.com")
+	verifier := auth.NewVerifier(testJWT(t), "user@example.com")
 	handler := me(verifier, fakeProfileStore{profile: profiles.Profile{
 		Email:          "user@example.com",
 		GitHubLogin:    &login,
@@ -163,7 +163,7 @@ func TestMe(t *testing.T) {
 
 func TestMeReturnsProfileError(t *testing.T) {
 	handler := me(
-		auth.NewVerifier("secret", "user@example.com"),
+		auth.NewVerifier(testJWT(t), "user@example.com"),
 		fakeProfileStore{err: errors.New("profile failed")},
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -178,7 +178,7 @@ func TestMeReturnsProfileError(t *testing.T) {
 }
 
 func TestMeRejectsUnauthenticated(t *testing.T) {
-	handler := me(auth.NewVerifier("secret", "user@example.com"), profiles.StubStore{})
+	handler := me(auth.NewVerifier(testJWT(t), "user@example.com"), profiles.StubStore{})
 	response := httptest.NewRecorder()
 
 	handler(response, httptest.NewRequest(http.MethodGet, "/api/auth/me", nil))
@@ -188,18 +188,35 @@ func TestMeRejectsUnauthenticated(t *testing.T) {
 	}
 }
 
-func signedMainToken(t *testing.T, secret, email string) string {
+// testJWT returns a process-singleton InMemoryJWT so verifier and signed-token
+// helpers in this file share the same key — necessary because each test now
+// constructs a verifier and a token separately and they must agree on the kid.
+var sharedTestJWT *auth.InMemoryJWT
+
+func testJWT(t *testing.T) *auth.InMemoryJWT {
 	t.Helper()
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	if sharedTestJWT != nil {
+		return sharedTestJWT
+	}
+	j, err := auth.NewInMemoryJWT("main-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedTestJWT = j
+	return j
+}
+
+func signedMainToken(t *testing.T, _ /*legacy secret arg*/, email string) string {
+	t.Helper()
+	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "sub-1",
 		"email": email,
 		"name":  "User",
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
-	signed, err := token.SignedString([]byte(secret))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return signed
+	return tok
 }

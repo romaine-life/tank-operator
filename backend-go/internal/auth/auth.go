@@ -1,17 +1,24 @@
 package auth
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 const CookieName = "auth_token"
+
+// keyResolveTimeout caps how long a verify call can spend fetching a missing
+// public key from KV. Verify is on the request path; a stalled KV call must
+// not block forever.
+const keyResolveTimeout = 5 * time.Second
 
 type User struct {
 	Sub   string
@@ -20,11 +27,11 @@ type User struct {
 }
 
 type Verifier struct {
-	secret        []byte
+	resolver      KeyResolver
 	allowedEmails map[string]struct{}
 }
 
-func NewVerifier(secret, allowedEmails string) *Verifier {
+func NewVerifier(resolver KeyResolver, allowedEmails string) *Verifier {
 	allowed := map[string]struct{}{}
 	for _, email := range strings.Split(allowedEmails, ",") {
 		normalized := strings.ToLower(strings.TrimSpace(email))
@@ -32,7 +39,7 @@ func NewVerifier(secret, allowedEmails string) *Verifier {
 			allowed[normalized] = struct{}{}
 		}
 	}
-	return &Verifier{secret: []byte(secret), allowedEmails: allowed}
+	return &Verifier{resolver: resolver, allowedEmails: allowed}
 }
 
 func (v *Verifier) CurrentUser(r *http.Request) (User, error) {
@@ -44,15 +51,21 @@ func (v *Verifier) CurrentUser(r *http.Request) (User, error) {
 }
 
 func (v *Verifier) Decode(tokenString string) (User, error) {
-	if len(v.secret) == 0 {
-		return User{}, errHTTP{status: http.StatusInternalServerError, message: "JWT_SECRET not configured"}
+	if v.resolver == nil {
+		return User{}, errHTTP{status: http.StatusInternalServerError, message: "JWT key resolver not configured"}
 	}
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
-		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+		if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 			return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
 		}
-		return v.secret, nil
+		kid, _ := token.Header["kid"].(string)
+		if kid == "" {
+			return nil, errors.New("token missing kid")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), keyResolveTimeout)
+		defer cancel()
+		return v.resolver.PublicKey(ctx, kid)
 	})
 	if err != nil || !token.Valid {
 		if err == nil {
