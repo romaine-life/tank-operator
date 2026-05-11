@@ -70,6 +70,17 @@ class _ActiveRunFakeSessions:
         )
 
 
+class _FakeRunEvents:
+    def __init__(self, events: list[RunEventRecord]) -> None:
+        self.events = events
+        self.list_after_kwargs: dict[str, object] | None = None
+
+    async def list_after(self, **kwargs: object) -> list[RunEventRecord]:
+        self.list_after_kwargs = kwargs
+        limit = int(kwargs.get("limit", 100))
+        return self.events[:limit]
+
+
 def test_wait_for_run_pod_name_sends_keepalive_while_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -193,6 +204,69 @@ def test_latest_run_events_uses_retained_run_pointer(
         "run_id": "run-1",
         "after_event_id": 42,
     }
+
+
+def test_latest_run_events_json_returns_bounded_event_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = ActiveRunRecord(
+        session_id="abc123",
+        email="operator@example.test",
+        run_id="run-1",
+        pod_name="session-abc123",
+        provider="claude",
+        status="completed",
+        stream_path="/tmp/tank-run-run-1.stream",
+        pid_path="/tmp/tank-run-run-1.pid",
+        started_at="2026-05-11T02:22:58.927036+00:00",
+        updated_at="2026-05-11T02:25:58.927036+00:00",
+        completed_at="2026-05-11T02:25:58.927036+00:00",
+    )
+    event = RunEventRecord(
+        run_id="run-1",
+        session_id="abc123",
+        email="operator@example.test",
+        event_id=42,
+        type="run.completed",
+        payload={"status": "ok"},
+        created_at="2026-05-11T02:25:58.927036+00:00",
+    )
+    fake_run_events = _FakeRunEvents([event])
+    monkeypatch.setattr(api, "sessions", _ActiveRunFakeSessions())
+    monkeypatch.setattr(api, "active_runs", _FakeActiveRuns(record))
+    monkeypatch.setattr(api, "run_events", fake_run_events)
+
+    response = asyncio.run(
+        api.get_latest_run_events_json(
+            session_id="abc123",
+            limit=5000,
+            user=User(
+                sub="operator@example.test",
+                email="operator@example.test",
+                name="Operator",
+            ),
+        )
+    )
+
+    assert fake_run_events.list_after_kwargs == {
+        "run_id": "run-1",
+        "session_id": "abc123",
+        "after_event_id": 0,
+        "limit": 1000,
+    }
+    assert response["run_id"] == "run-1"
+    assert response["limit"] == 1000
+    assert response["terminal_events_replayed"] == 1
+    assert response["events"] == [
+        {
+            "run_id": "run-1",
+            "session_id": "abc123",
+            "event_id": 42,
+            "type": "run.completed",
+            "payload": {"status": "ok"},
+            "created_at": "2026-05-11T02:25:58.927036+00:00",
+        }
+    ]
 
 
 def test_run_stdout_event_observer_emits_output_and_tool_events(

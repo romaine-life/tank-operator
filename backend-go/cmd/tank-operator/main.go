@@ -19,7 +19,9 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncompare"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
@@ -33,10 +35,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
+	mux.HandleFunc("GET /api/config", config)
+	authVerifier := auth.NewVerifier(os.Getenv("JWT_SECRET"), os.Getenv("ALLOWED_EMAILS"))
+	mux.HandleFunc("GET /api/auth/me", me(authVerifier, profileStore()))
 	if shadowSessionsEnabled() {
 		if reader, err := sessionReader(); err != nil {
 			slog.Warn("session shadow endpoints disabled", "error", err)
 		} else {
+			mux.HandleFunc("GET /api/sessions", authenticatedListSessions(authVerifier, reader))
+			mux.HandleFunc("GET /api/sessions/{session_id}", authenticatedGetSession(authVerifier, reader))
 			mux.HandleFunc("GET /api/shadow/sessions", listSessions(reader))
 			if pythonBase := pythonBaseURL(); pythonBase != "" {
 				mux.HandleFunc("GET /api/shadow/sessions/compare", compareSessions(reader, pythonBase))
@@ -61,6 +68,13 @@ func main() {
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func config(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{
+		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
+		"entra_authority": "https://login.microsoftonline.com/common",
+	})
 }
 
 func sessionReader() (*sessions.Reader, error) {
@@ -100,6 +114,29 @@ func pythonBaseURL() string {
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("TANK_PYTHON_BASE_URL")), "/")
 }
 
+func profileStore() profiles.Store {
+	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
+	if endpoint == "" {
+		return profiles.StubStore{}
+	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		slog.Warn("profile store disabled", "error", err)
+		return profiles.StubStore{}
+	}
+	store, err := profiles.NewCosmosStore(
+		endpoint,
+		envDefault("COSMOS_DATABASE", "tank-operator"),
+		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
+		credential,
+	)
+	if err != nil {
+		slog.Warn("profile store disabled", "error", err)
+		return profiles.StubStore{}
+	}
+	return store
+}
+
 func sessionRegistry() (sessions.Registry, error) {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" {
@@ -126,7 +163,77 @@ func envDefault(name, fallback string) string {
 	return value
 }
 
-func listSessions(reader *sessions.Reader) http.HandlerFunc {
+type sessionReaderAPI interface {
+	List(ctx context.Context, owner string) ([]sessions.Info, error)
+	Get(ctx context.Context, owner, sessionID string) (sessions.Info, error)
+}
+
+func me(verifier *auth.Verifier, store profiles.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := verifier.CurrentUser(r)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return
+		}
+		profile, err := store.GetOrCreate(r.Context(), user.Email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"sub":             user.Sub,
+			"email":           user.Email,
+			"name":            user.Name,
+			"avatar_url":      auth.GravatarURL(user.Email, 64),
+			"github_login":    profile.GitHubLogin,
+			"installation_id": profile.InstallationID,
+		})
+	}
+}
+
+func authenticatedListSessions(verifier *auth.Verifier, reader sessionReaderAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := verifier.CurrentUser(r)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return
+		}
+		result, err := reader.List(r.Context(), user.Email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func authenticatedGetSession(verifier *auth.Verifier, reader sessionReaderAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := verifier.CurrentUser(r)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return
+		}
+		sessionID := strings.TrimSpace(r.PathValue("session_id"))
+		if sessionID == "" {
+			writeError(w, http.StatusBadRequest, "missing session id")
+			return
+		}
+		result, err := reader.Get(r.Context(), user.Email, sessionID)
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, result)
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusNotFound, "session not found")
+		case errors.Is(err, context.Canceled):
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
+func listSessions(reader sessionReaderAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
 		if owner == "" {
@@ -142,7 +249,7 @@ func listSessions(reader *sessions.Reader) http.HandlerFunc {
 	}
 }
 
-func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFunc {
+func compareSessions(reader sessionReaderAPI, pythonBase string) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
@@ -164,7 +271,7 @@ func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFun
 	}
 }
 
-func getSession(reader *sessions.Reader) http.HandlerFunc {
+func getSession(reader sessionReaderAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
 		if owner == "" {

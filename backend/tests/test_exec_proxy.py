@@ -15,12 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from tank_operator import exec_proxy  # noqa: E402
 
 
-def test_detached_launcher_keeps_stream_file_and_tees_to_container_stdout() -> None:
+def test_detached_launcher_keeps_stream_file_and_closes_exec_stdout() -> None:
     launcher = exec_proxy._build_detached_launcher("echo hi", "/tmp/run.stream")
 
-    assert "tee -a /tmp/run.stream" in launcher
-    assert "> /proc/1/fd/1" in launcher
-    assert "2>&1" in launcher
+    assert ">> /tmp/run.stream 2>&1 < /dev/null &" in launcher
+    assert "tee" not in launcher
+    assert "/proc/1/fd/1" not in launcher
     assert "< /dev/null &" in launcher
 
 
@@ -30,7 +30,7 @@ def test_detached_launcher_quotes_command_and_log_path() -> None:
     )
 
     assert "bash -c 'printf '\"'\"'hello world'\"'\"''" in launcher
-    assert "tee -a '/tmp/run with spaces.stream'" in launcher
+    assert ">> '/tmp/run with spaces.stream' 2>&1 < /dev/null &" in launcher
 
 
 class _FakeBrowser:

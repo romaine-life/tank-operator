@@ -1468,6 +1468,12 @@ type RunLifecycleEvent = {
   created_at: string;
 };
 
+type RunReplayResponse = {
+  session_id: string;
+  run_id: string;
+  events?: unknown[];
+};
+
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -1669,6 +1675,12 @@ function skillActionText(name: string): string {
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} skill`;
 }
 
+function skillSupplementalText(name: string, text: string): string {
+  const trimmed = text.trim();
+  const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
+  return trimmed.replace(triggerPattern, "").trim();
+}
+
 function skillNameFromTrigger(text: string): string | null {
   const trimmed = text.trim();
   const match = trimmed.match(/^[$/]([A-Za-z0-9_-]{1,64})$/);
@@ -1686,6 +1698,7 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
 function appendSkillInvocation(
   entries: TranscriptEntry[],
   name: string,
+  supplementalText = "",
   time: string = nowIso(),
 ): TranscriptEntry[] {
   if (!name) return entries;
@@ -1698,6 +1711,7 @@ function appendSkillInvocation(
     time,
     messageKind: "skill-action",
     skillName: name,
+    skillSupplementalText: supplementalText.trim(),
   } as TranscriptEntry;
   return appendMeta(
     [...entries, userAction],
@@ -2044,7 +2058,10 @@ function applyProviderEvent(
 ): TranscriptEntry[] {
   if (event.type === "tank.skill_invocation") {
     const name = typeof event.name === "string" ? event.name.trim() : "";
-    return name ? appendSkillInvocation(entries, name, eventTime(event)) : entries;
+    const trigger = typeof event.trigger === "string" ? event.trigger : "";
+    return name
+      ? appendSkillInvocation(entries, name, skillSupplementalText(name, trigger), eventTime(event))
+      : entries;
   }
   if (mode === "codex_gui") return applyCodexEvent(entries, event);
   return applyClaudeEvent(entries, event);
@@ -2059,7 +2076,7 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 
 interface ToolVisualConfig {
   Icon: LucideIcon;
-  /** CSS class added to the icon span — drives the color stripe + icon hue. */
+  /** CSS class added to the icon span — drives the icon badge treatment. */
   colorClass: string;
   tooltip: string;
 }
@@ -2077,7 +2094,7 @@ function isToolSearchEntry(entry: TranscriptEntry): boolean {
   return normalized.includes("toolsearch");
 }
 
-/** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
+/** Map a tool entry to a Lucide icon + badge treatment. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
   if (isToolSearchEntry(entry)) {
@@ -2572,15 +2589,38 @@ type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void
 // and provider JSONL history are authoritative; this only fills the pane while
 // those replay paths catch up after a browser refresh.
 const RUN_STORAGE_PREFIX = "tank-run-entries-";
+const RUN_STORAGE_MAX_ENTRIES = 20;
+
+type StoredRunEntries = {
+  version: 2;
+  entries: TranscriptEntry[];
+  savedAt: string;
+};
+
+function trimStoredEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
+  return entries.slice(-RUN_STORAGE_MAX_ENTRIES);
+}
 
 function loadStoredEntries(sessionId: string): TranscriptEntry[] {
   try {
     const raw = localStorage.getItem(RUN_STORAGE_PREFIX + sessionId);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as TranscriptEntry[]) : [];
+    if (Array.isArray(parsed)) return trimStoredEntries(parsed as TranscriptEntry[]);
+    if (isJsonObject(parsed) && Array.isArray(parsed.entries)) {
+      return trimStoredEntries(parsed.entries as TranscriptEntry[]);
+    }
+    return [];
   } catch {
     return [];
+  }
+}
+
+function clearStoredEntries(sessionId: string) {
+  try {
+    localStorage.removeItem(RUN_STORAGE_PREFIX + sessionId);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -2940,6 +2980,10 @@ function RunMessageBubble({
   const messageKind = (entry as Record<string, unknown>).messageKind;
   const isSkillAction = messageKind === "skill-action";
   const skillName = (entry as Record<string, unknown>).skillName;
+  const skillSupplementalText =
+    typeof (entry as Record<string, unknown>).skillSupplementalText === "string"
+      ? ((entry as Record<string, unknown>).skillSupplementalText as string)
+      : "";
   const skillActionIcon =
     skillName === "test"
       ? FlaskConicalIcon
@@ -2970,9 +3014,16 @@ function RunMessageBubble({
       >
         <div className="run-transcript-message-text" data-slot="message-text">
           {isSkillAction ? (
-            <span className="run-skill-action-text">
-              <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
-              <span>{text}</span>
+            <span className="run-skill-action">
+              <span className="run-skill-action-text">
+                <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
+                <span>{text}</span>
+              </span>
+              {skillSupplementalText && (
+                <span className="run-skill-action-detail">
+                  <RunMarkdown>{skillSupplementalText}</RunMarkdown>
+                </span>
+              )}
             </span>
           ) : (
             <RunMarkdown>{text}</RunMarkdown>
@@ -3631,6 +3682,7 @@ function HeadlessRun({
   const wsRef = useRef<WebSocket | null>(null);
   const runEventsRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<void> | null>(null);
+  const transcriptCacheBackendAuthoritativeRef = useRef(false);
   const sessionIdRef = useRef(session.id);
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -3804,21 +3856,25 @@ function HeadlessRun({
     return () => main.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Persist transcript entries per-session in localStorage. Survives page
-  // refresh; restored on initial state via loadStoredEntries above.
+  // Keep only a bounded provisional cache. Backend replay/history is
+  // authoritative once it has restored this session.
   useEffect(() => {
     try {
-      if (entries.length > 0) {
+      if (transcriptCacheBackendAuthoritativeRef.current || entries.length === 0) {
+        clearStoredEntries(session.id);
+      } else {
+        const stored: StoredRunEntries = {
+          version: 2,
+          entries: trimStoredEntries(entries),
+          savedAt: nowIso(),
+        };
         localStorage.setItem(
           RUN_STORAGE_PREFIX + session.id,
-          JSON.stringify(entries),
+          JSON.stringify(stored),
         );
-      } else {
-        localStorage.removeItem(RUN_STORAGE_PREFIX + session.id);
       }
     } catch {
-      // Quota exceeded or storage unavailable — drop silently. Future
-      // backend replay would cover this case anyway.
+      // Quota exceeded or storage unavailable — drop silently.
     }
   }, [entries, session.id]);
 
@@ -3848,96 +3904,74 @@ function HeadlessRun({
     historyRefreshRef.current = refresh;
   }
 
-  function applyLatestRunReplayEvent(event: RunLifecycleEvent): boolean {
-    if (event.session_id !== session.id) return false;
-    if (event.type === "run.message.created") {
-      setEntries((prev) => applyRunMessageEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.tool.started") {
-      setEntries((prev) => applyRunToolStartedEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.tool.completed") {
-      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.completed") {
-      setLastStatusText("Done");
-      setRunStatus("done");
+  function applyReplayEventToEntries(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+    if (event.type === "run.message.created") return applyRunMessageEvent(entries, event);
+    if (event.type === "run.tool.started") return applyRunToolStartedEvent(entries, event);
+    if (event.type === "run.tool.completed") return applyRunToolCompletedEvent(entries, event);
+    return entries;
+  }
+
+  function applyRunReplay(events: RunLifecycleEvent[], showHint: boolean): boolean {
+    const replayEntries = events.reduce<TranscriptEntry[]>(
+      (acc, event) => applyReplayEventToEntries(acc, event),
+      [],
+    );
+    const replayedContent = replayEntries.length > 0;
+    for (const event of events) {
+      if (!isRunTerminalEvent(event)) continue;
+      if (event.type === "run.completed") {
+        setLastStatusText("Done");
+        setRunStatus("done");
+      } else {
+        setLastStatusText("Error");
+        setRunStatus("error");
+      }
       setActiveTool(null);
       setRunning(false);
       setActiveRunId(null);
-      return false;
     }
-    if (event.type === "run.failed" || event.type === "run.stale") {
-      setLastStatusText("Error");
-      setRunStatus("error");
-      setActiveTool(null);
-      setRunning(false);
-      setActiveRunId(null);
-      return false;
+    if (replayedContent) {
+      transcriptCacheBackendAuthoritativeRef.current = true;
+      clearStoredEntries(session.id);
+      setEntries((prev) =>
+        transcriptComparable(prev) === transcriptComparable(replayEntries)
+          ? prev
+          : replayEntries,
+      );
+      if (showHint) {
+        setContinueHintVisible(true);
+        window.setTimeout(() => setContinueHintVisible(false), 3000);
+      }
     }
-    return false;
+    return replayedContent;
   }
 
   function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
-    if (typeof EventSource === "undefined") return Promise.resolve(false);
     const refreshSessionId = session.id;
-    return new Promise((resolve) => {
-      let settled = false;
-      let replayedContent = false;
-      const runEventTypes: RunLifecycleEvent["type"][] = [
-        "run.started",
-        "run.completed",
-        "run.failed",
-        "run.stale",
-        "run.output.started",
-        "run.tool.started",
-        "run.tool.completed",
-        "run.message.created",
-      ];
-      const source = new EventSource(
-        `/api/sessions/${encodeURIComponent(session.id)}/runs/latest/events`,
-        { withCredentials: true },
-      );
-      const finish = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeout);
-        for (const type of runEventTypes) {
-          source.removeEventListener(type, onLifecycleEvent);
+    return authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/runs/latest/events.json`,
+    )
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const replay = (await res.json()) as RunReplayResponse;
+        if (sessionIdRef.current !== refreshSessionId) return false;
+        if (replay.session_id !== refreshSessionId || !Array.isArray(replay.events)) {
+          return false;
         }
-        source.close();
-        if (ok && showHint) {
-          setContinueHintVisible(true);
-          window.setTimeout(() => setContinueHintVisible(false), 3000);
-        }
-        resolve(ok);
-      };
-      const onLifecycleEvent = (message: MessageEvent<string>) => {
-        if (sessionIdRef.current !== refreshSessionId) {
-          finish(false);
-          return;
-        }
-        const event = parseRunLifecycleEvent(message.data);
-        if (!event) return;
-        replayedContent = applyLatestRunReplayEvent(event) || replayedContent;
-        if (isRunTerminalEvent(event)) {
-          window.setTimeout(() => finish(replayedContent), 50);
-        }
-      };
-      for (const type of runEventTypes) {
-        source.addEventListener(type, onLifecycleEvent);
-      }
-      source.onerror = () => finish(replayedContent);
-      const timeout = window.setTimeout(() => finish(replayedContent), 2000);
-    });
+        const events = replay.events
+          .map((event) => parseRunLifecycleEvent(JSON.stringify(event)))
+          .filter((event): event is RunLifecycleEvent => event !== null);
+        if (events.length === 0) return false;
+        return applyRunReplay(events, showHint);
+      })
+      .catch(() => false);
   }
 
   function refreshRunHistoryFromBackend(showHint: boolean) {
     const refreshSessionId = session.id;
-    void authedFetch(`/api/sessions/${refreshSessionId}/run/history`)
+    void authedFetch(
+      `/api/sessions/${refreshSessionId}/run/history?source=latest-events-fallback`,
+    )
       .then(async (res) => {
         if (!res.ok) return "";
         return await res.text();
@@ -3948,6 +3982,8 @@ function HeadlessRun({
         const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
           let behind = false;
+          transcriptCacheBackendAuthoritativeRef.current = true;
+          clearStoredEntries(refreshSessionId);
           setEntries((prev) => {
             if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
             // If the JSONL has fewer conversation messages than the current
@@ -4319,6 +4355,7 @@ function HeadlessRun({
   // session's cached entries and allow the history sync to run again.
   useEffect(() => {
     sessionIdRef.current = session.id;
+    transcriptCacheBackendAuthoritativeRef.current = false;
     setEntries(loadStoredEntries(session.id));
     setQueuedMessages([]);
     historyRefreshRef.current = null;
@@ -4555,6 +4592,12 @@ function HeadlessRun({
     const newPos = start + insert.length;
     ta.setSelectionRange(newPos, newPos);
     ta.focus();
+  }
+
+  function getComposerValue(): string {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    return ta?.value ?? composerText;
   }
 
   function setComposerValue(value: string) {
@@ -4874,9 +4917,25 @@ function HeadlessRun({
     if (!trimmed || session.status !== "Active") return;
     // Wait until all attachments have finished uploading. If any errored
     // out, surface it but still let the run go ahead with what's ready.
+    const composed = composePromptWithAttachments(trimmed);
+    if (composed == null) return;
+    if (running) {
+      // Queue message to send once the current run finishes. PromptInput
+      // clears the textarea before this callback returns, so the visible
+      // queued-message list is the user's confirmation that the submit stuck.
+      setQueuedMessages((prev) => [
+        ...prev,
+        { id: nextQueuedMessageId(), text: composed },
+      ]);
+      return;
+    }
+    startRun(composed);
+  }
+
+  function composePromptWithAttachments(trimmed: string): string | null {
     const ready = attachments.filter((a) => a.status === "ready");
     const stillUploading = attachments.some((a) => a.status === "uploading");
-    if (stillUploading) return;
+    if (stillUploading) return null;
     let composed = trimmed;
     if (ready.length > 0) {
       const lines = ready
@@ -4891,29 +4950,19 @@ function HeadlessRun({
       }
       return [];
     });
-    if (running) {
-      // Queue message to send once the current run finishes. PromptInput
-      // clears the textarea before this callback returns, so the visible
-      // queued-message list is the user's confirmation that the submit stuck.
-      setQueuedMessages((prev) => [
-        ...prev,
-        { id: nextQueuedMessageId(), text: composed },
-      ]);
-      return;
-    }
-    startRun(composed);
+    return composed;
   }
 
-  function submitSkillInvocation(skillName: string) {
+  function submitSkillInvocation(skillName: string, promptText = "") {
     const displayText = skillInvocationTitle(skillName);
     if (running) {
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: "", displayText, skillName },
+        { id: nextQueuedMessageId(), text: promptText, displayText, skillName },
       ]);
       return;
     }
-    startRun("", displayText, skillName);
+    startRun(promptText, displayText, skillName);
   }
 
   async function markTestState(state: TestState) {
@@ -4956,12 +5005,16 @@ function HeadlessRun({
 
   function startTestSkill() {
     if (session.status !== "Active") return;
+    const promptText = getComposerValue().trim();
+    const composed = composePromptWithAttachments(promptText);
+    if (composed == null) return;
+    setComposerValue("");
     void markTestState({ active: true }).catch((e) => {
       setEntries((prev) =>
         appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
       );
     });
-    submitSkillInvocation("test");
+    submitSkillInvocation("test", composed);
   }
 
   function startGuiRollout() {
@@ -4977,6 +5030,7 @@ function HeadlessRun({
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
+    transcriptCacheBackendAuthoritativeRef.current = false;
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
@@ -4995,7 +5049,7 @@ function HeadlessRun({
     currentRunRef.current = run;
     setActiveRunId(run.id);
     if (skillName) {
-      setEntries((prev) => appendSkillInvocation(prev, skillName, nowIso()));
+      setEntries((prev) => appendSkillInvocation(prev, skillName, trimmed, nowIso()));
     } else {
       setEntries((prev) => [
         ...prev,
@@ -6017,9 +6071,12 @@ function HeadlessRun({
                         setQueuedMessages((prev) =>
                           prev.filter((item) => item.id !== message.id),
                         );
+                        const skillTrigger = `${isClaude ? "/" : "$"}${message.skillName}`;
                         setComposerValue(
                           message.skillName
-                            ? `${isClaude ? "/" : "$"}${message.skillName}`
+                            ? message.text.trim()
+                              ? `${skillTrigger}\n\n${message.text}`
+                              : skillTrigger
                             : message.text,
                         );
                       }}
