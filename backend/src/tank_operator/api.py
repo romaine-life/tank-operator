@@ -55,7 +55,7 @@ from .exec_proxy import (
     exec_stream_to_websocket,
 )
 from .internal_api import build_router as build_internal_router
-from .profiles import ActiveRunStore, ProfileStore, SessionRegistryStore
+from .profiles import ActiveRunStore, ProfileStore, RunEventStore, SessionRegistryStore
 from .session_events import SessionEventBus
 from .sessions import (
     ACCEPTED_SESSION_MODES,
@@ -77,6 +77,7 @@ from .sessions import (
 
 session_registry = SessionRegistryStore()
 active_runs = ActiveRunStore()
+run_events = RunEventStore()
 session_events = SessionEventBus()
 sessions = SessionManager(
     registry=session_registry, events=session_events, active_runs=active_runs
@@ -100,11 +101,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await profiles.startup()
     await session_registry.startup()
     await active_runs.startup()
+    await run_events.startup()
     await sessions.startup()
     try:
         yield
     finally:
         await sessions.shutdown()
+        await run_events.shutdown()
         await active_runs.shutdown()
         await session_registry.shutdown()
         await profiles.shutdown()
@@ -205,6 +208,26 @@ async def _wait_for_run_pod_name(owner: str, session_id: str, ws: WebSocket) -> 
         if not pod_task.done():
             pod_task.cancel()
         raise
+
+
+async def _append_run_event(
+    *,
+    email: str,
+    session_id: str,
+    run_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await run_events.append(
+            email=email,
+            session_id=session_id,
+            run_id=run_id,
+            event_type=event_type,
+            payload=payload,
+        )
+    except Exception as exc:
+        log.warning("failed to append run event %s for %s: %s", event_type, run_id, exc)
 
 
 def _build_headless_script(
@@ -1968,6 +1991,13 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 SESSIONS_NAMESPACE, pod_name, prompt_path, prompt_bytes
             )
         except RuntimeError as exc:
+            await _append_run_event(
+                email=user.email,
+                session_id=session_id,
+                run_id=run_id,
+                event_type="run.failed",
+                payload={"phase": "stage_prompt", "detail": str(exc)},
+            )
             await ws.send_json({"status": "error", "detail": f"failed to stage prompt: {exc}"})
             await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="prompt write failed")
             return
@@ -1987,11 +2017,18 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 log_path=stream_path,
             )
         except RuntimeError as exc:
+            await _append_run_event(
+                email=user.email,
+                session_id=session_id,
+                run_id=run_id,
+                event_type="run.failed",
+                payload={"phase": "launch", "detail": str(exc)},
+            )
             await ws.send_json({"status": "error", "detail": f"failed to launch run: {exc}"})
             await ws.close(code=status.WS_1011_INTERNAL_ERROR, reason="run launch failed")
             return
         try:
-            await active_runs.start(
+            record = await active_runs.start(
                 email=user.email,
                 session_id=session_id,
                 run_id=run_id,
@@ -2000,12 +2037,32 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 stream_path=stream_path,
                 pid_path=pid_path,
             )
+            await _append_run_event(
+                email=user.email,
+                session_id=session_id,
+                run_id=run_id,
+                event_type="run.started",
+                payload={
+                    "provider": provider,
+                    "pod_name": pod_name,
+                    "stream_path": stream_path,
+                    "pid_path": pid_path,
+                    "started_at": record.started_at,
+                },
+            )
             session_events.publish(user.email)
         except Exception as exc:
             log.warning("failed to persist active run %s: %s", run_id, exc)
     else:
         live = await _check_active_run_on_pod(pod_name, run_id)
         if live is None:
+            await _append_run_event(
+                email=user.email,
+                session_id=session_id,
+                run_id=run_id,
+                event_type="run.stale",
+                payload={"phase": "resume"},
+            )
             await ws.send_json({"status": "error", "detail": "run is no longer active"})
             await ws.close(
                 code=status.WS_1011_INTERNAL_ERROR,
@@ -2026,6 +2083,12 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             )
             try:
                 await active_runs.mark_completed(session_id, run_id)
+                await _append_run_event(
+                    email=user.email,
+                    session_id=session_id,
+                    run_id=run_id,
+                    event_type="run.completed",
+                )
                 session_events.publish(user.email)
             except Exception as exc:
                 log.warning("failed to mark active run complete %s: %s", run_id, exc)

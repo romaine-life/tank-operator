@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tank_operator.profiles import ActiveRunStore, SessionRegistryStore
+from tank_operator.profiles import ActiveRunStore, RunEventStore, SessionRegistryStore
 from tank_operator.sessions import GLIMMUNG_CONTEXT_ANNOTATION, SessionManager
 
 
@@ -256,6 +256,28 @@ def test_active_run_store_tracks_edge_status_without_heartbeats() -> None:
     asyncio.run(store.mark_stale("abc123", "run-1"))
 
     assert asyncio.run(store.get_active("abc123")) is None
+
+
+def test_run_event_store_appends_semantic_events_in_memory() -> None:
+    async def run() -> None:
+        store = RunEventStore()
+        event = await store.append(
+            email="Operator@Example.Test",
+            session_id="abc123",
+            run_id="run-1",
+            event_type="run.started",
+            payload={"provider": "codex"},
+        )
+
+        assert event.email == "operator@example.test"
+        assert event.session_id == "abc123"
+        assert event.run_id == "run-1"
+        assert event.type == "run.started"
+        assert event.payload == {"provider": "codex"}
+        assert event.event_id > 0
+        assert store._memory["run-1"] == [event]  # noqa: SLF001
+
+    asyncio.run(run())
 
 
 def test_session_list_reports_request_creation_and_ready_timestamps() -> None:
