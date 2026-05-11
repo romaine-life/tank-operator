@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced — no implicit `:latest` drift.
-  tag: "9a2a844"
+  tag: "app-95780bd907e9850071dcaf36f616ea75e5bae8ace84e24e049c29b66d6e5aed8"
   pullPolicy: IfNotPresent
 
 testEnv:
@@ -98,7 +98,7 @@ apiProxy:
     # is load-bearing — the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "33d14e7"
+    tag: "api-proxy-10d26ba67ce7e9efdc8990cc3c280d14f50e1ba118afa837cdb1ddb145904ab9"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy

@@ -49,6 +49,7 @@ import {
   FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
+  ExternalLinkIcon,
   ImageIcon,
   InfoIcon,
   ListChecksIcon,
@@ -104,6 +105,7 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   toolServer?: string;
   toolAction?: string;
 };
+type SkillStateName = "test" | "rollout";
 
 interface Session {
   id: string;
@@ -758,6 +760,35 @@ function sessionRuntimeTitle(session: Session, nowMs: number): string {
   return `running ${runtime}`;
 }
 
+function currentSessionSkillState(
+  testState?: TestState | null,
+  rolloutState?: RolloutState | null,
+): SkillStateName | null {
+  const testActive = testState?.active;
+  const rolloutActive = rolloutState?.active;
+  if (!testActive && !rolloutActive) return null;
+  if (testActive && !rolloutActive) return "test";
+  if (rolloutActive && !testActive) return "rollout";
+  return null;
+}
+
+function sessionSkillStateClass(session: Session): string {
+  const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
+  if (currentSkill === "test") return " is-skill-test";
+  if (currentSkill === "rollout") return " is-skill-rollout";
+  return "";
+}
+
+function mergeMutualSessionSkillState(incoming: Session, existing?: Session): Session {
+  if (!existing) return incoming;
+  if (!incoming.test_state?.active || !incoming.rollout_state?.active) return incoming;
+
+  const existingSkill = currentSessionSkillState(existing.test_state, existing.rollout_state);
+  if (existingSkill === "test") return { ...incoming, rollout_state: null };
+  if (existingSkill === "rollout") return { ...incoming, test_state: null };
+  return incoming;
+}
+
 function sessionBootStartMs(session: Session): number {
   const requestedMs = session.requested_at ? Date.parse(session.requested_at) : NaN;
   if (Number.isFinite(requestedMs)) return requestedMs;
@@ -1000,6 +1031,14 @@ function IconExternal() {
       <path d="M10 3h3v3" />
       <path d="M13 3 8 8" />
       <path d="M11.5 9V13H3V4.5h4" />
+    </svg>
+  );
+}
+
+function IconGithub() {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+      <path d="M12 .5C5.7.5.7 5.6.7 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 .1.6 2.4 4 .7.1-.7.4-1.2.7-1.5-2.5-.3-5.2-1.3-5.2-5.6 0-1.2.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 .9-.3 3.1 1.2.9-.3 1.8-.4 2.8-.4s1.9.1 2.8.4c2.1-1.5 3.1-1.2 3.1-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.9 1.2 3.1 0 4.3-2.6 5.3-5.2 5.6.4.3.8 1 .8 2.1V22c0 .3.2.7.8.6 4.6-1.5 7.8-5.8 7.8-10.8C23.3 5.6 18.3.5 12 .5Z" />
     </svg>
   );
 }
@@ -1540,6 +1579,41 @@ function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEve
   });
 }
 
+function applyRunToolStartedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+  const payload = event.payload;
+  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
+  const toolName = typeof payload?.name === "string" && payload.name ? payload.name : "tool";
+  if (!toolUseId) return entries;
+  const existing = entries.find((entry) => entry.id === toolUseId);
+  const terminal = existing?.toolStatus === "completed" || existing?.toolStatus === "failed";
+  return upsertEntry(entries, {
+    id: toolUseId,
+    kind: "tool",
+    toolName: existing?.toolName ?? toolName,
+    toolInput: existing?.toolInput,
+    toolOutput: existing?.toolOutput,
+    toolStatus: terminal ? existing?.toolStatus : "started",
+    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
+  });
+}
+
+function applyRunToolCompletedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+  const payload = event.payload;
+  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
+  if (!toolUseId) return entries;
+  const existing = entries.find((entry) => entry.id === toolUseId);
+  const output = typeof payload?.output === "string" ? payload.output : existing?.toolOutput;
+  return upsertEntry(entries, {
+    id: toolUseId,
+    kind: "tool",
+    toolName: existing?.toolName ?? "tool result",
+    toolInput: existing?.toolInput,
+    toolOutput: output,
+    toolStatus: payload?.is_error === true ? "failed" : "completed",
+    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
+  });
+}
+
 function appendMeta(
   entries: TranscriptEntry[],
   id: string,
@@ -2061,6 +2135,7 @@ interface FileEntry {
   name: string;
   type: "file" | "dir" | "symlink" | "other";
   size: number;
+  github_url?: string | null;
 }
 
 interface SelectedFile {
@@ -4599,11 +4674,13 @@ function HeadlessRun({
         const toolUseId = event.payload?.tool_use_id;
         setActiveTool(toolName, typeof toolUseId === "string" ? toolUseId : null);
       }
+      setEntries((prev) => applyRunToolStartedEvent(prev, event));
       return;
     }
     if (event.type === "run.tool.completed") {
       const toolUseId = event.payload?.tool_use_id;
       completeActiveTool(typeof toolUseId === "string" ? toolUseId : null);
+      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
       return;
     }
     if (event.type === "run.message.created") {
@@ -4712,7 +4789,8 @@ function HeadlessRun({
 
   async function markTestState(state: TestState) {
     setTestState(state);
-    onSessionPatch(session.id, { test_state: state });
+    setRolloutState(null);
+    onSessionPatch(session.id, { test_state: state, rollout_state: null });
     const res = await authedFetch(`/api/sessions/${session.id}/test-state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4722,13 +4800,16 @@ function HeadlessRun({
       throw new Error(`test state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
-    setTestState(updated.test_state ?? null);
-    onSessionPatch(session.id, { test_state: updated.test_state ?? null });
+    const nextState = updated.test_state ?? null;
+    setTestState(nextState);
+    setRolloutState(null);
+    onSessionPatch(session.id, { test_state: nextState, rollout_state: null });
   }
 
   async function markRolloutState(state: RolloutState) {
     setRolloutState(state);
-    onSessionPatch(session.id, { rollout_state: state });
+    setTestState(null);
+    onSessionPatch(session.id, { test_state: null, rollout_state: state });
     const res = await authedFetch(`/api/sessions/${session.id}/rollout-state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4738,8 +4819,10 @@ function HeadlessRun({
       throw new Error(`rollout state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
-    setRolloutState(updated.rollout_state ?? null);
-    onSessionPatch(session.id, { rollout_state: updated.rollout_state ?? null });
+    const nextState = updated.rollout_state ?? null;
+    setTestState(null);
+    setRolloutState(nextState);
+    onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
   function startTestSkill() {
@@ -4953,6 +5036,9 @@ function HeadlessRun({
   const provider: Provider = isClaude ? "anthropic" : "codex";
   const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
+  const currentSkillState = currentSessionSkillState(testState, rolloutState);
+  const testActionActive = currentSkillState === "test";
+  const rolloutActionActive = currentSkillState === "rollout";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
   const contextWindow = getContextWindow(selectedModel.id);
@@ -5167,28 +5253,46 @@ function HeadlessRun({
                     const Icon =
                       e.type === "dir" ? FolderIcon : FileIcon;
                     return (
-                      <button
+                      <div
                         key={e.name}
-                        type="button"
                         className={`run-files-row${
                           selectedFile?.path === joinFilesPath(filesPath, e.name)
                             ? " run-files-row-active"
                             : ""
                         }`}
-                        onClick={() => openFileEntry(e.name, e.type)}
                       >
-                        <Icon
-                          size={14}
-                          className={`run-files-row-icon run-files-row-${e.type}`}
-                          aria-hidden="true"
-                        />
-                        <span className="run-files-row-name">{e.name}</span>
-                        {e.type === "file" && (
+                        <button
+                          type="button"
+                          className="run-files-row-main"
+                          onClick={() => openFileEntry(e.name, e.type)}
+                        >
+                          <Icon
+                            size={14}
+                            className={`run-files-row-icon run-files-row-${e.type}`}
+                            aria-hidden="true"
+                          />
+                          <span className="run-files-row-name">{e.name}</span>
+                        </button>
+                        {e.github_url ? (
+                          <a
+                            className="run-files-row-link"
+                            href={e.github_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open ${e.name} on GitHub`}
+                            aria-label={`Open ${e.name} on GitHub`}
+                          >
+                            <IconGithub />
+                            <ExternalLinkIcon size={11} aria-hidden="true" />
+                          </a>
+                        ) : e.type === "file" ? (
                           <span className="run-files-row-size">
                             {humanFileSize(e.size)}
                           </span>
+                        ) : (
+                          <span aria-hidden="true" />
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 {!filesLoading &&
@@ -5931,7 +6035,7 @@ function HeadlessRun({
                 {GUI_ROLLOUT_MODES.has(session.mode) && (
                   <button
                     type="button"
-                    className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutState?.active ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutActionActive ? " is-active" : ""}`}
                     onClick={startGuiRollout}
                     disabled={!ready}
                     aria-label="Start rollout"
@@ -5942,10 +6046,13 @@ function HeadlessRun({
                 )}
                 {testState?.active && testState.url ? (
                   <a
-                    className="run-composer-icon-btn run-composer-action-btn run-test-action-btn is-active"
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
                     href={testState.url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={() => {
+                      void markTestState({ ...testState, active: true });
+                    }}
                     aria-label="Open test environment"
                     title="Open test environment"
                   >
@@ -5959,7 +6066,7 @@ function HeadlessRun({
                 ) : (
                   <button
                     type="button"
-                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testState?.active ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
                     onClick={startTestSkill}
                     disabled={!ready}
                     aria-label="Start test skill"
@@ -6251,7 +6358,13 @@ export function App() {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
       const listed: Session[] = (await res.json()).map(normalizeSession);
-      setSessions(user ? orderSessions(listed, readSessionOrder(sessionOrderStorageKey(user))) : listed);
+      setSessions((prev) => {
+        const previousById = new Map(prev.map((session) => [session.id, session]));
+        const merged = listed.map((session) =>
+          mergeMutualSessionSkillState(session, previousById.get(session.id)),
+        );
+        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+      });
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -6788,11 +6901,7 @@ export function App() {
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
-              const skillStateClass = s.test_state?.active
-                ? " is-skill-test"
-                : s.rollout_state?.active
-                  ? " is-skill-rollout"
-                  : "";
+              const skillStateClass = sessionSkillStateClass(s);
               return (
                 <li
                   key={s.id}

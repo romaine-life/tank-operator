@@ -1,11 +1,26 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncompare"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
 func main() {
@@ -16,6 +31,17 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthz)
+	if shadowSessionsEnabled() {
+		if reader, err := sessionReader(); err != nil {
+			slog.Warn("session shadow endpoints disabled", "error", err)
+		} else {
+			mux.HandleFunc("GET /api/shadow/sessions", listSessions(reader))
+			if pythonBase := pythonBaseURL(); pythonBase != "" {
+				mux.HandleFunc("GET /api/shadow/sessions/compare", compareSessions(reader, pythonBase))
+			}
+			mux.HandleFunc("GET /api/shadow/sessions/{session_id}", getSession(reader))
+		}
+	}
 
 	server := &http.Server{
 		Addr:              addr,
@@ -33,4 +59,143 @@ func main() {
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func sessionReader() (*sessions.Reader, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := os.Getenv("KUBECONFIG")
+		if kubeconfig == "" {
+			if home, homeErr := os.UserHomeDir(); homeErr == nil {
+				kubeconfig = filepath.Join(home, ".kube", "config")
+			}
+		}
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	namespace := os.Getenv("SESSIONS_NAMESPACE")
+	if namespace == "" {
+		namespace = compat.SessionsNamespace
+	}
+	return sessions.NewReader(client, namespace), nil
+}
+
+func shadowSessionsEnabled() bool {
+	return os.Getenv("TANK_GO_SHADOW_SESSIONS") == "1"
+}
+
+func pythonBaseURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TANK_PYTHON_BASE_URL")), "/")
+}
+
+func listSessions(reader *sessions.Reader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+		if owner == "" {
+			writeError(w, http.StatusBadRequest, "missing owner query parameter")
+			return
+		}
+		result, err := reader.List(r.Context(), owner)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFunc {
+	client := &http.Client{Timeout: 10 * time.Second}
+	return func(w http.ResponseWriter, r *http.Request) {
+		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+		if owner == "" {
+			writeError(w, http.StatusBadRequest, "missing owner query parameter")
+			return
+		}
+		goSessions, err := reader.List(r.Context(), owner)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		pythonSessions, err := fetchPythonSessions(r.Context(), client, pythonBase, r.Header)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sessioncompare.Compare(pythonSessions, goSessions))
+	}
+}
+
+func getSession(reader *sessions.Reader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+		if owner == "" {
+			writeError(w, http.StatusBadRequest, "missing owner query parameter")
+			return
+		}
+		sessionID := strings.TrimSpace(r.PathValue("session_id"))
+		if sessionID == "" {
+			writeError(w, http.StatusBadRequest, "missing session id")
+			return
+		}
+		result, err := reader.Get(r.Context(), owner, sessionID)
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, result)
+		case errors.Is(err, sessions.ErrNotFound):
+			writeError(w, http.StatusNotFound, "session not found")
+		case errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusForbidden, "session not owned")
+		case errors.Is(err, context.Canceled):
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
+func fetchPythonSessions(ctx context.Context, client *http.Client, pythonBase string, headers http.Header) ([]sessions.Info, error) {
+	endpoint, err := url.JoinPath(pythonBase, "/api/sessions")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"Authorization", "Cookie"} {
+		for _, value := range headers.Values(name) {
+			req.Header.Add(name, value)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("python /api/sessions returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out []sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"detail": message})
 }
