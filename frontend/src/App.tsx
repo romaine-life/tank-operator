@@ -1467,6 +1467,12 @@ type RunLifecycleEvent = {
   created_at: string;
 };
 
+type RunReplayResponse = {
+  session_id: string;
+  run_id: string;
+  events?: unknown[];
+};
+
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
@@ -2552,15 +2558,38 @@ type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void
 // and provider JSONL history are authoritative; this only fills the pane while
 // those replay paths catch up after a browser refresh.
 const RUN_STORAGE_PREFIX = "tank-run-entries-";
+const RUN_STORAGE_MAX_ENTRIES = 20;
+
+type StoredRunEntries = {
+  version: 2;
+  entries: TranscriptEntry[];
+  savedAt: string;
+};
+
+function trimStoredEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
+  return entries.slice(-RUN_STORAGE_MAX_ENTRIES);
+}
 
 function loadStoredEntries(sessionId: string): TranscriptEntry[] {
   try {
     const raw = localStorage.getItem(RUN_STORAGE_PREFIX + sessionId);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as TranscriptEntry[]) : [];
+    if (Array.isArray(parsed)) return trimStoredEntries(parsed as TranscriptEntry[]);
+    if (isJsonObject(parsed) && Array.isArray(parsed.entries)) {
+      return trimStoredEntries(parsed.entries as TranscriptEntry[]);
+    }
+    return [];
   } catch {
     return [];
+  }
+}
+
+function clearStoredEntries(sessionId: string) {
+  try {
+    localStorage.removeItem(RUN_STORAGE_PREFIX + sessionId);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -3611,6 +3640,7 @@ function HeadlessRun({
   const wsRef = useRef<WebSocket | null>(null);
   const runEventsRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<void> | null>(null);
+  const transcriptCacheBackendAuthoritativeRef = useRef(false);
   const sessionIdRef = useRef(session.id);
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -3784,21 +3814,25 @@ function HeadlessRun({
     return () => main.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Persist transcript entries per-session in localStorage. Survives page
-  // refresh; restored on initial state via loadStoredEntries above.
+  // Keep only a bounded provisional cache. Backend replay/history is
+  // authoritative once it has restored this session.
   useEffect(() => {
     try {
-      if (entries.length > 0) {
+      if (transcriptCacheBackendAuthoritativeRef.current || entries.length === 0) {
+        clearStoredEntries(session.id);
+      } else {
+        const stored: StoredRunEntries = {
+          version: 2,
+          entries: trimStoredEntries(entries),
+          savedAt: nowIso(),
+        };
         localStorage.setItem(
           RUN_STORAGE_PREFIX + session.id,
-          JSON.stringify(entries),
+          JSON.stringify(stored),
         );
-      } else {
-        localStorage.removeItem(RUN_STORAGE_PREFIX + session.id);
       }
     } catch {
-      // Quota exceeded or storage unavailable — drop silently. Future
-      // backend replay would cover this case anyway.
+      // Quota exceeded or storage unavailable — drop silently.
     }
   }, [entries, session.id]);
 
@@ -3828,96 +3862,74 @@ function HeadlessRun({
     historyRefreshRef.current = refresh;
   }
 
-  function applyLatestRunReplayEvent(event: RunLifecycleEvent): boolean {
-    if (event.session_id !== session.id) return false;
-    if (event.type === "run.message.created") {
-      setEntries((prev) => applyRunMessageEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.tool.started") {
-      setEntries((prev) => applyRunToolStartedEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.tool.completed") {
-      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
-      return true;
-    }
-    if (event.type === "run.completed") {
-      setLastStatusText("Done");
-      setRunStatus("done");
+  function applyReplayEventToEntries(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+    if (event.type === "run.message.created") return applyRunMessageEvent(entries, event);
+    if (event.type === "run.tool.started") return applyRunToolStartedEvent(entries, event);
+    if (event.type === "run.tool.completed") return applyRunToolCompletedEvent(entries, event);
+    return entries;
+  }
+
+  function applyRunReplay(events: RunLifecycleEvent[], showHint: boolean): boolean {
+    const replayEntries = events.reduce<TranscriptEntry[]>(
+      (acc, event) => applyReplayEventToEntries(acc, event),
+      [],
+    );
+    const replayedContent = replayEntries.length > 0;
+    for (const event of events) {
+      if (!isRunTerminalEvent(event)) continue;
+      if (event.type === "run.completed") {
+        setLastStatusText("Done");
+        setRunStatus("done");
+      } else {
+        setLastStatusText("Error");
+        setRunStatus("error");
+      }
       setActiveTool(null);
       setRunning(false);
       setActiveRunId(null);
-      return false;
     }
-    if (event.type === "run.failed" || event.type === "run.stale") {
-      setLastStatusText("Error");
-      setRunStatus("error");
-      setActiveTool(null);
-      setRunning(false);
-      setActiveRunId(null);
-      return false;
+    if (replayedContent) {
+      transcriptCacheBackendAuthoritativeRef.current = true;
+      clearStoredEntries(session.id);
+      setEntries((prev) =>
+        transcriptComparable(prev) === transcriptComparable(replayEntries)
+          ? prev
+          : replayEntries,
+      );
+      if (showHint) {
+        setContinueHintVisible(true);
+        window.setTimeout(() => setContinueHintVisible(false), 3000);
+      }
     }
-    return false;
+    return replayedContent;
   }
 
   function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
-    if (typeof EventSource === "undefined") return Promise.resolve(false);
     const refreshSessionId = session.id;
-    return new Promise((resolve) => {
-      let settled = false;
-      let replayedContent = false;
-      const runEventTypes: RunLifecycleEvent["type"][] = [
-        "run.started",
-        "run.completed",
-        "run.failed",
-        "run.stale",
-        "run.output.started",
-        "run.tool.started",
-        "run.tool.completed",
-        "run.message.created",
-      ];
-      const source = new EventSource(
-        `/api/sessions/${encodeURIComponent(session.id)}/runs/latest/events`,
-        { withCredentials: true },
-      );
-      const finish = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeout);
-        for (const type of runEventTypes) {
-          source.removeEventListener(type, onLifecycleEvent);
+    return authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/runs/latest/events.json`,
+    )
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const replay = (await res.json()) as RunReplayResponse;
+        if (sessionIdRef.current !== refreshSessionId) return false;
+        if (replay.session_id !== refreshSessionId || !Array.isArray(replay.events)) {
+          return false;
         }
-        source.close();
-        if (ok && showHint) {
-          setContinueHintVisible(true);
-          window.setTimeout(() => setContinueHintVisible(false), 3000);
-        }
-        resolve(ok);
-      };
-      const onLifecycleEvent = (message: MessageEvent<string>) => {
-        if (sessionIdRef.current !== refreshSessionId) {
-          finish(false);
-          return;
-        }
-        const event = parseRunLifecycleEvent(message.data);
-        if (!event) return;
-        replayedContent = applyLatestRunReplayEvent(event) || replayedContent;
-        if (isRunTerminalEvent(event)) {
-          window.setTimeout(() => finish(replayedContent), 50);
-        }
-      };
-      for (const type of runEventTypes) {
-        source.addEventListener(type, onLifecycleEvent);
-      }
-      source.onerror = () => finish(replayedContent);
-      const timeout = window.setTimeout(() => finish(replayedContent), 2000);
-    });
+        const events = replay.events
+          .map((event) => parseRunLifecycleEvent(JSON.stringify(event)))
+          .filter((event): event is RunLifecycleEvent => event !== null);
+        if (events.length === 0) return false;
+        return applyRunReplay(events, showHint);
+      })
+      .catch(() => false);
   }
 
   function refreshRunHistoryFromBackend(showHint: boolean) {
     const refreshSessionId = session.id;
-    void authedFetch(`/api/sessions/${refreshSessionId}/run/history`)
+    void authedFetch(
+      `/api/sessions/${refreshSessionId}/run/history?source=latest-events-fallback`,
+    )
       .then(async (res) => {
         if (!res.ok) return "";
         return await res.text();
@@ -3928,6 +3940,8 @@ function HeadlessRun({
         const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
           let behind = false;
+          transcriptCacheBackendAuthoritativeRef.current = true;
+          clearStoredEntries(refreshSessionId);
           setEntries((prev) => {
             if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
             // If the JSONL has fewer conversation messages than the current
@@ -4299,6 +4313,7 @@ function HeadlessRun({
   // session's cached entries and allow the history sync to run again.
   useEffect(() => {
     sessionIdRef.current = session.id;
+    transcriptCacheBackendAuthoritativeRef.current = false;
     setEntries(loadStoredEntries(session.id));
     setQueuedMessages([]);
     historyRefreshRef.current = null;
@@ -4957,6 +4972,7 @@ function HeadlessRun({
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
+    transcriptCacheBackendAuthoritativeRef.current = false;
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
