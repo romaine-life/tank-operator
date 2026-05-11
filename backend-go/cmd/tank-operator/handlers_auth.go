@@ -99,6 +99,40 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		"avatar_url":      auth.GravatarURL(user.Email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
+		"run_prefs":       profile.RunPrefs,
+	})
+}
+
+// handleUpdatePrefs persists the SPA's run-pane preferences (chat font
+// scale, sound volume, etc.) on the caller's Cosmos profile row. The
+// body shape is opaque to the orchestrator — the SPA owns the schema
+// (frontend/src/App.tsx → RunPrefs). The store does a merge-safe
+// upsert so unrelated profile fields (installation_id, github_login)
+// survive.
+func (s *appServer) handleUpdatePrefs(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	prefsStore, ok := s.profiles.(profilesPrefsStore)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "profile store does not support prefs writes")
+		return
+	}
+	var body struct {
+		RunPrefs map[string]any `json:"run_prefs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	profile, err := prefsStore.UpdatePrefs(r.Context(), user.Email, body.RunPrefs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"run_prefs": profile.RunPrefs,
 	})
 }
 

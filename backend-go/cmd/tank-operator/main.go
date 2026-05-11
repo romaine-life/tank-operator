@@ -288,6 +288,14 @@ type profilesUpdateStore interface {
 	UpdateInstallation(ctx context.Context, email string, installationID int64, githubLogin *string) (profiles.Profile, error)
 }
 
+// profilesPrefsStore is an optional interface for the SPA's run-pref
+// sync (Phase E). Implemented by CosmosStore and StubStore. The handler
+// surfaces a 503 when the backing store doesn't satisfy it.
+type profilesPrefsStore interface {
+	profilesStore
+	UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (profiles.Profile, error)
+}
+
 // cosmosSessionRegistryAdapter wraps CosmosStore to satisfy sessions.SessionRegistry.
 type cosmosSessionRegistryAdapter struct {
 	*sessionregistry.CosmosStore

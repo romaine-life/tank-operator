@@ -680,6 +680,9 @@ interface SessionUser {
   // wall — null means show the install CTA, non-null means full app.
   github_login: string | null;
   installation_id: number | null;
+  // Phase E: cross-device run-pane prefs. Null when the user has never
+  // saved prefs; SPA falls back to localStorage + defaults.
+  run_prefs: Record<string, unknown> | null;
 }
 
 type GlimmungLaunchContext = {
@@ -2635,6 +2638,26 @@ function loadRunPrefs(): RunPrefs {
 }
 
 type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void;
+
+// Phase E: type-narrow the opaque server-side run_prefs blob into the
+// SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
+// written them); unknown values for known keys are ignored (defensive
+// against type drift).
+function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
+  const out: RunPrefs = { ...prev };
+  for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
+    const raw = server[key];
+    if (raw === undefined) continue;
+    if (key === "chatFontScale") {
+      if (typeof raw === "number") out[key] = clampChatFontScale(raw);
+    } else if (key === "turnCompleteSoundVolume") {
+      if (typeof raw === "number") out[key] = clampTurnCompleteSoundVolume(raw);
+    } else if (typeof raw === "boolean") {
+      (out as unknown as Record<string, unknown>)[key] = raw;
+    }
+  }
+  return out;
+}
 
 // transcriptComparable returns a stable JSON of the transcript's load-bearing
 // fields, used to short-circuit no-op replay updates. Backend replay paths
@@ -6446,9 +6469,34 @@ export function App() {
   const [active, setActive] = useState<string | null>(null);
   // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
   // sync immediately, while localStorage keeps them across reloads/windows.
+  // Phase E: also persisted to the Cosmos profile row so prefs ride across
+  // devices. The localStorage write stays as the offline fallback.
   const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
+  const prefsWriteTimer = useRef<number | null>(null);
+  const persistRunPrefs = useCallback((prefs: RunPrefs) => {
+    // 500ms debounce — sliders fire setRunPref dozens of times per drag,
+    // and a single PUT at the end is enough for cross-device sync.
+    if (prefsWriteTimer.current) {
+      window.clearTimeout(prefsWriteTimer.current);
+    }
+    prefsWriteTimer.current = window.setTimeout(() => {
+      void authedFetch("/api/auth/prefs", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_prefs: prefs }),
+      }).catch(() => {
+        // Best-effort — localStorage is the source of truth on this
+        // device; failed sync just means other devices won't see the
+        // change until the next successful write.
+      });
+    }, 500);
+  }, []);
   function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
-    setRunPrefs((p) => ({ ...p, [key]: value }));
+    setRunPrefs((p) => {
+      const next = { ...p, [key]: value };
+      persistRunPrefs(next);
+      return next;
+    });
     try {
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
     } catch {
@@ -6478,6 +6526,23 @@ export function App() {
     window.addEventListener("storage", syncRunPrefs);
     return () => window.removeEventListener("storage", syncRunPrefs);
   }, []);
+
+  // Phase E: merge server-canonical prefs in once the user resolves. If
+  // the server has prefs they win (this device may be stale); if it
+  // doesn't, push our local prefs up so cross-device sync stops at the
+  // first-write boundary instead of perpetually empty.
+  useEffect(() => {
+    if (!user) return;
+    const server = user.run_prefs;
+    if (server && Object.keys(server).length > 0) {
+      setRunPrefs((prev) => mergeServerRunPrefs(prev, server));
+    } else {
+      persistRunPrefs(runPrefs);
+    }
+    // We deliberately don't re-run when runPrefs changes — this is a
+    // one-shot reconciliation per user identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, persistRunPrefs]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.

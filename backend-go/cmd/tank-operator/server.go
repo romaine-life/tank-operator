@@ -40,6 +40,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/auth/microsoft/login", s.handleMicrosoftLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
+	mux.HandleFunc("PUT /api/auth/prefs", s.handleUpdatePrefs)
 	mux.HandleFunc("POST /api/internal/auth/k8s", s.handleK8sAuth)
 
 	// GitHub install.

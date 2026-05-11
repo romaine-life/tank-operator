@@ -15,6 +15,11 @@ type Profile struct {
 	Email          string  `json:"email"`
 	GitHubLogin    *string `json:"github_login"`
 	InstallationID *int64  `json:"installation_id"`
+	// RunPrefs is opaque on the wire — the SPA owns the schema (chat font
+	// scale, sound volume, etc., see frontend/src/App.tsx → RunPrefs).
+	// Storing as a free-form map lets us evolve UI prefs without coupling
+	// to a Cosmos schema migration. Nil when the user has never set prefs.
+	RunPrefs map[string]any `json:"run_prefs,omitempty"`
 }
 
 type Store interface {
@@ -68,9 +73,10 @@ func (StubStore) GetOrCreate(_ context.Context, email string) (Profile, error) {
 
 func profileFromDoc(data []byte) (Profile, error) {
 	var doc struct {
-		Email          string  `json:"email"`
-		GitHubLogin    *string `json:"github_login"`
-		InstallationID *int64  `json:"installation_id"`
+		Email          string         `json:"email"`
+		GitHubLogin    *string        `json:"github_login"`
+		InstallationID *int64         `json:"installation_id"`
+		RunPrefs       map[string]any `json:"run_prefs"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return Profile{}, err
@@ -79,5 +85,6 @@ func profileFromDoc(data []byte) (Profile, error) {
 		Email:          doc.Email,
 		GitHubLogin:    doc.GitHubLogin,
 		InstallationID: doc.InstallationID,
+		RunPrefs:       doc.RunPrefs,
 	}, nil
 }
