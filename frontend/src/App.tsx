@@ -1512,6 +1512,14 @@ function parseRunLifecycleEvent(data: string): RunLifecycleEvent | null {
   };
 }
 
+function isRunTerminalEvent(event: RunLifecycleEvent): boolean {
+  return (
+    event.type === "run.completed" ||
+    event.type === "run.failed" ||
+    event.type === "run.stale"
+  );
+}
+
 function shortJson(value: unknown): string {
   if (value == null) return "";
   if (typeof value === "string") return value;
@@ -3805,7 +3813,91 @@ function HeadlessRun({
   const [continueHintVisible, setContinueHintVisible] = useState(false);
   function refreshRunHistory(showHint: boolean) {
     if (session.status !== "Active" || running) return;
-    refreshRunHistoryFromBackend(showHint);
+    void refreshRunHistoryFromLatestEvents(showHint).then((replayed) => {
+      if (!replayed) refreshRunHistoryFromBackend(showHint);
+    });
+  }
+
+  function applyLatestRunReplayEvent(event: RunLifecycleEvent): boolean {
+    if (event.session_id !== session.id) return false;
+    if (event.type === "run.message.created") {
+      setEntries((prev) => applyRunMessageEvent(prev, event));
+      return true;
+    }
+    if (event.type === "run.tool.started") {
+      setEntries((prev) => applyRunToolStartedEvent(prev, event));
+      return true;
+    }
+    if (event.type === "run.tool.completed") {
+      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
+      return true;
+    }
+    if (event.type === "run.completed") {
+      setLastStatusText("Done");
+      setRunStatus("done");
+      setActiveTool(null);
+      setRunning(false);
+      setActiveRunId(null);
+      return false;
+    }
+    if (event.type === "run.failed" || event.type === "run.stale") {
+      setLastStatusText("Error");
+      setRunStatus("error");
+      setActiveTool(null);
+      setRunning(false);
+      setActiveRunId(null);
+      return false;
+    }
+    return false;
+  }
+
+  function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
+    if (typeof EventSource === "undefined") return Promise.resolve(false);
+    return new Promise((resolve) => {
+      let settled = false;
+      let replayedContent = false;
+      const runEventTypes: RunLifecycleEvent["type"][] = [
+        "run.started",
+        "run.completed",
+        "run.failed",
+        "run.stale",
+        "run.output.started",
+        "run.tool.started",
+        "run.tool.completed",
+        "run.message.created",
+      ];
+      const source = new EventSource(
+        `/api/sessions/${encodeURIComponent(session.id)}/runs/latest/events`,
+        { withCredentials: true },
+      );
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        for (const type of runEventTypes) {
+          source.removeEventListener(type, onLifecycleEvent);
+        }
+        source.close();
+        if (ok && showHint) {
+          setContinueHintVisible(true);
+          window.setTimeout(() => setContinueHintVisible(false), 3000);
+        }
+        resolve(ok);
+      };
+      const onLifecycleEvent = (message: MessageEvent<string>) => {
+        const event = parseRunLifecycleEvent(message.data);
+        if (!event) return;
+        replayedContent = applyLatestRunReplayEvent(event) || replayedContent;
+        if (isRunTerminalEvent(event)) {
+          window.setTimeout(() => finish(replayedContent), 50);
+        }
+      };
+      for (const type of runEventTypes) {
+        source.addEventListener(type, onLifecycleEvent);
+      }
+      source.onerror = () => finish(replayedContent);
+      const timeout = window.setTimeout(() => finish(replayedContent), 2000);
+    });
   }
 
   function refreshRunHistoryFromBackend(showHint: boolean) {
