@@ -245,6 +245,8 @@ spec:
               value: https://login.microsoftonline.com/
           envFrom:
             - secretRef:
+                name: {{ include "tank-operator.authSecret" . }}
+            - secretRef:
                 name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
           readinessProbe:
             httpGet:
