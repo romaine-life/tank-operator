@@ -1585,13 +1585,19 @@ function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEve
     : messageId;
   const payloadTime = normalizeIsoTimestamp(payload?.time);
   const eventCreatedAt = normalizeIsoTimestamp(event.created_at);
-  return upsertEntry(entries, {
+  const entry: Record<string, unknown> = {
     id,
     kind: "message",
     role,
     text,
     time: payloadTime ?? eventCreatedAt ?? nowIso(),
-  });
+  };
+  // Preserve skill-action metadata stored by the backend at run start so the
+  // event replay reconstructs the correct bubble without needing the JSONL.
+  if (typeof payload?.messageKind === "string") entry.messageKind = payload.messageKind;
+  if (typeof payload?.skillName === "string") entry.skillName = payload.skillName;
+  if (typeof payload?.skillSupplementalText === "string") entry.skillSupplementalText = payload.skillSupplementalText;
+  return upsertEntry(entries, entry as TranscriptEntry);
 }
 
 function applyRunToolStartedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
@@ -3931,16 +3937,6 @@ function HeadlessRun({
       setActiveRunId(null);
     }
     if (replayedContent) {
-      // If the replay has no user messages, fall through to the JSONL fallback.
-      // User messages aren't captured in the run event store (they come from
-      // Claude's project JSONL, not its stdout stream), so a replay that has
-      // tool/assistant events but no user messages would silently drop the
-      // user bubbles. The JSONL path (refreshRunHistoryFromBackend) handles
-      // user messages correctly via applyClaudeEvent.
-      const hasUserMessage = replayEntries.some(
-        (e) => e.kind === "message" && e.role === "user",
-      );
-      if (!hasUserMessage) return false;
       transcriptCacheBackendAuthoritativeRef.current = true;
       clearStoredEntries(session.id);
       setEntries((prev) =>

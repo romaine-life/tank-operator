@@ -2424,6 +2424,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     resume = bool(first.get("resume")) if isinstance(first, dict) else False
     run_id = _validate_run_id(first.get("run_id") if isinstance(first, dict) else None)
     prompt = first.get("prompt") if isinstance(first, dict) else None
+    user_raw_prompt = prompt  # capture before _skill_prompt overwrites for skill runs
     provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
     raw_skill_name = first.get("skill_name") if isinstance(first, dict) else None
     skill_name = _validate_skill_name(
@@ -2548,13 +2549,32 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                     "started_at": record.started_at,
                 },
             )
-            # Store the user's prompt as the first message event so the event
-            # replay path can reconstruct the user bubble without reading the
-            # pod JSONL. Claude's stdout stream does not emit user-turn events,
-            # so _RunStdoutEventObserver never produces run.message.created for
-            # the user role. Skill runs are excluded: their user bubbles are
-            # skill-action entries that the JSONL path reconstructs correctly.
-            if not skill_name and isinstance(prompt, str) and prompt.strip():
+            # Store the user's prompt as the first message event so event replay
+            # can reconstruct the user bubble without reading the pod JSONL.
+            # Claude's stream-json stdout never emits user-turn events, so
+            # _RunStdoutEventObserver never produces run.message.created for the
+            # user role. We cover both plain and skill-action messages here.
+            if skill_name:
+                skill_display = skill_name[0].upper() + skill_name[1:] + " skill"
+                raw = user_raw_prompt.strip() if isinstance(user_raw_prompt, str) else ""
+                trigger_pat = _re.compile(
+                    rf"^[$/]{_re.escape(skill_name)}(?:\s+|\n+)?", _re.IGNORECASE
+                )
+                supplemental = trigger_pat.sub("", raw).strip()
+                await _append_run_event(
+                    email=user.email,
+                    session_id=session_id,
+                    run_id=run_id,
+                    event_type="run.message.created",
+                    payload={
+                        "role": "user",
+                        "text": skill_display,
+                        "messageKind": "skill-action",
+                        "skillName": skill_name,
+                        "skillSupplementalText": supplemental,
+                    },
+                )
+            elif isinstance(prompt, str) and prompt.strip():
                 await _append_run_event(
                     email=user.email,
                     session_id=session_id,
