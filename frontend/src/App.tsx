@@ -98,6 +98,7 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 type AgentSessionActivity = "waiting" | "working";
+type SkillStateName = "test" | "rollout";
 
 interface Session {
   id: string;
@@ -750,6 +751,35 @@ function sessionRuntimeTitle(session: Session, nowMs: number): string {
   const startedMs = session.created_at ? Date.parse(session.created_at) : NaN;
   const runtime = Number.isFinite(startedMs) ? formatRuntime(nowMs - startedMs) : "unknown";
   return `running ${runtime}`;
+}
+
+function currentSessionSkillState(
+  testState?: TestState | null,
+  rolloutState?: RolloutState | null,
+): SkillStateName | null {
+  const testActive = testState?.active;
+  const rolloutActive = rolloutState?.active;
+  if (!testActive && !rolloutActive) return null;
+  if (testActive && !rolloutActive) return "test";
+  if (rolloutActive && !testActive) return "rollout";
+  return null;
+}
+
+function sessionSkillStateClass(session: Session): string {
+  const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
+  if (currentSkill === "test") return " is-skill-test";
+  if (currentSkill === "rollout") return " is-skill-rollout";
+  return "";
+}
+
+function mergeMutualSessionSkillState(incoming: Session, existing?: Session): Session {
+  if (!existing) return incoming;
+  if (!incoming.test_state?.active || !incoming.rollout_state?.active) return incoming;
+
+  const existingSkill = currentSessionSkillState(existing.test_state, existing.rollout_state);
+  if (existingSkill === "test") return { ...incoming, rollout_state: null };
+  if (existingSkill === "rollout") return { ...incoming, test_state: null };
+  return incoming;
 }
 
 function sessionBootStartMs(session: Session): number {
@@ -4728,7 +4758,8 @@ function HeadlessRun({
 
   async function markTestState(state: TestState) {
     setTestState(state);
-    onSessionPatch(session.id, { test_state: state });
+    setRolloutState(null);
+    onSessionPatch(session.id, { test_state: state, rollout_state: null });
     const res = await authedFetch(`/api/sessions/${session.id}/test-state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4738,13 +4769,16 @@ function HeadlessRun({
       throw new Error(`test state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
-    setTestState(updated.test_state ?? null);
-    onSessionPatch(session.id, { test_state: updated.test_state ?? null });
+    const nextState = updated.test_state ?? null;
+    setTestState(nextState);
+    setRolloutState(null);
+    onSessionPatch(session.id, { test_state: nextState, rollout_state: null });
   }
 
   async function markRolloutState(state: RolloutState) {
     setRolloutState(state);
-    onSessionPatch(session.id, { rollout_state: state });
+    setTestState(null);
+    onSessionPatch(session.id, { test_state: null, rollout_state: state });
     const res = await authedFetch(`/api/sessions/${session.id}/rollout-state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4754,8 +4788,10 @@ function HeadlessRun({
       throw new Error(`rollout state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
-    setRolloutState(updated.rollout_state ?? null);
-    onSessionPatch(session.id, { rollout_state: updated.rollout_state ?? null });
+    const nextState = updated.rollout_state ?? null;
+    setTestState(null);
+    setRolloutState(nextState);
+    onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
   function startTestSkill() {
@@ -4969,6 +5005,9 @@ function HeadlessRun({
   const provider: Provider = isClaude ? "anthropic" : "codex";
   const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
+  const currentSkillState = currentSessionSkillState(testState, rolloutState);
+  const testActionActive = currentSkillState === "test";
+  const rolloutActionActive = currentSkillState === "rollout";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
   const contextWindow = getContextWindow(selectedModel.id);
@@ -5965,7 +6004,7 @@ function HeadlessRun({
                 {GUI_ROLLOUT_MODES.has(session.mode) && (
                   <button
                     type="button"
-                    className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutState?.active ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutActionActive ? " is-active" : ""}`}
                     onClick={startGuiRollout}
                     disabled={!ready}
                     aria-label="Start rollout"
@@ -5976,10 +6015,13 @@ function HeadlessRun({
                 )}
                 {testState?.active && testState.url ? (
                   <a
-                    className="run-composer-icon-btn run-composer-action-btn run-test-action-btn is-active"
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
                     href={testState.url}
                     target="_blank"
                     rel="noreferrer"
+                    onClick={() => {
+                      void markTestState({ ...testState, active: true });
+                    }}
                     aria-label="Open test environment"
                     title="Open test environment"
                   >
@@ -5993,7 +6035,7 @@ function HeadlessRun({
                 ) : (
                   <button
                     type="button"
-                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testState?.active ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
                     onClick={startTestSkill}
                     disabled={!ready}
                     aria-label="Start test skill"
@@ -6285,7 +6327,13 @@ export function App() {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
       const listed: Session[] = (await res.json()).map(normalizeSession);
-      setSessions(user ? orderSessions(listed, readSessionOrder(sessionOrderStorageKey(user))) : listed);
+      setSessions((prev) => {
+        const previousById = new Map(prev.map((session) => [session.id, session]));
+        const merged = listed.map((session) =>
+          mergeMutualSessionSkillState(session, previousById.get(session.id)),
+        );
+        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+      });
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -6822,11 +6870,7 @@ export function App() {
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
-              const skillStateClass = s.test_state?.active
-                ? " is-skill-test"
-                : s.rollout_state?.active
-                  ? " is-skill-rollout"
-                  : "";
+              const skillStateClass = sessionSkillStateClass(s);
               return (
                 <li
                   key={s.id}

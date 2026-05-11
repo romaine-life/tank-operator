@@ -966,12 +966,13 @@ class SessionManager:
         else:
             state = None
             annotation_value = None
+        annotations = {TEST_STATE_ANNOTATION: annotation_value}
+        if active:
+            annotations[ROLLOUT_STATE_ANNOTATION] = None
         patched = await self._core.patch_namespaced_pod(
             name=pod.metadata.name,
             namespace=SESSIONS_NAMESPACE,
-            body={
-                "metadata": {"annotations": {TEST_STATE_ANNOTATION: annotation_value}}
-            },
+            body={"metadata": {"annotations": annotations}},
         )
         mode = normalize_session_mode(
             patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
@@ -988,7 +989,7 @@ class SessionManager:
             ready_at=_pod_ready_at(patched),
             name=(patched.metadata.annotations or {}).get(NAME_ANNOTATION),
             test_state=state,
-            rollout_state=_rollout_state_from_annotations(
+            rollout_state=None if active else _rollout_state_from_annotations(
                 patched.metadata.annotations or {}
             ),
         )
@@ -1019,14 +1020,13 @@ class SessionManager:
         else:
             state = None
             annotation_value = None
+        annotations = {ROLLOUT_STATE_ANNOTATION: annotation_value}
+        if active:
+            annotations[TEST_STATE_ANNOTATION] = None
         patched = await self._core.patch_namespaced_pod(
             name=pod.metadata.name,
             namespace=SESSIONS_NAMESPACE,
-            body={
-                "metadata": {
-                    "annotations": {ROLLOUT_STATE_ANNOTATION: annotation_value}
-                }
-            },
+            body={"metadata": {"annotations": annotations}},
         )
         mode = normalize_session_mode(
             patched.metadata.labels.get("tank-operator/mode", DEFAULT_SESSION_MODE)
@@ -1042,7 +1042,11 @@ class SessionManager:
             created_at=_pod_created_at(patched),
             ready_at=_pod_ready_at(patched),
             name=(patched.metadata.annotations or {}).get(NAME_ANNOTATION),
-            test_state=_test_state_from_annotations(patched.metadata.annotations or {}),
+            test_state=(
+                None
+                if active
+                else _test_state_from_annotations(patched.metadata.annotations or {})
+            ),
             rollout_state=state,
         )
         self._publish_changed(owner)
