@@ -139,11 +139,25 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 
 	spec := manifest["spec"].(map[string]any)
 	containers := spec["containers"].([]any)
-	claude := containers[2].(map[string]any)
+	if got, want := len(containers), 2; got != want {
+		t.Fatalf("container count = %d, want %d", got, want)
+	}
+	if got, want := containers[0].(map[string]any)["name"], "mcp-auth-proxy"; got != want {
+		t.Fatalf("sidecar container name = %v, want %q", got, want)
+	}
+	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "claude"; got != want {
 		t.Fatalf("main container name = %v, want %q", got, want)
 	}
 	if got, want := claude["image"], "codex-image"; got != want {
 		t.Fatalf("main container image = %v, want %q", got, want)
+	}
+	ports := claude["ports"].([]any)
+	if got, want := ports[0].(map[string]any)["name"], "sandbox-agent"; got != want {
+		t.Fatalf("main container port name = %v, want %q", got, want)
+	}
+	volumes := spec["volumes"].([]any)
+	if got, want := len(volumes), 1; got != want {
+		t.Fatalf("volume count = %d, want %d", got, want)
 	}
 }

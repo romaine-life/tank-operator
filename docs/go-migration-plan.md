@@ -19,9 +19,9 @@ The production system has four separable runtime surfaces:
    Envoy handles real HTTP/TLS/streaming; Python implements ext_proc header
    mutation plus single-flight OAuth refresh and Key Vault persistence.
 3. **Session pod sidecars/binaries**:
-   `claude-container/terminald/src/tank_terminald/server.py` owns pod-local
-   PTY fanout and replay. `claude-container/mcp-auth-proxy/src/.../server.py`
-   injects fresh projected ServiceAccount bearer tokens into local MCP traffic.
+   `sandbox-agent` owns pod-local interactive process terminals and replay.
+   `claude-container/mcp-auth-proxy/src/.../server.py` injects fresh projected
+   ServiceAccount bearer tokens into local MCP traffic.
 4. **Shell/session config**: `k8s/session-config/*.sh` and `.mcp.json`.
    These are not Python, but they are part of the backend contract because the
    orchestrator execs them and depends on their filesystem markers.
@@ -52,7 +52,6 @@ by runtime boundary rather than by Python file names:
 - `internal/static`: embedded SPA assets plus optional static override support.
 - `cmd/tank-api-proxy-extproc`: Go replacement for the ext_proc sidecar only;
   Envoy stays as-is.
-- `cmd/tank-terminald`: Go replacement for pod-local PTY fanout.
 - `cmd/mcp-auth-proxy`: Go replacement for pod-local MCP auth injection.
 
 Keep Dockerfiles able to build Python and Go variants side-by-side for at least
@@ -97,11 +96,11 @@ Existing pods must remain adoptable. The Go implementation must read and write:
   `tank-operator/display-name`, `tank-operator/glimmung-context`,
   `tank-operator/test-state`, `tank-operator/rollout-state`,
   ArgoCD tracking id.
-- Container names: especially `claude`, `terminal-proxy`, `mcp-auth-proxy`.
+- Container names: especially `claude` and `mcp-auth-proxy`.
   All `pods/exec` calls must continue to specify `container=claude`.
 - Session status vocabulary: `Pending`, `Active`, `Failed`.
-- Legacy adoption: pods without `terminal-proxy` and pods owned by legacy
-  Deployments must retain the current conservative behavior.
+- Legacy adoption: pods without a `sandbox-agent` port and pods owned by
+  legacy Deployments must retain the current conservative behavior.
 
 ### Durable Data
 
@@ -174,10 +173,8 @@ The highest-risk work is not CRUD; it is stream semantics.
   `{"cancel":true}` frame should terminate it.
 - Keepalive frames are load-bearing for gateways and long pod readiness waits.
 - The terminal path is currently proxied to sandbox-agent, not Kubernetes exec.
-  Keep that route compatible while `tank-terminald` migration is evaluated.
-- `tank-terminald` itself owns PTY replay and resize behavior. Go replacement
-  must be tested with reconnect, alternate screen apps, resize storms, and
-  partial-line replay before it replaces the Python binary in session images.
+  Keep the `/cli-process` and sandbox-agent terminal WebSocket routes
+  compatible.
 
 Recommended Go libraries:
 
@@ -187,7 +184,6 @@ Recommended Go libraries:
   implementation behind `internal/kubeexec`.
 - `github.com/coder/websocket` or `nhooyr.io/websocket` for browser/server
   WebSockets; keep binary/text behavior explicit.
-- `github.com/creack/pty` for `tank-terminald`.
 - Azure SDK for Go for Key Vault, Cosmos, and Workload Identity.
 
 ## Rollout Strategy
@@ -202,10 +198,9 @@ Use a strangler rollout with explicit gates:
    token decode, session list/get, and internal `resolve-caller` in Go. Deploy
    behind a separate Service or hidden prefix, compare responses from Python
    and Go in validation without serving users.
-3. **Sidecars with narrow blast radius**. Migrate `mcp-auth-proxy` first, then
-   `tank-terminald`, each controlled by session image tag and verified only on
-   newly created sessions. Existing sessions keep their old sidecars because
-   pods are immutable.
+3. **Sidecars with narrow blast radius**. Migrate `mcp-auth-proxy` first,
+   controlled by session image tag and verified only on newly created sessions.
+   Existing sessions keep their old sidecars because pods are immutable.
 4. **API route groups behind flags**. Move low-streaming REST groups first:
    profile/auth-me, session list/get/patch, file list/read. Keep create/delete,
    exec/write, runs, and WebSockets on Python until late.

@@ -22,10 +22,6 @@ const (
 	SessionsNamespace        = "tank-operator-sessions"
 	SessionServiceAccount    = "claude-session"
 	SessionConfigMap         = "tank-session-config"
-	TerminalProxyConfigMap   = "tank-terminal-proxy"
-	TerminalProxyImage       = "quay.io/brancz/kube-rbac-proxy:v0.22.0"
-	TerminalDPort            = 7680
-	TerminalProxyPort        = 7681
 	SandboxAgentPort         = 2468
 	DefaultSessionImage      = "romainecr.azurecr.io/claude-container:latest"
 	DefaultCodexSessionImage = "romainecr.azurecr.io/codex-container:latest"
@@ -82,18 +78,14 @@ type ActiveRunRecord struct {
 }
 
 type ManifestOptions struct {
-	SessionImage           string
-	CodexSessionImage      string
-	PiSessionImage         string
-	SessionsNamespace      string
-	SessionServiceAccount  string
-	SessionConfigMap       string
-	TerminalProxyConfigMap string
-	TerminalProxyImage     string
-	ArgoCDTrackingApp      string
-	TerminalDPort          int
-	TerminalProxyPort      int
-	SandboxAgentPort       int
+	SessionImage          string
+	CodexSessionImage     string
+	PiSessionImage        string
+	SessionsNamespace     string
+	SessionServiceAccount string
+	SessionConfigMap      string
+	ArgoCDTrackingApp     string
+	SandboxAgentPort      int
 }
 
 func NormalizeSessionMode(mode string) string {
@@ -241,20 +233,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			"containers": []any{
 				map[string]any{
-					"name":            "terminal-proxy",
-					"image":           opts.TerminalProxyImage,
-					"imagePullPolicy": "IfNotPresent",
-					"args": []any{
-						"--insecure-listen-address=0.0.0.0:" + itoa(opts.TerminalProxyPort),
-						"--upstream=http://127.0.0.1:" + itoa(opts.TerminalDPort) + "/",
-						"--config-file=/etc/kube-rbac-proxy/config.yaml",
-						"--v=2",
-					},
-					"ports": []any{
-						map[string]any{"name": "terminal", "containerPort": opts.TerminalProxyPort},
-					},
-				},
-				map[string]any{
 					"name":            "mcp-auth-proxy",
 					"image":           sessionImage,
 					"imagePullPolicy": "Always",
@@ -264,8 +242,15 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					"name":            "claude",
 					"image":           sessionImage,
 					"imagePullPolicy": "Always",
+					"command": []any{
+						"bash",
+						"-lc",
+						"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
+					},
+					"ports": []any{
+						map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort},
+					},
 					"env": []any{
-						map[string]any{"name": "TERMINALD_PORT", "value": itoa(opts.TerminalDPort)},
 						map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
 						map[string]any{"name": "TANK_SESSION_MODE", "value": mode},
 						map[string]any{"name": "TANK_GLIMMUNG_CONTEXT_JSON", "value": ""},
@@ -276,7 +261,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			"volumes": []any{
 				map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
-				map[string]any{"name": "terminal-proxy-config", "configMap": map[string]any{"name": opts.TerminalProxyConfigMap}},
 			},
 		},
 	}
@@ -301,20 +285,8 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	if opts.SessionConfigMap == "" {
 		opts.SessionConfigMap = SessionConfigMap
 	}
-	if opts.TerminalProxyConfigMap == "" {
-		opts.TerminalProxyConfigMap = TerminalProxyConfigMap
-	}
-	if opts.TerminalProxyImage == "" {
-		opts.TerminalProxyImage = TerminalProxyImage
-	}
 	if opts.ArgoCDTrackingApp == "" {
 		opts.ArgoCDTrackingApp = "tank-operator-sessions"
-	}
-	if opts.TerminalDPort == 0 {
-		opts.TerminalDPort = TerminalDPort
-	}
-	if opts.TerminalProxyPort == 0 {
-		opts.TerminalProxyPort = TerminalProxyPort
 	}
 	if opts.SandboxAgentPort == 0 {
 		opts.SandboxAgentPort = SandboxAgentPort
