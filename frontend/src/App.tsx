@@ -1585,13 +1585,19 @@ function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEve
     : messageId;
   const payloadTime = normalizeIsoTimestamp(payload?.time);
   const eventCreatedAt = normalizeIsoTimestamp(event.created_at);
-  return upsertEntry(entries, {
+  const entry: Record<string, unknown> = {
     id,
     kind: "message",
     role,
     text,
     time: payloadTime ?? eventCreatedAt ?? nowIso(),
-  });
+  };
+  // Preserve skill-action metadata stored by the backend at run start so the
+  // event replay reconstructs the correct bubble without needing the JSONL.
+  if (typeof payload?.messageKind === "string") entry.messageKind = payload.messageKind;
+  if (typeof payload?.skillName === "string") entry.skillName = payload.skillName;
+  if (typeof payload?.skillSupplementalText === "string") entry.skillSupplementalText = payload.skillSupplementalText;
+  return upsertEntry(entries, entry as TranscriptEntry);
 }
 
 function applyRunToolStartedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
