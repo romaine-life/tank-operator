@@ -60,6 +60,10 @@ func main() {
 	// 6b. Init turn queue store (Phase 1 of SDK migration).
 	turnQueueStore := buildTurnQueueStore(azCred)
 
+	// 6c. Init session events store (Phase C — reader side of the
+	// agent-runner's canonical event stream).
+	sessionEventsStore := buildSessionEventStore(azCred)
+
 	// 7. Init event bus.
 	eventBus := sessions.NewEventBus()
 
@@ -110,6 +114,7 @@ func main() {
 		activeRuns:              activeRunsStore,
 		runEvents:               runEventsStore,
 		turnQueue:               turnQueueStore,
+		sessionEvents:           sessionEventsStore,
 		eventBus:                eventBus,
 		verifier:                verifier,
 		minter:                  minter,
@@ -214,6 +219,24 @@ func buildActiveRunStore(azCred *azidentity.DefaultAzureCredential) store.Active
 	if err != nil {
 		slog.Warn("active run store disabled", "error", err)
 		return store.StubActiveRunStore{}
+	}
+	return s
+}
+
+func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.SessionEventStore {
+	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
+	if endpoint == "" || azCred == nil {
+		return store.StubSessionEventStore{}
+	}
+	s, err := store.NewCosmosSessionEventStore(
+		endpoint,
+		envDefault("COSMOS_DATABASE", "tank-operator"),
+		envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
+		azCred,
+	)
+	if err != nil {
+		slog.Warn("session events store disabled", "error", err)
+		return store.StubSessionEventStore{}
 	}
 	return s
 }
