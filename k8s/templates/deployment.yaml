@@ -48,14 +48,6 @@ spec:
               value: {{ include "tank-operator.sessionConfigMap" . | quote }}
             - name: SESSION_REGISTRY_SCOPE
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
-            - name: TERMINAL_PROXY_CONFIGMAP
-              value: {{ .Values.terminalProxy.configMap | quote }}
-            - name: TERMINAL_PROXY_IMAGE
-              value: {{ .Values.terminalProxy.image | quote }}
-            - name: TERMINALD_PORT
-              value: {{ .Values.terminalProxy.terminaldPort | quote }}
-            - name: TERMINAL_PROXY_PORT
-              value: {{ .Values.terminalProxy.proxyPort | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDS_SECRET

@@ -39,22 +39,9 @@
 # Codex reads /workspace/AGENTS.md. They load as project-scope context for
 # any cwd under /workspace, including cloned repos.
 #
-# claude runs inside a named tmux session ("tank") so reconnects re-attach
-# the same PTY/scrollback. If claude exits we fall through to bash so the
-# WS stays useful.
-#
-# Some PTY clients do not advertise the U8 terminfo capability, which makes
-# tmux attach clients with client_utf8=0. In that mode tmux substitutes
-# unsupported Unicode glyphs with underscores on redraw, even though the pane
-# history itself still contains UTF-8.
-tmux_utf8=(tmux -u)
-
 new_interactive_session() {
   local command="$1"
-  if [ "${TANK_SESSION_TRANSPORT:-}" = "sandbox-agent" ]; then
-    exec bash -lc "${command}"
-  fi
-  exec "${tmux_utf8[@]}" new-session -s tank "${command}"
+  exec bash -lc "${command}"
 }
 
 configure_git_identity() {
@@ -72,13 +59,6 @@ configure_git_identity() {
 
 source /opt/tank/session-config/install-tank-skills.sh
 
-# Reconnect fast-path: if the tmux session already exists this is a
-# reattach, not a fresh boot. Skip settings/credentials setup (already
-# done on first connect; rewriting is idempotent but wasteful, and in
-# subscription mode would re-hit the OAuth gateway every reconnect).
-if [ "${TANK_SESSION_TRANSPORT:-}" != "sandbox-agent" ] && "${tmux_utf8[@]}" has-session -t tank 2>/dev/null; then
-  exec "${tmux_utf8[@]}" attach-session -t tank
-fi
 bash /opt/tank/write-glimmung-context.sh
 configure_git_identity
 install_tank_skills
@@ -105,8 +85,7 @@ fi
 # pod). Once the user completes login, ~/.codex/auth.json contains the
 # token bundle (auth_mode + tokens.{access_token, id_token, refresh_token}
 # + last_refresh per developers.openai.com/codex/auth/ci-cd-auth) and the
-# tank-operator save-credentials button harvests it to KV. tmux-wrapped
-# so a tab reload during the device-code wait doesn't lose the flow.
+# tank-operator save-credentials button harvests it to KV.
 if [ "${TANK_SESSION_MODE}" = "codex_config" ]; then
   mkdir -p $HOME/.codex
   # cli_auth_credentials_store=file forces the file-backed store; without
@@ -217,7 +196,7 @@ if [ "${TANK_SESSION_MODE}" = "pi_config" ]; then
 Run `/login`, choose your provider, and complete the login flow. This mode is
 for manual Pi testing; Tank does not persist Pi's native auth.json.
 EOF
-  exec "${tmux_utf8[@]}" new-session -s tank 'printf "Run /login in Pi. This sandbox does not persist Pi auth.\\n\\n"; pi; exec bash'
+  new_interactive_session 'printf "Run /login in Pi. This sandbox does not persist Pi auth.\\n\\n"; pi; exec bash'
 fi
 # Pi-subscription mode: curate all Tank-backed subscription auth into Pi's
 # native ~/.pi/agent/auth.json from existing Claude proxy and Codex credentials.
@@ -323,7 +302,7 @@ fs.writeFileSync(modelsPath, JSON.stringify(models, null, 2));
 fs.chmodSync(modelsPath, 0o600);
 NODE
   chmod 600 $HOME/.pi/agent/auth.json
-  exec "${tmux_utf8[@]}" new-session -s tank 'pi; exec bash'
+  new_interactive_session 'pi; exec bash'
 fi
 # MCP auth is delegated to the mcp-auth-proxy sidecar — claude reaches
 # in-cluster HTTP MCP servers via 127.0.0.1 ports declared in
