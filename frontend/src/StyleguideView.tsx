@@ -11,6 +11,7 @@
 // not "the styleguide drifted from the live UI."
 
 import { useState } from "react";
+import { SquareTerminalIcon } from "lucide-react";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
 
@@ -266,6 +267,23 @@ export function StyleguideView() {
                 )}
               </span>
             ))}
+          </div>
+        </section>
+
+        {/* === Tool icons === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>tool icons</h2>
+          <p style={captionStyle}>
+            Transcript tool rows use semantic glyphs instead of relying on the
+            rendered tool label.
+          </p>
+          <div style={rowStyle}>
+            <span className="run-tool-icon-glyph tool-color-bash" aria-hidden="true">
+              <SquareTerminalIcon size={14} strokeWidth={2} />
+            </span>
+            <span className="run-tool-icon-glyph tool-color-mcp" aria-hidden="true">
+              <McpIcon size={14} strokeWidth={2} />
+            </span>
           </div>
         </section>
 

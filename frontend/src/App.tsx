@@ -8,7 +8,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import { ProcessTerminal, type TranscriptEntry } from "@sandbox-agent/react";
+import { ProcessTerminal, type TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
 import { SandboxAgent } from "sandbox-agent";
 import {
   Streamdown,
@@ -63,6 +63,7 @@ import {
   SearchIcon,
   SendHorizontalIcon,
   SettingsIcon,
+  SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -98,6 +99,12 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 type AgentSessionActivity = "waiting" | "working";
+type ToolKind = "mcp" | "shell";
+type TranscriptEntry = SandboxTranscriptEntry & {
+  toolKind?: ToolKind;
+  toolServer?: string;
+  toolAction?: string;
+};
 type SkillStateName = "test" | "rollout";
 
 interface Session {
@@ -1722,6 +1729,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
     return {
       id,
       kind: "tool",
+      toolKind: "shell",
       toolName: command,
       toolInput: command,
       toolOutput: shortJson(item.aggregated_output),
@@ -1747,6 +1755,9 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
     return {
       id,
       kind: "tool",
+      toolKind: "mcp",
+      toolServer: server,
+      toolAction: tool,
       toolName: `${server}.${tool}`,
       toolInput: shortJson(item.arguments),
       toolOutput: shortJson(item.result ?? item.error),
@@ -1856,11 +1867,25 @@ function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
   return message.content.flatMap((block): TranscriptEntry[] => {
     if (!isJsonObject(block) || block.type !== "tool_use") return [];
     const id = typeof block.id === "string" ? block.id : `claude-tool-${Date.now()}`;
+    const toolName = typeof block.name === "string" ? block.name : "tool";
+    const mcpMatch = /^mcp__([^_]+)__(.+)$/.exec(toolName);
+    const toolKind = mcpMatch ? "mcp" : toolName === "Bash" ? "shell" : undefined;
     return [
       {
         id,
         kind: "tool",
-        toolName: typeof block.name === "string" ? block.name : "tool",
+        toolName,
+        ...(toolKind
+          ? {
+              toolKind,
+              ...(mcpMatch
+                ? {
+                    toolServer: mcpMatch[1],
+                    toolAction: mcpMatch[2],
+                  }
+                : {}),
+            }
+          : {}),
         toolInput: shortJson(block.input),
         toolStatus: "started",
         time,
@@ -2033,8 +2058,14 @@ interface ToolVisualConfig {
 /** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
+  if (entry.toolKind === "mcp") {
+    return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
+  }
+  if (entry.toolKind === "shell") {
+    return { Icon: SquareTerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
+  }
   if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
-    return { Icon: TerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
+    return { Icon: SquareTerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
   }
   if (name === "Read") {
     return { Icon: FileTextIcon, colorClass: "tool-color-read", tooltip: "File read tool call" };
