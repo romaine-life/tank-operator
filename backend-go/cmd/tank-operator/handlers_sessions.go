@@ -86,6 +86,7 @@ func (s *appServer) handleCreateAndRunSession(w http.ResponseWriter, r *http.Req
 			PermissionMode: permMode,
 			SkillName:      skillName,
 			ActiveRuns:     s.activeRuns,
+			TurnQueue:      s.turnQueue,
 			Events:         s.eventBus,
 		})
 		if err != nil {
@@ -388,6 +389,7 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			PermissionMode: permMode,
 			SkillName:      skillName,
 			ActiveRuns:     s.activeRuns,
+			TurnQueue:      s.turnQueue,
 			Events:         s.eventBus,
 		})
 		if err != nil {

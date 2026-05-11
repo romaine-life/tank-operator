@@ -20,6 +20,7 @@ type appServer struct {
 	profiles   profilesStore
 	activeRuns store.ActiveRunStore
 	runEvents  store.RunEventStore
+	turnQueue  store.TurnQueueStore
 	eventBus   *sessions.EventBus
 	verifier   *auth.Verifier
 	minter     *auth.Minter
