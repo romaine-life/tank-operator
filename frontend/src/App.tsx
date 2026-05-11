@@ -108,12 +108,17 @@ interface Session {
   // User-set friendly name. Null when unset; UI falls back to the id slug.
   name: string | null;
   test_state?: TestState | null;
+  rollout_state?: RolloutState | null;
 }
 
 interface TestState {
   active?: boolean;
   slot_index?: number | null;
   url?: string | null;
+}
+
+interface RolloutState {
+  active?: boolean;
 }
 
 const MODE_LABELS: Record<SessionMode, string> = {
@@ -1060,14 +1065,24 @@ function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: Sess
   );
 }
 
-function TankIcon({ className }: { className?: string }) {
+function TankIcon({
+  className,
+  size,
+  strokeWidth,
+}: {
+  className?: string;
+  size?: number;
+  strokeWidth?: number;
+}) {
   return (
     <svg
       className={className}
+      width={size}
+      height={size}
       viewBox="0 0 64 64"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.5"
+      strokeWidth={strokeWidth ?? 2.5}
       strokeLinecap="round"
       strokeLinejoin="round"
       focusable="false"
@@ -2662,6 +2677,14 @@ function RunMessageBubble({
   const text = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
   const isSkillAction = messageKind === "skill-action";
+  const skillName = (entry as Record<string, unknown>).skillName;
+  const skillActionIcon =
+    skillName === "test"
+      ? FlaskConicalIcon
+      : skillName === "rollout"
+        ? TankIcon
+        : ListChecksIcon;
+  const SkillActionIcon = skillActionIcon;
   const time = formatMessageTime(entry.time);
   const durationMs = (entry as Record<string, unknown>).durationMs as number | undefined;
   const alwaysVisible = showTimestamps || showDuration;
@@ -2672,6 +2695,7 @@ function RunMessageBubble({
       data-variant={variant}
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
+      data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
@@ -2685,7 +2709,7 @@ function RunMessageBubble({
         <div className="run-transcript-message-text" data-slot="message-text">
           {isSkillAction ? (
             <span className="run-skill-action-text">
-              <FlaskConicalIcon size={15} strokeWidth={2.2} aria-hidden="true" />
+              <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
               <span>{text}</span>
             </span>
           ) : (
@@ -3213,6 +3237,7 @@ function HeadlessRun({
   session,
   visible,
   onRename,
+  onSessionPatch,
   runPrefs,
   setRunPref,
   user,
@@ -3221,6 +3246,7 @@ function HeadlessRun({
   session: Session;
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
+  onSessionPatch: (id: string, patch: Partial<Session>) => void;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
@@ -3241,6 +3267,7 @@ function HeadlessRun({
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
+  const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
@@ -3301,6 +3328,10 @@ function HeadlessRun({
   useEffect(() => {
     setTestState(session.test_state ?? null);
   }, [session.test_state]);
+
+  useEffect(() => {
+    setRolloutState(session.rollout_state ?? null);
+  }, [session.rollout_state]);
 
   const [dragActive, setDragActive] = useState(false);
   const setChatFontScale = (value: number) => {
@@ -4312,6 +4343,7 @@ function HeadlessRun({
 
   async function markTestState(state: TestState) {
     setTestState(state);
+    onSessionPatch(session.id, { test_state: state });
     const res = await authedFetch(`/api/sessions/${session.id}/test-state`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4320,6 +4352,25 @@ function HeadlessRun({
     if (!res.ok) {
       throw new Error(`test state update failed: ${res.status}`);
     }
+    const updated: Session = normalizeSession(await res.json());
+    setTestState(updated.test_state ?? null);
+    onSessionPatch(session.id, { test_state: updated.test_state ?? null });
+  }
+
+  async function markRolloutState(state: RolloutState) {
+    setRolloutState(state);
+    onSessionPatch(session.id, { rollout_state: state });
+    const res = await authedFetch(`/api/sessions/${session.id}/rollout-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+    if (!res.ok) {
+      throw new Error(`rollout state update failed: ${res.status}`);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    setRolloutState(updated.rollout_state ?? null);
+    onSessionPatch(session.id, { rollout_state: updated.rollout_state ?? null });
   }
 
   function startTestSkill() {
@@ -4334,6 +4385,11 @@ function HeadlessRun({
 
   function startGuiRollout() {
     if (session.status !== "Active") return;
+    void markRolloutState({ active: true }).catch((e) => {
+      setEntries((prev) =>
+        appendMeta(prev, nextEntryId("rollout-state-error"), "rollout state update failed", String(e), "error"),
+      );
+    });
     submitSkillInvocation("rollout");
   }
 
@@ -5501,7 +5557,7 @@ function HeadlessRun({
                 {GUI_ROLLOUT_MODES.has(session.mode) && (
                   <button
                     type="button"
-                    className="run-composer-icon-btn run-composer-action-btn"
+                    className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutState?.active ? " is-active" : ""}`}
                     onClick={startGuiRollout}
                     disabled={!ready}
                     aria-label="Start rollout"
@@ -6110,6 +6166,12 @@ export function App() {
     }
   }
 
+  function patchSession(id: string, patch: Partial<Session>) {
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, ...patch } : s))
+    );
+  }
+
   function startEditing(id: string, current: string | null) {
     setEditingId(id);
     setEditingValue(current ?? "");
@@ -6383,11 +6445,16 @@ export function App() {
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
+              const skillStateClass = s.test_state?.active
+                ? " is-skill-test"
+                : s.rollout_state?.active
+                  ? " is-skill-rollout"
+                  : "";
               return (
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
                   draggable={!isEditing && !isClosing}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
@@ -6653,6 +6720,7 @@ export function App() {
                       session={s}
                       visible={active === s.id}
                       onRename={renameSession}
+                      onSessionPatch={patchSession}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}

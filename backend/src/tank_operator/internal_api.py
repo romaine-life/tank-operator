@@ -189,6 +189,10 @@ class InternalTestStateBody(BaseModel):
     url: str | None = None
 
 
+class InternalRolloutStateBody(BaseModel):
+    active: bool = True
+
+
 class InternalSendMessageBody(BaseModel):
     prompt: str
     model: str | None = None
@@ -342,6 +346,27 @@ def build_router(
                 active=body.active,
                 slot_index=body.slot_index,
                 url=body.url,
+            )
+        except SessionNotFound:
+            raise HTTPException(status_code=404, detail="session not found")
+        except SessionNotOwned:
+            raise HTTPException(status_code=403, detail="session not owned by caller")
+        return {**dataclasses.asdict(session), "url": _session_url(session.id)}
+
+    @router.post("/sessions/{session_id}/rollout-state")
+    async def internal_set_rollout_state(
+        session_id: str,
+        body: InternalRolloutStateBody,
+        caller_pod_ip: str = Query(...),
+        _: CallerSubject = Depends(authorized_caller),
+    ) -> dict:
+        """Update the caller-owned session's GUI rollout state."""
+        email = await _resolve_email_from_pod_ip(caller_pod_ip, sessions)
+        try:
+            session = await sessions.set_rollout_state(
+                owner=email,
+                session_id=session_id,
+                active=body.active,
             )
         except SessionNotFound:
             raise HTTPException(status_code=404, detail="session not found")
