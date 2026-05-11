@@ -1418,7 +1418,14 @@ type RunLifecycleEvent = {
   run_id: string;
   session_id: string;
   event_id: number;
-  type: "run.started" | "run.completed" | "run.failed" | "run.stale";
+  type:
+    | "run.started"
+    | "run.completed"
+    | "run.failed"
+    | "run.stale"
+    | "run.output.started"
+    | "run.tool.started"
+    | "run.tool.completed";
   payload?: JsonObject;
   created_at: string;
 };
@@ -1442,7 +1449,10 @@ function parseRunLifecycleEvent(data: string): RunLifecycleEvent | null {
     type !== "run.started" &&
     type !== "run.completed" &&
     type !== "run.failed" &&
-    type !== "run.stale"
+    type !== "run.stale" &&
+    type !== "run.output.started" &&
+    type !== "run.tool.started" &&
+    type !== "run.tool.completed"
   ) {
     return null;
   }
@@ -3365,6 +3375,7 @@ function HeadlessRun({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
+  const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
   // Mirrors cloudcli's ClaudeStatus idle state: persists last status text
   // after the run ends (amber/static pill) instead of vanishing.
@@ -3581,11 +3592,17 @@ function HeadlessRun({
     source.addEventListener("run.completed", onLifecycleEvent);
     source.addEventListener("run.failed", onLifecycleEvent);
     source.addEventListener("run.stale", onLifecycleEvent);
+    source.addEventListener("run.output.started", onLifecycleEvent);
+    source.addEventListener("run.tool.started", onLifecycleEvent);
+    source.addEventListener("run.tool.completed", onLifecycleEvent);
     return () => {
       source.removeEventListener("run.started", onLifecycleEvent);
       source.removeEventListener("run.completed", onLifecycleEvent);
       source.removeEventListener("run.failed", onLifecycleEvent);
       source.removeEventListener("run.stale", onLifecycleEvent);
+      source.removeEventListener("run.output.started", onLifecycleEvent);
+      source.removeEventListener("run.tool.started", onLifecycleEvent);
+      source.removeEventListener("run.tool.completed", onLifecycleEvent);
       source.close();
       if (runEventsRef.current === source) runEventsRef.current = null;
     };
@@ -4326,6 +4343,26 @@ function HeadlessRun({
     ta.focus();
   }
 
+  function setActiveTool(toolName: string | null, toolUseId: string | null = null) {
+    activeToolNameRef.current = toolName;
+    activeToolUseIdRef.current = toolName ? toolUseId : null;
+    setActiveToolName(toolName);
+  }
+
+  function completeActiveTool(toolUseId: string | null = null) {
+    if (
+      toolUseId &&
+      activeToolUseIdRef.current &&
+      activeToolUseIdRef.current !== toolUseId
+    ) {
+      return;
+    }
+    if (isScheduleWakeupToolName(activeToolNameRef.current ?? undefined)) {
+      scheduledWakeupRef.current = true;
+    }
+    setActiveTool(null);
+  }
+
   function openSlashCommandMenu() {
     if (slashOpen && slashManualOpenRef.current) {
       slashManualOpenRef.current = false;
@@ -4369,22 +4406,17 @@ function HeadlessRun({
             (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
           );
           const toolName = toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null;
-          activeToolNameRef.current = toolName;
-          setActiveToolName(toolName);
+          const toolUseId = toolBlock && typeof toolBlock.id === "string" ? toolBlock.id : null;
+          setActiveTool(toolName, toolUseId);
         }
       }
     } else if (t === "user") {
-      if (isScheduleWakeupToolName(activeToolNameRef.current ?? undefined)) {
-        scheduledWakeupRef.current = true;
-      }
-      activeToolNameRef.current = null;
-      setActiveToolName(null);
+      completeActiveTool();
     } else if (t === "result") {
       const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
       const total = totalContextTokens(u);
       if (total > 0) setTokensUsed(total);
-      activeToolNameRef.current = null;
-      setActiveToolName(null);
+      setActiveTool(null);
     }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
   }
@@ -4466,9 +4498,8 @@ function HeadlessRun({
         ),
       );
     }
-    activeToolNameRef.current = null;
     scheduledWakeupRef.current = false;
-    setActiveToolName(null);
+    setActiveTool(null);
     setRunning(false);
     setActiveRunId(null);
     wsRef.current?.close();
@@ -4500,6 +4531,24 @@ function HeadlessRun({
       }
       setRunStatus("running");
       setRunning(true);
+      return;
+    }
+    if (event.type === "run.output.started") {
+      setRunStatus("running");
+      setRunning(true);
+      return;
+    }
+    if (event.type === "run.tool.started") {
+      const toolName = event.payload?.name;
+      if (typeof toolName === "string" && toolName) {
+        const toolUseId = event.payload?.tool_use_id;
+        setActiveTool(toolName, typeof toolUseId === "string" ? toolUseId : null);
+      }
+      return;
+    }
+    if (event.type === "run.tool.completed") {
+      const toolUseId = event.payload?.tool_use_id;
+      completeActiveTool(typeof toolUseId === "string" ? toolUseId : null);
       return;
     }
     if (event.type === "run.completed") {
@@ -4548,9 +4597,8 @@ function HeadlessRun({
     ws?.close();
     wsRef.current = null;
     setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
-    activeToolNameRef.current = null;
     scheduledWakeupRef.current = false;
-    setActiveToolName(null);
+    setActiveTool(null);
     setRunning(false);
     setActiveRunId(null);
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
@@ -4691,10 +4739,8 @@ function HeadlessRun({
     }
     setRunStatus("running");
     setRunning(true);
-    activeToolNameRef.current = null;
-    setActiveToolName(null);
+    setActiveTool(null);
     setLastStatusText(null);
-    setActiveToolName(null);
     setRunStartedAt(Date.now());
     setNow(Date.now());
     // The form clears the textarea internally on submit but doesn't
@@ -4764,9 +4810,8 @@ function HeadlessRun({
               ? `Used ${formatToolLabel(activeToolNameRef.current)}`
               : "Done",
         );
-        activeToolNameRef.current = null;
         scheduledWakeupRef.current = false;
-        setActiveToolName(null);
+        setActiveTool(null);
         setRunStatus("done");
         setRunning(false);
         setActiveRunId(null);
@@ -4783,9 +4828,8 @@ function HeadlessRun({
         flushStdoutBuffer();
         currentRunRef.current = null;
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
-        activeToolNameRef.current = null;
         scheduledWakeupRef.current = false;
-        setActiveToolName(null);
+        setActiveTool(null);
         setRunStatus("error");
         setRunning(false);
         setActiveRunId(null);
@@ -4822,9 +4866,8 @@ function HeadlessRun({
       currentRunRef.current = null;
       setActiveRunId(null);
       setLastStatusText("Connection lost");
-      activeToolNameRef.current = null;
       scheduledWakeupRef.current = false;
-      setActiveToolName(null);
+      setActiveTool(null);
       setRunning(false);
       setEntries((entries) =>
         appendMeta(
