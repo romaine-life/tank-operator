@@ -58,13 +58,6 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ printf "claude-api-proxy.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.apiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.goShadowPythonBaseUrl" -}}
-{{- if .Values.goShadow.pythonBaseUrl -}}
-{{- .Values.goShadow.pythonBaseUrl -}}
-{{- else -}}
-{{ printf "http://tank-operator.%s.svc.cluster.local" (include "tank-operator.orchestratorNamespace" .) }}
-{{- end -}}
-{{- end -}}
 
 {{- define "tank-operator.githubAppSecret" -}}
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-github-app-creds" .Release.Name }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}

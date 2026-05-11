@@ -40,14 +40,6 @@ orchestrator:
     enabled: true
     minAvailable: 1
 
-goShadow:
-  # Disabled by default. Validation slots can enable this to run the Go
-  # read-only shadow server next to the Python orchestrator and compare
-  # /api/sessions behavior before any route cutover.
-  enabled: false
-  replicas: 1
-  pythonBaseUrl: ""
-
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
