@@ -253,6 +253,7 @@ async def exec_stream_to_websocket(
     command: list[str],
     stdin: bytes,
     cancel_command: list[str] | None = None,
+    stdout_observer: Callable[[str], Awaitable[None]] | None = None,
 ) -> None:
     """Run a one-shot command and forward stdout/stderr chunks to the browser.
 
@@ -304,6 +305,14 @@ async def exec_stream_to_websocket(
                 except Exception:
                     browser_disconnected = True
 
+            async def observe_stdout(text: str) -> None:
+                if stdout_observer is None:
+                    return
+                try:
+                    await stdout_observer(text)
+                except Exception as exc:
+                    log.warning("stdout observer failed for %s/%s: %s", namespace, pod_name, exc)
+
             async def pump_pod() -> dict[str, str] | None:
                 status: dict[str, str] | None = None
                 async for wsmsg in k8s_ws:
@@ -313,10 +322,12 @@ async def exec_stream_to_websocket(
                         channel = wsmsg.data[0]
                         payload = wsmsg.data[1:]
                         if channel == STDOUT_CHANNEL:
+                            text = payload.decode(errors="replace")
+                            await observe_stdout(text)
                             await send_browser_json(
                                 {
                                     "stream": "stdout",
-                                    "data": payload.decode(errors="replace"),
+                                    "data": text,
                                 }
                             )
                         elif channel == STDERR_CHANNEL:

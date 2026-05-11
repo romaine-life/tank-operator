@@ -238,6 +238,114 @@ async def _append_run_event(
         log.warning("failed to append run event %s for %s: %s", event_type, run_id, exc)
 
 
+class _RunStdoutEventObserver:
+    """Emit semantic run events from provider stdout without changing streaming."""
+
+    def __init__(
+        self,
+        *,
+        email: str,
+        session_id: str,
+        run_id: str,
+        provider: str,
+    ) -> None:
+        self.email = email
+        self.session_id = session_id
+        self.run_id = run_id
+        self.provider = provider
+        self._buffer = ""
+        self._output_started = False
+        self._started_tools: set[str] = set()
+        self._completed_tools: set[str] = set()
+        self._tool_seq = 0
+
+    async def observe_stdout(self, text: str) -> None:
+        if text and not self._output_started:
+            self._output_started = True
+            await self._append("run.output.started")
+        if self.provider != "claude":
+            return
+        self._buffer += text
+        lines = self._buffer.splitlines(keepends=True)
+        self._buffer = ""
+        for line in lines:
+            if line.endswith(("\n", "\r")):
+                await self._observe_line(line.strip())
+            else:
+                self._buffer = line
+
+    async def _append(
+        self,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        await _append_run_event(
+            email=self.email,
+            session_id=self.session_id,
+            run_id=self.run_id,
+            event_type=event_type,
+            payload=payload,
+        )
+
+    async def _observe_line(self, line: str) -> None:
+        if not line:
+            return
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return
+        if not isinstance(event, dict):
+            return
+        event_type = event.get("type")
+        if event_type == "assistant":
+            await self._observe_assistant(event)
+        elif event_type == "user":
+            await self._observe_user(event)
+
+    async def _observe_assistant(self, event: dict[str, Any]) -> None:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return
+        content = message.get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            tool_use_id = block.get("id")
+            if not isinstance(tool_use_id, str) or not tool_use_id:
+                self._tool_seq += 1
+                tool_use_id = f"tool-{self._tool_seq}"
+            if tool_use_id in self._started_tools:
+                continue
+            self._started_tools.add(tool_use_id)
+            await self._append(
+                "run.tool.started",
+                {"tool_use_id": tool_use_id, "name": name},
+            )
+
+    async def _observe_user(self, event: dict[str, Any]) -> None:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return
+        content = message.get("content")
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            tool_use_id = block.get("tool_use_id")
+            if not isinstance(tool_use_id, str) or not tool_use_id:
+                continue
+            if tool_use_id in self._completed_tools:
+                continue
+            self._completed_tools.add(tool_use_id)
+            await self._append("run.tool.completed", {"tool_use_id": tool_use_id})
+
+
 def _parse_last_event_id(value: str | None) -> int:
     if not value:
         return 0
@@ -2165,6 +2273,12 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
             return
     await ws.send_json({"status": "attached", "run_id": run_id})
     command = ["bash", "-lc", _build_tail_run_script(stream_path, tail_offset)]
+    stdout_observer = _RunStdoutEventObserver(
+        email=user.email,
+        session_id=session_id,
+        run_id=run_id,
+        provider=provider,
+    )
     async with sessions.track_ws(session_id):
         try:
             await exec_stream_to_websocket(
@@ -2174,6 +2288,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                 command=command,
                 stdin=b"",
                 cancel_command=_build_cancel_run_command(pid_path),
+                stdout_observer=stdout_observer.observe_stdout,
             )
             try:
                 await active_runs.mark_completed(session_id, run_id)
