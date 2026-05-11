@@ -1,8 +1,7 @@
 # Seed the Claude Code subscription credentials in Azure Key Vault. From there
 # ExternalSecret pulls them once into a K8s Secret in the orchestrator
-# namespace; the in-cluster OAuth gateway (POST /v1/oauth/token in
-# tank-operator's FastAPI app) is the only thing that reads or writes that
-# Secret going forward. Session pods never see the refresh token.
+# namespace; the in-cluster api-proxy ext_proc is the only thing that reads or
+# writes that Secret going forward. Session pods never see the refresh token.
 #
 # How to produce the JSON:
 #   1. In WSL (or any Linux env), `npm i -g @anthropic-ai/claude-code`.

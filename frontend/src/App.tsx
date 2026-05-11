@@ -2629,45 +2629,10 @@ function loadRunPrefs(): RunPrefs {
 
 type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void;
 
-// localStorage key for a provisional transcript cache. The backend event log
-// and provider JSONL history are authoritative; this only fills the pane while
-// those replay paths catch up after a browser refresh.
-const RUN_STORAGE_PREFIX = "tank-run-entries-";
-const RUN_STORAGE_MAX_ENTRIES = 20;
-
-type StoredRunEntries = {
-  version: 2;
-  entries: TranscriptEntry[];
-  savedAt: string;
-};
-
-function trimStoredEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
-  return entries.slice(-RUN_STORAGE_MAX_ENTRIES);
-}
-
-function loadStoredEntries(sessionId: string): TranscriptEntry[] {
-  try {
-    const raw = localStorage.getItem(RUN_STORAGE_PREFIX + sessionId);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return trimStoredEntries(parsed as TranscriptEntry[]);
-    if (isJsonObject(parsed) && Array.isArray(parsed.entries)) {
-      return trimStoredEntries(parsed.entries as TranscriptEntry[]);
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-function clearStoredEntries(sessionId: string) {
-  try {
-    localStorage.removeItem(RUN_STORAGE_PREFIX + sessionId);
-  } catch {
-    /* ignore */
-  }
-}
-
+// transcriptComparable returns a stable JSON of the transcript's load-bearing
+// fields, used to short-circuit no-op replay updates. Backend replay paths
+// (`/runs/latest/events.json` then `/run/history`) are the sole source of
+// truth for transcript state across reloads; there is no client-side cache.
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
@@ -3632,9 +3597,7 @@ function HeadlessRun({
   user: SessionUser;
   onActivityChange?: (id: string, activity: AgentSessionActivity) => void;
 }) {
-  const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
-    loadStoredEntries(session.id),
-  );
+  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
@@ -3744,7 +3707,6 @@ function HeadlessRun({
   const wsRef = useRef<WebSocket | null>(null);
   const runEventsRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<void> | null>(null);
-  const transcriptCacheBackendAuthoritativeRef = useRef(false);
   const sessionIdRef = useRef(session.id);
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -3918,28 +3880,6 @@ function HeadlessRun({
     return () => main.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Keep only a bounded provisional cache. Backend replay/history is
-  // authoritative once it has restored this session.
-  useEffect(() => {
-    try {
-      if (transcriptCacheBackendAuthoritativeRef.current || entries.length === 0) {
-        clearStoredEntries(session.id);
-      } else {
-        const stored: StoredRunEntries = {
-          version: 2,
-          entries: trimStoredEntries(entries),
-          savedAt: nowIso(),
-        };
-        localStorage.setItem(
-          RUN_STORAGE_PREFIX + session.id,
-          JSON.stringify(stored),
-        );
-      }
-    } catch {
-      // Quota exceeded or storage unavailable — drop silently.
-    }
-  }, [entries, session.id]);
-
   // History replay — fetch provider JSONL from the pod and replay each event
   // through the matching provider parser. This is intentionally not limited
   // to empty localStorage: a run can finish while the tab is closed, leaving
@@ -3993,8 +3933,6 @@ function HeadlessRun({
       setActiveRunId(null);
     }
     if (replayedContent) {
-      transcriptCacheBackendAuthoritativeRef.current = true;
-      clearStoredEntries(session.id);
       setEntries((prev) =>
         transcriptComparable(prev) === transcriptComparable(replayEntries)
           ? prev
@@ -4044,8 +3982,6 @@ function HeadlessRun({
         const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
           let behind = false;
-          transcriptCacheBackendAuthoritativeRef.current = true;
-          clearStoredEntries(refreshSessionId);
           setEntries((prev) => {
             if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
             // If the JSONL has fewer conversation messages than the current
@@ -4413,12 +4349,11 @@ function HeadlessRun({
     }
   }
 
-  // When the session id changes, reset local transcript state to that
-  // session's cached entries and allow the history sync to run again.
+  // When the session id changes, reset transcript state and allow the
+  // history sync to run again. The replay paths repopulate from backend.
   useEffect(() => {
     sessionIdRef.current = session.id;
-    transcriptCacheBackendAuthoritativeRef.current = false;
-    setEntries(loadStoredEntries(session.id));
+    setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
     setHistoryAttempted(false);
@@ -5092,7 +5027,6 @@ function HeadlessRun({
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
-    transcriptCacheBackendAuthoritativeRef.current = false;
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();

@@ -12,13 +12,15 @@ Web frontend over a thin K8s orchestrator that spawns ephemeral session pods on 
 
 ## Stack
 
-FastAPI + kubernetes-asyncio backend, Vite + React frontend, multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Pods).
+Go orchestrator (`backend-go/`), Vite + React frontend (`frontend/`), multi-stage Dockerfile, Helm chart in `k8s/` synced by ArgoCD. Two namespaces: `tank-operator` (long-lived orchestrator Deployment) and `tank-operator-sessions` (ephemeral session Pods).
+
+The orchestrator was a Python FastAPI + kubernetes-asyncio app until 2026-05-11 (#373), when it was rewritten in Go. The repo has been mostly compiled-language since (Go orchestrator, Go session runner under construction). The api-proxy ext_proc is still Python (small, single-purpose).
 
 ## Container build verification
 
 Session pods intentionally do not ship Docker or a container runtime. Do not
 report missing local Docker as a blocker. Run available repo checks first
-(`pytest`, `npm`, `go test`, `helm template`, etc.). The normal container
+(`go test`, `npm test`, `helm template`, etc.). The normal container
 build gate is PR CI: `.github/workflows/docker-build-check.yml` performs
 throwaway Docker builds for every repo-owned image with `push: false`. If an
 image-packaging change needs feedback before a PR is ready, manually dispatch
@@ -48,20 +50,26 @@ phase's noise into the next decision. The split is the load-bearing
 context-reduction mechanism for autonomous work — don't let it drift back
 into a monolith.
 
-**Per-user profile store: Cosmos DB (SQL API), serverless** — `infra/cosmos.tf` provisions one account, one database, one `profiles` container partitioned on `/email`. Backend at `backend/src/tank_operator/profiles.py`. Auth is workload identity (the same `claude-credentials-refresher-identity` UAMI that already writes KV); `local_authentication_disabled = true` on the account so there's no key-based parallel surface to rotate. A profile row is auto-created on `/api/auth/microsoft/login` and exposed at `/api/auth/me`. The store boots in degraded "stub" mode if `COSMOS_ENDPOINT` is unset (first-install ordering before tofu has applied) — login still works, profile fields are null.
+**Per-user profile store: Cosmos DB (SQL API), serverless** — `infra/cosmos.tf` provisions one account, one database, one `profiles` container partitioned on `/email`, plus `active_runs` (PK `/session_id`) and `run_events` (PK `/run_id`, 30d TTL). Orchestrator code at `backend-go/internal/profiles/`, `backend-go/internal/sessionregistry/`, `backend-go/internal/store/`. Auth is workload identity (the same `claude-credentials-refresher-identity` UAMI that already writes KV); `local_authentication_disabled = true` on the account so there's no key-based parallel surface to rotate. A profile row is auto-created on `/api/auth/microsoft/login` and exposed at `/api/auth/me`. The store boots in degraded "stub" mode if `COSMOS_ENDPOINT` is unset (first-install ordering before tofu has applied) — login still works, profile fields are null.
+
+**Session-JWT signing key: KV Key (RSA 2048, sign-in-vault)** — `infra/jwt_signing_key.tf` provisions the key; orchestrator signs each minted session/install-state JWT via the KV Sign operation and caches the public key for in-process verification. Private bytes never leave KV; a compromised orchestrator can verify but cannot forge. Rotation is `az keyvault key rotate` — the verifier resolves whichever `kid` a JWT carries from KV, so old tokens keep working through a rolling rotation.
 
 ## Sessions
 
-Headless Claude/Codex runs stream through the run WebSocket and Kubernetes exec helpers in `backend/src/tank_operator/exec_proxy.py`. The session image bootstrap still seeds agent state to skip onboarding prompts, exports the MCP bearer token from the projected SA token, and performs mode-aware credential setup. Claude, Codex, and Pi sessions use separate SHA-pinned images (`session.image`, `session.codexImage`, and `session.piImage`) built from the same Dockerfile with agent-specific CLIs and support packages baked in, so startup does not fetch skills/extensions at runtime.
+Headless Claude/Codex runs stream through the run WebSocket and Kubernetes exec helpers in `backend-go/internal/kubeexec/`. The session image bootstrap seeds agent state to skip onboarding prompts, exports the MCP bearer token from the projected SA token, and performs mode-aware credential setup. Claude, Codex, and Pi sessions use separate SHA-pinned images (`session.image`, `session.codexImage`, and `session.piImage`) built from the same Dockerfile with agent-specific CLIs and support packages baked in, so startup does not fetch skills/extensions at runtime.
+
+The Claude path is mid-migration: today it spawns `claude -p` per-turn via `k8s/session-config/headless-run.sh`. Phase 2 of the SDK migration replaces this with a long-lived Go `agent-runner` baked into the claude-container image that holds one `claude` process alive across turns via stream-json stdin/stdout. Turns flow through a Cosmos `turn_queue` container (Phase 1) so pod or orchestrator restarts don't drop queued work. ScheduleWakeup is handled by the runner natively (in-process `time.Sleep` between the tool call and the re-enqueue of the wakeup turn).
+
+The Codex path stays on per-turn CLI invocation — there is no Codex equivalent of the agent SDK to wrap, so the two dispatch shapes live next to each other in the orchestrator. See `backend-go/internal/sessions/dispatch.go`.
 
 **Session pods are multi-container** (`claude` + `mcp-auth-proxy` sidecar). Any `pods/exec` call against them MUST pass `container="claude"` — the apiserver returns 400 "a container name must be specified" otherwise, which surfaces to the browser as a 1006 reconnect loop. Same gotcha for ad-hoc `kubectl exec` debugging: use `-c claude`.
 
 ## Auth flow
 
 - Browser SPA uses MSAL.js (auth-code+PKCE) to obtain an Entra ID token from a public app reg (`tank-operator-oauth`, distinct from the CI app). Bootstrap config (`entra_client_id`, authority) comes from the public `/api/config` endpoint.
-- SPA POSTs the token to `/api/auth/microsoft/login`. Backend validates via JWKS at `login.microsoftonline.com/common/...` (regex issuer match — permissive; `ALLOWED_EMAIL` env var is the gate), then mints its own HS256 JWT signed with `JWT_SECRET` (7-day TTL).
-- Session JWT comes back as response body (frontend → localStorage) and as an httpOnly cookie (`auth_token`). REST uses Bearer; WebSocket uses the cookie since browsers can't set Authorization on WS upgrades.
-- `current_user` re-checks the email against `ALLOWED_EMAIL` on every protected endpoint, so revoking access only needs a tofu apply, not a token rotation.
+- SPA POSTs the token (as `{"credential": "<id-token>"}`) to `/api/auth/microsoft/login`. Orchestrator validates via JWKS at `login.microsoftonline.com/common/...` (regex issuer match — permissive; `ALLOWED_EMAILS` env var is the gate), then mints its own RS256 JWT signed by the `tank-operator-jwt-signing` KV Key (7-day TTL). The header stamps `kid` = current key version so the verifier can resolve the right public key per token during rotation.
+- Session JWT comes back as response body (frontend → localStorage as `tank-operator-jwt`) and as an httpOnly cookie (`auth_token`). REST uses Bearer; WebSocket uses the cookie since browsers can't set Authorization on WS upgrades.
+- The orchestrator re-checks the email against `ALLOWED_EMAILS` on every protected endpoint, so revoking access only needs a tofu apply, not a token rotation.
 - No oauth2-proxy. Session pods authenticate to in-cluster MCP servers via the projected SA token (read fresh per request by the `mcp-auth-proxy` sidecar in each session pod); MCP servers do Azure work via their dedicated UAMIs.
 
 **GitHub App install flow (#57 stage 2).** When `/api/auth/me` returns `installation_id=null`, the SPA renders an onboarding wall (`frontend/src/App.tsx → OnboardingWall`) instead of the main shell. Clicking the install CTA hits `/api/github/install/url`, which mints a 10-min state JWT (custom audience `tank-operator/github-install`) bound to the caller's email and 302s to `https://github.com/apps/<github.appSlug>/installations/new?state=...`. After GitHub install consent, GitHub redirects to `/api/github/install/callback`; the callback validates *both* the state JWT and the caller's `auth_token` cookie agree on email (defense-in-depth against a phishing flow where an attacker tricks a victim into installing under the attacker's profile), then upserts `installation_id` on the Cosmos profile row and 302s back to `/`. Validation failures redirect to `/?install_error=<reason>` for an SPA banner. The user-facing App lives at `https://github.com/apps/tank-operator-romaine-life` (`tank-operator` slug was taken globally on github.com) — `github.appSlug` in `k8s/values.yaml` carries the actual slug.

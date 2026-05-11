@@ -3,7 +3,8 @@
 # ============================================================================
 # Provides the Azure identity the orchestrator uses to write the Anthropic
 # OAuth blob to Key Vault from the in-app "+ config sub" / save-credentials
-# flow (backend/src/tank_operator/credentials_seed.py). That break-glass
+# flow (the post-save harvest path in backend-go/cmd/tank-operator/
+# handlers_sessions.go and backend-go/internal/keyvault/). That break-glass
 # harvest is now the sole consumer of this UAMI — steady-state rotation
 # moved to the api-proxy's own UAMI (see infra/api_proxy.tf).
 #
