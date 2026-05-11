@@ -18,8 +18,10 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncompare"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
@@ -83,7 +85,11 @@ func sessionReader() (*sessions.Reader, error) {
 	if namespace == "" {
 		namespace = compat.SessionsNamespace
 	}
-	return sessions.NewReader(client, namespace), nil
+	registry, err := sessionRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return sessions.NewReaderWithRegistry(client, namespace, registry), nil
 }
 
 func shadowSessionsEnabled() bool {
@@ -92,6 +98,32 @@ func shadowSessionsEnabled() bool {
 
 func pythonBaseURL() string {
 	return strings.TrimRight(strings.TrimSpace(os.Getenv("TANK_PYTHON_BASE_URL")), "/")
+}
+
+func sessionRegistry() (sessions.Registry, error) {
+	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
+	if endpoint == "" {
+		return nil, nil
+	}
+	database := envDefault("COSMOS_DATABASE", "tank-operator")
+	container := envDefault("COSMOS_PROFILES_CONTAINER", "profiles")
+	scope := strings.TrimSpace(os.Getenv("SESSION_REGISTRY_SCOPE"))
+	if scope == "" {
+		scope = "default"
+	}
+	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	if err != nil {
+		return nil, err
+	}
+	return sessionregistry.NewCosmosStore(endpoint, database, container, scope, credential)
+}
+
+func envDefault(name, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func listSessions(reader *sessions.Reader) http.HandlerFunc {

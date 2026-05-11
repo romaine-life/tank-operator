@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -83,6 +84,65 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
+func TestListMergesRegistryRecordsWithPods(t *testing.T) {
+	recordedName := "Saved name"
+	client := fake.NewSimpleClientset(
+		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
+		sessionPod("16", "nelson@romaine.life", corev1.PodRunning, true),
+	)
+	registry := registryRecords{
+		{
+			ID:          "12",
+			Email:       "nelson@romaine.life",
+			Mode:        "codex_headless",
+			PodName:     "session-12",
+			Name:        &recordedName,
+			RequestedAt: "2026-05-11T00:00:00+00:00",
+			CreatedAt:   "2026-05-11T00:00:01+00:00",
+			Visible:     true,
+		},
+		{
+			ID:          "15",
+			Email:       "nelson@romaine.life",
+			Mode:        "subscription",
+			PodName:     "session-15",
+			RequestedAt: "2026-05-10T00:00:00+00:00",
+			CreatedAt:   "2026-05-10T00:00:01+00:00",
+			Visible:     true,
+		},
+	}
+	reader := NewReaderWithRegistry(client, compat.SessionsNamespace, registry)
+
+	got, err := reader.List(context.Background(), "nelson@romaine.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(got, func(a, b Info) int {
+		if a.ID < b.ID {
+			return -1
+		}
+		if a.ID > b.ID {
+			return 1
+		}
+		return 0
+	})
+	if len(got) != 3 {
+		t.Fatalf("session count = %d, want 3: %#v", len(got), got)
+	}
+	if got[0].ID != "12" || got[0].Status != "Active" || got[0].Name == nil || *got[0].Name != recordedName {
+		t.Fatalf("merged session = %#v", got[0])
+	}
+	if got[0].RequestedAt == nil || *got[0].RequestedAt != "2026-05-11T00:00:00+00:00" {
+		t.Fatalf("merged requested_at = %#v", got[0].RequestedAt)
+	}
+	if got[1].ID != "15" || got[1].Status != "Failed" || got[1].Mode != compat.ClaudeCLIMode {
+		t.Fatalf("registry-only session = %#v", got[1])
+	}
+	if got[2].ID != "16" || got[2].Status != "Active" {
+		t.Fatalf("pod-only session = %#v", got[2])
+	}
+}
+
 func TestPodStatusCompatibility(t *testing.T) {
 	pending := sessionPod("12", "nelson@romaine.life", corev1.PodPending, true)
 	if got := podStatus(pending); got != "Pending" {
@@ -100,6 +160,12 @@ func TestPodStatusCompatibility(t *testing.T) {
 	if got := podStatus(crash); got != "Failed" {
 		t.Fatalf("crash status = %q", got)
 	}
+}
+
+type registryRecords []compat.SessionRecord
+
+func (r registryRecords) List(context.Context, string) ([]compat.SessionRecord, error) {
+	return []compat.SessionRecord(r), nil
 }
 
 func sessionPod(id, owner string, phase corev1.PodPhase, sandboxAgent bool) *corev1.Pod {
