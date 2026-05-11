@@ -79,6 +79,10 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-credentials-refresher-config" .Release.Name }}{{- else -}}{{ .Values.credentialRefresher.configSecret }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.sessionAzureConfigSecret" -}}
+{{- if .Values.testEnv.enabled -}}{{ printf "%s-session-azure-config" .Release.Name }}{{- else -}}{{ .Values.externalSecret.sessionAzureConfig.secretName }}{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.apiProxyConfigSecret" -}}
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-api-proxy-config" .Release.Name }}{{- else -}}{{ .Values.apiProxy.configSecret }}{{- end -}}
 {{- end -}}
