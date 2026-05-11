@@ -42,6 +42,8 @@ func main() {
 		if reader, err := sessionReader(); err != nil {
 			slog.Warn("session shadow endpoints disabled", "error", err)
 		} else {
+			mux.HandleFunc("GET /api/sessions", authenticatedListSessions(authVerifier, reader))
+			mux.HandleFunc("GET /api/sessions/{session_id}", authenticatedGetSession(authVerifier, reader))
 			mux.HandleFunc("GET /api/shadow/sessions", listSessions(reader))
 			if pythonBase := pythonBaseURL(); pythonBase != "" {
 				mux.HandleFunc("GET /api/shadow/sessions/compare", compareSessions(reader, pythonBase))
@@ -161,6 +163,11 @@ func envDefault(name, fallback string) string {
 	return value
 }
 
+type sessionReaderAPI interface {
+	List(ctx context.Context, owner string) ([]sessions.Info, error)
+	Get(ctx context.Context, owner, sessionID string) (sessions.Info, error)
+}
+
 func me(verifier *auth.Verifier, store profiles.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user, err := verifier.CurrentUser(r)
@@ -184,7 +191,49 @@ func me(verifier *auth.Verifier, store profiles.Store) http.HandlerFunc {
 	}
 }
 
-func listSessions(reader *sessions.Reader) http.HandlerFunc {
+func authenticatedListSessions(verifier *auth.Verifier, reader sessionReaderAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := verifier.CurrentUser(r)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return
+		}
+		result, err := reader.List(r.Context(), user.Email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func authenticatedGetSession(verifier *auth.Verifier, reader sessionReaderAPI) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user, err := verifier.CurrentUser(r)
+		if err != nil {
+			writeError(w, auth.ErrorStatus(err), err.Error())
+			return
+		}
+		sessionID := strings.TrimSpace(r.PathValue("session_id"))
+		if sessionID == "" {
+			writeError(w, http.StatusBadRequest, "missing session id")
+			return
+		}
+		result, err := reader.Get(r.Context(), user.Email, sessionID)
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusOK, result)
+		case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+			writeError(w, http.StatusNotFound, "session not found")
+		case errors.Is(err, context.Canceled):
+			return
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+	}
+}
+
+func listSessions(reader sessionReaderAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
 		if owner == "" {
@@ -200,7 +249,7 @@ func listSessions(reader *sessions.Reader) http.HandlerFunc {
 	}
 }
 
-func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFunc {
+func compareSessions(reader sessionReaderAPI, pythonBase string) http.HandlerFunc {
 	client := &http.Client{Timeout: 10 * time.Second}
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
@@ -222,7 +271,7 @@ func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFun
 	}
 }
 
-func getSession(reader *sessions.Reader) http.HandlerFunc {
+func getSession(reader sessionReaderAPI) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
 		if owner == "" {
