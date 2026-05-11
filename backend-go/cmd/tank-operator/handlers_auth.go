@@ -40,9 +40,19 @@ func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Create or update profile.
-	if _, err := s.profiles.GetOrCreate(r.Context(), email); err != nil {
-		slog.Warn("profile upsert failed", "email", email, "error", err)
+	// Read the profile so the response carries installation_id /
+	// github_login / run_prefs alongside the JWT. The SPA uses this
+	// `user` object directly on the fresh-login path (it does NOT then
+	// call /api/auth/me), so omitting these fields here makes the SPA
+	// believe installation_id is null even when the Cosmos doc has it
+	// — surfacing as a spurious "Connect GitHub" wall after any flow
+	// that forces a re-login (cookie expiry, localStorage reap, manual
+	// logout). Read-only here; don't write — there's nothing new to
+	// merge in. A bad Cosmos read shouldn't block sign-in, so we log
+	// and continue with a zero profile rather than 500.
+	profile, err := s.profiles.GetOrCreate(r.Context(), email)
+	if err != nil {
+		slog.Warn("profile read failed during login", "email", email, "error", err)
 	}
 
 	// Set httpOnly cookie.
@@ -59,9 +69,13 @@ func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
 		"user": map[string]any{
-			"sub":   sub,
-			"email": email,
-			"name":  name,
+			"sub":             sub,
+			"email":           email,
+			"name":            name,
+			"avatar_url":      auth.GravatarURL(email, 64),
+			"github_login":    profile.GitHubLogin,
+			"installation_id": profile.InstallationID,
+			"run_prefs":       profile.RunPrefs,
 		},
 	})
 }
