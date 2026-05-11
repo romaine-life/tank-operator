@@ -28,7 +28,6 @@ from fastapi.responses import (
     RedirectResponse,
     StreamingResponse,
 )
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import (
@@ -2028,20 +2027,56 @@ _static_env = os.environ.get("TANK_OPERATOR_STATIC_DIR")
 _static = (
     Path(_static_env) if _static_env else Path(__file__).resolve().parent / "static"
 )
+_static_override_env = os.environ.get("TANK_OPERATOR_STATIC_OVERRIDE_DIR")
+_static_override = Path(_static_override_env) if _static_override_env else None
+
+
+def _static_file(*parts: str) -> Path | None:
+    for root in (_static_override, _static):
+        if root is None or not root.exists():
+            continue
+        try:
+            candidate = root.joinpath(*parts).resolve()
+            candidate.relative_to(root.resolve())
+        except ValueError:
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _static_index() -> Path:
+    found = _static_file("index.html")
+    if found is not None:
+        return found
+    return _static / "index.html"
+
+
 if _static.exists():
-    app.mount("/assets", StaticFiles(directory=_static / "assets"), name="assets")
-    app.mount("/fonts", StaticFiles(directory=_static / "fonts"), name="fonts")
+    @app.get("/assets/{asset_path:path}")
+    async def frontend_asset(asset_path: str) -> FileResponse:
+        found = _static_file("assets", asset_path)
+        if found is None:
+            raise HTTPException(404, "static asset not found")
+        return FileResponse(found)
+
+    @app.get("/fonts/{font_path:path}")
+    async def frontend_font(font_path: str) -> FileResponse:
+        found = _static_file("fonts", font_path)
+        if found is None:
+            raise HTTPException(404, "static font not found")
+        return FileResponse(found)
 
     @app.get("/manifest.webmanifest")
     async def web_app_manifest() -> FileResponse:
-        return FileResponse(
-            _static / "manifest.webmanifest",
-            media_type="application/manifest+json",
-        )
+        found = _static_file("manifest.webmanifest")
+        if found is None:
+            raise HTTPException(404, "manifest not found")
+        return FileResponse(found, media_type="application/manifest+json")
 
     @app.get("/")
     async def index() -> FileResponse:
-        return FileResponse(_static / "index.html")
+        return FileResponse(_static_index())
 
     @app.get("/_styleguide")
     async def styleguide() -> FileResponse:
@@ -2050,4 +2085,4 @@ if _static.exists():
         # the same index.html so the bundle loads. Glimmung's UI pilot
         # contract — see frontend/src/StyleguideView.tsx and the
         # docs/styleguide-contract.md in the glimmung repo.
-        return FileResponse(_static / "index.html")
+        return FileResponse(_static_index())
