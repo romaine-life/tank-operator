@@ -105,14 +105,6 @@ resource "azuread_service_principal" "oauth_test" {
   client_id = azuread_application.oauth_test.client_id
 }
 
-# Self-signed JWT secret used by the backend to mint per-session tokens after
-# verifying the Entra ID token. Single secret, rotate by tainting and applying;
-# tainting invalidates all live sessions, which is fine for a single-user tool.
-resource "random_password" "jwt_secret" {
-  length  = 64
-  special = false
-}
-
 resource "azurerm_key_vault_secret" "oauth_client_id" {
   name         = "tank-operator-oauth-client-id"
   value        = azuread_application.oauth.client_id
@@ -122,12 +114,6 @@ resource "azurerm_key_vault_secret" "oauth_client_id" {
 resource "azurerm_key_vault_secret" "oauth_test_client_id" {
   name         = "tank-operator-test-oauth-client-id"
   value        = azuread_application.oauth_test.client_id
-  key_vault_id = data.azurerm_key_vault.main.id
-}
-
-resource "azurerm_key_vault_secret" "jwt_secret" {
-  name         = "tank-operator-jwt-secret"
-  value        = random_password.jwt_secret.result
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
