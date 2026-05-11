@@ -5,8 +5,8 @@ demand. The launcher creates GUI/headless agent sessions backed by Kubernetes
 pods.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
-in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy` and `terminald`
-Python packages). `platform-mcp` is installed from its standalone
+in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy`). `platform-mcp` is
+installed from its standalone
 [`nelsong6/platform-mcp`](https://github.com/nelsong6/platform-mcp) repo.
 Session-facing MCP config, AGENTS/CLAUDE primers, the
 bootstrap shell script, and bundled skill docs live in `k8s/session-config/` and are mounted

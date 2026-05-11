@@ -94,7 +94,7 @@ jobs:
             --image ${{ matrix.agent }} \
             --dockerfile claude-container/Dockerfile \
             --context . \
-            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-container/terminald' \
+            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy' \
             | awk -F= '$1 == "fingerprint" { print $2 }')"
           echo "ALIAS_TAG=${{ matrix.agent }}-${fingerprint}" >> "$GITHUB_ENV"
 

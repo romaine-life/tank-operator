@@ -31,6 +31,7 @@ def _session_pod(
     *,
     created_at: datetime.datetime | None = None,
     ready_at: datetime.datetime | None = None,
+    sandbox_agent: bool = False,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         metadata=SimpleNamespace(
@@ -44,7 +45,17 @@ def _session_pod(
             creation_timestamp=created_at,
         ),
         spec=SimpleNamespace(
-            containers=[SimpleNamespace(name=name) for name in containers]
+            containers=[
+                SimpleNamespace(
+                    name=name,
+                    ports=[
+                        SimpleNamespace(name="sandbox-agent", container_port=2468)
+                    ]
+                    if name == "claude" and sandbox_agent
+                    else [],
+                )
+                for name in containers
+            ]
         ),
         status=SimpleNamespace(
             phase="Running" if ready_at else "Pending",
@@ -77,8 +88,9 @@ class _FakeCore:
         session_id = body["metadata"]["labels"]["tank-operator/session-id"]
         pod = _session_pod(
             session_id,
-            ["mcp-auth-proxy", "terminal-proxy", "claude"],
+            ["mcp-auth-proxy", "claude"],
             created_at=datetime.datetime.now(datetime.timezone.utc),
+            sandbox_agent=True,
         )
         self._pods.append(pod)
         return pod
@@ -145,46 +157,51 @@ def test_session_config_is_mounted_from_configmap() -> None:
         and mount["mountPath"] == "/workspace/.mcp.json"
         for mount in proxy["volumeMounts"]
     )
-    terminal_proxy = next(
-        c for c in _pod_spec(manifest)["containers"] if c["name"] == "terminal-proxy"
-    )
-    assert any(port["name"] == "terminal" for port in terminal_proxy["ports"])
-    assert any(
-        volume["name"] == "terminal-proxy-config"
-        for volume in _pod_spec(manifest)["volumes"]
-    )
+    containers = _pod_spec(manifest)["containers"]
+    assert [c["name"] for c in containers] == ["mcp-auth-proxy", "claude"]
+    assert [volume["name"] for volume in _pod_spec(manifest)["volumes"]] == [
+        "session-config"
+    ]
 
 
 def test_idle_reaper_leaves_legacy_session_pods() -> None:
     manager = _ReaperSessionManager(
         [
             _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
-            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+            _session_pod(
+                "sandbox",
+                ["mcp-auth-proxy", "claude"],
+                sandbox_agent=True,
+            ),
         ]
     )
-    manager._activity = {"legacy": -10_000, "terminald": -10_000}
+    manager._activity = {"legacy": -10_000, "sandbox": -10_000}
 
     asyncio.run(manager._reap_idle())
 
-    assert manager.deleted == ["session-terminald"]
+    assert manager.deleted == ["session-sandbox"]
     assert "legacy" in manager._activity
 
 
-def test_session_list_uses_registry_and_adopts_only_terminald_pods() -> None:
+def test_session_list_uses_registry_and_adopts_only_sandbox_agent_pods() -> None:
     registry = SessionRegistryStore()
     manager = _ReaperSessionManager(
         [
             _session_pod("legacy", ["mcp-auth-proxy", "claude"]),
-            _session_pod("terminald", ["mcp-auth-proxy", "terminal-proxy", "claude"]),
+            _session_pod(
+                "sandbox",
+                ["mcp-auth-proxy", "claude"],
+                sandbox_agent=True,
+            ),
         ],
         registry=registry,
     )
 
     listed = asyncio.run(manager.list(owner="operator@example.test"))
 
-    assert [session.id for session in listed] == ["terminald"]
+    assert [session.id for session in listed] == ["sandbox"]
     assert asyncio.run(registry.get("operator@example.test", "legacy")) is None
-    assert asyncio.run(registry.get("operator@example.test", "terminald")) is not None
+    assert asyncio.run(registry.get("operator@example.test", "sandbox")) is not None
 
 
 def test_session_registry_scope_isolates_environments() -> None:
@@ -317,9 +334,10 @@ def test_session_list_reports_request_creation_and_ready_timestamps() -> None:
         [
             _session_pod(
                 "timed",
-                ["mcp-auth-proxy", "terminal-proxy", "claude"],
+                ["mcp-auth-proxy", "claude"],
                 created_at=created_at,
                 ready_at=ready_at,
+                sandbox_agent=True,
             )
         ],
         registry=registry,
@@ -378,7 +396,7 @@ def test_glimmung_context_is_stamped_on_session_pod() -> None:
     assert _claude_container(manifest)["command"] == [
         "bash",
         "-lc",
-        "if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry >/tmp/sandbox-agent.log 2>&1 & exec tank-terminald",
+        "if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry",
     ]
     ports = _claude_container(manifest)["ports"]
     assert {"name": "sandbox-agent", "containerPort": 2468} in ports
