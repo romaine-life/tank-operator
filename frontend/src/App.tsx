@@ -1414,10 +1414,54 @@ type RunEvent = {
   detail?: string;
 };
 
+type RunLifecycleEvent = {
+  run_id: string;
+  session_id: string;
+  event_id: number;
+  type: "run.started" | "run.completed" | "run.failed" | "run.stale";
+  payload?: JsonObject;
+  created_at: string;
+};
+
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRunLifecycleEvent(data: string): RunLifecycleEvent | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!isJsonObject(parsed)) return null;
+  const type = parsed.type;
+  if (
+    type !== "run.started" &&
+    type !== "run.completed" &&
+    type !== "run.failed" &&
+    type !== "run.stale"
+  ) {
+    return null;
+  }
+  if (
+    typeof parsed.run_id !== "string" ||
+    typeof parsed.session_id !== "string" ||
+    typeof parsed.event_id !== "number" ||
+    typeof parsed.created_at !== "string"
+  ) {
+    return null;
+  }
+  return {
+    run_id: parsed.run_id,
+    session_id: parsed.session_id,
+    event_id: parsed.event_id,
+    type,
+    payload: isJsonObject(parsed.payload) ? parsed.payload : undefined,
+    created_at: parsed.created_at,
+  };
 }
 
 function shortJson(value: unknown): string {
@@ -3318,6 +3362,7 @@ function HeadlessRun({
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
@@ -3419,6 +3464,8 @@ function HeadlessRun({
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const runEventsRef = useRef<EventSource | null>(null);
+  const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
   const runPrefsRef = useRef(runPrefs);
   const stdoutBufferRef = useRef("");
@@ -3489,6 +3536,12 @@ function HeadlessRun({
     return () => {
       wsRef.current?.close();
       wsRef.current = null;
+      runEventsRef.current?.close();
+      runEventsRef.current = null;
+      if (runLifecycleFinishTimerRef.current !== null) {
+        window.clearTimeout(runLifecycleFinishTimerRef.current);
+        runLifecycleFinishTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -3512,6 +3565,34 @@ function HeadlessRun({
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [running]);
+
+  useEffect(() => {
+    if (!activeRunId || session.status !== "Active") return;
+    const source = new EventSource(
+      `/api/sessions/${encodeURIComponent(session.id)}/runs/${encodeURIComponent(activeRunId)}/events`,
+      { withCredentials: true },
+    );
+    runEventsRef.current = source;
+    const onLifecycleEvent = (event: MessageEvent<string>) => {
+      const lifecycleEvent = parseRunLifecycleEvent(event.data);
+      if (lifecycleEvent) handleRunLifecycleEvent(lifecycleEvent);
+    };
+    source.addEventListener("run.started", onLifecycleEvent);
+    source.addEventListener("run.completed", onLifecycleEvent);
+    source.addEventListener("run.failed", onLifecycleEvent);
+    source.addEventListener("run.stale", onLifecycleEvent);
+    return () => {
+      source.removeEventListener("run.started", onLifecycleEvent);
+      source.removeEventListener("run.completed", onLifecycleEvent);
+      source.removeEventListener("run.failed", onLifecycleEvent);
+      source.removeEventListener("run.stale", onLifecycleEvent);
+      source.close();
+      if (runEventsRef.current === source) runEventsRef.current = null;
+    };
+  // handleRunLifecycleEvent is intentionally omitted; it closes over current
+  // run refs and state setters, while activeRunId controls subscription scope.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRunId, session.id, session.status]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -3577,6 +3658,10 @@ function HeadlessRun({
   const [continueHintVisible, setContinueHintVisible] = useState(false);
   function refreshRunHistory(showHint: boolean) {
     if (session.status !== "Active" || running) return;
+    refreshRunHistoryFromBackend(showHint);
+  }
+
+  function refreshRunHistoryFromBackend(showHint: boolean) {
     void authedFetch(`/api/sessions/${session.id}/run/history`)
       .then(async (res) => {
         if (!res.ok) return "";
@@ -4323,6 +4408,113 @@ function HeadlessRun({
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
 
+  function lifecycleStartedAtMs(event: RunLifecycleEvent): number | null {
+    const startedAt = event.payload?.started_at;
+    if (typeof startedAt !== "string") return null;
+    const parsed = Date.parse(startedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function clearLifecycleFinishTimer() {
+    if (runLifecycleFinishTimerRef.current !== null) {
+      window.clearTimeout(runLifecycleFinishTimerRef.current);
+      runLifecycleFinishTimerRef.current = null;
+    }
+  }
+
+  function finalizeRunFromLifecycle(
+    runId: string,
+    status: "done" | "error",
+    detail?: string,
+  ) {
+    clearLifecycleFinishTimer();
+    const run = currentRunRef.current;
+    if (!run || run.id !== runId || run.cancelled) return;
+    flushStdoutBuffer();
+    currentRunRef.current = null;
+    const durationMs = Date.now() - run.turnStart;
+    if (status === "done") {
+      setEntries((prev) => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].kind === "message" && prev[i].role === "assistant") {
+            const updated = [...prev];
+            updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
+            return updated;
+          }
+        }
+        return prev;
+      });
+      setLastStatusText(
+        scheduledWakeupRef.current
+          ? "Wakeup scheduled"
+          : activeToolNameRef.current
+            ? `Used ${formatToolLabel(activeToolNameRef.current)}`
+            : "Done",
+      );
+      setRunStatus("done");
+      playTurnCompleteSound();
+    } else {
+      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
+      setRunStatus("error");
+      setEntries((prev) =>
+        appendMeta(
+          prev,
+          nextEntryId("run-lifecycle-error"),
+          "run failed",
+          detail || "Run ended before the live stream reported completion.",
+          "error",
+        ),
+      );
+    }
+    activeToolNameRef.current = null;
+    scheduledWakeupRef.current = false;
+    setActiveToolName(null);
+    setRunning(false);
+    setActiveRunId(null);
+    wsRef.current?.close();
+    wsRef.current = null;
+    window.setTimeout(() => refreshRunHistoryFromBackend(false), 250);
+  }
+
+  function scheduleLifecycleFinish(
+    runId: string,
+    status: "done" | "error",
+    detail?: string,
+  ) {
+    clearLifecycleFinishTimer();
+    const delay = status === "done" ? 1500 : 500;
+    runLifecycleFinishTimerRef.current = window.setTimeout(() => {
+      runLifecycleFinishTimerRef.current = null;
+      finalizeRunFromLifecycle(runId, status, detail);
+    }, delay);
+  }
+
+  function handleRunLifecycleEvent(event: RunLifecycleEvent) {
+    if (event.session_id !== session.id || event.run_id !== activeRunId) return;
+    if (event.type === "run.started") {
+      const startedAt = lifecycleStartedAtMs(event);
+      if (startedAt !== null && currentRunRef.current?.id === event.run_id) {
+        currentRunRef.current.turnStart = startedAt;
+        setRunStartedAt(startedAt);
+        setNow(Date.now());
+      }
+      setRunStatus("running");
+      setRunning(true);
+      return;
+    }
+    if (event.type === "run.completed") {
+      scheduleLifecycleFinish(event.run_id, "done");
+      return;
+    }
+    const detail =
+      typeof event.payload?.detail === "string"
+        ? event.payload.detail
+        : event.type === "run.stale"
+          ? "Run is no longer active."
+          : undefined;
+    scheduleLifecycleFinish(event.run_id, "error", detail);
+  }
+
   function attachActiveRun(data: ActiveRunData | null): boolean {
     if (!data || currentRunRef.current) return false;
     const startedAt = activeRunStartedAtMs(data);
@@ -4340,6 +4532,7 @@ function HeadlessRun({
     currentRunRef.current = run;
     setRunStatus("running");
     setRunning(true);
+    setActiveRunId(run.id);
     setRunStartedAt(startedAt);
     setNow(Date.now());
     openRunSocket(run, true);
@@ -4359,6 +4552,7 @@ function HeadlessRun({
     scheduledWakeupRef.current = false;
     setActiveToolName(null);
     setRunning(false);
+    setActiveRunId(null);
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
   }
 
@@ -4480,6 +4674,7 @@ function HeadlessRun({
       cancelled: false,
     };
     currentRunRef.current = run;
+    setActiveRunId(run.id);
     if (skillName) {
       setEntries((prev) => appendSkillInvocation(prev, skillName, nowIso()));
     } else {
@@ -4548,6 +4743,7 @@ function HeadlessRun({
           appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
         );
       } else if (msg.status === "done") {
+        clearLifecycleFinishTimer();
         flushStdoutBuffer();
         currentRunRef.current = null;
         const durationMs = Date.now() - run.turnStart;
@@ -4573,12 +4769,17 @@ function HeadlessRun({
         setActiveToolName(null);
         setRunStatus("done");
         setRunning(false);
+        setActiveRunId(null);
         playTurnCompleteSound();
         ws.close();
       } else if (msg.status === "attached") {
         // Sync run_id from server in case it sanitised the client-provided value.
-        if (msg.run_id) run.id = msg.run_id;
+        if (msg.run_id && msg.run_id !== run.id) {
+          run.id = msg.run_id;
+          setActiveRunId(msg.run_id);
+        }
       } else if (msg.status === "error") {
+        clearLifecycleFinishTimer();
         flushStdoutBuffer();
         currentRunRef.current = null;
         setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
@@ -4587,6 +4788,7 @@ function HeadlessRun({
         setActiveToolName(null);
         setRunStatus("error");
         setRunning(false);
+        setActiveRunId(null);
         setEntries((prev) =>
           appendMeta(prev, nextEntryId("run-error"), "run failed", msg.detail, "error"),
         );
@@ -4618,6 +4820,7 @@ function HeadlessRun({
         return;
       }
       currentRunRef.current = null;
+      setActiveRunId(null);
       setLastStatusText("Connection lost");
       activeToolNameRef.current = null;
       scheduledWakeupRef.current = false;
