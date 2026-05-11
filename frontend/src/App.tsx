@@ -36,8 +36,10 @@ import {
   ArrowDownIcon,
   ArrowLeftIcon,
   ArrowUpFromLineIcon,
+  BellIcon,
   BotIcon,
   BrainIcon,
+  CalendarIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
@@ -51,6 +53,8 @@ import {
   FolderIcon,
   FolderOpenIcon,
   ExternalLinkIcon,
+  GitBranchIcon,
+  GlobeIcon,
   ImageIcon,
   InfoIcon,
   ListChecksIcon,
@@ -58,6 +62,7 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
+  NotebookPenIcon,
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -2139,7 +2144,7 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   if (name === "TodoWrite" || name === "Todo") {
     return { Icon: ListChecksIcon, colorClass: "tool-color-todo", tooltip: "Todo list tool call" };
   }
-  if (name === "Task" || name === "Agent") {
+  if (name === "Task" || name === "Agent" || name === "TaskOutput" || name === "TaskStop") {
     return { Icon: BotIcon, colorClass: "tool-color-task", tooltip: "Agent task tool call" };
   }
   if (isScheduleWakeupToolName(name)) {
@@ -2147,6 +2152,30 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   }
   if (name === "ExitPlanMode" || name === "EnterPlanMode") {
     return { Icon: ClipboardListIcon, colorClass: "tool-color-plan", tooltip: "Planning mode tool call" };
+  }
+  if (name === "WebFetch" || name === "WebSearch") {
+    return { Icon: GlobeIcon, colorClass: "tool-color-search", tooltip: "Web tool call" };
+  }
+  if (name === "Monitor") {
+    return { Icon: MonitorIcon, colorClass: "tool-color-bash", tooltip: "Monitor tool call" };
+  }
+  if (name === "AskUserQuestion") {
+    return { Icon: MessageSquareIcon, colorClass: "tool-color-todo", tooltip: "User question tool call" };
+  }
+  if (name === "RemoteTrigger") {
+    return { Icon: PlayIcon, colorClass: "tool-color-plan", tooltip: "Remote trigger tool call" };
+  }
+  if (name === "NotebookEdit") {
+    return { Icon: NotebookPenIcon, colorClass: "tool-color-edit", tooltip: "Notebook edit tool call" };
+  }
+  if (name === "EnterWorktree" || name === "ExitWorktree") {
+    return { Icon: GitBranchIcon, colorClass: "tool-color-plan", tooltip: "Worktree tool call" };
+  }
+  if (name === "CronCreate" || name === "CronDelete" || name === "CronList") {
+    return { Icon: CalendarIcon, colorClass: "tool-color-plan", tooltip: "Cron schedule tool call" };
+  }
+  if (name === "PushNotification") {
+    return { Icon: BellIcon, colorClass: "tool-color-todo", tooltip: "Push notification tool call" };
   }
   if (name.toLowerCase().includes("mcp")) {
     return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
