@@ -157,13 +157,44 @@ func (s *appServer) handleRunWebSocket(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("run stream ended", "session", sessionID, "run_id", runID, "err", streamErr)
 	}
 
-	// Mark run completed.
+	// Only mark the run completed if the detached agent process is actually
+	// gone. The stream WebSocket can return on transport-level events that
+	// leave the agent inside the pod running — the AKS apiserver kills exec
+	// connections every few hours, and a tab close drops the WebSocket on
+	// purpose without cancelling the pod. In both cases, marking the run
+	// completed would hide it from /run/active so the next reconnect would
+	// see no run and lose the live stream. Use a fresh context: r.Context()
+	// is typically cancelled by the time we get here.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cleanupCancel()
+	if !s.agentRunDone(cleanupCtx, podName, pidPath) {
+		slog.Info("run stream ended with agent still running; leaving active row",
+			"session", sessionID, "run_id", runID)
+		return
+	}
 	if s.activeRuns != nil {
-		_ = s.activeRuns.MarkCompleted(ctx, sessionID, runID)
+		_ = s.activeRuns.MarkCompleted(cleanupCtx, sessionID, runID)
 	}
 	if s.runEvents != nil {
-		_, _ = s.runEvents.Append(ctx, email, sessionID, runID, "run.completed", map[string]any{})
+		_, _ = s.runEvents.Append(cleanupCtx, email, sessionID, runID, "run.completed", map[string]any{})
 	}
+}
+
+// agentRunDone reports whether the detached agent process for a run has
+// exited inside the pod. Used to decide whether MarkCompleted is safe: a
+// premature MarkCompleted hides the run from /run/active and breaks any
+// future reconnect. False on exec errors — conservative bias is to leave
+// the row alone; handleGetActiveRun's own liveness probe will reconcile.
+func (s *appServer) agentRunDone(ctx context.Context, podName, pidPath string) bool {
+	script := fmt.Sprintf(
+		`pid=$(cat %s 2>/dev/null); if [ -z "$pid" ]; then echo D; exit 0; fi; if kill -0 "$pid" 2>/dev/null; then echo A; else echo D; fi; exit 0`,
+		shellQ(pidPath),
+	)
+	out, err := kubeexec.Capture(ctx, s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "D"
 }
 
 // handleGetActiveRun returns the currently active run for a session.
