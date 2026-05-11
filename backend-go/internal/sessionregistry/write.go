@@ -3,7 +3,9 @@ package sessionregistry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -13,54 +15,102 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 )
 
-// NextSessionID returns the next monotonic session ID using a per-scope counter
-// document. The counter is a simple integer stored as a Cosmos item.
-func (s *CosmosStore) NextSessionID(ctx context.Context) (string, error) {
-	counterID := "counter:" + s.scope
-	pk := azcosmos.NewPartitionKeyString(counterID)
+// counterPartitionKey is the partition value for the session-counter document.
+// The profiles container is partitioned on /email; the counter has no real
+// owner, so we stamp this sentinel as both the partition value and the doc's
+// email field. Must match the prior Python backend's value so the existing
+// counter row continues to advance monotonically across the rewrite.
+const counterPartitionKey = "__tank_operator_system__"
 
-	for attempt := 0; attempt < 5; attempt++ {
-		resp, err := s.container.ReadItem(ctx, pk, counterID, nil)
-		var current int64
+// NextSessionID returns the next monotonic session ID, allocated from a
+// per-scope counter document. Doc shape matches the Python implementation that
+// previously owned this counter: id=session-counter[:scope], partition value
+// __tank_operator_system__, field next_session_number is the value to return
+// on the NEXT call (i.e. the doc stores "next", not "last allocated").
+func (s *CosmosStore) NextSessionID(ctx context.Context) (string, error) {
+	counterID := compat.SessionCounterDocID(s.scope)
+	pk := azcosmos.NewPartitionKeyString(counterPartitionKey)
+
+	for attempt := 0; attempt < 20; attempt++ {
+		resp, readErr := s.container.ReadItem(ctx, pk, counterID, nil)
+
+		var next int64
 		var etag string
-		if err != nil {
-			current = 0
-			etag = ""
-		} else {
-			var doc struct {
-				Value int64 `json:"value"`
+		exists := false
+		if readErr == nil {
+			var existing struct {
+				NextSessionNumber int64 `json:"next_session_number"`
 			}
-			if jsonErr := json.Unmarshal(resp.Value, &doc); jsonErr == nil {
-				current = doc.Value
+			if err := json.Unmarshal(resp.Value, &existing); err != nil {
+				return "", fmt.Errorf("decode session counter: %w", err)
+			}
+			next = existing.NextSessionNumber
+			if next < 1 {
+				next = 1
 			}
 			etag = string(resp.ETag)
+			exists = true
+		} else if !isNotFound(readErr) {
+			return "", fmt.Errorf("read session counter: %w", readErr)
+		} else {
+			next = 1
 		}
 
-		next := current + 1
-		doc := map[string]any{
-			"id":    counterID,
-			"scope": s.scope,
-			"type":  "session_counter",
-			"value": next,
-		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		doc := buildCounterDoc(s.scope, next, exists, now)
 		raw, err := json.Marshal(doc)
 		if err != nil {
 			return "", err
 		}
 
-		var upsertErr error
-		if etag == "" {
-			_, upsertErr = s.container.CreateItem(ctx, pk, raw, nil)
-		} else {
+		var writeErr error
+		if exists {
 			opts := &azcosmos.ItemOptions{IfMatchEtag: (*azcore.ETag)(&etag)}
-			_, upsertErr = s.container.ReplaceItem(ctx, pk, counterID, raw, opts)
+			_, writeErr = s.container.ReplaceItem(ctx, pk, counterID, raw, opts)
+		} else {
+			_, writeErr = s.container.CreateItem(ctx, pk, raw, nil)
 		}
-		if upsertErr == nil {
+		if writeErr == nil {
 			return fmt.Sprintf("%d", next), nil
 		}
-		// Conflict (412) or already exists (409): retry.
+		if isConflict(writeErr) {
+			continue
+		}
+		return "", fmt.Errorf("allocate session id: %w", writeErr)
 	}
-	return "", fmt.Errorf("could not allocate session ID after retries")
+	return "", fmt.Errorf("could not allocate session ID after 20 retries")
+}
+
+// buildCounterDoc returns the Cosmos document body for the session counter.
+// The email field MUST equal counterPartitionKey because the profiles container
+// is partitioned on /email; a mismatch is a 400 BadRequest on every write.
+func buildCounterDoc(scope string, currentNext int64, exists bool, now string) map[string]any {
+	doc := map[string]any{
+		"id":                  compat.SessionCounterDocID(scope),
+		"type":                "session_counter",
+		"email":               counterPartitionKey,
+		"session_scope":       scope,
+		"next_session_number": currentNext + 1,
+		"updated_at":          now,
+	}
+	if !exists {
+		doc["created_at"] = now
+	}
+	return doc
+}
+
+func isNotFound(err error) bool {
+	var respErr *azcore.ResponseError
+	return errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound
+}
+
+func isConflict(err error) bool {
+	var respErr *azcore.ResponseError
+	if !errors.As(err, &respErr) {
+		return false
+	}
+	return respErr.StatusCode == http.StatusConflict ||
+		respErr.StatusCode == http.StatusPreconditionFailed
 }
 
 // Upsert writes or overwrites a session record in the registry.
