@@ -188,6 +188,71 @@ func TestMeRejectsUnauthenticated(t *testing.T) {
 	}
 }
 
+// Pins the canonical user-response shape that both /api/auth/microsoft/login
+// (fresh sign-in) and /api/auth/me (existing-JWT bootstrap) build via
+// userResponseBody. A missing field reads as undefined in the SPA and —
+// because `undefined == null` in JS — flips installation_id-driven UI like
+// the OnboardingWall into the "not installed" branch even for users who
+// are installed. That was the bug in #391; this test prevents it
+// reappearing if the helper is refactored.
+func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
+	login := "octocat"
+	installationID := int64(42)
+	prefs := map[string]any{"chatFontScale": 1.25}
+
+	body := userResponseBody("sub-1", "user@example.com", "User Name", profiles.Profile{
+		Email:          "user@example.com",
+		GitHubLogin:    &login,
+		InstallationID: &installationID,
+		RunPrefs:       prefs,
+	})
+
+	// Cast InstallationID for comparison — go's map[string]any doesn't
+	// equate *int64 with int64 directly, so we dereference via the helper.
+	if got, ok := body["installation_id"].(*int64); !ok || got == nil || *got != installationID {
+		t.Fatalf("installation_id = %#v, want pointer to %d", body["installation_id"], installationID)
+	}
+	if got, ok := body["github_login"].(*string); !ok || got == nil || *got != login {
+		t.Fatalf("github_login = %#v, want pointer to %q", body["github_login"], login)
+	}
+	if got, _ := body["run_prefs"].(map[string]any); got == nil || got["chatFontScale"] != 1.25 {
+		t.Fatalf("run_prefs = %#v", body["run_prefs"])
+	}
+	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" {
+		t.Fatalf("body = %#v", body)
+	}
+	if got, _ := body["avatar_url"].(string); got == "" {
+		t.Fatalf("avatar_url empty: %#v", body["avatar_url"])
+	}
+}
+
+// Verifies the response shape also tolerates an empty profile (e.g. a
+// first-time login where the Cosmos doc doesn't exist yet). All profile-
+// derived fields should serialize as JSON null — not be missing — so the
+// SPA reads them as `null` and renders the install-CTA branch correctly
+// instead of dead-ending on an undefined field access. Asserting on the
+// marshaled JSON (not the map) because Go's typed-nil-in-interface
+// semantics make (*int64)(nil) != nil for `==` purposes, but both
+// marshal to JSON null. The SPA only sees the JSON.
+func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
+	body := userResponseBody("sub-1", "user@example.com", "User Name", profiles.Profile{})
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"installation_id", "github_login", "run_prefs"} {
+		if v, ok := parsed[key]; !ok {
+			t.Fatalf("missing key %q (must be present even if null)", key)
+		} else if v != nil {
+			t.Fatalf("expected JSON null for %q, got %#v", key, v)
+		}
+	}
+}
+
 // testJWT returns a process-singleton InMemoryJWT so verifier and signed-token
 // helpers in this file share the same key — necessary because each test now
 // constructs a verifier and a token separately and they must agree on the kid.
