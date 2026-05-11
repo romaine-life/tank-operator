@@ -82,7 +82,6 @@ import {
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
-import { RunPaneSDK } from "./RunPaneSDK";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
@@ -120,11 +119,12 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
-  // Dispatch shape for this session's pod. "sdk" → Phase B+ pod with the
-  // agent-runner container; SPA opens /agent-ws + /events. "legacy" →
-  // pre-Phase B pod (no runner); SPA falls back to /run + /run/history.
-  // Derived server-side from pod spec; absent on pods that pre-date the
-  // field (treat as "legacy").
+  // Which data-ingestion path the chat pane should use for this session.
+  // "sdk" → pod has the agent-runner sidecar; chat pane opens /agent-ws
+  // + /events. "legacy" → no agent-runner; chat pane uses /run +
+  // /runs/latest/events.json + /run/history. Renderer is the same for
+  // both; only the event source differs. Absent on older pods — treated
+  // as "legacy".
   runtime?: "sdk" | "legacy";
   requested_at: string | null;
   created_at: string | null;
@@ -3923,10 +3923,17 @@ function HeadlessRun({
     if (session.status !== "Active" || running) return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
-    const refresh = refreshRunHistoryFromLatestEvents(showHint)
+    // SDK pods have a durable canonical log in Cosmos session-events; hit
+    // that directly. Legacy path tries the structured replay first and falls
+    // back to raw JSONL history. Both feed the same applyProviderEvent.
+    const initial =
+      session.runtime === "sdk"
+        ? refreshSdkRunHistory(showHint)
+        : refreshRunHistoryFromLatestEvents(showHint);
+    const refresh = initial
       .then((replayed) => {
         if (sessionIdRef.current !== refreshSessionId) return;
-        if (!replayed) refreshRunHistoryFromBackend(showHint);
+        if (!replayed && session.runtime !== "sdk") refreshRunHistoryFromBackend(showHint);
       })
       .finally(() => {
         if (historyRefreshRef.current === refresh) {
@@ -3974,6 +3981,44 @@ function HeadlessRun({
       }
     }
     return replayedContent;
+  }
+
+  // SDK-runtime history replay. Hits the canonical event log written by the
+  // pod-side agent-runner (Cosmos session-events container, exposed via
+  // /api/sessions/{id}/events). Each event is the same shape applyProviderEvent
+  // already consumes — the chat pane was built around Claude's stream-json,
+  // which the SDK is a TypeScript wrapper over the same binary's stdout.
+  function refreshSdkRunHistory(showHint: boolean): Promise<boolean> {
+    const refreshSessionId = session.id;
+    return authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/events?limit=1000`,
+    )
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const body = (await res.json()) as { session_id?: string; events?: unknown[] };
+        if (sessionIdRef.current !== refreshSessionId) return false;
+        if (!Array.isArray(body.events)) return false;
+        let acc: TranscriptEntry[] = [];
+        for (const ev of body.events) {
+          if (isJsonObject(ev)) {
+            acc = applyProviderEvent(acc, session.mode, ev);
+          }
+        }
+        if (acc.length === 0) return false;
+        setEntries((prev) => {
+          if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
+          // For SDK history we trust the server's canonical log over any
+          // partial in-memory state. The dedupe-by-uuid in upsertEntry handles
+          // any overlap if a live event arrived before history finished.
+          return acc;
+        });
+        if (showHint) {
+          setContinueHintVisible(true);
+          window.setTimeout(() => setContinueHintVisible(false), 3000);
+        }
+        return true;
+      })
+      .catch(() => false);
   }
 
   function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
@@ -4716,6 +4761,15 @@ function HeadlessRun({
     try {
       providerEvent = JSON.parse(trimmed);
     } catch {
+      // Non-JSON line. The legacy stream path tails a file that's supposed
+      // to contain JSON events, but codex CLI in some failure modes emits
+      // plain text to the same stream (e.g. "ERROR: You've hit your usage
+      // limit..." on quota). Previously we silently dropped these lines and
+      // the user saw a generic kubeexec timeout in the SPA. Render the line
+      // as a meta entry so the underlying agent error is at least visible.
+      setEntries((prev) =>
+        appendMeta(prev, nextEntryId("stdout-text"), "agent output", trimmed, "info"),
+      );
       return;
     }
     if (!isJsonObject(providerEvent)) return;
@@ -4927,7 +4981,14 @@ function HeadlessRun({
     const ws = wsRef.current;
     if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ cancel: true }));
+      // SDK and legacy speak different cancel frames. Agent-runner expects
+      // {type:"interrupt"} per agent-runner/src/ws.ts; legacy run handler
+      // expects {cancel:true}.
+      const cancelFrame =
+        session.runtime === "sdk"
+          ? { type: "interrupt" }
+          : { cancel: true };
+      ws.send(JSON.stringify(cancelFrame));
     }
     ws?.close();
     wsRef.current = null;
@@ -5098,7 +5159,147 @@ function HeadlessRun({
     // always fire an input event in time, so my mirror lingers and the
     // X-clear button stays visible. Force the mirror clean.
     setComposerText("");
-    openRunSocket(run, false);
+    if (session.runtime === "sdk") {
+      openSdkRunSocket(run);
+    } else {
+      openRunSocket(run, false);
+    }
+  }
+
+  // SDK-runtime live tap. Connects to the orchestrator's /agent-ws reverse
+  // proxy, which fans events from the pod-side agent-runner. Each WebSocket
+  // frame is one SDK event (same shape applyProviderEvent already handles),
+  // so the receive path is much simpler than the legacy stdout-chunking
+  // pipeline. Lifecycle is "open per turn, close on result event" — the
+  // agent-runner accepts user frames from any client and broadcasts events
+  // to every connected client, so re-opening on each turn is harmless.
+  function openSdkRunSocket(run: NonNullable<typeof currentRunRef.current>) {
+    const wsUrl =
+      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
+      `/api/sessions/${session.id}/agent-ws`;
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.onopen = () => {
+      ws.send(
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: run.prompt },
+        }),
+      );
+    };
+    ws.onmessage = (event) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(event.data));
+      } catch {
+        setEntries((prev) =>
+          appendMeta(
+            prev,
+            nextEntryId("agent-ws-message"),
+            "agent-ws message",
+            String(event.data),
+          ),
+        );
+        return;
+      }
+      if (!isJsonObject(parsed)) return;
+
+      // Mirror the bookkeeping applyStdoutLine does for usage/active-tool so
+      // the context-window pie and the streaming pill stay accurate.
+      const t = parsed.type;
+      if (t === "assistant") {
+        const msg = parsed.message;
+        if (isJsonObject(msg)) {
+          const u = msg.usage as ClaudeUsage | undefined;
+          const total = totalContextTokens(u);
+          if (total > 0) setTokensUsed(total);
+          if (Array.isArray(msg.content)) {
+            const toolBlock = (msg.content as unknown[]).find(
+              (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
+            );
+            const toolName =
+              toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null;
+            const toolUseId =
+              toolBlock && typeof toolBlock.id === "string" ? toolBlock.id : null;
+            setActiveTool(toolName, toolUseId);
+          }
+        }
+      } else if (t === "user") {
+        completeActiveTool();
+      } else if (t === "result") {
+        const u = parsed.usage as ClaudeUsage | undefined;
+        const total = totalContextTokens(u);
+        if (total > 0) setTokensUsed(total);
+        setActiveTool(null);
+      }
+
+      setEntries((prev) => applyProviderEvent(prev, session.mode, parsed));
+
+      // Terminal events. A `result` marks the turn done; the SPA closes the
+      // WS — the next user submit opens a fresh one. The runner stays alive
+      // for the pod's lifetime; the WS is per-turn for the SPA's convenience.
+      if (t === "result") {
+        currentRunRef.current = null;
+        const durationMs = Date.now() - run.turnStart;
+        setEntries((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].kind === "message" && prev[i].role === "assistant") {
+              const updated = [...prev];
+              updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
+              return updated;
+            }
+          }
+          return prev;
+        });
+        setLastStatusText(
+          scheduledWakeupRef.current
+            ? "Wakeup scheduled"
+            : activeToolNameRef.current
+              ? `Used ${formatToolLabel(activeToolNameRef.current)}`
+              : "Done",
+        );
+        scheduledWakeupRef.current = false;
+        setActiveTool(null);
+        setRunStatus("done");
+        setRunning(false);
+        setActiveRunId(null);
+        playTurnCompleteSound();
+        ws.close();
+      }
+    };
+    ws.onerror = () => {
+      if (!run.cancelled) {
+        setLastStatusText("Reconnecting");
+      }
+    };
+    ws.onclose = (event) => {
+      if (currentRunRef.current?.id !== run.id || run.cancelled) {
+        return;
+      }
+      // If the WS dropped before a `result` arrived, the runner is still
+      // chewing. The agent-runner replays unseen events to a fresh client
+      // via the canonical Cosmos log, but for simplicity v1 just shows
+      // "connection lost" — the user can refresh the page to pick up
+      // history. (Reconnect with replay is a follow-up.)
+      currentRunRef.current = null;
+      setActiveRunId(null);
+      setLastStatusText("Connection lost");
+      scheduledWakeupRef.current = false;
+      setActiveTool(null);
+      setRunning(false);
+      setEntries((entries) =>
+        appendMeta(
+          entries,
+          nextEntryId("ws-close"),
+          "Connection lost",
+          `WebSocket closed with code ${event.code}${
+            event.reason ? ` — ${event.reason}` : ""
+          }. Reload to resume.`,
+          "error",
+        ),
+      );
+      setRunStatus("error");
+    };
   }
 
   function openRunSocket(run: NonNullable<typeof currentRunRef.current>, resume: boolean) {
@@ -7392,14 +7593,7 @@ export function App() {
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
                           <span className="home-session-main">
                             <span className="home-session-title">{sessionDisplayName(s)}</span>
-                            <span className="home-session-sub">
-                              {MODE_LABELS[s.mode]}
-                              {HEADLESS_MODES.has(s.mode) && s.runtime && (
-                                <span className={`home-session-runtime is-${s.runtime}`}>
-                                  {s.runtime}
-                                </span>
-                              )}
-                            </span>
+                            <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
                           </span>
                         </button>
                       ))
@@ -7420,24 +7614,16 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    {s.runtime === "sdk" ? (
-                      <RunPaneSDK
-                        sessionId={s.id}
-                        visible={active === s.id}
-                        onActivityChange={updateSessionActivity}
-                      />
-                    ) : (
-                      <HeadlessRun
-                        session={s}
-                        visible={active === s.id}
-                        onRename={renameSession}
-                        onSessionPatch={patchSession}
-                        runPrefs={runPrefs}
-                        setRunPref={setRunPref}
-                        user={user!}
-                        onActivityChange={updateSessionActivity}
-                      />
-                    )}
+                    <HeadlessRun
+                      session={s}
+                      visible={active === s.id}
+                      onRename={renameSession}
+                      onSessionPatch={patchSession}
+                      runPrefs={runPrefs}
+                      setRunPref={setRunPref}
+                      user={user!}
+                      onActivityChange={updateSessionActivity}
+                    />
                   </div>
                 ) : (
                   <div
