@@ -5,7 +5,7 @@ description: Placeholder test skill for validating session skill loading and inv
 
 # /test
 
-This skill is invoked when you have finished writing code, and it is time to test it. Usually the user wants to utilize nelsong6/glimmung for this, but some features need to be done ad-hoc. As such, there is an mcp tool to grab a lease on a test environment slot, which grabs an available test environment number, automatically provisions it. It also gives you the URL of a container running playwright dedicated to testing.
+This skill is invoked when you have finished writing code, and it is time to test it. Usually the user wants to utilize nelsong6/glimmung for this, but some features need to be done ad-hoc. As such, there is an mcp tool to grab a lease on a test environment slot, which grabs an available test environment number, automatically provisions it. It also gives you the URL of a container running playwright dedicated to testing in this test slot.
 
 When it's up, you are to hot-swap code into the test environment. We want to save time, so don't do full builds if you can avoid it.
 
