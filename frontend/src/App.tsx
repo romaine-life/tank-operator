@@ -1695,18 +1695,6 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
   );
 }
 
-function isAgentToolPrompt(text: string, entries: TranscriptEntry[]): boolean {
-  return entries.some((entry) => {
-    if (entry.toolName !== "Agent" && entry.toolName !== "Task") return false;
-    if (!entry.toolInput) return false;
-    try {
-      const input = JSON.parse(entry.toolInput);
-      return isJsonObject(input) && typeof input.prompt === "string" && input.prompt.trim() === text;
-    } catch {
-      return false;
-    }
-  });
-}
 
 function appendSkillInvocation(
   entries: TranscriptEntry[],
@@ -2014,14 +2002,21 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
         const t = message.content.trim();
         if (t) texts.push(t);
       } else if (Array.isArray(message.content)) {
-        for (const block of message.content as unknown[]) {
-          if (!isJsonObject(block) || block.type !== "text") continue;
-          const t = typeof block.text === "string" ? block.text.trim() : "";
-          if (t) texts.push(t);
+        // A user event with tool_result blocks is a tool-response turn; any
+        // text blocks alongside them are echoed context (e.g. agent prompts),
+        // not human input — skip text extraction entirely for those events.
+        const hasToolResults = (message.content as unknown[]).some(
+          (b) => isJsonObject(b) && b.type === "tool_result",
+        );
+        if (!hasToolResults) {
+          for (const block of message.content as unknown[]) {
+            if (!isJsonObject(block) || block.type !== "text") continue;
+            const t = typeof block.text === "string" ? block.text.trim() : "";
+            if (t) texts.push(t);
+          }
         }
       }
       for (const text of texts) {
-        if (isAgentToolPrompt(text, nextEntries)) continue;
         const skillName = skillNameFromTrigger(text);
         if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
         if (!nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {

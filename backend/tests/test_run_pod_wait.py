@@ -325,6 +325,68 @@ def test_run_stdout_event_observer_emits_output_and_tool_events(
     assert appended[3]["payload"] == {"tool_use_id": "toolu_1", "output": "ok"}
 
 
+def test_run_stdout_event_observer_does_not_emit_user_message_on_tool_result_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Text blocks alongside tool_result blocks are echoed context (e.g. agent
+    prompts), not human input — no run.message.created with role=user should fire."""
+    appended: list[dict[str, object]] = []
+
+    async def fake_append_run_event(**kwargs: object) -> None:
+        appended.append(kwargs)
+
+    monkeypatch.setattr(api, "_append_run_event", fake_append_run_event)
+
+    observer = api._RunStdoutEventObserver(
+        email="operator@example.test",
+        session_id="abc123",
+        run_id="run-1",
+        provider="claude",
+    )
+    assistant = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "tool_use", "id": "toolu_agent_1", "name": "Agent"},
+            ]
+        },
+    }
+    # User event with a tool_result AND a text block (the echoed agent prompt).
+    user = {
+        "type": "user",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_agent_1",
+                    "content": "agent result",
+                },
+                {"type": "text", "text": "find the signal implementation"},
+            ]
+        },
+    }
+
+    async def run() -> None:
+        await observer.observe_stdout(json.dumps(assistant) + "\n")
+        await observer.observe_stdout(json.dumps(user) + "\n")
+
+    asyncio.run(run())
+
+    event_types = [event["event_type"] for event in appended]
+    assert event_types == [
+        "run.output.started",
+        "run.tool.started",
+        "run.tool.completed",
+    ]
+    # Confirm no user message was emitted.
+    assert not any(
+        event["event_type"] == "run.message.created"
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("role") == "user"
+        for event in appended
+    )
+
+
 def test_run_stdout_event_observer_buffers_partial_json_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

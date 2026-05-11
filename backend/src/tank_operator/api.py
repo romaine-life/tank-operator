@@ -350,10 +350,12 @@ class _RunStdoutEventObserver:
         if not isinstance(message, dict):
             return
         content = message.get("content")
+        has_tool_results = False
         if isinstance(content, list):
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_result":
                     continue
+                has_tool_results = True
                 tool_use_id = block.get("tool_use_id")
                 if not isinstance(tool_use_id, str) or not tool_use_id:
                     continue
@@ -367,11 +369,15 @@ class _RunStdoutEventObserver:
                 if block.get("is_error") is True:
                     payload["is_error"] = True
                 await self._append("run.tool.completed", payload)
-        await self._append_message(
-            role="user",
-            text=_claude_text_from_content(content),
-            event=event,
-        )
+        # A user event containing tool_results is a tool-response turn; any
+        # text blocks in it are echoed context (e.g. agent prompts), not human
+        # input. Only emit a user message for plain-text content events.
+        if not has_tool_results:
+            await self._append_message(
+                role="user",
+                text=_claude_text_from_content(content),
+                event=event,
+            )
 
     async def _observe_result(self, event: dict[str, Any]) -> None:
         result = event.get("result")
