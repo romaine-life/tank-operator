@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncompare"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
@@ -32,6 +36,9 @@ func main() {
 			slog.Warn("session shadow endpoints disabled", "error", err)
 		} else {
 			mux.HandleFunc("GET /api/shadow/sessions", listSessions(reader))
+			if pythonBase := pythonBaseURL(); pythonBase != "" {
+				mux.HandleFunc("GET /api/shadow/sessions/compare", compareSessions(reader, pythonBase))
+			}
 			mux.HandleFunc("GET /api/shadow/sessions/{session_id}", getSession(reader))
 		}
 	}
@@ -83,6 +90,10 @@ func shadowSessionsEnabled() bool {
 	return os.Getenv("TANK_GO_SHADOW_SESSIONS") == "1"
 }
 
+func pythonBaseURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("TANK_PYTHON_BASE_URL")), "/")
+}
+
 func listSessions(reader *sessions.Reader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
@@ -96,6 +107,28 @@ func listSessions(reader *sessions.Reader) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	}
+}
+
+func compareSessions(reader *sessions.Reader, pythonBase string) http.HandlerFunc {
+	client := &http.Client{Timeout: 10 * time.Second}
+	return func(w http.ResponseWriter, r *http.Request) {
+		owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+		if owner == "" {
+			writeError(w, http.StatusBadRequest, "missing owner query parameter")
+			return
+		}
+		goSessions, err := reader.List(r.Context(), owner)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		pythonSessions, err := fetchPythonSessions(r.Context(), client, pythonBase, r.Header)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sessioncompare.Compare(pythonSessions, goSessions))
 	}
 }
 
@@ -125,6 +158,36 @@ func getSession(reader *sessions.Reader) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}
 	}
+}
+
+func fetchPythonSessions(ctx context.Context, client *http.Client, pythonBase string, headers http.Header) ([]sessions.Info, error) {
+	endpoint, err := url.JoinPath(pythonBase, "/api/sessions")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"Authorization", "Cookie"} {
+		for _, value := range headers.Values(name) {
+			req.Header.Add(name, value)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("python /api/sessions returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out []sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
