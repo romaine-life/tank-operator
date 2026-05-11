@@ -2058,12 +2058,12 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 
 interface ToolVisualConfig {
   Icon: LucideIcon;
-  /** CSS class added to the icon span — drives the color stripe + icon hue. */
+  /** CSS class added to the icon span — drives the icon badge treatment. */
   colorClass: string;
   tooltip: string;
 }
 
-/** Map a tool entry to a Lucide icon + cloudcli-flavored color stripe. */
+/** Map a tool entry to a Lucide icon + badge treatment. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
   if (entry.toolKind === "mcp") {
