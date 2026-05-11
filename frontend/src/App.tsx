@@ -997,16 +997,6 @@ function IconExternal() {
   );
 }
 
-function IconReload() {
-  return (
-    <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
-         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
-      <polyline points="13.5 2.5 13.5 5 11 5" />
-    </svg>
-  );
-}
-
 function sessionInteractionForSession(session: Session): SessionInteraction | null {
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
@@ -6542,37 +6532,6 @@ export function App() {
     }
   }
 
-  async function clearSession(id: string) {
-    const existing = sessions.find((s) => s.id === id);
-    if (!existing) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const delRes = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
-      if (!delRes.ok) throw new Error(`delete failed: ${delRes.status}`);
-      const createRes = await authedFetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: existing.mode }),
-      });
-      if (!createRes.ok) throw new Error(`create failed: ${createRes.status}`);
-      const created: Session = normalizeSession(await createRes.json());
-      const existingInteraction = readSessionInteraction(existing.id);
-      if (existingInteraction) {
-        writeSessionInteraction(created.id, existingInteraction);
-      }
-      if (existing.name) {
-        await renameSession(created.id, existing.name);
-      }
-      await refresh();
-      activate(created.id);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function saveCredentials(id: string) {
     setBusy(true);
     setError(null);
@@ -6871,15 +6830,6 @@ export function App() {
                         save
                       </button>
                     )}
-                    <button
-                      className="session-action is-icon"
-                      onClick={(e) => { e.stopPropagation(); clearSession(s.id); }}
-                      disabled={busy || isClosing}
-                      title="delete this pod and replace it with a fresh one"
-                      aria-label="refresh session pod"
-                    >
-                      <IconReload />
-                    </button>
                   </div>
                 </li>
               );
