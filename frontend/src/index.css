@@ -2252,6 +2252,74 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.run-settings-sound-row {
+  align-items: center;
+}
+
+.run-settings-sound-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(7rem, 13rem) 3rem auto;
+  align-items: center;
+  justify-content: end;
+  gap: 0.55rem;
+}
+
+.run-settings-volume-slider {
+  width: 100%;
+  min-width: 7rem;
+  accent-color: var(--accent, #2563eb);
+}
+
+.run-settings-volume-slider:disabled {
+  opacity: 0.45;
+}
+
+.run-settings-volume-value {
+  min-width: 3rem;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-settings-test-btn {
+  min-height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-settings-test-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--text-primary);
+}
+
+.run-settings-test-btn:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.run-settings-test-btn svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
 .run-settings-zoom-btn {
   display: inline-flex;
   align-items: center;
@@ -2361,6 +2429,18 @@ button:disabled {
   border-color: rgba(96, 165, 250, 0.28);
   background: rgba(37, 99, 235, 0.11);
   color: var(--text-primary);
+}
+
+@media (max-width: 640px) {
+  .run-settings-sound-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .run-settings-sound-controls {
+    grid-template-columns: minmax(0, 1fr) 3rem auto;
+    justify-content: stretch;
+  }
 }
 
 .run-help-list {
