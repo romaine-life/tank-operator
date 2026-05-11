@@ -4015,6 +4015,11 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
 }
 
+.run-transcript-tools[data-state="running"] .run-transcript-tools-icon {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.14);
+}
+
 .run-transcript-tools-label {
   flex: 1 1 auto;
   min-width: 0;
