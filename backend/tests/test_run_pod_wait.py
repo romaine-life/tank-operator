@@ -6,7 +6,7 @@ import pytest
 
 from tank_operator import api
 from tank_operator.auth import User
-from tank_operator.profiles import ActiveRunRecord
+from tank_operator.profiles import ActiveRunRecord, RunEventRecord
 from tank_operator.sessions import CODEX_HEADLESS_MODE, SessionInfo
 
 
@@ -111,6 +111,33 @@ def test_headless_script_preserves_exit_status_after_prompt_cleanup() -> None:
         permission_mode="acceptEdits",
     )
     assert "rm -f '/tmp/prompt one'; (exit $rc)" in script
+
+
+def test_parse_last_event_id_ignores_invalid_values() -> None:
+    assert api._parse_last_event_id(None) == 0
+    assert api._parse_last_event_id("123") == 123
+    assert api._parse_last_event_id("-1") == 0
+    assert api._parse_last_event_id("not-an-int") == 0
+
+
+def test_format_run_sse_event_shapes_eventstream_frame() -> None:
+    event = RunEventRecord(
+        run_id="run-1",
+        session_id="abc123",
+        email="operator@example.test",
+        event_id=42,
+        type="run.started",
+        payload={"provider": "codex"},
+        created_at="2026-05-11T02:22:58.927036+00:00",
+    )
+
+    frame = api._format_run_sse_event(event)
+
+    assert frame.startswith("id: 42\nevent: run.started\n")
+    assert '"run_id":"run-1"' in frame
+    assert '"session_id":"abc123"' in frame
+    assert '"provider":"codex"' in frame
+    assert frame.endswith("\n\n")
 
 
 def test_check_active_run_on_pod_uses_specific_registry_run(

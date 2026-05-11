@@ -261,21 +261,39 @@ def test_active_run_store_tracks_edge_status_without_heartbeats() -> None:
 def test_run_event_store_appends_semantic_events_in_memory() -> None:
     async def run() -> None:
         store = RunEventStore()
-        event = await store.append(
+        first = await store.append(
             email="Operator@Example.Test",
             session_id="abc123",
             run_id="run-1",
             event_type="run.started",
             payload={"provider": "codex"},
         )
+        second = await store.append(
+            email="operator@example.test",
+            session_id="abc123",
+            run_id="run-1",
+            event_type="run.completed",
+        )
+        await store.append(
+            email="operator@example.test",
+            session_id="other",
+            run_id="run-1",
+            event_type="run.started",
+        )
 
-        assert event.email == "operator@example.test"
-        assert event.session_id == "abc123"
-        assert event.run_id == "run-1"
-        assert event.type == "run.started"
-        assert event.payload == {"provider": "codex"}
-        assert event.event_id > 0
-        assert store._memory["run-1"] == [event]  # noqa: SLF001
+        assert first.email == "operator@example.test"
+        assert first.session_id == "abc123"
+        assert first.run_id == "run-1"
+        assert first.type == "run.started"
+        assert first.payload == {"provider": "codex"}
+        assert first.event_id > 0
+        assert store._memory["run-1"][0] == first  # noqa: SLF001
+        replayed = await store.list_after(
+            run_id="run-1",
+            session_id="abc123",
+            after_event_id=first.event_id,
+        )
+        assert replayed == [second]
 
     asyncio.run(run())
 
