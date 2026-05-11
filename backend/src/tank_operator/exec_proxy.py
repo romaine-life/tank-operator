@@ -40,14 +40,17 @@ def _build_detached_launcher(command: str, log_path: str) -> str:
     """Build the shell snippet that starts a long-running pod command.
 
     The stream file remains the live UI source of truth. The tee to PID 1's
-    stdout gives the cluster log collector a best-effort recovery copy in Loki
-    without putting Loki on the browser streaming path.
+    stdout used to give the cluster log collector a best-effort recovery copy
+    in Loki, but it also kept the Kubernetes exec stream attached to the
+    background process on some launches. Keep the detached launcher boring:
+    once the child has inherited only file/stdin descriptors, the exec call can
+    return immediately while the run continues.
     """
     quoted_log_path = shlex.quote(log_path)
     return (
         f"set -uo pipefail; "
         f"nohup bash -c {shlex.quote(command)} "
-        f"> >(tee -a {quoted_log_path} > /proc/1/fd/1) 2>&1 < /dev/null & "
+        f">> {quoted_log_path} 2>&1 < /dev/null & "
         f"disown $! 2>/dev/null || true; "
         f"echo launched"
     )
