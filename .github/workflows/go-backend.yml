@@ -1,0 +1,33 @@
+name: Go backend
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend-go/**'
+      - '.github/workflows/go-backend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend-go/**'
+      - '.github/workflows/go-backend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend-go/go.mod
+
+      - name: go test
+        run: go test ./...
