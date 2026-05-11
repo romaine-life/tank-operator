@@ -1252,7 +1252,9 @@ button:disabled {
 .status-dot.status-active  { background: var(--status-online); }
 .status-dot.status-failed  { background: var(--status-error-fg); }
 .status-dot.status-pending { background: var(--text-faint); }
+.status-dot.status-agent-working,
 .status-dot.status-codex-working { background: var(--status-agent-working); }
+.status-dot.status-agent-waiting,
 .status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 
 .mode {
