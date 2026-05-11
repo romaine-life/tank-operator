@@ -49,6 +49,7 @@ import {
   FlaskConicalIcon,
   FolderIcon,
   FolderOpenIcon,
+  ExternalLinkIcon,
   ImageIcon,
   InfoIcon,
   ListChecksIcon,
@@ -2030,6 +2031,7 @@ interface FileEntry {
   name: string;
   type: "file" | "dir" | "symlink" | "other";
   size: number;
+  github_url?: string | null;
 }
 
 interface SelectedFile {
@@ -5136,28 +5138,45 @@ function HeadlessRun({
                     const Icon =
                       e.type === "dir" ? FolderIcon : FileIcon;
                     return (
-                      <button
+                      <div
                         key={e.name}
-                        type="button"
                         className={`run-files-row${
                           selectedFile?.path === joinFilesPath(filesPath, e.name)
                             ? " run-files-row-active"
                             : ""
                         }`}
-                        onClick={() => openFileEntry(e.name, e.type)}
                       >
-                        <Icon
-                          size={14}
-                          className={`run-files-row-icon run-files-row-${e.type}`}
-                          aria-hidden="true"
-                        />
-                        <span className="run-files-row-name">{e.name}</span>
-                        {e.type === "file" && (
+                        <button
+                          type="button"
+                          className="run-files-row-main"
+                          onClick={() => openFileEntry(e.name, e.type)}
+                        >
+                          <Icon
+                            size={14}
+                            className={`run-files-row-icon run-files-row-${e.type}`}
+                            aria-hidden="true"
+                          />
+                          <span className="run-files-row-name">{e.name}</span>
+                        </button>
+                        {e.github_url ? (
+                          <a
+                            className="run-files-row-link"
+                            href={e.github_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`Open ${e.name} on GitHub`}
+                            aria-label={`Open ${e.name} on GitHub`}
+                          >
+                            <ExternalLinkIcon size={13} aria-hidden="true" />
+                          </a>
+                        ) : e.type === "file" ? (
                           <span className="run-files-row-size">
                             {humanFileSize(e.size)}
                           </span>
+                        ) : (
+                          <span aria-hidden="true" />
                         )}
-                      </button>
+                      </div>
                     );
                   })}
                 {!filesLoading &&

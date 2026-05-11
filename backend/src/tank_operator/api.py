@@ -1061,6 +1061,7 @@ class FileEntry(BaseModel):
     name: str
     type: str  # "file" | "dir" | "symlink" | "other"
     size: int
+    github_url: str | None = None
 
 
 class FileListing(BaseModel):
@@ -1308,8 +1309,47 @@ async def list_session_files(
     # inside the pod for a JSON listing. The claude-container image bakes
     # python3 in via apk for orchestration helpers.
     listing_script = (
-        "import os, json, sys\n"
+        "import os, json, subprocess, sys\n"
+        "from urllib.parse import urlparse\n"
         "p = sys.argv[1]\n"
+        "def normalize_github_remote(remote):\n"
+        "    remote = remote.strip()\n"
+        "    repo_path = ''\n"
+        "    if remote.startswith('git@github.com:'):\n"
+        "        repo_path = remote.split(':', 1)[1]\n"
+        "    else:\n"
+        "        parsed = urlparse(remote)\n"
+        "        if parsed.hostname != 'github.com':\n"
+        "            return None\n"
+        "        repo_path = parsed.path.lstrip('/')\n"
+        "    if repo_path.endswith('.git'):\n"
+        "        repo_path = repo_path[:-4]\n"
+        "    parts = [part for part in repo_path.split('/') if part]\n"
+        "    if len(parts) != 2:\n"
+        "        return None\n"
+        "    return 'https://github.com/{}/{}'.format(parts[0], parts[1])\n"
+        "def github_url_for_repo_dir(full):\n"
+        "    try:\n"
+        "        root = subprocess.check_output(\n"
+        "            ['git', '-C', full, 'rev-parse', '--show-toplevel'],\n"
+        "            stderr=subprocess.DEVNULL,\n"
+        "            text=True,\n"
+        "            timeout=2,\n"
+        "        ).strip()\n"
+        "    except Exception:\n"
+        "        return None\n"
+        "    if os.path.realpath(root) != os.path.realpath(full):\n"
+        "        return None\n"
+        "    try:\n"
+        "        remote = subprocess.check_output(\n"
+        "            ['git', '-C', full, 'remote', 'get-url', 'origin'],\n"
+        "            stderr=subprocess.DEVNULL,\n"
+        "            text=True,\n"
+        "            timeout=2,\n"
+        "        )\n"
+        "    except Exception:\n"
+        "        return None\n"
+        "    return normalize_github_remote(remote)\n"
         "out = []\n"
         "for name in sorted(os.listdir(p)):\n"
         "    full = os.path.join(p, name)\n"
@@ -1325,7 +1365,12 @@ async def list_session_files(
         "        t = 'file'\n"
         "    else:\n"
         "        t = 'other'\n"
-        "    out.append({'name': name, 'type': t, 'size': st.st_size if t == 'file' else 0})\n"
+        "    item = {'name': name, 'type': t, 'size': st.st_size if t == 'file' else 0}\n"
+        "    if t == 'dir':\n"
+        "        github_url = github_url_for_repo_dir(full)\n"
+        "        if github_url:\n"
+        "            item['github_url'] = github_url\n"
+        "    out.append(item)\n"
         "print(json.dumps(out))\n"
     )
     cmd = ["python3", "-c", listing_script, abs_path]
@@ -1347,6 +1392,11 @@ async def list_session_files(
                 name=str(item.get("name", "")),
                 type=str(item.get("type", "other")),
                 size=int(item.get("size", 0) or 0),
+                github_url=(
+                    str(item.get("github_url"))
+                    if item.get("github_url") is not None
+                    else None
+                ),
             )
         )
     # Directories first, then files, alphabetical within each group.
