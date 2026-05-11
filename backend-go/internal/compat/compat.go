@@ -29,10 +29,11 @@ const (
 	DefaultSessionImage      = "romainecr.azurecr.io/claude-container:latest"
 	DefaultCodexSessionImage = "romainecr.azurecr.io/codex-container:latest"
 	DefaultPiSessionImage    = "romainecr.azurecr.io/pi-container:latest"
-	DefaultGitHubAppSecret   = "github-app-creds"
-	DefaultCodexCredsSecret  = "codex-credentials"
-	DefaultOAuthGatewayCA    = "claude-oauth-ca"
-	SessionConfigDirMount    = "/opt/tank/session-config"
+	DefaultGitHubAppSecret          = "github-app-creds"
+	DefaultCodexCredsSecret         = "codex-credentials"
+	DefaultOAuthGatewayCA           = "claude-oauth-ca"
+	DefaultSessionAzureConfigSecret = "tank-session-azure-config"
+	SessionConfigDirMount           = "/opt/tank/session-config"
 )
 
 var (
@@ -131,6 +132,11 @@ type ManifestOptions struct {
 	CodexCredsSecret string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
+	// Secret name for pod-side Azure workload-identity config
+	// (AZURE_CLIENT_ID + AZURE_TENANT_ID). envFrom on the claude container
+	// so the Phase B agent-runner can talk to Cosmos via federated SA token.
+	// May be empty in Phase A test envs where the ExternalSecret isn't wired.
+	SessionAzureConfigSecret string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 }
@@ -315,10 +321,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		})
 	}
 
-	// GitHub App secret envFrom on claude container.
+	// envFrom on the claude container. GitHub App for git auth; session-azure
+	// config provides AZURE_CLIENT_ID + AZURE_TENANT_ID so DefaultAzureCredential
+	// can mint a federated Cosmos token from the projected SA token (the WI
+	// webhook injects AZURE_FEDERATED_TOKEN_FILE via the pod's
+	// azure.workload.identity/use=true label).
 	envFrom := []any{}
 	if opts.GitHubAppSecret != "" {
 		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.GitHubAppSecret}})
+	}
+	if opts.SessionAzureConfigSecret != "" {
+		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.SessionAzureConfigSecret}})
 	}
 
 	claudeContainer := map[string]any{
@@ -456,6 +469,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.GitHubAppSecret == "" {
 		opts.GitHubAppSecret = DefaultGitHubAppSecret
+	}
+	if opts.SessionAzureConfigSecret == "" {
+		opts.SessionAzureConfigSecret = DefaultSessionAzureConfigSecret
 	}
 	return opts
 }

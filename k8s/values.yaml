@@ -247,6 +247,16 @@ externalSecret:
         kvKey: tank-operator-oauth-client-id
       - envVar: ALLOWED_EMAILS
         kvKey: romaine-life-admin-emails
+  # Pod-side workload-identity config for session pods. Mirrors the
+  # tank-session UAMI's client_id + the shared cluster tenant id into a
+  # Secret in the SESSIONS namespace; session pods envFrom it so
+  # DefaultAzureCredential can mint a federated Cosmos token via the
+  # pod's projected SA token. Phase A of the SDK migration.
+  # UAMI + role assignments: infra/tank_session_identity.tf
+  sessionAzureConfig:
+    secretName: tank-session-azure-config
+    clientIdKvKey: tank-session-mi-client-id
+    tenantIdKvKey: mcp-tenant-id
 
 # Session-JWT signing key in Key Vault. Private bytes never leave the vault;
 # orchestrator calls KV's Sign operation per mint and caches the public key
