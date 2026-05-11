@@ -14,11 +14,14 @@ import (
 
 // handleMicrosoftLogin exchanges an Entra ID token for a session JWT.
 func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request) {
+	// Frontend wire contract (inherited from Python): {"credential": "<token>"}.
+	// Kept `credential` rather than `id_token` to avoid a frontend change for
+	// what is a backend rewrite — see frontend/src/auth.ts.
 	var body struct {
-		IDToken string `json:"id_token"`
+		IDToken string `json:"credential"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IDToken == "" {
-		writeError(w, http.StatusBadRequest, "missing id_token")
+		writeError(w, http.StatusBadRequest, "missing credential")
 		return
 	}
 
