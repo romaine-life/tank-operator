@@ -1542,6 +1542,41 @@ function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEve
   });
 }
 
+function applyRunToolStartedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+  const payload = event.payload;
+  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
+  const toolName = typeof payload?.name === "string" && payload.name ? payload.name : "tool";
+  if (!toolUseId) return entries;
+  const existing = entries.find((entry) => entry.id === toolUseId);
+  const terminal = existing?.toolStatus === "completed" || existing?.toolStatus === "failed";
+  return upsertEntry(entries, {
+    id: toolUseId,
+    kind: "tool",
+    toolName: existing?.toolName ?? toolName,
+    toolInput: existing?.toolInput,
+    toolOutput: existing?.toolOutput,
+    toolStatus: terminal ? existing?.toolStatus : "started",
+    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
+  });
+}
+
+function applyRunToolCompletedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
+  const payload = event.payload;
+  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
+  if (!toolUseId) return entries;
+  const existing = entries.find((entry) => entry.id === toolUseId);
+  const output = typeof payload?.output === "string" ? payload.output : existing?.toolOutput;
+  return upsertEntry(entries, {
+    id: toolUseId,
+    kind: "tool",
+    toolName: existing?.toolName ?? "tool result",
+    toolInput: existing?.toolInput,
+    toolOutput: output,
+    toolStatus: payload?.is_error === true ? "failed" : "completed",
+    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
+  });
+}
+
 function appendMeta(
   entries: TranscriptEntry[],
   id: string,
@@ -4578,11 +4613,13 @@ function HeadlessRun({
         const toolUseId = event.payload?.tool_use_id;
         setActiveTool(toolName, typeof toolUseId === "string" ? toolUseId : null);
       }
+      setEntries((prev) => applyRunToolStartedEvent(prev, event));
       return;
     }
     if (event.type === "run.tool.completed") {
       const toolUseId = event.payload?.tool_use_id;
       completeActiveTool(typeof toolUseId === "string" ? toolUseId : null);
+      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
       return;
     }
     if (event.type === "run.message.created") {
