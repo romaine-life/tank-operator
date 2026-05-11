@@ -1,0 +1,139 @@
+{
+  "active_run_doc": {
+    "completed_at": null,
+    "email": "USER@example.COM",
+    "id": "12",
+    "pid_path": "/tmp/tank-run-run_12.pid",
+    "pod_name": "session-12",
+    "provider": "codex",
+    "run_id": "run_12",
+    "session_id": "12",
+    "started_at": "2026-05-11T00:01:00+00:00",
+    "status": "running",
+    "stream_path": "/tmp/tank-run-run_12.stream",
+    "type": "active_run",
+    "updated_at": "2026-05-11T00:01:01+00:00"
+  },
+  "mode_aliases": {
+    "": "claude_cli",
+    "codex_config": "codex_config",
+    "codex_headless": "codex_gui",
+    "codex_subscription": "codex_cli",
+    "pi_subscription": "pi_cli",
+    "subscription": "claude_cli",
+    "subscription_headless": "claude_gui",
+    "unknown": "unknown"
+  },
+  "owner_labels": [
+    {
+      "email": "nelson@romaine.life",
+      "label": "u-db1458e0eb6e9e75"
+    },
+    {
+      "email": "User@Example.COM",
+      "label": "u-857296a3c8a81182"
+    }
+  ],
+  "pod_manifest_core": {
+    "claude_command": [
+      "bash",
+      "-lc",
+      "if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry"
+    ],
+    "claude_env": {
+      "CLAUDE_CODE_NO_FLICKER": "1",
+      "FORCE_HYPERLINK": "1",
+      "SANDBOX_AGENT_PORT": "2468",
+      "TANK_GLIMMUNG_CONTEXT_JSON": "",
+      "TANK_GLIMMUNG_ISSUE_REF": "",
+      "TANK_GLIMMUNG_RUN_REF": "",
+      "TANK_GLIMMUNG_TOUCHPOINT_REF": "",
+      "TANK_GLIMMUNG_VALIDATION_URL": "",
+      "TANK_SESSION_MODE": "codex_gui"
+    },
+    "container_images": {
+      "claude": "romainecr.azurecr.io/codex-container:latest",
+      "mcp-auth-proxy": "romainecr.azurecr.io/codex-container:latest"
+    },
+    "container_names": [
+      "mcp-auth-proxy",
+      "claude"
+    ],
+    "input": {
+      "mode": "codex_headless",
+      "owner": "nelson@romaine.life",
+      "session_id": "12"
+    },
+    "metadata": {
+      "annotations": {
+        "argocd.argoproj.io/tracking-id": "tank-operator-sessions:/Pod:tank-operator-sessions/session-12",
+        "tank-operator/owner-email": "nelson@romaine.life"
+      },
+      "labels": {
+        "app.kubernetes.io/instance": "tank-operator-sessions",
+        "app.kubernetes.io/managed-by": "tank-operator",
+        "azure.workload.identity/use": "true",
+        "tank-operator/mode": "codex_gui",
+        "tank-operator/owner": "u-db1458e0eb6e9e75",
+        "tank-operator/session-id": "12"
+      },
+      "name": "session-12",
+      "namespace": "tank-operator-sessions"
+    },
+    "security_context": {
+      "fsGroup": 1000,
+      "runAsGroup": 1000,
+      "runAsNonRoot": true,
+      "runAsUser": 1000
+    },
+    "service_account": "claude-session"
+  },
+  "run_ids": {
+    "invalid": [
+      "",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "../../bad",
+      "has space"
+    ],
+    "valid": [
+      "abc123",
+      "run_abc-123.4",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  "run_paths": [
+    {
+      "pid_path": "/tmp/tank-run-run_12.pid",
+      "run_id": "run_12",
+      "stream_path": "/tmp/tank-run-run_12.stream"
+    }
+  ],
+  "session_doc": {
+    "created_at": "2026-05-11T00:00:01+00:00",
+    "email": "USER@example.COM",
+    "id": "session:12",
+    "mode": "claude_cli",
+    "name": "Workbench",
+    "pod_name": "session-12",
+    "requested_at": "2026-05-11T00:00:00+00:00",
+    "session_id": "12",
+    "session_scope": "default",
+    "type": "session",
+    "updated_at": "2026-05-11T00:00:02+00:00",
+    "visible": true
+  },
+  "session_doc_ids": [
+    {
+      "counter_id": "session-counter",
+      "doc_id": "session:12",
+      "scope": "default",
+      "session_id": "12"
+    },
+    {
+      "counter_id": "session-counter:slot-a",
+      "doc_id": "session:slot-a:12",
+      "scope": "slot-a",
+      "session_id": "12"
+    }
+  ]
+}

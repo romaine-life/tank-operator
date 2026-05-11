@@ -1,6 +1,8 @@
 package compat
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -93,7 +95,7 @@ func TestDocumentIDsAndShapes(t *testing.T) {
 	if got, want := sessionDoc["id"], "session:12"; got != want {
 		t.Fatalf("session doc id = %v, want %q", got, want)
 	}
-	if got, want := sessionDoc["email"], "user@example.com"; got != want {
+	if got, want := sessionDoc["email"], "USER@example.COM"; got != want {
 		t.Fatalf("session doc email = %v, want %q", got, want)
 	}
 
@@ -111,6 +113,9 @@ func TestDocumentIDsAndShapes(t *testing.T) {
 	}
 	if got, want := runDoc["status"], "running"; got != want {
 		t.Fatalf("active run status = %v, want %q", got, want)
+	}
+	if got, want := runDoc["email"], "USER@example.COM"; got != want {
+		t.Fatalf("active run email = %v, want %q", got, want)
 	}
 }
 
@@ -160,4 +165,178 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := len(volumes), 1; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
+}
+
+func TestPythonCompatFixture(t *testing.T) {
+	fixture := loadFixture(t)
+
+	modeAliases := fixture["mode_aliases"].(map[string]any)
+	for input, want := range modeAliases {
+		if got := NormalizeSessionMode(input); got != want {
+			t.Fatalf("NormalizeSessionMode(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	for _, item := range fixture["owner_labels"].([]any) {
+		row := item.(map[string]any)
+		email := row["email"].(string)
+		if got, want := OwnerLabel(email), row["label"]; got != want {
+			t.Fatalf("OwnerLabel(%q) = %q, want %q", email, got, want)
+		}
+	}
+
+	runIDs := fixture["run_ids"].(map[string]any)
+	for _, value := range runIDs["valid"].([]any) {
+		if !ValidateRunID(value.(string)) {
+			t.Fatalf("ValidateRunID(%q) = false, want true", value)
+		}
+	}
+	for _, value := range runIDs["invalid"].([]any) {
+		if ValidateRunID(value.(string)) {
+			t.Fatalf("ValidateRunID(%q) = true, want false", value)
+		}
+	}
+
+	for _, item := range fixture["run_paths"].([]any) {
+		row := item.(map[string]any)
+		runID := row["run_id"].(string)
+		if got, want := RunStreamPath(runID), row["stream_path"]; got != want {
+			t.Fatalf("RunStreamPath(%q) = %q, want %q", runID, got, want)
+		}
+		if got, want := RunPIDPath(runID), row["pid_path"]; got != want {
+			t.Fatalf("RunPIDPath(%q) = %q, want %q", runID, got, want)
+		}
+	}
+
+	for _, item := range fixture["session_doc_ids"].([]any) {
+		row := item.(map[string]any)
+		scope := row["scope"].(string)
+		sessionID := row["session_id"].(string)
+		if got, want := SessionDocID(scope, sessionID), row["doc_id"]; got != want {
+			t.Fatalf("SessionDocID(%q, %q) = %q, want %q", scope, sessionID, got, want)
+		}
+		if got, want := SessionCounterDocID(scope), row["counter_id"]; got != want {
+			t.Fatalf("SessionCounterDocID(%q) = %q, want %q", scope, got, want)
+		}
+	}
+
+	name := "Workbench"
+	assertCanonicalJSON(t, SessionDoc(SessionRecord{
+		ID:          "12",
+		Email:       "USER@example.COM",
+		Mode:        ClaudeCLIMode,
+		Scope:       "default",
+		PodName:     "session-12",
+		Name:        &name,
+		Visible:     true,
+		RequestedAt: "2026-05-11T00:00:00+00:00",
+		CreatedAt:   "2026-05-11T00:00:01+00:00",
+		UpdatedAt:   "2026-05-11T00:00:02+00:00",
+	}), fixture["session_doc"])
+
+	assertCanonicalJSON(t, ActiveRunDoc(ActiveRunRecord{
+		SessionID:  "12",
+		Email:      "USER@example.COM",
+		RunID:      "run_12",
+		PodName:    "session-12",
+		Provider:   "codex",
+		Status:     "running",
+		StreamPath: RunStreamPath("run_12"),
+		PIDPath:    RunPIDPath("run_12"),
+		StartedAt:  "2026-05-11T00:01:00+00:00",
+		UpdatedAt:  "2026-05-11T00:01:01+00:00",
+	}), fixture["active_run_doc"])
+
+	core := fixture["pod_manifest_core"].(map[string]any)
+	input := core["input"].(map[string]any)
+	manifest := PodManifest(
+		input["session_id"].(string),
+		input["owner"].(string),
+		input["mode"].(string),
+		ManifestOptions{},
+	)
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	assertCanonicalJSON(t, map[string]any{
+		"input":            input,
+		"metadata":         manifest["metadata"],
+		"service_account":  spec["serviceAccountName"],
+		"security_context": spec["securityContext"],
+		"container_names":  containerNames(containers),
+		"container_images": containerImages(containers),
+		"claude_command":   claudeCommand(containers),
+		"claude_env":       claudeEnv(containers),
+	}, core)
+}
+
+func loadFixture(t *testing.T) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile("testdata/python_compat.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture map[string]any
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture
+}
+
+func assertCanonicalJSON(t *testing.T, got, want any) {
+	t.Helper()
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("json mismatch\ngot:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+func containerNames(containers []any) []any {
+	out := make([]any, 0, len(containers))
+	for _, item := range containers {
+		container := item.(map[string]any)
+		out = append(out, container["name"])
+	}
+	return out
+}
+
+func containerImages(containers []any) map[string]any {
+	out := map[string]any{}
+	for _, item := range containers {
+		container := item.(map[string]any)
+		out[container["name"].(string)] = container["image"]
+	}
+	return out
+}
+
+func claudeEnv(containers []any) map[string]any {
+	for _, item := range containers {
+		container := item.(map[string]any)
+		if container["name"] != "claude" {
+			continue
+		}
+		out := map[string]any{}
+		for _, envItem := range container["env"].([]any) {
+			env := envItem.(map[string]any)
+			out[env["name"].(string)] = env["value"]
+		}
+		return out
+	}
+	return nil
+}
+
+func claudeCommand(containers []any) []any {
+	for _, item := range containers {
+		container := item.(map[string]any)
+		if container["name"] == "claude" {
+			return container["command"].([]any)
+		}
+	}
+	return nil
 }
