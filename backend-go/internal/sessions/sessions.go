@@ -33,11 +33,13 @@ type Info struct {
 	Owner        string         `json:"owner"`
 	Status       string         `json:"status"`
 	Mode         string         `json:"mode"`
-	// Runtime is the dispatch shape for this session pod:
-	//   "sdk"    — Phase B+ pods with the agent-runner container. SPA
-	//              should open /agent-ws + /events for live + history.
-	//   "legacy" — pre-Phase B pods (no agent-runner container) or
-	//              non-claude modes. SPA falls back to /run + /run/history.
+	// Runtime tells the SPA's chat pane which data-ingestion path to use
+	// for this session:
+	//   "sdk"    — pod has the agent-runner sidecar. Chat pane opens
+	//              /agent-ws (live) + /events (history).
+	//   "legacy" — no agent-runner sidecar. Chat pane uses /run (live)
+	//              + /runs/latest/events.json + /run/history (history).
+	// The renderer is the same for both; only the data source differs.
 	// Derived from the pod spec at read time; not stored anywhere.
 	Runtime      string         `json:"runtime"`
 	RequestedAt  *string        `json:"requested_at"`
