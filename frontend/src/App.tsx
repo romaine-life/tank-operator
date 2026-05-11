@@ -42,6 +42,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   ClipboardListIcon,
+  Code2Icon,
   CopyIcon,
   FileIcon,
   FileTextIcon,
@@ -64,6 +65,7 @@ import {
   SquareIcon,
   SquarePenIcon,
   TerminalIcon,
+  TextQuoteIcon,
   TimerIcon,
   WrenchIcon,
   XIcon,
@@ -2525,12 +2527,23 @@ function computeLineDiff(
   return out;
 }
 
+type QuoteStyle = "fence" | "blockquote";
+
+function quoteMessageText(text: string, style: QuoteStyle): string {
+  if (style === "blockquote") {
+    return text.split("\n").map((line) => (line.length > 0 ? `> ${line}` : ">")).join("\n");
+  }
+  const longestBacktickRun = Math.max(2, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+  const fence = "`".repeat(longestBacktickRun + 1);
+  return `${fence}\n${text}\n${fence}`;
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
-      className="run-msg-copy"
+      className="run-msg-action run-msg-copy"
       title="Copy"
       aria-label={copied ? "Copied" : "Copy message"}
       onClick={async (e) => {
@@ -2549,6 +2562,33 @@ function CopyButton({ text }: { text: string }) {
       ) : (
         <CopyIcon size={12} aria-hidden="true" />
       )}
+    </button>
+  );
+}
+
+function QuoteButton({
+  text,
+  style,
+  onQuote,
+}: {
+  text: string;
+  style: QuoteStyle;
+  onQuote: (text: string, style: QuoteStyle) => void;
+}) {
+  const title = style === "blockquote" ? "Quote as blockquote" : "Quote as code block";
+  const Icon = style === "blockquote" ? TextQuoteIcon : Code2Icon;
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-quote"
+      title={title}
+      aria-label={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onQuote(text, style);
+      }}
+    >
+      <Icon size={12} aria-hidden="true" />
     </button>
   );
 }
@@ -2666,11 +2706,13 @@ function RunMessageBubble({
   provider,
   showTimestamps,
   showDuration,
+  onQuote,
 }: {
   entry: TranscriptEntry;
   provider: Provider;
   showTimestamps: boolean;
   showDuration: boolean;
+  onQuote: (text: string, style: QuoteStyle) => void;
 }) {
   const variant = entry.role === "user" ? "user" : "assistant";
   const { user } = useContext(RunContext);
@@ -2733,6 +2775,8 @@ function RunMessageBubble({
               </span>
             )}
           </div>
+          <QuoteButton text={text} style="fence" onQuote={onQuote} />
+          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
           <CopyButton text={text} />
         </div>
       </div>
@@ -3186,6 +3230,7 @@ function RunMessages({
   autoExpandTools,
   showTimestamps,
   showDuration,
+  onQuote,
 }: {
   entries: TranscriptEntry[];
   provider: Provider;
@@ -3193,6 +3238,7 @@ function RunMessages({
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  onQuote: (text: string, style: QuoteStyle) => void;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   return (
@@ -3226,6 +3272,7 @@ function RunMessages({
             provider={provider}
             showTimestamps={showTimestamps}
             showDuration={showDuration}
+            onQuote={onQuote}
           />
         );
       })}
@@ -4149,6 +4196,12 @@ function HeadlessRun({
     ta.focus();
     const cursor = value.length;
     ta.setSelectionRange(cursor, cursor);
+  }
+
+  function appendQuotedMessage(text: string, style: QuoteStyle) {
+    const quoted = quoteMessageText(text, style);
+    const next = composerText.trim().length > 0 ? `${composerText}\n\n${quoted}` : quoted;
+    setComposerValue(next);
   }
 
   function applySlashCommand(name: string) {
@@ -5138,6 +5191,7 @@ function HeadlessRun({
               autoExpandTools={runPrefs.autoExpandTools}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
+              onQuote={appendQuotedMessage}
             />
           </>
         )}

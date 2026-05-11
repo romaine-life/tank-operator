@@ -3793,7 +3793,7 @@ textarea.run-files-viewer-editor:focus {
   line-height: 1.4;
 }
 
-/* Per-message footer — timestamp + copy button, hover-revealed. */
+/* Per-message footer — timestamp + message actions, hover-revealed. */
 .run-msg-footer {
   display: flex;
   align-items: center;
@@ -3830,7 +3830,7 @@ textarea.run-files-viewer-editor:focus {
   font-variant-numeric: tabular-nums;
 }
 
-.run-msg-copy {
+.run-msg-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3844,7 +3844,7 @@ textarea.run-files-viewer-editor:focus {
   transition: background var(--motion-fast, 100ms) ease, color var(--motion-fast, 100ms) ease;
 }
 
-.run-msg-copy:hover {
+.run-msg-action:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
 }
