@@ -73,7 +73,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
 
-	// Run endpoints.
+	// Legacy run endpoints — claude_cli/codex_gui/pi pods still hit these
+	// (they have no agent-runner sidecar). Phase F2 deletes them once
+	// every claude_gui code path is on the SDK runtime AND codex_gui
+	// either gets its own SDK pane or is removed. Don't delete in the
+	// same diff as the runtime swap: running pre-Phase-B pods still need
+	// these to render until they reap.
 	mux.HandleFunc("GET /api/sessions/{session_id}/run/active", s.handleGetActiveRun)
 	mux.HandleFunc("GET /api/sessions/{session_id}/run/history", s.handleRunHistory)
 	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events", s.handleLatestRunEvents)
@@ -81,9 +86,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/runs/{run_id}/events", s.handleRunEvents)
 	mux.HandleFunc("GET /api/sessions/{session_id}/run", s.handleRunWebSocket)
 
-	// Phase C agent surface (new SDK runtime). Lives next to the legacy
-	// run endpoints during the rollout — Phase D switches the SPA over;
-	// Phase F deletes the legacy paths above.
+	// Phase C agent surface (SDK runtime). The SPA's RunPaneSDK opens
+	// agent-ws for live and hits /events for history; together they're
+	// the producer-contract reader (one canonical event stream from the
+	// pod-side runner, two consumers).
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
 

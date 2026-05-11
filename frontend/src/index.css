@@ -5169,6 +5169,30 @@ textarea.run-files-viewer-editor:focus {
   }
 }
 
+/* Sidebar runtime chip — Phase F observability. Small label next to the
+   mode that flags whether a claude_gui session opens the SDK pane or the
+   legacy one. The legacy chip is amber to nudge the user — those pods
+   pre-date the Phase B image roll and stay legacy until reaped. */
+.home-session-runtime {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  vertical-align: middle;
+  font-family: ui-monospace, monospace;
+}
+.home-session-runtime.is-sdk {
+  background: rgba(74, 222, 128, 0.15);
+  color: #4ade80;
+}
+.home-session-runtime.is-legacy {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
 /* RunPaneSDK — Phase D. Minimal first-cut styles so the SDK transcript
    renders without inheriting the legacy HeadlessRun bubble CSS. Phase F
    replaces these with the real design once the legacy pane is gone. */

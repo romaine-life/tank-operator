@@ -7392,7 +7392,14 @@ export function App() {
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
                           <span className="home-session-main">
                             <span className="home-session-title">{sessionDisplayName(s)}</span>
-                            <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
+                            <span className="home-session-sub">
+                              {MODE_LABELS[s.mode]}
+                              {HEADLESS_MODES.has(s.mode) && s.runtime && (
+                                <span className={`home-session-runtime is-${s.runtime}`}>
+                                  {s.runtime}
+                                </span>
+                              )}
+                            </span>
                           </span>
                         </button>
                       ))
