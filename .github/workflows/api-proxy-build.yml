@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'api-proxy/**'
+      - 'scripts/image-fingerprint.sh'
       - '.github/workflows/api-proxy-build.yml'
   workflow_dispatch:
 
@@ -35,25 +36,57 @@ jobs:
       - name: ACR login
         run: az acr login --name romainecr
 
-      - name: Compute tag
-        id: tag
-        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build + push (SHA-pinned, no :latest)
-        working-directory: api-proxy
+      - name: Compute image fingerprint
+        id: fingerprint
+        shell: bash
         run: |
-          TAG="${{ steps.tag.outputs.tag }}"
-          docker build \
-            -t romainecr.azurecr.io/api-proxy:$TAG .
-          docker push romainecr.azurecr.io/api-proxy:$TAG
-          echo "### Pushed romainecr.azurecr.io/api-proxy:$TAG" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+          scripts/image-fingerprint.sh \
+            --image api-proxy \
+            --dockerfile api-proxy/Dockerfile \
+            --context api-proxy \
+            --paths 'api-proxy/Dockerfile api-proxy/pyproject.toml api-proxy/src'
+
+      - name: Check ACR proof image
+        id: proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.fingerprint.outputs.proof_tag }}"
+          if az acr repository show-tags \
+              --name romainecr \
+              --repository api-proxy \
+              --query "[?@=='${tag}'] | [0]" \
+              --output tsv | grep -qx "${tag}"; then
+            echo "hit=true" >>"${GITHUB_OUTPUT}"
+            echo "Found reusable proof image: romainecr.azurecr.io/api-proxy:${tag}"
+          else
+            echo "hit=false" >>"${GITHUB_OUTPUT}"
+            echo "No proof image found for api-proxy fingerprint ${{ steps.fingerprint.outputs.fingerprint }}"
+          fi
+
+      - name: Build and push proof image
+        if: steps.proof.outputs.hit != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: api-proxy
+          file: api-proxy/Dockerfile
+          push: true
+          tags: romainecr.azurecr.io/api-proxy:${{ steps.fingerprint.outputs.proof_tag }}
+          cache-from: |
+            type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy
+            type=gha,scope=api-proxy
+          cache-to: |
+            type=registry,ref=romainecr.azurecr.io/api-proxy-build-cache:api-proxy,mode=max
+            type=gha,mode=max,scope=api-proxy
 
       - name: Bump api-proxy chart tag
         run: |
-          tag="${{ steps.tag.outputs.tag }}"
-          # Quote the value so all-digit short-SHAs aren't parsed as YAML
-          # numbers and emitted in scientific notation. See
-          # reference_yaml_tag_quoting.md.
+          tag="${{ steps.fingerprint.outputs.proof_tag }}"
+          # Quote the value so YAML never reinterprets image tags.
           sed -i -E "s|^(    tag: ).*$|\1\"${tag}\"|" k8s/values.yaml
 
           if git diff --quiet k8s/values.yaml; then
@@ -64,7 +97,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add k8s/values.yaml
-          git commit -m "chart: bump api-proxy image to ${tag} [skip ci]"
+          git commit -m "chart: bump api-proxy image to fingerprint ${tag} [skip ci]"
           for i in 1 2 3; do
             if git push; then exit 0; fi
             git pull --rebase origin main
