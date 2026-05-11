@@ -2548,11 +2548,9 @@ function loadRunPrefs(): RunPrefs {
 
 type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void;
 
-// localStorage key for persisting a single run's transcript entries.
-// Backend-side persistence (replay JSONL from
-// ~/.claude/projects/<encoded-cwd>/<session>.jsonl in the session pod)
-// is a follow-up; localStorage is sufficient for refresh-survives-tab
-// and same-browser cross-tab.
+// localStorage key for a provisional transcript cache. The backend event log
+// and provider JSONL history are authoritative; this only fills the pane while
+// those replay paths catch up after a browser refresh.
 const RUN_STORAGE_PREFIX = "tank-run-entries-";
 
 function loadStoredEntries(sessionId: string): TranscriptEntry[] {
@@ -3612,6 +3610,8 @@ function HeadlessRun({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const runEventsRef = useRef<EventSource | null>(null);
+  const historyRefreshRef = useRef<Promise<void> | null>(null);
+  const sessionIdRef = useRef(session.id);
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
   const runPrefsRef = useRef(runPrefs);
@@ -3813,9 +3813,19 @@ function HeadlessRun({
   const [continueHintVisible, setContinueHintVisible] = useState(false);
   function refreshRunHistory(showHint: boolean) {
     if (session.status !== "Active" || running) return;
-    void refreshRunHistoryFromLatestEvents(showHint).then((replayed) => {
-      if (!replayed) refreshRunHistoryFromBackend(showHint);
-    });
+    if (historyRefreshRef.current) return;
+    const refreshSessionId = session.id;
+    const refresh = refreshRunHistoryFromLatestEvents(showHint)
+      .then((replayed) => {
+        if (sessionIdRef.current !== refreshSessionId) return;
+        if (!replayed) refreshRunHistoryFromBackend(showHint);
+      })
+      .finally(() => {
+        if (historyRefreshRef.current === refresh) {
+          historyRefreshRef.current = null;
+        }
+      });
+    historyRefreshRef.current = refresh;
   }
 
   function applyLatestRunReplayEvent(event: RunLifecycleEvent): boolean {
@@ -3853,6 +3863,7 @@ function HeadlessRun({
 
   function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
     if (typeof EventSource === "undefined") return Promise.resolve(false);
+    const refreshSessionId = session.id;
     return new Promise((resolve) => {
       let settled = false;
       let replayedContent = false;
@@ -3885,6 +3896,10 @@ function HeadlessRun({
         resolve(ok);
       };
       const onLifecycleEvent = (message: MessageEvent<string>) => {
+        if (sessionIdRef.current !== refreshSessionId) {
+          finish(false);
+          return;
+        }
         const event = parseRunLifecycleEvent(message.data);
         if (!event) return;
         replayedContent = applyLatestRunReplayEvent(event) || replayedContent;
@@ -3901,12 +3916,14 @@ function HeadlessRun({
   }
 
   function refreshRunHistoryFromBackend(showHint: boolean) {
-    void authedFetch(`/api/sessions/${session.id}/run/history`)
+    const refreshSessionId = session.id;
+    void authedFetch(`/api/sessions/${refreshSessionId}/run/history`)
       .then(async (res) => {
         if (!res.ok) return "";
         return await res.text();
       })
       .then((text) => {
+        if (sessionIdRef.current !== refreshSessionId) return;
         if (!text) return;
         const acc = parseRunHistory(text, session.mode);
         if (acc.length > 0) {
@@ -3942,11 +3959,9 @@ function HeadlessRun({
   useEffect(() => {
     if (historyAttempted) return;
     if (entries.length > 0) {
-      setContinueHintVisible(true);
-      const t = window.setTimeout(() => setContinueHintVisible(false), 3000);
       setHistoryAttempted(true);
       refreshRunHistory(false);
-      return () => window.clearTimeout(t);
+      return;
     }
     if (session.status !== "Active") return;
     setHistoryAttempted(true);
@@ -4283,8 +4298,10 @@ function HeadlessRun({
   // When the session id changes, reset local transcript state to that
   // session's cached entries and allow the history sync to run again.
   useEffect(() => {
+    sessionIdRef.current = session.id;
     setEntries(loadStoredEntries(session.id));
     setQueuedMessages([]);
+    historyRefreshRef.current = null;
     setHistoryAttempted(false);
     setActiveRunChecked(false);
     setContinueHintVisible(false);
