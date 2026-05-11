@@ -1218,6 +1218,7 @@ async def walk_session_files(
 class ActiveRunResponse(BaseModel):
     run_id: str
     stream_offset: int
+    started_at: str | None = None
 
 
 @app.get("/api/sessions/{session_id}/run/active")
@@ -1252,7 +1253,11 @@ async def get_active_run(
         live = await _check_active_run_on_pod(pod_name, record.run_id)
         if live is not None:
             run_id, stream_offset = live
-            return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
+            return ActiveRunResponse(
+                run_id=run_id,
+                stream_offset=stream_offset,
+                started_at=record.started_at or None,
+            )
         try:
             await active_runs.mark_stale(session_id, record.run_id)
         except Exception as exc:
@@ -1265,7 +1270,7 @@ async def get_active_run(
     try:
         session = await sessions.get_session(owner=user.email, session_id=session_id)
         provider = "codex" if session.mode == CODEX_HEADLESS_MODE else "claude"
-        await active_runs.start(
+        record = await active_runs.start(
             email=user.email,
             session_id=session_id,
             run_id=run_id,
@@ -1276,8 +1281,13 @@ async def get_active_run(
         )
     except Exception as exc:
         log.warning("failed to backfill active run %s: %s", run_id, exc)
+        record = None
 
-    return ActiveRunResponse(run_id=run_id, stream_offset=stream_offset)
+    return ActiveRunResponse(
+        run_id=run_id,
+        stream_offset=stream_offset,
+        started_at=record.started_at if record is not None else None,
+    )
 
 
 @app.get("/api/sessions/{session_id}/run/history")

@@ -5,6 +5,9 @@ import asyncio
 import pytest
 
 from tank_operator import api
+from tank_operator.auth import User
+from tank_operator.profiles import ActiveRunRecord
+from tank_operator.sessions import CODEX_HEADLESS_MODE, SessionInfo
 
 
 class _FakeSessions:
@@ -21,6 +24,46 @@ class _FakeWebSocket:
 
     async def send_json(self, payload: dict[str, object]) -> None:
         self.sent.append(payload)
+
+
+class _FakeActiveRuns:
+    def __init__(self, record: ActiveRunRecord | None = None) -> None:
+        self.record = record
+        self.started_kwargs: dict[str, object] | None = None
+
+    async def get_active(self, session_id: str) -> ActiveRunRecord | None:
+        return self.record if self.record and self.record.session_id == session_id else None
+
+    async def start(self, **kwargs: object) -> ActiveRunRecord:
+        self.started_kwargs = kwargs
+        self.record = ActiveRunRecord(
+            session_id=str(kwargs["session_id"]),
+            email=str(kwargs["email"]),
+            run_id=str(kwargs["run_id"]),
+            pod_name=str(kwargs["pod_name"]),
+            provider=str(kwargs["provider"]),
+            stream_path=str(kwargs["stream_path"]),
+            pid_path=str(kwargs["pid_path"]),
+            started_at="2026-05-11T02:22:58.927036+00:00",
+            updated_at="2026-05-11T02:22:58.927036+00:00",
+        )
+        return self.record
+
+
+class _ActiveRunFakeSessions:
+    async def get_pod_name(
+        self, owner: str, session_id: str, timeout: float = 90.0
+    ) -> str:
+        return f"session-{session_id}"
+
+    async def get_session(self, owner: str, session_id: str) -> SessionInfo:
+        return SessionInfo(
+            id=session_id,
+            pod_name=f"session-{session_id}",
+            owner=owner,
+            status="Active",
+            mode=CODEX_HEADLESS_MODE,
+        )
 
 
 def test_wait_for_run_pod_name_sends_keepalive_while_pending(
@@ -92,6 +135,82 @@ def test_check_active_run_on_pod_uses_specific_registry_run(
     assert isinstance(command, list)
     assert "/tmp/tank-run-run_abc.pid" in command[-1]
     assert "ls -t /tmp/tank-run-*.pid" not in command[-1]
+
+
+def test_get_active_run_returns_registry_started_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started_at = "2026-05-11T02:21:53.142530+00:00"
+    record = ActiveRunRecord(
+        session_id="abc123",
+        email="operator@example.test",
+        run_id="run_abc",
+        pod_name="session-abc123",
+        provider="codex",
+        stream_path="/tmp/tank-run-run_abc.stream",
+        pid_path="/tmp/tank-run-run_abc.pid",
+        started_at=started_at,
+        updated_at=started_at,
+    )
+
+    async def fake_check_active_run_on_pod(
+        pod_name: str, run_id: str | None = None
+    ) -> tuple[str, int] | None:
+        assert pod_name == "session-abc123"
+        assert run_id == "run_abc"
+        return ("run_abc", 42)
+
+    monkeypatch.setattr(api, "sessions", _ActiveRunFakeSessions())
+    monkeypatch.setattr(api, "active_runs", _FakeActiveRuns(record))
+    monkeypatch.setattr(api, "_check_active_run_on_pod", fake_check_active_run_on_pod)
+
+    result = asyncio.run(
+        api.get_active_run(
+            "abc123",
+            user=User(
+                sub="user",
+                email="operator@example.test",
+                name="Operator",
+            ),
+        )
+    )
+
+    assert result is not None
+    assert result.run_id == "run_abc"
+    assert result.stream_offset == 42
+    assert result.started_at == started_at
+
+
+def test_get_active_run_returns_backfilled_started_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_check_active_run_on_pod(
+        pod_name: str, run_id: str | None = None
+    ) -> tuple[str, int] | None:
+        assert pod_name == "session-abc123"
+        assert run_id is None
+        return ("run_backfill", 99)
+
+    active_runs = _FakeActiveRuns()
+    monkeypatch.setattr(api, "sessions", _ActiveRunFakeSessions())
+    monkeypatch.setattr(api, "active_runs", active_runs)
+    monkeypatch.setattr(api, "_check_active_run_on_pod", fake_check_active_run_on_pod)
+
+    result = asyncio.run(
+        api.get_active_run(
+            "abc123",
+            user=User(
+                sub="user",
+                email="operator@example.test",
+                name="Operator",
+            ),
+        )
+    )
+
+    assert result is not None
+    assert result.run_id == "run_backfill"
+    assert result.stream_offset == 99
+    assert result.started_at == "2026-05-11T02:22:58.927036+00:00"
 
 
 def test_check_active_run_on_pod_rejects_malicious_registry_run() -> None:
