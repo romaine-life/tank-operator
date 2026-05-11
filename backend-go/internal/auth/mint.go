@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -16,14 +17,19 @@ const (
 	SessionTTL      = 7 * 24 * time.Hour
 	installStateTTL = 10 * time.Minute
 	installAudience = "tank-operator/github-install"
+	mintTimeout     = 10 * time.Second
 )
 
+// Minter signs session and install-state JWTs via a remote Signer (Key Vault
+// in prod, in-memory in tests). Holds the verifier's KeyResolver too so it
+// can validate the install-state tokens it issued.
 type Minter struct {
-	secret        []byte
+	signer        Signer
+	resolver      KeyResolver
 	allowedEmails map[string]struct{}
 }
 
-func NewMinter(secret, allowedEmails string) *Minter {
+func NewMinter(signer Signer, resolver KeyResolver, allowedEmails string) *Minter {
 	allowed := map[string]struct{}{}
 	for _, e := range strings.Split(allowedEmails, ",") {
 		normalized := strings.ToLower(strings.TrimSpace(e))
@@ -31,7 +37,7 @@ func NewMinter(secret, allowedEmails string) *Minter {
 			allowed[normalized] = struct{}{}
 		}
 	}
-	return &Minter{secret: []byte(secret), allowedEmails: allowed}
+	return &Minter{signer: signer, resolver: resolver, allowedEmails: allowed}
 }
 
 func (m *Minter) IsAllowed(email string) bool {
@@ -40,8 +46,8 @@ func (m *Minter) IsAllowed(email string) bool {
 }
 
 func (m *Minter) MintSession(sub, email, name string) (string, error) {
-	if len(m.secret) == 0 {
-		return "", fmt.Errorf("JWT_SECRET not configured")
+	if m.signer == nil {
+		return "", fmt.Errorf("JWT signer not configured")
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -51,12 +57,14 @@ func (m *Minter) MintSession(sub, email, name string) (string, error) {
 		"iat":   now.Unix(),
 		"exp":   now.Add(SessionTTL).Unix(),
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	ctx, cancel := context.WithTimeout(context.Background(), mintTimeout)
+	defer cancel()
+	return m.signer.MintJWT(ctx, claims)
 }
 
 func (m *Minter) MintInstallState(email string) (string, error) {
-	if len(m.secret) == 0 {
-		return "", fmt.Errorf("JWT_SECRET not configured")
+	if m.signer == nil {
+		return "", fmt.Errorf("JWT signer not configured")
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -65,20 +73,28 @@ func (m *Minter) MintInstallState(email string) (string, error) {
 		"iat":   now.Unix(),
 		"exp":   now.Add(installStateTTL).Unix(),
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	ctx, cancel := context.WithTimeout(context.Background(), mintTimeout)
+	defer cancel()
+	return m.signer.MintJWT(ctx, claims)
 }
 
 func (m *Minter) VerifyInstallState(state string) (string, error) {
-	if len(m.secret) == 0 {
-		return "", errHTTP{status: http.StatusInternalServerError, message: "JWT_SECRET not configured"}
+	if m.resolver == nil {
+		return "", errHTTP{status: http.StatusInternalServerError, message: "JWT key resolver not configured"}
 	}
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(state, claims,
 		func(t *jwt.Token) (any, error) {
-			if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			if t.Method.Alg() != jwt.SigningMethodRS256.Alg() {
 				return nil, fmt.Errorf("unexpected alg: %s", t.Method.Alg())
 			}
-			return m.secret, nil
+			kid, _ := t.Header["kid"].(string)
+			if kid == "" {
+				return nil, errors.New("token missing kid")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), keyResolveTimeout)
+			defer cancel()
+			return m.resolver.PublicKey(ctx, kid)
 		},
 		jwt.WithAudience(installAudience),
 	)
