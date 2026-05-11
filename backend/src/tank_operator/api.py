@@ -469,7 +469,12 @@ def _parse_last_event_id(value: str | None) -> int:
 
 
 def _format_run_sse_event(event: RunEventRecord) -> str:
-    data = {
+    body = json.dumps(_run_event_json(event), separators=(",", ":"))
+    return f"id: {event.event_id}\nevent: {event.type}\ndata: {body}\n\n"
+
+
+def _run_event_json(event: RunEventRecord) -> dict[str, Any]:
+    return {
         "run_id": event.run_id,
         "session_id": event.session_id,
         "event_id": event.event_id,
@@ -477,8 +482,6 @@ def _format_run_sse_event(event: RunEventRecord) -> str:
         "payload": event.payload,
         "created_at": event.created_at,
     }
-    body = json.dumps(data, separators=(",", ":"))
-    return f"id: {event.event_id}\nevent: {event.type}\ndata: {body}\n\n"
 
 
 async def _run_event_sse_stream(
@@ -1644,6 +1647,7 @@ async def get_active_run(
 @app.get("/api/sessions/{session_id}/run/history")
 async def get_run_history(
     session_id: str,
+    source: str | None = None,
     user: User = Depends(current_user),
 ) -> Response:
     """Stream the most recent claude-code session JSONL out of the session
@@ -1667,6 +1671,13 @@ async def get_run_history(
         session = await sessions.get_session(owner=user.email, session_id=session_id)
     except (SessionNotOwned, SessionNotFound):
         session = None
+    if source == "latest-events-fallback":
+        log.info(
+            "run_history_fallback session_id=%s email=%s source=%s",
+            session_id,
+            user.email.lower(),
+            source,
+        )
     if session and session.mode == CODEX_HEADLESS_MODE:
         cmd = ["bash", "-lc", "cat /tmp/tank-run-history.ndjson 2>/dev/null || true"]
     else:
@@ -1728,12 +1739,86 @@ async def stream_latest_run_events(
         raise HTTPException(status_code=404, detail="session not found")
     record = await active_runs.get_latest(session_id)
     if record is None or record.email != user.email.lower():
+        log.info(
+            "latest_run_events_not_found session_id=%s email=%s transport=sse",
+            session_id,
+            user.email.lower(),
+        )
         raise HTTPException(status_code=404, detail="run not found")
+    log.info(
+        "run_event_replay_start session_id=%s run_id=%s email=%s transport=sse",
+        session_id,
+        record.run_id,
+        user.email.lower(),
+    )
     return _run_events_response(
         session_id=session_id,
         run_id=record.run_id,
         last_event_id=last_event_id,
     )
+
+
+@app.get("/api/sessions/{session_id}/runs/latest/events.json")
+async def get_latest_run_events_json(
+    session_id: str,
+    limit: int = 500,
+    user: User = Depends(current_user),
+) -> dict[str, Any]:
+    """Return a finite bounded replay of semantic events for the latest run.
+
+    This is the preferred completed-run restore path for the browser. The
+    long-lived SSE endpoint remains available for reconnect/live cases, while
+    /run/history stays as a compatibility fallback for older runs that predate
+    the event store.
+    """
+    try:
+        await sessions.get_session(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    record = await active_runs.get_latest(session_id)
+    if record is None or record.email != user.email.lower():
+        log.info(
+            "latest_run_events_not_found session_id=%s email=%s transport=json",
+            session_id,
+            user.email.lower(),
+        )
+        raise HTTPException(status_code=404, detail="run not found")
+
+    bounded_limit = min(max(limit, 1), 1000)
+    log.info(
+        "run_event_replay_start session_id=%s run_id=%s email=%s transport=json limit=%s",
+        session_id,
+        record.run_id,
+        user.email.lower(),
+        bounded_limit,
+    )
+    events = await run_events.list_after(
+        run_id=record.run_id,
+        session_id=session_id,
+        after_event_id=0,
+        limit=bounded_limit,
+    )
+    terminal_count = sum(
+        1
+        for event in events
+        if event.type in {"run.completed", "run.failed", "run.stale"}
+    )
+    if terminal_count:
+        log.info(
+            "run_event_replay_terminal_events session_id=%s run_id=%s count=%s transport=json",
+            session_id,
+            record.run_id,
+            terminal_count,
+        )
+    return {
+        "session_id": session_id,
+        "run_id": record.run_id,
+        "limit": bounded_limit,
+        "events": [_run_event_json(event) for event in events],
+        "terminal_events_replayed": terminal_count,
+    }
 
 
 @app.get("/api/sessions/{session_id}/runs/{run_id}/events")
