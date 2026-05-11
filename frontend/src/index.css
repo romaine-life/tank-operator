@@ -4495,9 +4495,16 @@ textarea.run-files-viewer-editor:focus {
   grid-column: 2;
   grid-row: 1;
   justify-self: end;
-  background: #1d4ed8;
-  color: #f5f8ff;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.085),
+    rgba(255, 255, 255, 0.055)
+  );
+  color: var(--text-primary);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  box-shadow:
+    inset 2px 0 0 rgba(185, 210, 251, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.02) inset;
 }
 
 .run-transcript [data-slot="message"][data-kind="skill-action"] .run-transcript-message-content {
