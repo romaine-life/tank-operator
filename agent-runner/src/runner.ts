@@ -26,6 +26,39 @@ import { CosmosSink, isCanonical } from "./cosmos.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
+// Pull a single dispatch out as a free function so the producer
+// contract — cosmos-first ordering + cosmos-failure suppresses ws — is
+// testable without spinning up a Runner (the WSFanout binds to a port
+// in its constructor, which makes the full Runner painful to unit-test).
+//
+// Returns true on a successful end-to-end dispatch; false when the
+// canonical write failed and the broadcast was intentionally skipped.
+// Callers that don't care about the outcome can ignore it.
+interface DispatchSink {
+  upsert(message: SDKMessage): Promise<void>;
+}
+interface DispatchWS {
+  broadcastEvent(message: SDKMessage): void;
+}
+export async function dispatch(
+  sink: DispatchSink,
+  ws: DispatchWS,
+  message: SDKMessage,
+): Promise<boolean> {
+  if (isCanonical(message)) {
+    try {
+      await sink.upsert(message);
+    } catch (err) {
+      console.error("cosmos upsert failed:", err);
+      // Don't broadcast a live event we couldn't persist — the SPA's
+      // history-replay would then disagree with what it saw live.
+      return false;
+    }
+  }
+  ws.broadcastEvent(message);
+  return true;
+}
+
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
 // pushed item exactly once. The SDK consumes this as the prompt source.
 class AsyncQueue<T> {
@@ -110,19 +143,11 @@ export class Runner {
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
-    // 1. Cosmos first (durable, read-your-writes ordering)
-    if (isCanonical(message)) {
-      try {
-        await this.sink.upsert(message);
-      } catch (err) {
-        console.error("cosmos upsert failed:", err);
-        // Don't broadcast a live event we couldn't persist — the SPA's
-        // history-replay would then disagree with what it saw live.
-        return;
-      }
-    }
-    // 2. WebSocket broadcast (live tap)
-    this.ws.broadcastEvent(message);
+    // 1+2. Dual-sink dispatch (cosmos-first ordering). Extracted so the
+    // contract — canonical: cosmos before ws, ws skipped on cosmos
+    // failure; live-only: ws only — can be tested without spinning up a
+    // Runner.
+    await dispatch(this.sink, this.ws, message);
 
     // 3. ScheduleWakeup detection
     const wakeup = extractWakeup(message);
