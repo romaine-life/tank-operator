@@ -188,6 +188,14 @@ def _skill_trigger(provider: str, skill_name: str) -> str:
     return f"${skill_name}" if provider == "codex" else f"/{skill_name}"
 
 
+def _skill_prompt(provider: str, skill_name: str, supplemental_prompt: str | None = None) -> str:
+    trigger = _skill_trigger(provider, skill_name)
+    supplemental = supplemental_prompt.strip() if isinstance(supplemental_prompt, str) else ""
+    if supplemental:
+        return f"{trigger}\n\n{supplemental}"
+    return trigger
+
+
 def _run_stream_path(run_id: str) -> str:
     return f"/tmp/tank-run-{run_id}.stream"
 
@@ -2427,7 +2435,7 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
     prompt_bytes = b""
     if not resume:
         if skill_name:
-            prompt = _skill_trigger(provider, skill_name)
+            prompt = _skill_prompt(provider, skill_name, prompt if isinstance(prompt, str) else None)
         if not isinstance(prompt, str) or not prompt.strip():
             await ws.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="missing prompt")
             return

@@ -33,6 +33,7 @@ from tank_operator.api import (
     _build_headless_script,
     _build_live_run_script,
     _build_tail_run_script,
+    _skill_prompt,
     _skill_trigger,
     _validate_skill_name,
     _validate_run_id,
@@ -101,6 +102,16 @@ def test_validate_skill_name_rejects_paths_and_shell() -> None:
 def test_skill_trigger_is_provider_specific() -> None:
     assert _skill_trigger("codex", "test") == "$test"
     assert _skill_trigger("claude", "test") == "/test"
+
+
+def test_skill_prompt_includes_supplemental_text() -> None:
+    assert _skill_prompt("codex", "test", "Set up env for issue 42") == (
+        "$test\n\nSet up env for issue 42"
+    )
+
+
+def test_skill_prompt_without_supplemental_text_is_trigger_only() -> None:
+    assert _skill_prompt("claude", "test", "  ") == "/test"
 
 
 def test_headless_script_passes_skill_name() -> None:

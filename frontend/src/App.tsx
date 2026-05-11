@@ -1674,6 +1674,12 @@ function skillActionText(name: string): string {
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} skill`;
 }
 
+function skillSupplementalText(name: string, text: string): string {
+  const trimmed = text.trim();
+  const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
+  return trimmed.replace(triggerPattern, "").trim();
+}
+
 function skillNameFromTrigger(text: string): string | null {
   const trimmed = text.trim();
   const match = trimmed.match(/^[$/]([A-Za-z0-9_-]{1,64})$/);
@@ -1691,6 +1697,7 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
 function appendSkillInvocation(
   entries: TranscriptEntry[],
   name: string,
+  supplementalText = "",
   time: string = nowIso(),
 ): TranscriptEntry[] {
   if (!name) return entries;
@@ -1703,6 +1710,7 @@ function appendSkillInvocation(
     time,
     messageKind: "skill-action",
     skillName: name,
+    skillSupplementalText: supplementalText.trim(),
   } as TranscriptEntry;
   return appendMeta(
     [...entries, userAction],
@@ -2049,7 +2057,10 @@ function applyProviderEvent(
 ): TranscriptEntry[] {
   if (event.type === "tank.skill_invocation") {
     const name = typeof event.name === "string" ? event.name.trim() : "";
-    return name ? appendSkillInvocation(entries, name, eventTime(event)) : entries;
+    const trigger = typeof event.trigger === "string" ? event.trigger : "";
+    return name
+      ? appendSkillInvocation(entries, name, skillSupplementalText(name, trigger), eventTime(event))
+      : entries;
   }
   if (mode === "codex_gui") return applyCodexEvent(entries, event);
   return applyClaudeEvent(entries, event);
@@ -2949,6 +2960,10 @@ function RunMessageBubble({
   const messageKind = (entry as Record<string, unknown>).messageKind;
   const isSkillAction = messageKind === "skill-action";
   const skillName = (entry as Record<string, unknown>).skillName;
+  const skillSupplementalText =
+    typeof (entry as Record<string, unknown>).skillSupplementalText === "string"
+      ? ((entry as Record<string, unknown>).skillSupplementalText as string)
+      : "";
   const skillActionIcon =
     skillName === "test"
       ? FlaskConicalIcon
@@ -2979,9 +2994,16 @@ function RunMessageBubble({
       >
         <div className="run-transcript-message-text" data-slot="message-text">
           {isSkillAction ? (
-            <span className="run-skill-action-text">
-              <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
-              <span>{text}</span>
+            <span className="run-skill-action">
+              <span className="run-skill-action-text">
+                <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
+                <span>{text}</span>
+              </span>
+              {skillSupplementalText && (
+                <span className="run-skill-action-detail">
+                  <RunMarkdown>{skillSupplementalText}</RunMarkdown>
+                </span>
+              )}
             </span>
           ) : (
             <RunMarkdown>{text}</RunMarkdown>
@@ -4552,6 +4574,12 @@ function HeadlessRun({
     ta.focus();
   }
 
+  function getComposerValue(): string {
+    const wrap = composerWrapRef.current;
+    const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
+    return ta?.value ?? composerText;
+  }
+
   function setComposerValue(value: string) {
     const wrap = composerWrapRef.current;
     const ta = wrap?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -4869,9 +4897,25 @@ function HeadlessRun({
     if (!trimmed || session.status !== "Active") return;
     // Wait until all attachments have finished uploading. If any errored
     // out, surface it but still let the run go ahead with what's ready.
+    const composed = composePromptWithAttachments(trimmed);
+    if (composed == null) return;
+    if (running) {
+      // Queue message to send once the current run finishes. PromptInput
+      // clears the textarea before this callback returns, so the visible
+      // queued-message list is the user's confirmation that the submit stuck.
+      setQueuedMessages((prev) => [
+        ...prev,
+        { id: nextQueuedMessageId(), text: composed },
+      ]);
+      return;
+    }
+    startRun(composed);
+  }
+
+  function composePromptWithAttachments(trimmed: string): string | null {
     const ready = attachments.filter((a) => a.status === "ready");
     const stillUploading = attachments.some((a) => a.status === "uploading");
-    if (stillUploading) return;
+    if (stillUploading) return null;
     let composed = trimmed;
     if (ready.length > 0) {
       const lines = ready
@@ -4886,29 +4930,19 @@ function HeadlessRun({
       }
       return [];
     });
-    if (running) {
-      // Queue message to send once the current run finishes. PromptInput
-      // clears the textarea before this callback returns, so the visible
-      // queued-message list is the user's confirmation that the submit stuck.
-      setQueuedMessages((prev) => [
-        ...prev,
-        { id: nextQueuedMessageId(), text: composed },
-      ]);
-      return;
-    }
-    startRun(composed);
+    return composed;
   }
 
-  function submitSkillInvocation(skillName: string) {
+  function submitSkillInvocation(skillName: string, promptText = "") {
     const displayText = skillInvocationTitle(skillName);
     if (running) {
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: "", displayText, skillName },
+        { id: nextQueuedMessageId(), text: promptText, displayText, skillName },
       ]);
       return;
     }
-    startRun("", displayText, skillName);
+    startRun(promptText, displayText, skillName);
   }
 
   async function markTestState(state: TestState) {
@@ -4951,12 +4985,16 @@ function HeadlessRun({
 
   function startTestSkill() {
     if (session.status !== "Active") return;
+    const promptText = getComposerValue().trim();
+    const composed = composePromptWithAttachments(promptText);
+    if (composed == null) return;
+    setComposerValue("");
     void markTestState({ active: true }).catch((e) => {
       setEntries((prev) =>
         appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
       );
     });
-    submitSkillInvocation("test");
+    submitSkillInvocation("test", composed);
   }
 
   function startGuiRollout() {
@@ -4991,7 +5029,7 @@ function HeadlessRun({
     currentRunRef.current = run;
     setActiveRunId(run.id);
     if (skillName) {
-      setEntries((prev) => appendSkillInvocation(prev, skillName, nowIso()));
+      setEntries((prev) => appendSkillInvocation(prev, skillName, trimmed, nowIso()));
     } else {
       setEntries((prev) => [
         ...prev,
@@ -6013,9 +6051,12 @@ function HeadlessRun({
                         setQueuedMessages((prev) =>
                           prev.filter((item) => item.id !== message.id),
                         );
+                        const skillTrigger = `${isClaude ? "/" : "$"}${message.skillName}`;
                         setComposerValue(
                           message.skillName
-                            ? `${isClaude ? "/" : "$"}${message.skillName}`
+                            ? message.text.trim()
+                              ? `${skillTrigger}\n\n${message.text}`
+                              : skillTrigger
                             : message.text,
                         );
                       }}
