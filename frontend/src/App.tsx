@@ -3448,15 +3448,26 @@ function RunToolGroup({
     );
   }
   const [open, setOpen] = useState(autoExpand);
+  const runningCount = entries.filter(
+    (e) => normalizeToolState(e.toolStatus) === "running",
+  ).length;
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
-  const summary =
-    errorCount > 0
-      ? `${entries.length} tool calls · ${errorCount} error${errorCount === 1 ? "" : "s"}`
-      : `${entries.length} tool calls`;
+  const summaryParts = [`${entries.length} tool calls`];
+  if (runningCount > 0) {
+    summaryParts.push(`${runningCount} running`);
+  }
+  if (errorCount > 0) {
+    summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
+  }
+  const summary = summaryParts.join(" · ");
   return (
-    <div className="run-transcript-tools" data-slot="tool-group">
+    <div
+      className="run-transcript-tools"
+      data-slot="tool-group"
+      data-state={runningCount > 0 ? "running" : undefined}
+    >
       <button
         type="button"
         className="run-transcript-tools-header"
@@ -3475,6 +3486,13 @@ function RunToolGroup({
           />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
+        {runningCount > 0 && (
+          <Loader2Icon
+            size={12}
+            className="run-spin run-tool-spinner"
+            aria-hidden="true"
+          />
+        )}
         <span className="run-transcript-tools-chevron">
           {open ? (
             <ChevronUpIcon size={14} className="run-chevron-icon" />
