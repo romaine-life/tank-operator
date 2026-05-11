@@ -82,6 +82,7 @@ import {
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
+import { RunPaneSDK } from "./RunPaneSDK";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
@@ -119,6 +120,12 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
+  // Dispatch shape for this session's pod. "sdk" → Phase B+ pod with the
+  // agent-runner container; SPA opens /agent-ws + /events. "legacy" →
+  // pre-Phase B pod (no runner); SPA falls back to /run + /run/history.
+  // Derived server-side from pod spec; absent on pods that pre-date the
+  // field (treat as "legacy").
+  runtime?: "sdk" | "legacy";
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
@@ -7341,16 +7348,24 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun
-                      session={s}
-                      visible={active === s.id}
-                      onRename={renameSession}
-                      onSessionPatch={patchSession}
-                      runPrefs={runPrefs}
-                      setRunPref={setRunPref}
-                      user={user!}
-                      onActivityChange={updateSessionActivity}
-                    />
+                    {s.runtime === "sdk" ? (
+                      <RunPaneSDK
+                        sessionId={s.id}
+                        visible={active === s.id}
+                        onActivityChange={updateSessionActivity}
+                      />
+                    ) : (
+                      <HeadlessRun
+                        session={s}
+                        visible={active === s.id}
+                        onRename={renameSession}
+                        onSessionPatch={patchSession}
+                        runPrefs={runPrefs}
+                        setRunPref={setRunPref}
+                        user={user!}
+                        onActivityChange={updateSessionActivity}
+                      />
+                    )}
                   </div>
                 ) : (
                   <div

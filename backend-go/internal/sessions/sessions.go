@@ -33,6 +33,13 @@ type Info struct {
 	Owner        string         `json:"owner"`
 	Status       string         `json:"status"`
 	Mode         string         `json:"mode"`
+	// Runtime is the dispatch shape for this session pod:
+	//   "sdk"    — Phase B+ pods with the agent-runner container. SPA
+	//              should open /agent-ws + /events for live + history.
+	//   "legacy" — pre-Phase B pods (no agent-runner container) or
+	//              non-claude modes. SPA falls back to /run + /run/history.
+	// Derived from the pod spec at read time; not stored anywhere.
+	Runtime      string         `json:"runtime"`
 	RequestedAt  *string        `json:"requested_at"`
 	CreatedAt    *string        `json:"created_at"`
 	ReadyAt      *string        `json:"ready_at"`
@@ -168,6 +175,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		Owner:        owner,
 		Status:       podStatus(pod),
 		Mode:         compat.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
+		Runtime:      runtimeFromPod(pod),
 		RequestedAt:  createdAt,
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
@@ -175,6 +183,20 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 	}
+}
+
+// runtimeFromPod returns "sdk" if the pod has the Phase B agent-runner
+// container in its spec, "legacy" otherwise. The SPA branches on this
+// to pick the new typed-event consumer or the old stream-json one.
+// Old pods that pre-date the Phase B image roll won't have the
+// container; they stay on the legacy path until reaped.
+func runtimeFromPod(pod *corev1.Pod) string {
+	for _, c := range pod.Spec.Containers {
+		if c.Name == "agent-runner" {
+			return "sdk"
+		}
+	}
+	return "legacy"
 }
 
 func optionalString(value string) *string {
