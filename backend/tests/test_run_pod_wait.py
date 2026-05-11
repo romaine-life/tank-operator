@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -138,6 +139,128 @@ def test_format_run_sse_event_shapes_eventstream_frame() -> None:
     assert '"session_id":"abc123"' in frame
     assert '"provider":"codex"' in frame
     assert frame.endswith("\n\n")
+
+
+def test_run_stdout_event_observer_emits_output_and_tool_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appended: list[dict[str, object]] = []
+
+    async def fake_append_run_event(**kwargs: object) -> None:
+        appended.append(kwargs)
+
+    monkeypatch.setattr(api, "_append_run_event", fake_append_run_event)
+
+    observer = api._RunStdoutEventObserver(
+        email="operator@example.test",
+        session_id="abc123",
+        run_id="run-1",
+        provider="claude",
+    )
+    assistant = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {"type": "text", "text": "checking"},
+                {"type": "tool_use", "id": "toolu_1", "name": "Read"},
+            ]
+        },
+    }
+    user = {
+        "type": "user",
+        "message": {
+            "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}
+            ]
+        },
+    }
+
+    async def run() -> None:
+        await observer.observe_stdout(json.dumps(assistant) + "\n")
+        await observer.observe_stdout(json.dumps(user) + "\n")
+
+    asyncio.run(run())
+
+    assert [event["event_type"] for event in appended] == [
+        "run.output.started",
+        "run.tool.started",
+        "run.tool.completed",
+    ]
+    assert appended[1]["payload"] == {"tool_use_id": "toolu_1", "name": "Read"}
+    assert appended[2]["payload"] == {"tool_use_id": "toolu_1"}
+
+
+def test_run_stdout_event_observer_buffers_partial_json_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appended: list[dict[str, object]] = []
+
+    async def fake_append_run_event(**kwargs: object) -> None:
+        appended.append(kwargs)
+
+    monkeypatch.setattr(api, "_append_run_event", fake_append_run_event)
+
+    observer = api._RunStdoutEventObserver(
+        email="operator@example.test",
+        session_id="abc123",
+        run_id="run-1",
+        provider="claude",
+    )
+    event = {
+        "type": "assistant",
+        "message": {
+            "content": [{"type": "tool_use", "id": "toolu_2", "name": "Bash"}]
+        },
+    }
+    payload = json.dumps(event) + "\n"
+
+    async def run() -> None:
+        await observer.observe_stdout(payload[:20])
+        await observer.observe_stdout(payload[20:])
+
+    asyncio.run(run())
+
+    assert [event["event_type"] for event in appended] == [
+        "run.output.started",
+        "run.tool.started",
+    ]
+    assert appended[1]["payload"] == {"tool_use_id": "toolu_2", "name": "Bash"}
+
+
+def test_run_stdout_event_observer_skips_tool_parse_for_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appended: list[dict[str, object]] = []
+
+    async def fake_append_run_event(**kwargs: object) -> None:
+        appended.append(kwargs)
+
+    monkeypatch.setattr(api, "_append_run_event", fake_append_run_event)
+
+    observer = api._RunStdoutEventObserver(
+        email="operator@example.test",
+        session_id="abc123",
+        run_id="run-1",
+        provider="codex",
+    )
+
+    asyncio.run(
+        observer.observe_stdout(
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "id": "toolu_1", "name": "Read"}
+                        ]
+                    },
+                }
+            )
+            + "\n"
+        )
+    )
+
+    assert [event["event_type"] for event in appended] == ["run.output.started"]
 
 
 def test_check_active_run_on_pod_uses_specific_registry_run(
