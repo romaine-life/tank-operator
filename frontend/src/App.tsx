@@ -817,6 +817,12 @@ function isSessionShortcutEditableTarget(_target: EventTarget | null): boolean {
   return false;
 }
 
+function shortcutSessionId(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  const sessionEl = target.closest("[data-session-id]") as HTMLElement | null;
+  return sessionEl?.dataset.sessionId ?? null;
+}
+
 function adjacentSessionId(
   sessions: Session[],
   currentId: string | null,
@@ -5801,6 +5807,23 @@ export function App() {
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
   }, [sessions, active, closingIds]);
 
+  useEffect(() => {
+    const renameHighlightedSession = (event: KeyboardEvent) => {
+      if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (editingId) return;
+      const targetId = shortcutSessionId(event.target) ?? active;
+      if (!targetId || closingIds.has(targetId)) return;
+      const session = sessions.find((s) => s.id === targetId);
+      if (!session) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSidebarCollapsed(false);
+      startEditing(session.id, session.name);
+    };
+    window.addEventListener("keydown", renameHighlightedSession, { capture: true });
+    return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
+  }, [sessions, active, closingIds, editingId]);
+
   function activate(id: string) {
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -6201,6 +6224,7 @@ export function App() {
               return (
                 <li
                   key={s.id}
+                  data-session-id={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
                   draggable={!isEditing && !isClosing}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
@@ -6433,6 +6457,7 @@ export function App() {
                       sessions.slice(0, 6).map((s) => (
                         <button
                           key={s.id}
+                          data-session-id={s.id}
                           className="home-session"
                           onClick={() => activate(s.id)}
                           disabled={closingIds.has(s.id)}
