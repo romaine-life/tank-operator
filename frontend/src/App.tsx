@@ -2427,6 +2427,18 @@ function parseRunHistory(text: string, mode: SessionMode): TranscriptEntry[] {
   return acc;
 }
 
+type ActiveRunData = {
+  run_id: string;
+  stream_offset: number;
+  started_at?: string | null;
+};
+
+function activeRunStartedAtMs(data: ActiveRunData): number {
+  if (!data.started_at) return Date.now();
+  const parsed = Date.parse(data.started_at);
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 // ---------------------------------------------------------------------------
 // Inline message renderer. Replaces AgentTranscript so we can ship per-tool
 // body renderers (diff viewer, todo list, bash, etc), per-message copy
@@ -3647,7 +3659,7 @@ function HeadlessRun({
     void authedFetch(`/api/sessions/${session.id}/run/active`)
       .then(async (res) => {
         if (!res.ok) return;
-        const data = (await res.json()) as { run_id: string; stream_offset: number } | null;
+        const data = (await res.json()) as ActiveRunData | null;
         attachActiveRun(data);
       })
       .catch(() => undefined);
@@ -3665,7 +3677,7 @@ function HeadlessRun({
       try {
         const res = await authedFetch(`/api/sessions/${session.id}/run/active`);
         if (res.ok) {
-          const data = (await res.json()) as { run_id: string; stream_offset: number } | null;
+          const data = (await res.json()) as ActiveRunData | null;
           if (!cancelled && attachActiveRun(data)) {
             if (timer !== null) window.clearInterval(timer);
             return;
@@ -3950,6 +3962,7 @@ function HeadlessRun({
     setEntries(loadStoredEntries(session.id));
     setQueuedMessages([]);
     setHistoryAttempted(false);
+    setActiveRunChecked(false);
     setContinueHintVisible(false);
   }, [session.id]);
 
@@ -4310,22 +4323,24 @@ function HeadlessRun({
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
 
-  function attachActiveRun(data: { run_id: string; stream_offset: number } | null): boolean {
+  function attachActiveRun(data: ActiveRunData | null): boolean {
     if (!data || currentRunRef.current) return false;
+    const startedAt = activeRunStartedAtMs(data);
     const run = {
       id: data.run_id,
       prompt: "",
       followUp: false,
       model: "",
       permissionMode: "",
-      turnStart: Date.now(),
+      turnStart: startedAt,
       reconnects: 0,
       offset: data.stream_offset,
       cancelled: false,
     };
     currentRunRef.current = run;
+    setRunStatus("running");
     setRunning(true);
-    setRunStartedAt(Date.now());
+    setRunStartedAt(startedAt);
     setNow(Date.now());
     openRunSocket(run, true);
     return true;
