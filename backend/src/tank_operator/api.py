@@ -1688,6 +1688,54 @@ async def get_run_history(
     return Response(content=out, media_type="application/x-ndjson")
 
 
+def _run_events_response(
+    *,
+    session_id: str,
+    run_id: str,
+    last_event_id: str | None,
+) -> StreamingResponse:
+    return StreamingResponse(
+        _run_event_sse_stream(
+            session_id=session_id,
+            run_id=run_id,
+            after_event_id=_parse_last_event_id(last_event_id),
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/sessions/{session_id}/runs/latest/events")
+async def stream_latest_run_events(
+    session_id: str,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    user: User = Depends(current_user),
+) -> StreamingResponse:
+    """Replay semantic events for the latest known run in this session.
+
+    ActiveRunStore retains the latest run id after completion, so this gives
+    the browser a stable replay handle after refresh without falling back to
+    provider JSONL history first.
+    """
+    try:
+        await sessions.get_session(owner=user.email, session_id=session_id)
+    except SessionNotOwned:
+        raise HTTPException(status_code=403, detail="session not owned by caller")
+    except SessionNotFound:
+        raise HTTPException(status_code=404, detail="session not found")
+    record = await active_runs.get_latest(session_id)
+    if record is None or record.email != user.email.lower():
+        raise HTTPException(status_code=404, detail="run not found")
+    return _run_events_response(
+        session_id=session_id,
+        run_id=record.run_id,
+        last_event_id=last_event_id,
+    )
+
+
 @app.get("/api/sessions/{session_id}/runs/{run_id}/events")
 async def stream_run_events(
     session_id: str,
@@ -1710,17 +1758,10 @@ async def stream_run_events(
     except SessionNotFound:
         raise HTTPException(status_code=404, detail="session not found")
 
-    return StreamingResponse(
-        _run_event_sse_stream(
-            session_id=session_id,
-            run_id=run_id,
-            after_event_id=_parse_last_event_id(last_event_id),
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+    return _run_events_response(
+        session_id=session_id,
+        run_id=run_id,
+        last_event_id=last_event_id,
     )
 
 

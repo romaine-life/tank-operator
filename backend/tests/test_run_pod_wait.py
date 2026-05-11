@@ -35,6 +35,9 @@ class _FakeActiveRuns:
     async def get_active(self, session_id: str) -> ActiveRunRecord | None:
         return self.record if self.record and self.record.session_id == session_id else None
 
+    async def get_latest(self, session_id: str) -> ActiveRunRecord | None:
+        return self.record if self.record and self.record.session_id == session_id else None
+
     async def start(self, **kwargs: object) -> ActiveRunRecord:
         self.started_kwargs = kwargs
         self.record = ActiveRunRecord(
@@ -139,6 +142,57 @@ def test_format_run_sse_event_shapes_eventstream_frame() -> None:
     assert '"session_id":"abc123"' in frame
     assert '"provider":"codex"' in frame
     assert frame.endswith("\n\n")
+
+
+def test_latest_run_events_uses_retained_run_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = ActiveRunRecord(
+        session_id="abc123",
+        email="operator@example.test",
+        run_id="run-1",
+        pod_name="session-abc123",
+        provider="claude",
+        status="completed",
+        stream_path="/tmp/tank-run-run-1.stream",
+        pid_path="/tmp/tank-run-run-1.pid",
+        started_at="2026-05-11T02:22:58.927036+00:00",
+        updated_at="2026-05-11T02:25:58.927036+00:00",
+        completed_at="2026-05-11T02:25:58.927036+00:00",
+    )
+    monkeypatch.setattr(api, "sessions", _ActiveRunFakeSessions())
+    monkeypatch.setattr(api, "active_runs", _FakeActiveRuns(record))
+    captured: dict[str, object] = {}
+
+    def fake_run_event_sse_stream(**kwargs: object) -> object:
+        captured.update(kwargs)
+
+        async def gen() -> object:
+            if False:
+                yield ""
+
+        return gen()
+
+    monkeypatch.setattr(api, "_run_event_sse_stream", fake_run_event_sse_stream)
+
+    response = asyncio.run(
+        api.stream_latest_run_events(
+            session_id="abc123",
+            last_event_id="42",
+            user=User(
+                sub="operator@example.test",
+                email="operator@example.test",
+                name="Operator",
+            ),
+        )
+    )
+
+    assert response.media_type == "text/event-stream"
+    assert captured == {
+        "session_id": "abc123",
+        "run_id": "run-1",
+        "after_event_id": 42,
+    }
 
 
 def test_run_stdout_event_observer_emits_output_and_tool_events(
