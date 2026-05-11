@@ -10,7 +10,30 @@ import (
 	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 )
+
+// userResponseBody is the canonical JSON shape returned for the SPA's
+// `user` object — used by /api/auth/microsoft/login (fresh sign-in)
+// and /api/auth/me (existing-JWT bootstrap). Both paths must agree:
+// the SPA reads whichever returns from the call it makes (login on
+// fresh, me on reload), and a missing field (e.g. installation_id)
+// reads as undefined → undefined == null in JS → the OnboardingWall
+// renders even for users with the GitHub App installed.
+//
+// Keep this the single source of truth so the shape can't drift
+// between the two paths again.
+func userResponseBody(sub, email, name string, profile profiles.Profile) map[string]any {
+	return map[string]any{
+		"sub":             sub,
+		"email":           email,
+		"name":            name,
+		"avatar_url":      auth.GravatarURL(email, 64),
+		"github_login":    profile.GitHubLogin,
+		"installation_id": profile.InstallationID,
+		"run_prefs":       profile.RunPrefs,
+	}
+}
 
 // handleMicrosoftLogin exchanges an Entra ID token for a session JWT.
 func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request) {
@@ -68,15 +91,7 @@ func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
-		"user": map[string]any{
-			"sub":             sub,
-			"email":           email,
-			"name":            name,
-			"avatar_url":      auth.GravatarURL(email, 64),
-			"github_login":    profile.GitHubLogin,
-			"installation_id": profile.InstallationID,
-			"run_prefs":       profile.RunPrefs,
-		},
+		"user":  userResponseBody(sub, email, name, profile),
 	})
 }
 
@@ -106,15 +121,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"sub":             user.Sub,
-		"email":           user.Email,
-		"name":            user.Name,
-		"avatar_url":      auth.GravatarURL(user.Email, 64),
-		"github_login":    profile.GitHubLogin,
-		"installation_id": profile.InstallationID,
-		"run_prefs":       profile.RunPrefs,
-	})
+	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, profile))
 }
 
 // handleUpdatePrefs persists the SPA's run-pane preferences (chat font
