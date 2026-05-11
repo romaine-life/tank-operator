@@ -184,10 +184,17 @@ def test_run_stdout_event_observer_emits_output_and_tool_events(
     assert [event["event_type"] for event in appended] == [
         "run.output.started",
         "run.tool.started",
+        "run.message.created",
         "run.tool.completed",
     ]
     assert appended[1]["payload"] == {"tool_use_id": "toolu_1", "name": "Read"}
-    assert appended[2]["payload"] == {"tool_use_id": "toolu_1"}
+    assert appended[2]["payload"] == {
+        "message_id": "assistant-1",
+        "role": "assistant",
+        "text": "checking",
+        "source": "claude",
+    }
+    assert appended[3]["payload"] == {"tool_use_id": "toolu_1", "output": "ok"}
 
 
 def test_run_stdout_event_observer_buffers_partial_json_lines(
@@ -261,6 +268,66 @@ def test_run_stdout_event_observer_skips_tool_parse_for_codex(
     )
 
     assert [event["event_type"] for event in appended] == ["run.output.started"]
+
+
+def test_run_stdout_event_observer_emits_user_and_result_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    appended: list[dict[str, object]] = []
+
+    async def fake_append_run_event(**kwargs: object) -> None:
+        appended.append(kwargs)
+
+    monkeypatch.setattr(api, "_append_run_event", fake_append_run_event)
+
+    observer = api._RunStdoutEventObserver(
+        email="operator@example.test",
+        session_id="abc123",
+        run_id="run-1",
+        provider="claude",
+    )
+    user = {
+        "type": "user",
+        "uuid": "user-msg-1",
+        "timestamp": "2026-05-11T04:05:00Z",
+        "message": {"content": "hello"},
+    }
+    result = {
+        "type": "result",
+        "uuid": "result-msg-1",
+        "result": "done",
+    }
+    duplicate_result = {
+        "type": "result",
+        "uuid": "result-msg-2",
+        "result": "done",
+    }
+
+    async def run() -> None:
+        await observer.observe_stdout(json.dumps(user) + "\n")
+        await observer.observe_stdout(json.dumps(result) + "\n")
+        await observer.observe_stdout(json.dumps(duplicate_result) + "\n")
+
+    asyncio.run(run())
+
+    assert [event["event_type"] for event in appended] == [
+        "run.output.started",
+        "run.message.created",
+        "run.message.created",
+    ]
+    assert appended[1]["payload"] == {
+        "message_id": "user-msg-1",
+        "role": "user",
+        "text": "hello",
+        "source": "claude",
+        "time": "2026-05-11T04:05:00Z",
+    }
+    assert appended[2]["payload"] == {
+        "message_id": "result-msg-1",
+        "role": "assistant",
+        "text": "done",
+        "source": "claude",
+    }
 
 
 def test_check_active_run_on_pod_uses_specific_registry_run(
