@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -360,10 +361,14 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 
 // Delete deletes a session pod and marks it deleted in the registry.
 func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
-	podName := "session-" + sessionID
-	err := m.client.CoreV1().Pods(m.namespace).Delete(ctx, podName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("delete pod: %w", err)
+	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	if pod != nil {
+		if delErr := m.client.CoreV1().Pods(m.namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); delErr != nil && !k8serrors.IsNotFound(delErr) {
+			return fmt.Errorf("delete pod: %w", delErr)
+		}
 	}
 
 	m.mu.Lock()
@@ -396,9 +401,14 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 		},
 	}
 	raw, _ := json.Marshal(patch)
-	podName := "session-" + sessionID
-	if _, err := m.client.CoreV1().Pods(m.namespace).Patch(ctx, podName, types.MergePatchType, raw, metav1.PatchOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		return Info{}, fmt.Errorf("patch pod name: %w", err)
+	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return Info{}, err
+	}
+	if pod != nil {
+		if _, patchErr := m.client.CoreV1().Pods(m.namespace).Patch(ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{}); patchErr != nil && !k8serrors.IsNotFound(patchErr) {
+			return Info{}, fmt.Errorf("patch pod name: %w", patchErr)
+		}
 	}
 
 	if m.registry != nil {
@@ -437,9 +447,12 @@ func (m *Manager) patchAnnotation(ctx context.Context, owner, sessionID, annotat
 		},
 	}
 	raw, _ := json.Marshal(patch)
-	podName := "session-" + sessionID
-	if _, err := m.client.CoreV1().Pods(m.namespace).Patch(ctx, podName, types.MergePatchType, raw, metav1.PatchOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-		return Info{}, fmt.Errorf("patch annotation %s: %w", annotation, err)
+	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if _, patchErr := m.client.CoreV1().Pods(m.namespace).Patch(ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{}); patchErr != nil && !k8serrors.IsNotFound(patchErr) {
+		return Info{}, fmt.Errorf("patch annotation %s: %w", annotation, patchErr)
 	}
 	if m.events != nil {
 		m.events.Publish(owner)
@@ -457,17 +470,18 @@ func (m *Manager) GetByOwner(ctx context.Context, owner, sessionID string) (Info
 func (m *Manager) GetPodName(ctx context.Context, owner, sessionID string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, podReadyTimeout)
 	defer cancel()
-	podName := "session-" + sessionID
 	for {
-		pod, err := m.client.CoreV1().Pods(m.namespace).Get(ctx, podName, metav1.GetOptions{})
+		pod, err := m.findPodBySessionID(ctx, owner, sessionID)
 		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				return "", ErrNotFound
+			if errors.Is(err, ErrNotFound) {
+				select {
+				case <-ctx.Done():
+					return "", ErrNotFound
+				case <-time.After(500 * time.Millisecond):
+					continue
+				}
 			}
 			return "", err
-		}
-		if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
-			return "", ErrNotOwned
 		}
 		if podReady(pod) {
 			return pod.Name, nil
@@ -484,17 +498,18 @@ func (m *Manager) GetPodName(ctx context.Context, owner, sessionID string) (stri
 func (m *Manager) GetTerminalEndpoint(ctx context.Context, owner, sessionID string) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, podReadyTimeout)
 	defer cancel()
-	podName := "session-" + sessionID
 	for {
-		pod, err := m.client.CoreV1().Pods(m.namespace).Get(ctx, podName, metav1.GetOptions{})
+		pod, err := m.findPodBySessionID(ctx, owner, sessionID)
 		if err != nil {
-			if k8serrors.IsNotFound(err) {
-				return "", 0, ErrNotFound
+			if errors.Is(err, ErrNotFound) {
+				select {
+				case <-ctx.Done():
+					return "", 0, ErrNotFound
+				case <-time.After(500 * time.Millisecond):
+					continue
+				}
 			}
 			return "", 0, err
-		}
-		if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
-			return "", 0, ErrNotOwned
 		}
 		if podReady(pod) && pod.Status.PodIP != "" {
 			return pod.Status.PodIP, compat.SandboxAgentPort, nil
@@ -505,6 +520,39 @@ func (m *Manager) GetTerminalEndpoint(ctx context.Context, owner, sessionID stri
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// findPodBySessionID resolves the session pod by label (preferred — handles
+// both the current "session-<id>" naming and legacy hash-suffixed names like
+// "session-189268a4e4" from earlier orchestrator versions). Falls back to a
+// by-name Get for the brief race between pod Create and the label cache
+// catching up. Returns ErrNotOwned if the pod exists but belongs to someone
+// else, ErrNotFound if no pod for this session_id is in the namespace.
+func (m *Manager) findPodBySessionID(ctx context.Context, owner, sessionID string) (*corev1.Pod, error) {
+	pods, err := m.client.CoreV1().Pods(m.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "tank-operator/session-id=" + sessionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(pods.Items) > 0 {
+		pod := &pods.Items[0]
+		if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
+			return nil, ErrNotOwned
+		}
+		return pod, nil
+	}
+	pod, err := m.client.CoreV1().Pods(m.namespace).Get(ctx, "session-"+sessionID, metav1.GetOptions{})
+	if k8serrors.IsNotFound(err) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
+		return nil, ErrNotOwned
+	}
+	return pod, nil
 }
 
 // FindPodByIP returns the owner email and pod name for a session pod with the given IP.
