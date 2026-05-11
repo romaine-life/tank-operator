@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import socket
 import time
 from dataclasses import asdict, dataclass
@@ -796,6 +797,19 @@ class SessionManager:
             command=_build_live_run_script(script, pid_path),
             log_path=stream_path,
         )
+        if provider == "claude":
+            asyncio.create_task(
+                self._schedule_headless_wakeup(
+                    owner=owner,
+                    session_id=session_id,
+                    pod_name=pod_name,
+                    stream_path=stream_path,
+                    pid_path=pid_path,
+                    model=safe_model or "",
+                    permission_mode=safe_pm or "",
+                ),
+                name=f"wakeup-watcher-{run_id}",
+            )
         if self._active_runs is not None:
             try:
                 await self._active_runs.start(
@@ -810,6 +824,112 @@ class SessionManager:
             except Exception as exc:
                 log.warning("failed to persist active run %s: %s", run_id, exc)
         self._publish_changed(owner)
+
+    async def _schedule_headless_wakeup(
+        self,
+        *,
+        owner: str,
+        session_id: str,
+        pod_name: str,
+        stream_path: str,
+        pid_path: str,
+        model: str,
+        permission_mode: str,
+    ) -> None:
+        """Background task: once a headless run finishes, fire ScheduleWakeup if the agent requested one.
+
+        Polls for pid-file removal (run exit), reads the completed stream JSONL,
+        and if a ScheduleWakeup tool_use is found, sleeps for the requested delay
+        then calls dispatch_headless with follow_up=True.
+        """
+        from .exec_proxy import exec_capture
+
+        quoted_pid = shlex.quote(pid_path)
+        quoted_stream = shlex.quote(stream_path)
+
+        # Poll until the pid file is gone (the agent process has exited).
+        # Max ~4 hours at 10s intervals; gives up quietly on any exec error.
+        for _ in range(1440):
+            try:
+                out = await exec_capture(
+                    SESSIONS_NAMESPACE,
+                    pod_name,
+                    ["bash", "-c", f"test -f {quoted_pid} && echo alive || echo done"],
+                )
+                if b"done" in out:
+                    break
+            except Exception:
+                return
+            await asyncio.sleep(10)
+
+        # Read the completed stream JSONL.
+        try:
+            stream_bytes = await exec_capture(
+                SESSIONS_NAMESPACE,
+                pod_name,
+                ["bash", "-c", f"cat {quoted_stream} 2>/dev/null || true"],
+            )
+        except Exception as exc:
+            log.warning("wakeup watcher could not read stream %s: %s", stream_path, exc)
+            return
+
+        # Scan for the last ScheduleWakeup tool_use in the assistant stream.
+        delay_seconds: int | None = None
+        wakeup_prompt: str | None = None
+        for raw_line in stream_bytes.decode(errors="replace").splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "assistant":
+                continue
+            message = event.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if (block.get("name") or "").lower() != "schedulewakeup":
+                    continue
+                inp = block.get("input")
+                if not isinstance(inp, dict):
+                    continue
+                raw_delay = inp.get("delaySeconds")
+                raw_prompt = inp.get("prompt")
+                if raw_delay is not None and raw_prompt is not None:
+                    try:
+                        delay_seconds = max(0, int(raw_delay))
+                        wakeup_prompt = str(raw_prompt)
+                    except (TypeError, ValueError):
+                        pass
+
+        if delay_seconds is None or wakeup_prompt is None:
+            return
+
+        log.info(
+            "scheduling wakeup for session %s in %ds", session_id, delay_seconds
+        )
+        if delay_seconds > 0:
+            await asyncio.sleep(delay_seconds)
+
+        try:
+            await self.dispatch_headless(
+                owner=owner,
+                session_id=session_id,
+                prompt=wakeup_prompt,
+                follow_up=True,
+                model=model,
+                permission_mode=permission_mode,
+            )
+            log.info("wakeup dispatched for session %s", session_id)
+        except Exception as exc:
+            log.warning("wakeup dispatch failed for session %s: %s", session_id, exc)
 
     async def list(self, owner: str) -> list[SessionInfo]:
         assert self._core is not None
