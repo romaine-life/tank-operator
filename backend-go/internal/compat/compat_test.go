@@ -162,7 +162,8 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("main container port name = %v, want %q", got, want)
 	}
 	volumes := spec["volumes"].([]any)
-	if got, want := len(volumes), 1; got != want {
+	// codex_gui mode adds session-config + codex-creds volumes.
+	if got, want := len(volumes), 2; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
 }

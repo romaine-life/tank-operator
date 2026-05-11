@@ -3,9 +3,12 @@ package compat
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strings"
 )
+
+var jsonUnmarshal = json.Unmarshal
 
 const (
 	APIKeyMode               = "api_key"
@@ -26,6 +29,10 @@ const (
 	DefaultSessionImage      = "romainecr.azurecr.io/claude-container:latest"
 	DefaultCodexSessionImage = "romainecr.azurecr.io/codex-container:latest"
 	DefaultPiSessionImage    = "romainecr.azurecr.io/pi-container:latest"
+	DefaultGitHubAppSecret   = "github-app-creds"
+	DefaultCodexCredsSecret  = "codex-credentials"
+	DefaultOAuthGatewayCA    = "claude-oauth-ca"
+	SessionConfigDirMount    = "/opt/tank/session-config"
 )
 
 var (
@@ -77,6 +84,35 @@ type ActiveRunRecord struct {
 	CompletedAt *string
 }
 
+// sessionConfigMounts mirrors Python's SESSION_CONFIG_MOUNTS + the dir mount.
+var sessionConfigMounts = []struct{ key, mountPath string }{
+	{"mcp.json", "/workspace/.mcp.json"},
+	{"default-claude.md", "/workspace/CLAUDE.md"},
+	{"default-claude.md", "/workspace/AGENTS.md"},
+	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
+	{"tank-bootstrap.sh", "/opt/tank/bootstrap.sh"},
+	{"headless-run.sh", "/opt/tank/headless-run.sh"},
+}
+
+// noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
+var noClaudeHijackModes = map[string]bool{
+	ConfigMode:      true,
+	CodexConfigMode: true,
+	CodexCLIMode:    true,
+	CodexGUIMode:    true,
+	PiConfigMode:    true,
+}
+
+// codexModes need the codex-credentials secret mount.
+var codexModes = map[string]bool{
+	CodexConfigMode: false, // codex_config harvests; no mount
+	CodexCLIMode:    true,
+	CodexGUIMode:    true,
+}
+
+// piCLIMode also mounts codex creds (for Pi auth translation).
+const piCLIMode = PiCLIMode
+
 type ManifestOptions struct {
 	SessionImage          string
 	CodexSessionImage     string
@@ -86,6 +122,17 @@ type ManifestOptions struct {
 	SessionConfigMap      string
 	ArgoCDTrackingApp     string
 	SandboxAgentPort      int
+	// Optional: in-cluster Service IPs for host alias injection.
+	OAuthGatewayIP string
+	APIProxyIP     string
+	// ConfigMap name for the OAuth gateway CA cert.
+	OAuthGatewayCAConfigMap string
+	// Secret name for codex credentials.
+	CodexCredsSecret string
+	// Secret name for GitHub App credentials (envFrom on claude container).
+	GitHubAppSecret string
+	// GlimmungContext JSON-serialized dict (may be empty).
+	GlimmungContextJSON string
 }
 
 func NormalizeSessionMode(mode string) string {
@@ -195,12 +242,131 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	opts = withManifestDefaults(opts)
 	mode = NormalizeSessionMode(mode)
 	podName := "session-" + sessionID
+	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
+
 	sessionImage := opts.SessionImage
 	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode {
 		sessionImage = opts.CodexSessionImage
 	}
 	if mode == PiConfigMode || mode == PiCLIMode {
 		sessionImage = opts.PiSessionImage
+	}
+
+	// Build configmap volume mounts for both containers.
+	configMounts := buildConfigMounts(opts.SessionConfigMap)
+
+	// Environment variables for the claude container.
+	env := []any{
+		map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
+		map[string]any{"name": "TANK_SESSION_MODE", "value": mode},
+		map[string]any{"name": "TANK_GLIMMUNG_CONTEXT_JSON", "value": opts.GlimmungContextJSON},
+		map[string]any{"name": "TANK_GLIMMUNG_RUN_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_run_ref")},
+		map[string]any{"name": "TANK_GLIMMUNG_ISSUE_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_issue_ref")},
+		map[string]any{"name": "TANK_GLIMMUNG_TOUCHPOINT_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_touchpoint_ref")},
+		map[string]any{"name": "TANK_GLIMMUNG_VALIDATION_URL", "value": glimmungField(opts.GlimmungContextJSON, "validation_url")},
+		map[string]any{"name": "FORCE_HYPERLINK", "value": "1"},
+		map[string]any{"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
+	}
+
+	claudeVolumeMounts := append([]any{}, configMounts...)
+	volumes := []any{
+		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
+	}
+
+	// OAuth gateway + API proxy host aliases and CA cert.
+	var hostAliases []any
+	if !noClaudeHijackModes[mode] && (opts.OAuthGatewayIP != "" || opts.APIProxyIP != "") {
+		if mode != PiCLIMode && opts.OAuthGatewayIP != "" {
+			hostAliases = append(hostAliases, map[string]any{
+				"ip":        opts.OAuthGatewayIP,
+				"hostnames": []any{"platform.claude.com"},
+			})
+		}
+		if opts.APIProxyIP != "" {
+			hostAliases = append(hostAliases, map[string]any{
+				"ip":        opts.APIProxyIP,
+				"hostnames": []any{"api.anthropic.com"},
+			})
+		}
+		if opts.OAuthGatewayCAConfigMap != "" {
+			env = append(env, map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"})
+			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+			volumes = append(volumes, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
+			})
+		}
+	}
+
+	// Codex credentials secret mount (codex_cli, codex_gui, pi_cli).
+	if (mode == CodexCLIMode || mode == CodexGUIMode || mode == PiCLIMode) && opts.CodexCredsSecret != "" {
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "codex-creds",
+			"mountPath": "/etc/codex-creds",
+			"readOnly":  true,
+		})
+		volumes = append(volumes, map[string]any{
+			"name":   "codex-creds",
+			"secret": map[string]any{"secretName": opts.CodexCredsSecret, "optional": true},
+		})
+	}
+
+	// GitHub App secret envFrom on claude container.
+	envFrom := []any{}
+	if opts.GitHubAppSecret != "" {
+		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.GitHubAppSecret}})
+	}
+
+	claudeContainer := map[string]any{
+		"name":            "claude",
+		"image":           sessionImage,
+		"imagePullPolicy": "Always",
+		"command": []any{
+			"bash", "-lc",
+			"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
+		},
+		"ports":        []any{map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort}},
+		"env":          env,
+		"volumeMounts": claudeVolumeMounts,
+	}
+	if len(envFrom) > 0 {
+		claudeContainer["envFrom"] = envFrom
+	}
+
+	spec := map[string]any{
+		"serviceAccountName": opts.SessionServiceAccount,
+		"securityContext": map[string]any{
+			"runAsNonRoot": true,
+			"runAsUser":    1000,
+			"runAsGroup":   1000,
+			"fsGroup":      1000,
+		},
+		"containers": []any{
+			map[string]any{
+				"name":            "mcp-auth-proxy",
+				"image":           sessionImage,
+				"imagePullPolicy": "Always",
+				"command":         []any{"mcp-auth-proxy"},
+				"volumeMounts":    configMounts,
+			},
+			claudeContainer,
+		},
+		"volumes": volumes,
+	}
+	if len(hostAliases) > 0 {
+		spec["hostAliases"] = hostAliases
+	}
+
+	annotations := map[string]any{
+		"tank-operator/owner-email":      owner,
+		"argocd.argoproj.io/tracking-id": argoTrackingID,
+	}
+	if opts.GlimmungContextJSON != "" {
+		annotations["tank-operator/glimmung-context"] = opts.GlimmungContextJSON
 	}
 
 	return map[string]any{
@@ -217,57 +383,44 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"tank-operator/mode":           mode,
 				"azure.workload.identity/use":  "true",
 			},
-			"annotations": map[string]any{
-				"tank-operator/owner-email": owner,
-				"argocd.argoproj.io/tracking-id": opts.ArgoCDTrackingApp +
-					":/Pod:" + opts.SessionsNamespace + "/" + podName,
-			},
+			"annotations": annotations,
 		},
-		"spec": map[string]any{
-			"serviceAccountName": opts.SessionServiceAccount,
-			"securityContext": map[string]any{
-				"runAsNonRoot": true,
-				"runAsUser":    1000,
-				"runAsGroup":   1000,
-				"fsGroup":      1000,
-			},
-			"containers": []any{
-				map[string]any{
-					"name":            "mcp-auth-proxy",
-					"image":           sessionImage,
-					"imagePullPolicy": "Always",
-					"command":         []any{"mcp-auth-proxy"},
-				},
-				map[string]any{
-					"name":            "claude",
-					"image":           sessionImage,
-					"imagePullPolicy": "Always",
-					"command": []any{
-						"bash",
-						"-lc",
-						"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
-					},
-					"ports": []any{
-						map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort},
-					},
-					"env": []any{
-						map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
-						map[string]any{"name": "TANK_SESSION_MODE", "value": mode},
-						map[string]any{"name": "TANK_GLIMMUNG_CONTEXT_JSON", "value": ""},
-						map[string]any{"name": "TANK_GLIMMUNG_RUN_REF", "value": ""},
-						map[string]any{"name": "TANK_GLIMMUNG_ISSUE_REF", "value": ""},
-						map[string]any{"name": "TANK_GLIMMUNG_TOUCHPOINT_REF", "value": ""},
-						map[string]any{"name": "TANK_GLIMMUNG_VALIDATION_URL", "value": ""},
-						map[string]any{"name": "FORCE_HYPERLINK", "value": "1"},
-						map[string]any{"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
-					},
-				},
-			},
-			"volumes": []any{
-				map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
-			},
-		},
+		"spec": spec,
 	}
+}
+
+// buildConfigMounts returns the volumeMount entries for the session ConfigMap,
+// matching Python's _session_config_mounts().
+func buildConfigMounts(configMapName string) []any {
+	_ = configMapName // name is in the volume declaration, not the mount
+	mounts := make([]any, 0, len(sessionConfigMounts)+1)
+	for _, m := range sessionConfigMounts {
+		mounts = append(mounts, map[string]any{
+			"name":      "session-config",
+			"mountPath": m.mountPath,
+			"subPath":   m.key,
+			"readOnly":  true,
+		})
+	}
+	mounts = append(mounts, map[string]any{
+		"name":      "session-config",
+		"mountPath": SessionConfigDirMount,
+		"readOnly":  true,
+	})
+	return mounts
+}
+
+// glimmungField extracts a string field from a compact JSON object string.
+func glimmungField(contextJSON, field string) string {
+	if contextJSON == "" {
+		return ""
+	}
+	var m map[string]any
+	if err := jsonUnmarshal([]byte(contextJSON), &m); err != nil {
+		return ""
+	}
+	v, _ := m[field].(string)
+	return v
 }
 
 func withManifestDefaults(opts ManifestOptions) ManifestOptions {
@@ -294,6 +447,15 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.SandboxAgentPort == 0 {
 		opts.SandboxAgentPort = SandboxAgentPort
+	}
+	if opts.OAuthGatewayCAConfigMap == "" {
+		opts.OAuthGatewayCAConfigMap = DefaultOAuthGatewayCA
+	}
+	if opts.CodexCredsSecret == "" {
+		opts.CodexCredsSecret = DefaultCodexCredsSecret
+	}
+	if opts.GitHubAppSecret == "" {
+		opts.GitHubAppSecret = DefaultGitHubAppSecret
 	}
 	return opts
 }
