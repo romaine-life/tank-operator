@@ -55,6 +55,7 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
+  PlayIcon,
   PlusIcon,
   RotateCcwIcon,
   SearchIcon,
@@ -2269,6 +2270,7 @@ const CODEX_MODELS: ModelOption[] = [
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
 const RUN_PREF_PREFIX = "tank-run-pref-";
+const TURN_COMPLETE_SOUND_SRC = "/assets/upgrade-complete.mp3";
 
 interface RunPrefs {
   sendByCtrlEnter: boolean;
@@ -2276,6 +2278,8 @@ interface RunPrefs {
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  turnCompleteSound: boolean;
+  turnCompleteSoundVolume: number;
   chatFontScale: number;
 }
 
@@ -2285,16 +2289,29 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   autoExpandTools: false,
   showTimestamps: true,
   showDuration: true,
+  turnCompleteSound: true,
+  turnCompleteSoundVolume: 0.8,
   chatFontScale: 1,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
 const CHAT_FONT_SCALE_MAX = 2.0;
 const CHAT_FONT_SCALE_STEP = 0.1;
+const TURN_COMPLETE_SOUND_VOLUME_MIN = 0;
+const TURN_COMPLETE_SOUND_VOLUME_MAX = 1;
+const TURN_COMPLETE_SOUND_VOLUME_STEP = 0.05;
 
 function clampChatFontScale(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
   return Math.min(CHAT_FONT_SCALE_MAX, Math.max(CHAT_FONT_SCALE_MIN, value));
+}
+
+function clampTurnCompleteSoundVolume(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.turnCompleteSoundVolume;
+  return Math.min(
+    TURN_COMPLETE_SOUND_VOLUME_MAX,
+    Math.max(TURN_COMPLETE_SOUND_VOLUME_MIN, value),
+  );
 }
 
 function loadRunPrefs(): RunPrefs {
@@ -2304,6 +2321,8 @@ function loadRunPrefs(): RunPrefs {
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
       if (key === "chatFontScale") {
         if (raw != null) out[key] = clampChatFontScale(Number(raw));
+      } else if (key === "turnCompleteSoundVolume") {
+        if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -3281,8 +3300,15 @@ function HeadlessRun({
   const setChatFontScale = (value: number) => {
     setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
   };
+  const setTurnCompleteSoundVolume = (value: number) => {
+    setRunPref(
+      "turnCompleteSoundVolume",
+      Number(clampTurnCompleteSoundVolume(value).toFixed(2)),
+    );
+  };
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
+  const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
   const setPaneFontScale = setChatFontScale;
   const chatFontScaleStyle = {
     "--run-chat-font-scale": runPrefs.chatFontScale,
@@ -3297,6 +3323,8 @@ function HeadlessRun({
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const runPrefsRef = useRef(runPrefs);
   const stdoutBufferRef = useRef("");
   const currentRunRef = useRef<{
     id: string;
@@ -3323,6 +3351,36 @@ function HeadlessRun({
   function nextQueuedMessageId(): string {
     queuedMessageSeqRef.current += 1;
     return `queued-${session.id}-${queuedMessageSeqRef.current}`;
+  }
+
+  useEffect(() => {
+    runPrefsRef.current = runPrefs;
+  }, [runPrefs]);
+
+  function getTurnCompleteAudio(): HTMLAudioElement | null {
+    if (typeof Audio === "undefined") return null;
+    if (!turnCompleteAudioRef.current) {
+      const audio = new Audio(TURN_COMPLETE_SOUND_SRC);
+      audio.preload = "auto";
+      turnCompleteAudioRef.current = audio;
+    }
+    return turnCompleteAudioRef.current;
+  }
+
+  function primeTurnCompleteSound() {
+    const audio = getTurnCompleteAudio();
+    if (!audio) return;
+    audio.load();
+  }
+
+  function playTurnCompleteSound() {
+    const prefs = runPrefsRef.current;
+    if (!prefs.turnCompleteSound) return;
+    const audio = getTurnCompleteAudio();
+    if (!audio) return;
+    audio.volume = clampTurnCompleteSoundVolume(prefs.turnCompleteSoundVolume);
+    audio.currentTime = 0;
+    void audio.play().catch(() => undefined);
   }
 
   const slashFiltered = slashOpen ? filterSlashCommands(slashCommands, slashQuery) : [];
@@ -4276,6 +4334,7 @@ function HeadlessRun({
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
     stdoutBufferRef.current = "";
+    primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
     const run = {
@@ -4384,6 +4443,7 @@ function HeadlessRun({
         setActiveToolName(null);
         setRunStatus("done");
         setRunning(false);
+        playTurnCompleteSound();
         ws.close();
       } else if (msg.status === "attached") {
         // Sync run_id from server in case it sanitised the client-provided value.
@@ -4835,6 +4895,53 @@ function HeadlessRun({
                   <CheckIcon className="run-settings-check" aria-hidden="true" />
                 )}
               </button>
+            </section>
+            <section className="run-settings-section">
+              <h2 className="run-settings-title">Sound</h2>
+              <button
+                type="button"
+                className="run-settings-toggle"
+                onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
+                aria-pressed={runPrefs.turnCompleteSound}
+              >
+                <span>Turn complete sound</span>
+                {runPrefs.turnCompleteSound && (
+                  <CheckIcon className="run-settings-check" aria-hidden="true" />
+                )}
+              </button>
+              <div className="run-settings-panel-row run-settings-sound-row">
+                <label className="run-settings-label" htmlFor={`turn-sound-volume-${session.id}`}>
+                  Volume
+                </label>
+                <div className="run-settings-sound-controls">
+                  <input
+                    id={`turn-sound-volume-${session.id}`}
+                    className="run-settings-volume-slider"
+                    type="range"
+                    min={TURN_COMPLETE_SOUND_VOLUME_MIN}
+                    max={TURN_COMPLETE_SOUND_VOLUME_MAX}
+                    step={TURN_COMPLETE_SOUND_VOLUME_STEP}
+                    value={runPrefs.turnCompleteSoundVolume}
+                    disabled={!runPrefs.turnCompleteSound}
+                    onChange={(event) =>
+                      setTurnCompleteSoundVolume(Number(event.currentTarget.value))
+                    }
+                    aria-label="Turn complete sound volume"
+                  />
+                  <span className="run-settings-volume-value" aria-live="polite">
+                    {turnCompleteSoundVolumePct}%
+                  </span>
+                  <button
+                    type="button"
+                    className="run-settings-test-btn"
+                    disabled={!runPrefs.turnCompleteSound}
+                    onClick={playTurnCompleteSound}
+                  >
+                    <PlayIcon aria-hidden="true" />
+                    <span>Test</span>
+                  </button>
+                </div>
+              </div>
             </section>
             <section className="run-settings-section">
               <h2 className="run-settings-title">Transcript</h2>
