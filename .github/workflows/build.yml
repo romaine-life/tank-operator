@@ -52,7 +52,7 @@ jobs:
             --image app \
             --dockerfile Dockerfile \
             --context . \
-            --paths 'Dockerfile .dockerignore frontend backend'
+            --paths 'Dockerfile .dockerignore frontend backend backend-go'
 
       - name: Check ACR proof image
         id: proof

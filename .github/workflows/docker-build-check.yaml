@@ -32,7 +32,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/tank-operator-build-cache:app
             image-repo: tank-operator
             fingerprint-image: app
-            fingerprint-paths: Dockerfile .dockerignore frontend backend
+            fingerprint-paths: Dockerfile .dockerignore frontend backend backend-go
           - name: agent-container
             file: agent-container/Dockerfile
             context: .
