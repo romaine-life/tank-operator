@@ -292,7 +292,7 @@ func (s *appServer) handleLatestRunEventsJSON(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	events, err := s.runEvents.ListAfter(r.Context(), latest.RunID, sessionID, 0, 500)
+	events, err := s.runEvents.ListAfter(r.Context(), latest.RunID, sessionID, 0, 1000)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -300,7 +300,11 @@ func (s *appServer) handleLatestRunEventsJSON(w http.ResponseWriter, r *http.Req
 	if events == nil {
 		events = []store.RunEventRecord{}
 	}
-	writeJSON(w, http.StatusOK, events)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": sessionID,
+		"run_id":     latest.RunID,
+		"events":     events,
+	})
 }
 
 // handleRunEvents streams run events for a specific run as SSE.
