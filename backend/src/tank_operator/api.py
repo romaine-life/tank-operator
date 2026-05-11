@@ -2548,6 +2548,24 @@ async def session_run(ws: WebSocket, session_id: str) -> None:
                     "started_at": record.started_at,
                 },
             )
+            # Store the user's prompt as the first message event so the event
+            # replay path can reconstruct the user bubble without reading the
+            # pod JSONL. Claude's stdout stream does not emit user-turn events,
+            # so _RunStdoutEventObserver never produces run.message.created for
+            # the user role. Skill runs are excluded: their user bubbles are
+            # skill-action entries that the JSONL path reconstructs correctly.
+            if not skill_name and isinstance(prompt, str) and prompt.strip():
+                await _append_run_event(
+                    email=user.email,
+                    session_id=session_id,
+                    run_id=run_id,
+                    event_type="run.message.created",
+                    payload={
+                        "role": "user",
+                        "text": prompt.strip(),
+                        "source": "client",
+                    },
+                )
             session_events.publish(user.email)
         except Exception as exc:
             log.warning("failed to persist active run %s: %s", run_id, exc)

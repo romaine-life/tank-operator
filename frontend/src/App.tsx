@@ -3931,6 +3931,16 @@ function HeadlessRun({
       setActiveRunId(null);
     }
     if (replayedContent) {
+      // If the replay has no user messages, fall through to the JSONL fallback.
+      // User messages aren't captured in the run event store (they come from
+      // Claude's project JSONL, not its stdout stream), so a replay that has
+      // tool/assistant events but no user messages would silently drop the
+      // user bubbles. The JSONL path (refreshRunHistoryFromBackend) handles
+      // user messages correctly via applyClaudeEvent.
+      const hasUserMessage = replayEntries.some(
+        (e) => e.kind === "message" && e.role === "user",
+      );
+      if (!hasUserMessage) return false;
       transcriptCacheBackendAuthoritativeRef.current = true;
       clearStoredEntries(session.id);
       setEntries((prev) =>
