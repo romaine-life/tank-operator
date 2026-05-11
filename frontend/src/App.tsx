@@ -44,6 +44,7 @@ import {
   ClipboardListIcon,
   Code2Icon,
   CopyIcon,
+  FileDiffIcon,
   FileIcon,
   FileTextIcon,
   FlaskConicalIcon,
@@ -2080,9 +2081,25 @@ interface ToolVisualConfig {
   tooltip: string;
 }
 
+function isToolSearchEntry(entry: TranscriptEntry): boolean {
+  const normalized = [
+    entry.toolServer,
+    entry.toolAction,
+    entry.toolName,
+  ]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  return normalized.includes("toolsearch");
+}
+
 /** Map a tool entry to a Lucide icon + badge treatment. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
+  if (isToolSearchEntry(entry)) {
+    return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
+  }
   if (entry.toolKind === "mcp") {
     return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
   }
@@ -2097,6 +2114,9 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   }
   if (name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch") {
     return { Icon: SquarePenIcon, colorClass: "tool-color-edit", tooltip: "File edit tool call" };
+  }
+  if (name === "file change") {
+    return { Icon: FileDiffIcon, colorClass: "tool-color-edit", tooltip: "File change" };
   }
   if (name === "Glob" || name === "Grep") {
     return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
