@@ -94,6 +94,21 @@ resource "azurerm_cosmosdb_sql_container" "active_runs" {
   }
 }
 
+resource "azurerm_cosmosdb_sql_container" "run_events" {
+  name                = "run-events"
+  resource_group_name = data.azurerm_resource_group.main.name
+  account_name        = azurerm_cosmosdb_account.tank_operator.name
+  database_name       = azurerm_cosmosdb_sql_database.tank_operator.name
+  partition_key_paths = ["/run_id"]
+  default_ttl         = 2592000
+
+  indexing_policy {
+    indexing_mode = "consistent"
+    included_path { path = "/*" }
+    excluded_path { path = "/payload/*" }
+  }
+}
+
 # Cosmos DB Built-in Data Contributor — read + write items in the database
 # (data plane only, no schema mutation). The well-known role definition id
 # is universal across Cosmos accounts; the scoped reference below pins it

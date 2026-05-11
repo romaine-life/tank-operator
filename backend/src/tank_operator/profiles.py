@@ -30,6 +30,7 @@ import asyncio
 import datetime
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -49,6 +50,9 @@ COSMOS_DATABASE = os.environ.get("COSMOS_DATABASE", "tank-operator")
 COSMOS_PROFILES_CONTAINER = os.environ.get("COSMOS_PROFILES_CONTAINER", "profiles")
 COSMOS_ACTIVE_RUNS_CONTAINER = os.environ.get(
     "COSMOS_ACTIVE_RUNS_CONTAINER", "active-runs"
+)
+COSMOS_RUN_EVENTS_CONTAINER = os.environ.get(
+    "COSMOS_RUN_EVENTS_CONTAINER", "run-events"
 )
 SESSION_REGISTRY_SCOPE = os.environ.get("SESSION_REGISTRY_SCOPE", "default").strip() or "default"
 
@@ -95,6 +99,20 @@ class ActiveRunRecord:
     started_at: str = ""
     updated_at: str = ""
     completed_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RunEventRecord:
+    run_id: str
+    session_id: str
+    email: str
+    event_id: int
+    type: str
+    payload: dict[str, Any]
+    created_at: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -610,4 +628,77 @@ def _active_run_doc(record: ActiveRunRecord) -> dict[str, Any]:
         "started_at": record.started_at,
         "updated_at": record.updated_at,
         "completed_at": record.completed_at,
+    }
+
+
+class RunEventStore:
+    """Append-only semantic run events for future SSE replay.
+
+    This deliberately stores lifecycle/tool-sized events, not raw token
+    streams. The browser can later replay `event_id > Last-Event-ID` without
+    treating pod-local stream offsets as the public reconnect contract.
+    """
+
+    def __init__(self) -> None:
+        self._credential: DefaultAzureCredential | None = None
+        self._client: CosmosClient | None = None
+        self._container = None
+        self._enabled = bool(COSMOS_ENDPOINT)
+        self._memory: dict[str, list[RunEventRecord]] = {}
+
+    async def startup(self) -> None:
+        if not self._enabled:
+            log.warning(
+                "COSMOS_ENDPOINT unset; run event store using in-memory storage"
+            )
+            return
+        self._credential = DefaultAzureCredential()
+        self._client = CosmosClient(COSMOS_ENDPOINT, credential=self._credential)
+        database = self._client.get_database_client(COSMOS_DATABASE)
+        self._container = database.get_container_client(COSMOS_RUN_EVENTS_CONTAINER)
+
+    async def shutdown(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+        if self._credential is not None:
+            await self._credential.close()
+
+    async def append(
+        self,
+        *,
+        email: str,
+        session_id: str,
+        run_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+    ) -> RunEventRecord:
+        normalized = email.lower()
+        now = _now_iso()
+        record = RunEventRecord(
+            run_id=run_id,
+            session_id=session_id,
+            email=normalized,
+            event_id=time.time_ns(),
+            type=event_type,
+            payload=payload or {},
+            created_at=now,
+        )
+        if not self._enabled or self._container is None:
+            self._memory.setdefault(run_id, []).append(record)
+            return record
+        await self._container.create_item(body=_run_event_doc(record))
+        return record
+
+
+def _run_event_doc(record: RunEventRecord) -> dict[str, Any]:
+    return {
+        "id": f"{record.run_id}:{record.event_id}",
+        "type": "run_event",
+        "run_id": record.run_id,
+        "session_id": record.session_id,
+        "email": record.email,
+        "event_id": record.event_id,
+        "event_type": record.type,
+        "payload": record.payload,
+        "created_at": record.created_at,
     }
