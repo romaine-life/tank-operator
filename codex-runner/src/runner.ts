@@ -118,7 +118,16 @@ export class Runner {
   // message, runs one turn, drains its events. The thread persists
   // across iterations so codex sees the full conversation context.
   async run(signal: AbortSignal): Promise<void> {
-    this.thread = this.codex.startThread({ workingDirectory: this.cfg.workspace });
+    this.thread = this.codex.startThread({
+      workingDirectory: this.cfg.workspace,
+      // /workspace inside session pods isn't a git repo (and may never be —
+      // users mount projects ad hoc). Without this flag the CLI exits with
+      // "Not inside a trusted directory and --skip-git-repo-check was not
+      // specified." Same flag legacy headless-run.sh has always passed.
+      skipGitRepoCheck: true,
+      sandboxMode: "danger-full-access",
+      approvalPolicy: "never",
+    });
     while (!signal.aborted) {
       const next = await this.userQueue.next();
       if (next.done) break;
