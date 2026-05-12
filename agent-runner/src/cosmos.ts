@@ -20,10 +20,12 @@ import { DefaultAzureCredential } from "@azure/identity";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import type { Config } from "./config.js";
+import { isDurableTankConversationEvent } from "./conversation.js";
 
 export interface RunnerEvent {
   type: string;
   uuid?: string;
+  event_id?: string;
   subtype?: string;
   [k: string]: unknown;
 }
@@ -51,6 +53,7 @@ const CANONICAL_TOP_LEVEL_TYPES = new Set<string>([
 ]);
 
 export function isCanonical(message: RunnerEvent | SDKMessage): boolean {
+  if (isDurableTankConversationEvent(message as RunnerEvent)) return true;
   const t = (message as RunnerEvent).type;
   if (!t) return false;
   if (CANONICAL_TOP_LEVEL_TYPES.has(t)) return true;
@@ -87,7 +90,23 @@ export class CosmosSink {
   // id), and pod restart may yield a new SDK session within the same
   // tank-operator session. The SDK's session_id rides along as a field.
   async upsert(message: RunnerEvent & { uuid: string }): Promise<void> {
-    const doc: Record<string, unknown> = {
+    const doc = this.docFromMessage(message);
+    await this.container.items.upsert(doc);
+  }
+
+  async create(message: RunnerEvent & { uuid: string }): Promise<"created" | "exists"> {
+    const doc = this.docFromMessage(message);
+    try {
+      await this.container.items.create(doc);
+      return "created";
+    } catch (err) {
+      if (isConflict(err)) return "exists";
+      throw err;
+    }
+  }
+
+  private docFromMessage(message: RunnerEvent & { uuid: string }): Record<string, unknown> {
+    return {
       ...message,
       id: message.uuid,
       tank_session_id: this.cfg.sessionId,
@@ -98,6 +117,12 @@ export class CosmosSink {
           ? message.written_at
           : new Date().toISOString(),
     };
-    await this.container.items.upsert(doc);
   }
+}
+
+function isConflict(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const statusCode = (err as { statusCode?: unknown; code?: unknown }).statusCode;
+  const code = (err as { statusCode?: unknown; code?: unknown }).code;
+  return statusCode === 409 || code === 409 || code === "Conflict";
 }

@@ -6,8 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch } from "./runner.js";
+import { dispatch, dispatchCreate } from "./runner.js";
 import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
+import { userSubmissionEvents } from "./conversation.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -24,6 +25,17 @@ function makeWS(order: Order) {
       order.push("ws");
     },
   };
+}
+
+function userMessageEvent() {
+  return userSubmissionEvents({
+    sessionID: "63",
+    clientNonce: "run-123",
+    text: "hello",
+    message: { role: "user", content: "hello" },
+    runtime: "codex",
+    now: "2026-05-12T00:00:00.000Z",
+  }).userMessage;
 }
 
 test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
@@ -70,6 +82,56 @@ test("canonical: cosmos failure suppresses ws broadcast", async () => {
   // replay diverges from what was rendered.
   assert.equal(ok, false);
   assert.deepEqual(order, []);
+});
+
+test("dispatchCreate uses event_id as the durable id for canonical Tank events", async () => {
+  let cosmosEvent: any;
+  let wsEvent: any;
+  const ok = await dispatchCreate(
+    {
+      async upsert() {
+        throw new Error("upsert should not be used for create path");
+      },
+      async create(event) {
+        cosmosEvent = event;
+        return "created";
+      },
+    },
+    {
+      broadcastEvent(event) {
+        wsEvent = event;
+      },
+    },
+    userMessageEvent(),
+  );
+  assert.equal(ok, "created");
+  assert.equal(cosmosEvent.uuid, "turn_run-123:user_message.created");
+  assert.equal(cosmosEvent.event_id, cosmosEvent.uuid);
+  assert.equal(cosmosEvent.order_key, cosmosEvent.tank_order_key);
+  assert.equal(cosmosEvent.sequence, cosmosEvent.tank_event_seq);
+  assert.equal(wsEvent.uuid, cosmosEvent.uuid);
+});
+
+test("dispatchCreate suppresses duplicate client_nonce submissions", async () => {
+  let broadcasted = false;
+  const ok = await dispatchCreate(
+    {
+      async upsert() {
+        throw new Error("upsert should not be used for create path");
+      },
+      async create() {
+        return "exists";
+      },
+    },
+    {
+      broadcastEvent() {
+        broadcasted = true;
+      },
+    },
+    userMessageEvent(),
+  );
+  assert.equal(ok, "exists");
+  assert.equal(broadcasted, false);
 });
 
 test("live-only: turn.started broadcasts without a cosmos write", async () => {

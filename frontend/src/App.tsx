@@ -1920,6 +1920,14 @@ function isCodexToolishItemType(itemType: string): boolean {
 }
 
 function tankUserMessageText(event: JsonObject): string {
+  if (isJsonObject(event.payload)) {
+    if (typeof event.payload.text === "string") return event.payload.text.trim();
+    if (typeof event.payload.message === "string") return event.payload.message.trim();
+    if (isJsonObject(event.payload.message)) {
+      const content = event.payload.message.content;
+      if (typeof content === "string") return content.trim();
+    }
+  }
   if (typeof event.message === "string") return event.message.trim();
   if (isJsonObject(event.message)) {
     const content = event.message.content;
@@ -1937,6 +1945,26 @@ function tankUserMessageText(event: JsonObject): string {
     }
   }
   return "";
+}
+
+function isCanonicalConversationEvent(event: JsonObject): boolean {
+  return (
+    typeof event.event_id === "string" &&
+    typeof event.session_id === "string" &&
+    typeof event.visibility === "string" &&
+    typeof event.actor === "string" &&
+    typeof event.source === "string"
+  );
+}
+
+function applyCanonicalConversationEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+  if (event.type === "user_message.created") {
+    return applyTankUserMessageEvent(entries, event);
+  }
+  // Phase 2 producers write canonical turn/item lifecycle for the future
+  // reducer. The legacy pane still renders provider-shaped events, so avoid
+  // showing duplicate lifecycle meta rows until Phase 3 switches projection.
+  return entries;
 }
 
 function applyTankUserMessageEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
@@ -2220,6 +2248,9 @@ function applyProviderEvent(
   mode: SessionMode,
   event: JsonObject,
 ): TranscriptEntry[] {
+  if (isCanonicalConversationEvent(event)) {
+    return applyCanonicalConversationEvent(entries, event);
+  }
   if (event.type === "tank.user_message") {
     return applyTankUserMessageEvent(entries, event);
   }
@@ -2267,7 +2298,7 @@ function sdkHistoryTerminalForRun(
   let afterRunUserMessage = false;
   for (const event of events) {
     if (!isJsonObject(event)) continue;
-    if (event.type === "tank.user_message") {
+    if (event.type === "tank.user_message" || event.type === "user_message.created") {
       if (afterRunUserMessage) return undefined;
       if (event.client_nonce === clientNonce) afterRunUserMessage = true;
       continue;

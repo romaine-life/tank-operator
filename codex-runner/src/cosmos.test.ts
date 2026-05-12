@@ -30,6 +30,40 @@ test("canonical: item.completed (the main durable signal)", () => {
   );
 });
 
+test("canonical: durable Tank conversation envelope", () => {
+  assert.equal(
+    isCanonical({
+      event_id: "turn_1:item.started:item_1",
+      session_id: "63",
+      turn_id: "turn_1",
+      item_id: "item_1",
+      actor: "tool",
+      source: "codex",
+      type: "item.started",
+      created_at: "2026-05-12T00:00:00Z",
+      visibility: "durable",
+    } as never),
+    true,
+  );
+});
+
+test("NOT canonical: live-only Tank conversation envelope", () => {
+  assert.equal(
+    isCanonical({
+      event_id: "turn_1:item.delta:item_1",
+      session_id: "63",
+      turn_id: "turn_1",
+      item_id: "item_1",
+      actor: "tool",
+      source: "codex",
+      type: "item.delta",
+      created_at: "2026-05-12T00:00:00Z",
+      visibility: "live-only",
+    } as never),
+    false,
+  );
+});
+
 test("canonical: error (thread-level)", () => {
   assert.equal(isCanonical({ type: "error", message: "boom" } as never), true);
 });

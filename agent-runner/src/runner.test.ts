@@ -6,8 +6,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch } from "./runner.js";
+import { dispatch, dispatchCreate } from "./runner.js";
 import { isCanonical } from "./cosmos.js";
+import { userSubmissionEvents } from "./conversation.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -24,6 +25,17 @@ function makeWS(order: Order) {
       order.push("ws");
     },
   };
+}
+
+function userMessageEvent() {
+  return userSubmissionEvents({
+    sessionID: "63",
+    clientNonce: "run-123",
+    text: "hello",
+    message: { role: "user", content: "hello" },
+    runtime: "claude",
+    now: "2026-05-12T00:00:00.000Z",
+  }).userMessage;
 }
 
 test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
@@ -86,6 +98,56 @@ test("dispatch assigns a shared uuid to Tank-owned user messages", async () => {
   assert.equal(typeof cosmosMessage.uuid, "string");
   assert.equal(cosmosMessage.uuid, wsMessage.uuid);
   assert.equal(cosmosMessage.tank_order_key, wsMessage.tank_order_key);
+});
+
+test("dispatchCreate uses event_id as the durable id for canonical Tank events", async () => {
+  let cosmosMessage: any;
+  let wsMessage: any;
+  const ok = await dispatchCreate(
+    {
+      async upsert() {
+        throw new Error("upsert should not be used for create path");
+      },
+      async create(message) {
+        cosmosMessage = message;
+        return "created";
+      },
+    },
+    {
+      broadcastEvent(message) {
+        wsMessage = message;
+      },
+    },
+    userMessageEvent(),
+  );
+  assert.equal(ok, "created");
+  assert.equal(cosmosMessage.uuid, "turn_run-123:user_message.created");
+  assert.equal(cosmosMessage.event_id, cosmosMessage.uuid);
+  assert.equal(cosmosMessage.order_key, cosmosMessage.tank_order_key);
+  assert.equal(cosmosMessage.sequence, cosmosMessage.tank_event_seq);
+  assert.equal(wsMessage.uuid, cosmosMessage.uuid);
+});
+
+test("dispatchCreate suppresses duplicate client_nonce submissions", async () => {
+  let broadcasted = false;
+  const ok = await dispatchCreate(
+    {
+      async upsert() {
+        throw new Error("upsert should not be used for create path");
+      },
+      async create() {
+        return "exists";
+      },
+    },
+    {
+      broadcastEvent() {
+        broadcasted = true;
+      },
+    },
+    userMessageEvent(),
+  );
+  assert.equal(ok, "exists");
+  assert.equal(broadcasted, false);
 });
 
 test("canonical: cosmos failure suppresses ws broadcast", async () => {

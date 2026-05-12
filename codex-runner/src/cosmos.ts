@@ -36,6 +36,7 @@ import { DefaultAzureCredential } from "@azure/identity";
 import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.js";
+import { isDurableTankConversationEvent } from "./conversation.js";
 
 const CANONICAL_TYPES = new Set<string>([
   "thread.started",
@@ -53,6 +54,7 @@ export interface CodexEvent {
 }
 
 export function isCanonical(event: CodexEvent): boolean {
+  if (isDurableTankConversationEvent(event)) return true;
   return CANONICAL_TYPES.has(event.type);
 }
 
@@ -93,18 +95,30 @@ export function stampEventID(
   written_at: string;
 } {
   const now = Date.now();
-  const uuid = nextSortableEventID(now);
+  const eventID = typeof event.event_id === "string" && event.event_id ? event.event_id : "";
+  const uuid = typeof event.uuid === "string" && event.uuid ? event.uuid : eventID || nextSortableEventID(now);
   const seq = nextTankEventSeq();
+  const writtenAt = new Date(now).toISOString();
+  const tankOrderKey = [
+    String(now).padStart(13, "0"),
+    String(seq).padStart(8, "0"),
+    uuid,
+  ].join("-");
   return {
     ...event,
     uuid,
+    ...(eventID ? { event_id: eventID } : {}),
     tank_event_seq: seq,
-    tank_order_key: [
-      String(now).padStart(13, "0"),
-      String(seq).padStart(8, "0"),
-      uuid,
-    ].join("-"),
-    written_at: new Date(now).toISOString(),
+    tank_order_key: tankOrderKey,
+    written_at: writtenAt,
+    ...(isDurableTankConversationEvent(event)
+      ? {
+          order_key: typeof event.order_key === "string" && event.order_key ? event.order_key : tankOrderKey,
+          sequence: typeof event.sequence === "number" ? event.sequence : seq,
+          created_at:
+            typeof event.created_at === "string" && event.created_at ? event.created_at : writtenAt,
+        }
+      : {}),
   };
 }
 
@@ -127,7 +141,23 @@ export class CosmosSink {
   // so the orchestrator's read endpoint and the SPA's chat pane consume
   // both claude- and codex-runner events out of the same container.
   async upsert(event: CodexEvent & { uuid: string }): Promise<void> {
-    const doc: Record<string, unknown> = {
+    const doc = this.docFromEvent(event);
+    await this.container.items.upsert(doc);
+  }
+
+  async create(event: CodexEvent & { uuid: string }): Promise<"created" | "exists"> {
+    const doc = this.docFromEvent(event);
+    try {
+      await this.container.items.create(doc);
+      return "created";
+    } catch (err) {
+      if (isConflict(err)) return "exists";
+      throw err;
+    }
+  }
+
+  private docFromEvent(event: CodexEvent & { uuid: string }): Record<string, unknown> {
+    return {
       ...event,
       id: event.uuid,
       tank_session_id: this.cfg.sessionId,
@@ -138,6 +168,12 @@ export class CosmosSink {
           ? event.written_at
           : new Date().toISOString(),
     };
-    await this.container.items.upsert(doc);
   }
+}
+
+function isConflict(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const statusCode = (err as { statusCode?: unknown; code?: unknown }).statusCode;
+  const code = (err as { statusCode?: unknown; code?: unknown }).code;
+  return statusCode === 409 || code === 409 || code === "Conflict";
 }

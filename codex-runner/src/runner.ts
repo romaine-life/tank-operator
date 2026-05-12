@@ -29,6 +29,13 @@ import {
   stampEventID,
   type CodexEvent,
 } from "./cosmos.js";
+import {
+  itemEvent,
+  normalizeClientNonce,
+  turnEvent,
+  userSubmissionEvents,
+  type TankConversationEvent,
+} from "./conversation.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
 // AsyncQueue — one writer, one consumer. WS frames push; the run loop
@@ -71,6 +78,7 @@ class AsyncQueue<T> {
 // canonical write failed and the broadcast was intentionally skipped.
 interface DispatchSink {
   upsert(event: CodexEvent & { uuid: string }): Promise<void>;
+  create?(event: CodexEvent & { uuid: string }): Promise<"created" | "exists">;
 }
 interface DispatchWS {
   broadcastEvent(event: unknown): void;
@@ -95,6 +103,27 @@ export async function dispatch(
   return true;
 }
 
+export async function dispatchCreate(
+  sink: DispatchSink,
+  ws: DispatchWS,
+  event: CodexEvent,
+): Promise<"created" | "exists" | "failed"> {
+  const stamped = stampEventID(event);
+  if (!isCanonical(stamped)) {
+    ws.broadcastEvent(stamped);
+    return "created";
+  }
+  try {
+    const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
+    if (result === "exists") return "exists";
+  } catch (err) {
+    console.error("cosmos create failed:", err);
+    return "failed";
+  }
+  ws.broadcastEvent(stamped);
+  return "created";
+}
+
 function isAbortError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const code = (err as { code?: unknown }).code;
@@ -103,6 +132,111 @@ function isAbortError(err: unknown): boolean {
     code === "ABORT_ERR" ||
     /operation was aborted/i.test(err.message)
   );
+}
+
+interface AcceptedTurn {
+  turnID: string;
+  clientNonce: string;
+  turnSeq: number;
+}
+
+function codexProviderEventID(event: CodexEvent): string | undefined {
+  const item = event.item;
+  if (item && typeof item === "object") {
+    const itemID = (item as { id?: unknown }).id;
+    if (typeof itemID === "string" && itemID) return itemID;
+  }
+  for (const key of ["turn_id", "thread_id", "id", "uuid"]) {
+    const value = event[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+function codexItemPayload(item: Record<string, unknown>): Record<string, unknown> {
+  return {
+    kind: typeof item.type === "string" && item.type ? item.type : "item",
+    title:
+      typeof item.command === "string"
+        ? item.command
+        : typeof item.tool === "string"
+          ? item.tool
+          : typeof item.type === "string"
+            ? item.type
+            : "item",
+    text: typeof item.text === "string" ? item.text : undefined,
+    command: item.command,
+    arguments: item.arguments,
+    result: item.result,
+    error: item.error,
+    raw_item: item,
+  };
+}
+
+function canonicalEventsForCodexEvent(
+  cfg: Config,
+  turn: AcceptedTurn,
+  event: CodexEvent,
+): TankConversationEvent[] {
+  const providerID = codexProviderEventID(event);
+  if (event.type === "turn.completed") {
+    return [
+      turnEvent({
+        sessionID: cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "codex",
+        type: "turn.completed",
+        usage: event.usage,
+        providerEventID: providerID,
+      }),
+    ];
+  }
+  if (event.type === "turn.failed" || event.type === "error") {
+    return [
+      turnEvent({
+        sessionID: cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "codex",
+        type: "turn.failed",
+        reason: "provider_failure",
+        error: event.error ?? event.message ?? event,
+        providerEventID: providerID,
+      }),
+    ];
+  }
+  if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") {
+    return [];
+  }
+  const item = event.item;
+  if (!item || typeof item !== "object") return [];
+  const itemRecord = item as Record<string, unknown>;
+  const itemID =
+    typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
+  const itemFailed = itemRecord.error !== undefined;
+  const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
+  const type =
+    event.type === "item.started"
+      ? "item.started"
+      : event.type === "item.updated"
+        ? "item.delta"
+        : itemFailed
+          ? "item.failed"
+          : "item.completed";
+  return [
+    itemEvent({
+      sessionID: cfg.sessionId,
+      turnID: turn.turnID,
+      source: "codex",
+      type,
+      itemID,
+      actor,
+      providerEventID: providerID,
+      visibility: event.type === "item.updated" ? "live-only" : "durable",
+      payload: codexItemPayload(itemRecord),
+    }),
+  ];
 }
 
 export class Runner {
@@ -145,13 +279,20 @@ export class Runner {
       if (next.done) break;
       const { text: input, clientNonce } = next.value;
       const turnSeq = ++this.turnSeq;
-      const persisted = await dispatch(this.sink, this.ws, {
-        type: "tank.user_message",
-        message: input,
-        tank_turn_seq: turnSeq,
-        ...(clientNonce ? { client_nonce: clientNonce } : {}),
-      });
-      if (!persisted) continue;
+      const turn = await this.recordUserSubmission(input, clientNonce, turnSeq);
+      if (!turn) continue;
+
+      await dispatch(
+        this.sink,
+        this.ws,
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "codex",
+          type: "turn.started",
+        }),
+      );
 
       this.currentAbort = new AbortController();
       // If the outer signal aborts mid-turn, also abort the in-flight
@@ -166,21 +307,29 @@ export class Runner {
         });
         for await (const event of streamed.events) {
           if (signal.aborted) break;
-          await dispatch(this.sink, this.ws, {
+          const codexEvent = {
             ...(event as CodexEvent),
             tank_turn_seq: turnSeq,
-          });
+          };
+          await dispatch(this.sink, this.ws, codexEvent);
+          for (const canonicalEvent of canonicalEventsForCodexEvent(this.cfg, turn, codexEvent)) {
+            await dispatch(this.sink, this.ws, canonicalEvent);
+          }
         }
       } catch (err) {
         const interrupted = this.currentAbort.signal.aborted && isAbortError(err);
         if (interrupted) {
-          if (!signal.aborted || this.interruptRequested) {
-            await dispatch(this.sink, this.ws, {
+          await dispatch(this.sink, this.ws, {
+            ...turnEvent({
+              sessionID: this.cfg.sessionId,
+              turnID: turn.turnID,
+              clientNonce: turn.clientNonce,
+              source: "codex",
               type: "turn.interrupted",
               reason: this.interruptRequested ? "client_interrupt" : "runner_shutdown",
-              tank_turn_seq: turnSeq,
-            });
-          }
+            }),
+            tank_turn_seq: turnSeq,
+          } as CodexEvent);
           console.info("codex turn interrupted");
           continue;
         }
@@ -189,6 +338,19 @@ export class Runner {
         // surfaced as an exception rather than a turn.failed).
         const errMessage =
           err instanceof Error ? err.message : String(err);
+        await dispatch(
+          this.sink,
+          this.ws,
+          turnEvent({
+            sessionID: this.cfg.sessionId,
+            turnID: turn.turnID,
+            clientNonce: turn.clientNonce,
+            source: "codex",
+            type: "turn.failed",
+            reason: "provider_failure",
+            error: errMessage,
+          }),
+        );
         await dispatch(this.sink, this.ws, {
           type: "error",
           message: errMessage,
@@ -231,5 +393,39 @@ export class Runner {
       this.interruptRequested = true;
       this.currentAbort?.abort();
     }
+  }
+
+  private async recordUserSubmission(
+    text: string,
+    rawClientNonce: unknown,
+    turnSeq: number,
+  ): Promise<AcceptedTurn | null> {
+    const clientNonce = normalizeClientNonce(rawClientNonce);
+    if (!clientNonce) {
+      await dispatch(this.sink, this.ws, {
+        type: "error",
+        message: "client_nonce is required for user submissions",
+        tank_turn_seq: turnSeq,
+      });
+      return null;
+    }
+    const { turnID, userMessage, turnSubmitted } = userSubmissionEvents({
+      sessionID: this.cfg.sessionId,
+      clientNonce,
+      text,
+      message: { role: "user", content: text },
+      runtime: "codex",
+    });
+    const userResult = await dispatchCreate(this.sink, this.ws, {
+      ...userMessage,
+      tank_turn_seq: turnSeq,
+    });
+    if (userResult === "failed") return null;
+    const submittedResult = await dispatchCreate(this.sink, this.ws, {
+      ...turnSubmitted,
+      tank_turn_seq: turnSeq,
+    });
+    if (submittedResult !== "created") return null;
+    return { turnID, clientNonce, turnSeq };
   }
 }
