@@ -37,6 +37,7 @@ import {
 import {
   normalizeClientNonce,
   turnEvent,
+  turnIDForClientNonce,
   userSubmissionEvents,
 } from "./conversation.js";
 import { TurnQueue, turnClientNonce, type TurnRecord } from "./turnQueue.js";
@@ -140,7 +141,10 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-export type AcceptedTurn = CodexAdapterTurn & { queueRecord?: TurnRecord };
+export type AcceptedTurn = CodexAdapterTurn & {
+  queueRecord?: TurnRecord;
+  stopLeaseRenewal?: () => void;
+};
 
 export class Runner {
   private readonly sink: CosmosSink;
@@ -197,6 +201,23 @@ export class Runner {
         if (next.done) break;
         const { text: input, clientNonce, queueRecord } = next.value;
         const turnSeq = ++this.turnSeq;
+        if (
+          queueRecord &&
+          clientNonce &&
+          (await this.finalizeQueuedRecordIfAlreadyTerminal(queueRecord, clientNonce))
+        ) {
+          continue;
+        }
+        if (queueRecord && this.turnQueue.attemptsExceeded(queueRecord)) {
+          await this.failQueuedRecord(
+            input,
+            clientNonce,
+            turnSeq,
+            queueRecord,
+            new Error(`turn queue exceeded ${queueRecord.attempt_count ?? "unknown"} claim attempts`),
+          );
+          continue;
+        }
         const turn = await this.recordUserSubmission(
           input,
           clientNonce,
@@ -208,8 +229,11 @@ export class Runner {
             await this.turnQueue.markFailed(
               queueRecord,
               new Error("queued turn was not accepted"),
-            );
+          );
           continue;
+        }
+        if (queueRecord) {
+          turn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(queueRecord);
         }
 
         await dispatch(
@@ -312,6 +336,8 @@ export class Runner {
           console.error("codex turn failed:", err);
         } finally {
           signal.removeEventListener("abort", onOuterAbort);
+          turn.stopLeaseRenewal?.();
+          turn.stopLeaseRenewal = undefined;
           this.currentAbort = null;
           this.interruptRequested = false;
         }
@@ -409,7 +435,8 @@ export class Runner {
       ...turnSubmitted,
       tank_turn_seq: turnSeq,
     });
-    if (submittedResult !== "created") return null;
+    if (submittedResult === "failed") return null;
+    if (submittedResult === "exists" && !queueRecord) return null;
     return {
       turnID,
       clientNonce,
@@ -424,6 +451,8 @@ export class Runner {
   ): Promise<void> {
     if (!turn.queueRecord) return;
     const record = turn.queueRecord;
+    turn.stopLeaseRenewal?.();
+    turn.stopLeaseRenewal = undefined;
     turn.queueRecord = undefined;
     try {
       if (type === "turn.completed") {
@@ -433,6 +462,51 @@ export class Runner {
       }
     } catch (err) {
       console.error("turn queue terminal mark failed:", err);
+    }
+  }
+
+  private async finalizeQueuedRecordIfAlreadyTerminal(
+    record: TurnRecord,
+    clientNonce: string,
+  ): Promise<boolean> {
+    const terminal = await this.sink.findTurnTerminal(turnIDForClientNonce(clientNonce));
+    if (!terminal) return false;
+    if (terminal.type === "turn.completed") {
+      await this.turnQueue.markCompleted(record);
+    } else {
+      await this.turnQueue.markFailed(record, new Error(String(terminal.type)));
+    }
+    return true;
+  }
+
+  private async failQueuedRecord(
+    text: string,
+    clientNonce: string | undefined,
+    turnSeq: number,
+    queueRecord: TurnRecord,
+    err: unknown,
+  ): Promise<void> {
+    const turn = await this.recordUserSubmission(text, clientNonce, turnSeq, queueRecord);
+    if (!turn) {
+      await this.turnQueue.markFailed(queueRecord, err);
+      return;
+    }
+    turn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(queueRecord);
+    const dispatched = await dispatch(
+      this.sink,
+      this.ws,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "codex",
+        type: "turn.failed",
+        reason: "turn_queue_attempts_exceeded",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    if (dispatched) {
+      await this.markQueuedTurnTerminal(turn, "turn.failed");
     }
   }
 }

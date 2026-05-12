@@ -268,10 +268,14 @@ Body:
 ```
 
 The backend validates session ownership and SDK runtime, writes a `turn-queue`
-row with `source=sdk`, and returns `202 Accepted`. Runners claim the row by
-session/provider before producing canonical events. `/agent-ws` remains live
-delivery only; clients reconnect against `/timeline` instead of resending the
-prompt.
+row with `source=sdk`, and returns `202 Accepted`. Runners claim due rows by
+session/provider before producing canonical events. Claimed rows carry
+`claim_id`, `claimed_by`, `claim_expires_at`, and `attempt_count`; terminal
+updates require the current `claim_id`, and expired claims can be reclaimed by
+a restarted runner in the same live session pod. Claude `ScheduleWakeup`
+re-enqueues as a delayed `turn-queue` row with `source=schedule-wakeup` and
+`available_at`. `/agent-ws` remains live delivery only; clients reconnect
+against `/timeline` instead of resending the prompt.
 
 Durability scope: queued SDK turns are intended to survive browser disconnects,
 orchestrator restarts/rollouts, and runner-process restarts while the session

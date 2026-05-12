@@ -44,7 +44,13 @@ type TurnRecord struct {
 	Status         TurnQueueStatus `json:"status"`
 	CreatedAt      string          `json:"created_at"`
 	ClaimedAt      *string         `json:"claimed_at"`
+	ClaimID        *string         `json:"claim_id"`
+	ClaimedBy      *string         `json:"claimed_by"`
+	ClaimExpiresAt *string         `json:"claim_expires_at"`
+	AttemptCount   int             `json:"attempt_count"`
+	AvailableAt    *string         `json:"available_at"`
 	CompletedAt    *string         `json:"completed_at"`
+	LastError      string          `json:"last_error,omitempty"`
 }
 
 // TurnQueueStore persists per-session turn descriptors. The orchestrator
@@ -180,23 +186,29 @@ func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, runID
 // (session_id) can hold sibling kinds of docs later without collision.
 func turnDoc(r TurnRecord) map[string]any {
 	doc := map[string]any{
-		"id":              "turn:" + r.RunID,
-		"type":            "turn",
-		"run_id":          r.RunID,
-		"session_id":      r.SessionID,
-		"email":           r.Email,
-		"provider":        r.Provider,
-		"source":          r.Source,
-		"client_nonce":    r.ClientNonce,
-		"prompt":          r.Prompt,
-		"follow_up":       r.FollowUp,
-		"status":          string(r.Status),
-		"created_at":      r.CreatedAt,
-		"claimed_at":      r.ClaimedAt,
-		"completed_at":    r.CompletedAt,
-		"model":           r.Model,
-		"permission_mode": r.PermissionMode,
-		"skill_name":      r.SkillName,
+		"id":               "turn:" + r.RunID,
+		"type":             "turn",
+		"run_id":           r.RunID,
+		"session_id":       r.SessionID,
+		"email":            r.Email,
+		"provider":         r.Provider,
+		"source":           r.Source,
+		"client_nonce":     r.ClientNonce,
+		"prompt":           r.Prompt,
+		"follow_up":        r.FollowUp,
+		"status":           string(r.Status),
+		"created_at":       r.CreatedAt,
+		"claimed_at":       r.ClaimedAt,
+		"claim_id":         r.ClaimID,
+		"claimed_by":       r.ClaimedBy,
+		"claim_expires_at": r.ClaimExpiresAt,
+		"attempt_count":    r.AttemptCount,
+		"available_at":     r.AvailableAt,
+		"completed_at":     r.CompletedAt,
+		"last_error":       r.LastError,
+		"model":            r.Model,
+		"permission_mode":  r.PermissionMode,
+		"skill_name":       r.SkillName,
 	}
 	return doc
 }
@@ -217,7 +229,13 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		Status         string  `json:"status"`
 		CreatedAt      string  `json:"created_at"`
 		ClaimedAt      *string `json:"claimed_at"`
+		ClaimID        *string `json:"claim_id"`
+		ClaimedBy      *string `json:"claimed_by"`
+		ClaimExpiresAt *string `json:"claim_expires_at"`
+		AttemptCount   int     `json:"attempt_count"`
+		AvailableAt    *string `json:"available_at"`
 		CompletedAt    *string `json:"completed_at"`
+		LastError      string  `json:"last_error"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
 		return TurnRecord{}, err
@@ -237,7 +255,13 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		Status:         TurnQueueStatus(d.Status),
 		CreatedAt:      d.CreatedAt,
 		ClaimedAt:      d.ClaimedAt,
+		ClaimID:        d.ClaimID,
+		ClaimedBy:      d.ClaimedBy,
+		ClaimExpiresAt: d.ClaimExpiresAt,
+		AttemptCount:   d.AttemptCount,
+		AvailableAt:    d.AvailableAt,
 		CompletedAt:    d.CompletedAt,
+		LastError:      d.LastError,
 	}, nil
 }
 

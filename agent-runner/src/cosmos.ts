@@ -106,6 +106,25 @@ export class CosmosSink {
     }
   }
 
+  async findTurnTerminal(turnID: string): Promise<RunnerEvent | null> {
+    const iterator = this.container.items.query<RunnerEvent>(
+      {
+        query:
+          "SELECT TOP 1 * FROM c WHERE c.tank_session_id = @session_id AND c.turn_id = @turn_id AND (c.type = @completed OR c.type = @failed OR c.type = @interrupted)",
+        parameters: [
+          { name: "@session_id", value: this.cfg.sessionId },
+          { name: "@turn_id", value: turnID },
+          { name: "@completed", value: "turn.completed" },
+          { name: "@failed", value: "turn.failed" },
+          { name: "@interrupted", value: "turn.interrupted" },
+        ],
+      },
+      { partitionKey: this.cfg.sessionId },
+    );
+    const page = await iterator.fetchNext();
+    return page.resources[0] ?? null;
+  }
+
   private docFromMessage(message: RunnerEvent & { uuid: string }): Record<string, unknown> {
     return {
       ...message,
