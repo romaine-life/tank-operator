@@ -1,5 +1,9 @@
 import type { TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
 
+// Legacy /run compatibility only. SDK sessions should consume canonical
+// TankConversationEvent values through conversationReducer/projection instead
+// of routing provider-shaped Claude/Codex frames through this module.
+
 export type ToolKind = "mcp" | "shell";
 
 export type ProviderTranscriptEntry = SandboxTranscriptEntry & {

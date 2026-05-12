@@ -99,6 +99,27 @@ test("Tool lifecycle replays to a completed tool item", () => {
   ]);
 });
 
+test("Item deltas append delta payload text", () => {
+  const state = reduceConversationEvents([
+    ev("1", "item.started", {
+      actor: "assistant",
+      source: "codex",
+      item_id: "msg-1",
+      payload: { kind: "agent_message", text: "Hel" },
+    }),
+    ev("2", "item.delta", {
+      actor: "assistant",
+      source: "codex",
+      item_id: "msg-1",
+      payload: { delta: "lo" },
+    }),
+  ]);
+
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.text, "Hello");
+  assert.equal(state.items[0]?.status, "streaming");
+});
+
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

@@ -22,6 +22,10 @@
 
 import { Codex, type Thread } from "@openai/codex-sdk";
 
+import {
+  CodexTankEventAdapter,
+  type CodexAdapterTurn,
+} from "./adapters/codex.js";
 import type { Config } from "./config.js";
 import {
   CosmosSink,
@@ -30,11 +34,9 @@ import {
   type CodexEvent,
 } from "./cosmos.js";
 import {
-  itemEvent,
   normalizeClientNonce,
   turnEvent,
   userSubmissionEvents,
-  type TankConversationEvent,
 } from "./conversation.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
@@ -134,116 +136,14 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-export interface AcceptedTurn {
-  turnID: string;
-  clientNonce: string;
-  turnSeq: number;
-}
-
-function codexProviderEventID(event: CodexEvent): string | undefined {
-  const item = event.item;
-  if (item && typeof item === "object") {
-    const itemID = (item as { id?: unknown }).id;
-    if (typeof itemID === "string" && itemID) return itemID;
-  }
-  for (const key of ["turn_id", "thread_id", "id", "uuid"]) {
-    const value = event[key];
-    if (typeof value === "string" && value) return value;
-  }
-  return undefined;
-}
-
-function codexItemPayload(item: Record<string, unknown>): Record<string, unknown> {
-  return {
-    kind: typeof item.type === "string" && item.type ? item.type : "item",
-    title:
-      typeof item.command === "string"
-        ? item.command
-        : typeof item.tool === "string"
-          ? item.tool
-          : typeof item.type === "string"
-            ? item.type
-            : "item",
-    text: typeof item.text === "string" ? item.text : undefined,
-    command: item.command,
-    arguments: item.arguments,
-    result: item.result,
-    error: item.error,
-    raw_item: item,
-  };
-}
-
-export function canonicalEventsForCodexEvent(
-  cfg: Config,
-  turn: AcceptedTurn,
-  event: CodexEvent,
-): TankConversationEvent[] {
-  const providerID = codexProviderEventID(event);
-  if (event.type === "turn.completed") {
-    return [
-      turnEvent({
-        sessionID: cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "codex",
-        type: "turn.completed",
-        usage: event.usage,
-        providerEventID: providerID,
-      }),
-    ];
-  }
-  if (event.type === "turn.failed" || event.type === "error") {
-    return [
-      turnEvent({
-        sessionID: cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "codex",
-        type: "turn.failed",
-        reason: "provider_failure",
-        error: event.error ?? event.message ?? event,
-        providerEventID: providerID,
-      }),
-    ];
-  }
-  if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") {
-    return [];
-  }
-  const item = event.item;
-  if (!item || typeof item !== "object") return [];
-  const itemRecord = item as Record<string, unknown>;
-  const itemID =
-    typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
-  const itemFailed = itemRecord.error !== undefined;
-  const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
-  const type =
-    event.type === "item.started"
-      ? "item.started"
-      : event.type === "item.updated"
-        ? "item.delta"
-        : itemFailed
-          ? "item.failed"
-          : "item.completed";
-  return [
-    itemEvent({
-      sessionID: cfg.sessionId,
-      turnID: turn.turnID,
-      source: "codex",
-      type,
-      itemID,
-      actor,
-      providerEventID: providerID,
-      visibility: event.type === "item.updated" ? "live-only" : "durable",
-      payload: codexItemPayload(itemRecord),
-    }),
-  ];
-}
+export type AcceptedTurn = CodexAdapterTurn;
 
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
   private readonly userQueue = new AsyncQueue<{ text: string; clientNonce?: string }>();
   private readonly codex: Codex;
+  private readonly codexAdapter: CodexTankEventAdapter;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
   private interruptRequested = false;
@@ -258,6 +158,7 @@ export class Runner {
     // ~/.codex/auth.json (mounted from the codex-credentials secret).
     // No CODEX_API_KEY needed — subscription auth path.
     this.codex = new Codex();
+    this.codexAdapter = new CodexTankEventAdapter(cfg);
   }
 
   // Run until externally aborted. Each iteration awaits one user
@@ -312,7 +213,7 @@ export class Runner {
             tank_turn_seq: turnSeq,
           };
           await dispatch(this.sink, this.ws, codexEvent);
-          for (const canonicalEvent of canonicalEventsForCodexEvent(this.cfg, turn, codexEvent)) {
+          for (const canonicalEvent of this.codexAdapter.canonicalEventsForCodexEvent(turn, codexEvent)) {
             await dispatch(this.sink, this.ws, canonicalEvent);
           }
         }
