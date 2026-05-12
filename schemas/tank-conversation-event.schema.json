@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tank.romaine.life/schemas/tank-conversation-event.schema.json",
+  "title": "Tank Conversation Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "session_id",
+    "actor",
+    "source",
+    "type",
+    "created_at",
+    "visibility"
+  ],
+  "anyOf": [
+    { "required": ["order_key"] },
+    { "required": ["sequence"] }
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "order_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "item_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "client_nonce": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actor": {
+      "type": "string",
+      "enum": ["user", "assistant", "system", "tool", "runner"]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["tank", "claude", "codex", "legacy-run"]
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "conversation.started",
+        "conversation.archived",
+        "user_message.created",
+        "turn.submitted",
+        "turn.started",
+        "turn.completed",
+        "turn.failed",
+        "turn.interrupted",
+        "item.started",
+        "item.delta",
+        "item.completed",
+        "item.failed",
+        "tool.approval_requested",
+        "tool.approval_resolved",
+        "session.activity_updated",
+        "read_state.updated"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "runtime": { "type": "string" },
+        "provider_event_id": { "type": "string" }
+      }
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["durable", "live-only", "audit-only"]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
