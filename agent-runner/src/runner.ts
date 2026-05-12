@@ -20,9 +20,10 @@ import {
   type SDKUserMessage,
   type Options,
 } from "@anthropic-ai/claude-agent-sdk";
+import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.js";
-import { CosmosSink, isCanonical } from "./cosmos.js";
+import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
@@ -35,35 +36,35 @@ import { WSFanout, type ClientFrame } from "./ws.js";
 // canonical write failed and the broadcast was intentionally skipped.
 // Callers that don't care about the outcome can ignore it.
 interface DispatchSink {
-  upsert(message: SDKMessage): Promise<void>;
+  upsert(message: RunnerEvent & { uuid: string }): Promise<void>;
 }
 interface DispatchWS {
-  broadcastEvent(message: SDKMessage): void;
+  broadcastEvent(message: RunnerEvent): void;
 }
 
 let tankEventSeq = 0;
 
-function stampTankEvent(message: SDKMessage): SDKMessage {
+function stampTankEvent(message: RunnerEvent): RunnerEvent & { uuid: string } {
   tankEventSeq += 1;
   const now = Date.now();
-  const uuid = (message as any).uuid;
-  const stableId = typeof uuid === "string" && uuid ? uuid : String(tankEventSeq);
+  const uuid = typeof message.uuid === "string" && message.uuid ? message.uuid : randomUUID();
   return {
-    ...(message as Record<string, unknown>),
+    ...message,
+    uuid,
     tank_event_seq: tankEventSeq,
     tank_order_key: [
       String(now).padStart(13, "0"),
       String(tankEventSeq).padStart(8, "0"),
-      stableId,
+      uuid,
     ].join("-"),
     written_at: new Date(now).toISOString(),
-  } as unknown as SDKMessage;
+  };
 }
 
 export async function dispatch(
   sink: DispatchSink,
   ws: DispatchWS,
-  message: SDKMessage,
+  message: RunnerEvent,
 ): Promise<boolean> {
   const stamped = stampTankEvent(message);
   if (isCanonical(stamped)) {
@@ -78,6 +79,28 @@ export async function dispatch(
   }
   ws.broadcastEvent(stamped);
   return true;
+}
+
+function userMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (
+          part &&
+          typeof part === "object" &&
+          "type" in part &&
+          (part as { type?: unknown }).type === "text" &&
+          "text" in part
+        ) {
+          return String((part as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(content ?? "");
 }
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -120,11 +143,20 @@ export class Runner {
   private readonly ws: WSFanout;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private sdkQuery: Query | null = null;
+  private userFrameChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
     this.ws = new WSFanout(cfg.wsPort);
-    this.ws.onMessage((frame) => this.handleClientFrame(frame));
+    this.ws.onMessage((frame) => {
+      if (frame.type === "user") {
+        this.userFrameChain = this.userFrameChain
+          .then(() => this.handleClientFrame(frame))
+          .catch((err) => console.error("user frame handling failed:", err));
+        return;
+      }
+      void this.handleClientFrame(frame);
+    });
   }
 
   // Run forever (or until externally aborted). Drives the SDK against
@@ -177,10 +209,19 @@ export class Runner {
     }
   }
 
-  private handleClientFrame(frame: ClientFrame): void {
+  private async handleClientFrame(frame: ClientFrame): Promise<void> {
     if (frame.type === "user") {
-      // Hand straight to the SDK iterator. The SDK enforces "wait for
-      // result before next message" internally; we don't need to gate.
+      const text = userMessageText(frame.message?.content);
+      const persisted = await dispatch(this.sink, this.ws, {
+        type: "tank.user_message",
+        message: text,
+        ...(frame.client_nonce ? { client_nonce: frame.client_nonce } : {}),
+      });
+      if (!persisted) return;
+
+      // Hand to the SDK iterator only after Tank owns the durable user
+      // message. The SDK enforces "wait for result before next message"
+      // internally; we don't need to gate.
       this.userQueue.push({
         type: "user",
         session_id: "",

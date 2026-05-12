@@ -8,6 +8,7 @@ import { isCanonical } from "./cosmos.js";
 // affects the SPA's history-replay correctness.
 
 test("canonical: user, assistant, result messages", () => {
+  assert.equal(isCanonical({ type: "tank.user_message", message: "hello" }), true);
   assert.equal(isCanonical({ type: "user" } as any), true);
   assert.equal(isCanonical({ type: "assistant" } as any), true);
   assert.equal(isCanonical({ type: "result", subtype: "success" } as any), true);

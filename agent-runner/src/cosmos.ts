@@ -7,7 +7,7 @@
 //
 // "Canonical" = events the SPA's history-replay path should see:
 //   system (init / compact_boundary), user, assistant, tool_use_summary,
-//   result, permission_denied, rate_limit, plugin_install
+//   result, permission_denied, rate_limit, plugin_install, tank.user_message
 //
 // "Live-only" = transient deltas that drive the typewriter effect but
 // have no durable value (Discord's "typing..." analog):
@@ -21,8 +21,16 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import type { Config } from "./config.js";
 
+export interface RunnerEvent {
+  type: string;
+  uuid?: string;
+  subtype?: string;
+  [k: string]: unknown;
+}
+
 const CANONICAL_TYPES = new Set<string>([
   "system",
+  "tank.user_message",
   "user",
   "assistant",
   "result",
@@ -42,13 +50,13 @@ const CANONICAL_TOP_LEVEL_TYPES = new Set<string>([
   "rate_limit",
 ]);
 
-export function isCanonical(message: SDKMessage): boolean {
-  const t = (message as any).type as string | undefined;
+export function isCanonical(message: RunnerEvent | SDKMessage): boolean {
+  const t = (message as RunnerEvent).type;
   if (!t) return false;
   if (CANONICAL_TOP_LEVEL_TYPES.has(t)) return true;
   if (CANONICAL_TYPES.has(t)) {
     if (t === "system") {
-      const subtype = (message as any).subtype as string | undefined;
+      const subtype = (message as RunnerEvent).subtype;
       // Some system events (status, hook progress) are ephemeral — only
       // the documented turn-level subtypes are durable.
       return subtype ? CANONICAL_SYSTEM_SUBTYPES.has(subtype) : false;
@@ -78,15 +86,16 @@ export class CosmosSink {
   // session_id — the SPA queries on the integer (it knows the pod-level
   // id), and pod restart may yield a new SDK session within the same
   // tank-operator session. The SDK's session_id rides along as a field.
-  async upsert(message: SDKMessage): Promise<void> {
+  async upsert(message: RunnerEvent & { uuid: string }): Promise<void> {
     const doc: Record<string, unknown> = {
-      ...(message as Record<string, unknown>),
-      id: (message as any).uuid as string,
+      ...message,
+      id: message.uuid,
       tank_session_id: this.cfg.sessionId,
       email: this.cfg.ownerEmail,
+      runtime: "claude",
       written_at:
-        typeof (message as any).written_at === "string"
-          ? ((message as any).written_at as string)
+        typeof message.written_at === "string"
+          ? message.written_at
           : new Date().toISOString(),
     };
     await this.container.items.upsert(doc);

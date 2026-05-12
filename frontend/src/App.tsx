@@ -1728,6 +1728,19 @@ function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
   );
 }
 
+function hasUserMessageText(entries: TranscriptEntry[], text: string): boolean {
+  const normalized = text.trim();
+  return Boolean(
+    normalized &&
+      entries.some(
+        (entry) =>
+          entry.kind === "message" &&
+          entry.role === "user" &&
+          entry.text?.trim() === normalized,
+      ),
+  );
+}
+
 
 function appendSkillInvocation(
   entries: TranscriptEntry[],
@@ -1868,22 +1881,43 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
   return null;
 }
 
+function tankUserMessageText(event: JsonObject): string {
+  if (typeof event.message === "string") return event.message.trim();
+  if (isJsonObject(event.message)) {
+    const content = event.message.content;
+    if (typeof content === "string") return content.trim();
+    if (Array.isArray(content)) {
+      return content
+        .map((block) =>
+          isJsonObject(block) && block.type === "text" && typeof block.text === "string"
+            ? block.text
+            : "",
+        )
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+    }
+  }
+  return "";
+}
+
+function applyTankUserMessageEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+  const text = tankUserMessageText(event);
+  if (!text || hasUserMessageText(entries, text)) return entries;
+  const skillName = skillNameFromTrigger(text);
+  if (skillName && hasSkillInvocation(entries, skillName)) return entries;
+  return upsertEntry(entries, {
+    id: `tank-user-message-${eventID(event, "tank-user-message")}`,
+    kind: "message",
+    role: "user",
+    text,
+    time: eventTime(event),
+  });
+}
+
 function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
   const time = eventTime(event);
-  if (type === "tank.user_message") {
-    const text = typeof event.message === "string" ? event.message.trim() : "";
-    const skillName = skillNameFromTrigger(text);
-    if (skillName && hasSkillInvocation(entries, skillName)) return entries;
-    if (!text) return entries;
-    return upsertEntry(entries, {
-      id: `codex-user-message-${eventID(event, "codex-user-message")}`,
-      kind: "message",
-      role: "user",
-      text,
-      time,
-    });
-  }
   if (type === "thread.started") {
     const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
     return appendMeta(entries, `codex-thread-${eventID(event, threadId || "codex-thread")}`, "Codex thread started", threadId, "info", time);
@@ -2085,6 +2119,7 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
       for (const [index, text] of texts.entries()) {
         const skillName = skillNameFromTrigger(text);
         if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
+        if (hasUserMessageText(nextEntries, text)) continue;
         nextEntries = upsertEntry(nextEntries, {
           id: `${baseId}-${index}`,
           kind: "message",
@@ -2127,6 +2162,9 @@ function applyProviderEvent(
   mode: SessionMode,
   event: JsonObject,
 ): TranscriptEntry[] {
+  if (event.type === "tank.user_message") {
+    return applyTankUserMessageEvent(entries, event);
+  }
   if (event.type === "tank.skill_invocation") {
     const name = typeof event.name === "string" ? event.name.trim() : "";
     const trigger = typeof event.trigger === "string" ? event.trigger : "";
@@ -5446,6 +5484,7 @@ function HeadlessRun({
         JSON.stringify({
           type: "user",
           message: { role: "user", content: run.prompt },
+          client_nonce: run.id,
         }),
       );
     };

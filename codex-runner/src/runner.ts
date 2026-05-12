@@ -98,7 +98,7 @@ export async function dispatch(
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
-  private readonly userQueue = new AsyncQueue<string>();
+  private readonly userQueue = new AsyncQueue<{ text: string; clientNonce?: string }>();
   private readonly codex: Codex;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
@@ -132,12 +132,13 @@ export class Runner {
     while (!signal.aborted) {
       const next = await this.userQueue.next();
       if (next.done) break;
-      const input = next.value;
+      const { text: input, clientNonce } = next.value;
       const turnSeq = ++this.turnSeq;
       await dispatch(this.sink, this.ws, {
         type: "tank.user_message",
         message: input,
         tank_turn_seq: turnSeq,
+        ...(clientNonce ? { client_nonce: clientNonce } : {}),
       });
 
       this.currentAbort = new AbortController();
@@ -199,7 +200,7 @@ export class Runner {
                 .join("\n")
             : String(content ?? "");
       if (text.trim()) {
-        this.userQueue.push(text);
+        this.userQueue.push({ text, clientNonce: frame.client_nonce });
       }
     } else if (frame.type === "interrupt") {
       this.currentAbort?.abort();

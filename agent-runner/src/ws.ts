@@ -13,10 +13,9 @@
 // + JWT before proxying). This server trusts whatever connects.
 
 import { WebSocketServer, type WebSocket } from "ws";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export type ClientFrame =
-  | { type: "user"; message: { role: "user"; content: unknown } }
+  | { type: "user"; message: { role: "user"; content: unknown }; client_nonce?: string }
   | { type: "interrupt" }
   | { type: "ping" };
 
@@ -61,8 +60,8 @@ export class WSFanout {
     }
   }
 
-  // Broadcast a typed SDKMessage by serializing once.
-  broadcastEvent(message: SDKMessage): void {
+  // Broadcast a typed event by serializing once.
+  broadcastEvent(message: unknown): void {
     this.broadcast(JSON.stringify(message));
   }
 
