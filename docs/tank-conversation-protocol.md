@@ -76,7 +76,9 @@ The JSON Schema is the source of truth for `actor`, `source`, `visibility`,
 and event `type` enums. Changes to those enums must update the schema first;
 `scripts/check-tank-conversation-contract.mjs` and the Go conversation package
 test then verify the frontend, agent-runner, codex-runner, and Go definitions
-match it.
+match it. The same script also validates representative canonical fixtures in
+`schemas/tank-conversation-event.fixtures.json`, including runner-stamped and
+persisted timeline shapes.
 
 Required fields:
 

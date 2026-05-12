@@ -22,7 +22,22 @@
       "type": "string",
       "minLength": 1
     },
+    "uuid": {
+      "description": "Runner-stamped id used for live/history dedupe. For Tank events this normally matches event_id.",
+      "type": "string",
+      "minLength": 1
+    },
+    "id": {
+      "description": "Session-events document id when a persisted event is returned by /timeline.",
+      "type": "string",
+      "minLength": 1
+    },
     "order_key": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tank_order_key": {
+      "description": "Runner-stamped render-order cursor used before/alongside canonical order_key.",
       "type": "string",
       "minLength": 1
     },
@@ -30,11 +45,31 @@
       "type": "integer",
       "minimum": 0
     },
+    "tank_event_seq": {
+      "description": "Runner-local event sequence stamped before Cosmos/live fanout.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "tank_turn_seq": {
+      "description": "Codex-runner local turn sequence stamped on some events for turn correlation.",
+      "type": "integer",
+      "minimum": 1
+    },
     "conversation_id": {
       "type": "string",
       "minLength": 1
     },
     "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tank_session_id": {
+      "description": "Session-events partition key when a persisted event is returned by /timeline.",
+      "type": "string",
+      "minLength": 1
+    },
+    "email": {
+      "description": "Owner email stamped on persisted session-events documents.",
       "type": "string",
       "minLength": 1
     },
@@ -87,6 +122,16 @@
       "type": "string",
       "format": "date-time"
     },
+    "written_at": {
+      "description": "Runner/storage write timestamp stamped before Cosmos/live fanout.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "runtime": {
+      "description": "Session-events storage runtime stamp.",
+      "type": "string",
+      "enum": ["claude", "codex"]
+    },
     "producer": {
       "type": "object",
       "additionalProperties": false,
@@ -104,6 +149,31 @@
     "payload": {
       "type": "object",
       "additionalProperties": true
+    },
+    "_rid": {
+      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "type": "string",
+      "minLength": 1
+    },
+    "_self": {
+      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "type": "string",
+      "minLength": 1
+    },
+    "_etag": {
+      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "type": "string",
+      "minLength": 1
+    },
+    "_attachments": {
+      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "type": "string",
+      "minLength": 1
+    },
+    "_ts": {
+      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

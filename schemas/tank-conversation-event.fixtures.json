@@ -1,0 +1,438 @@
+{
+  "events": [
+    {
+      "name": "conversation started",
+      "event": {
+        "event_id": "evt-conversation-started",
+        "order_key": "order-0001",
+        "sequence": 1,
+        "conversation_id": "63",
+        "session_id": "63",
+        "actor": "system",
+        "source": "tank",
+        "type": "conversation.started",
+        "created_at": "2026-05-12T00:00:00.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "backend-go"
+        },
+        "visibility": "durable",
+        "payload": {
+          "status": "ready"
+        }
+      }
+    },
+    {
+      "name": "conversation archived",
+      "event": {
+        "event_id": "evt-conversation-archived",
+        "order_key": "order-0002",
+        "sequence": 2,
+        "conversation_id": "63",
+        "session_id": "63",
+        "actor": "system",
+        "source": "tank",
+        "type": "conversation.archived",
+        "created_at": "2026-05-12T00:00:01.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "backend-go"
+        },
+        "visibility": "durable",
+        "payload": {
+          "reason": "user_requested"
+        }
+      }
+    },
+    {
+      "name": "persisted codex user message with runner and storage stamps",
+      "event": {
+        "event_id": "turn_contract:user_message.created",
+        "uuid": "turn_contract:user_message.created",
+        "id": "turn_contract:user_message.created",
+        "order_key": "1768179840000-00000001-turn_contract:user_message.created",
+        "tank_order_key": "1768179840000-00000001-turn_contract:user_message.created",
+        "sequence": 1,
+        "tank_event_seq": 1,
+        "tank_turn_seq": 1,
+        "conversation_id": "63",
+        "session_id": "63",
+        "tank_session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "turn_contract:user",
+        "client_nonce": "client-nonce-contract",
+        "actor": "user",
+        "source": "tank",
+        "type": "user_message.created",
+        "created_at": "2026-05-12T00:00:02.000Z",
+        "written_at": "2026-05-12T00:00:02.000Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex"
+        },
+        "runtime": "codex",
+        "email": "owner@example.com",
+        "visibility": "durable",
+        "payload": {
+          "text": "Investigate issue #402",
+          "message": {
+            "role": "user",
+            "content": "Investigate issue #402"
+          }
+        },
+        "_rid": "cosmos-rid-1",
+        "_self": "dbs/tank/colls/session-events/docs/turn_contract:user_message.created/",
+        "_etag": "\"00000000-0000-0000-0000-000000000001\"",
+        "_attachments": "attachments/",
+        "_ts": 1778544002
+      }
+    },
+    {
+      "name": "turn submitted",
+      "event": {
+        "event_id": "turn_contract:turn.submitted",
+        "order_key": "order-0004",
+        "sequence": 4,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "tank",
+        "type": "turn.submitted",
+        "created_at": "2026-05-12T00:00:03.000Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex"
+        },
+        "visibility": "durable",
+        "payload": {
+          "status": "submitted"
+        }
+      }
+    },
+    {
+      "name": "turn started",
+      "event": {
+        "event_id": "turn_contract:turn.started:runner",
+        "uuid": "turn_contract:turn.started:runner",
+        "order_key": "1768179841000-00000002-turn_contract:turn.started:runner",
+        "tank_order_key": "1768179841000-00000002-turn_contract:turn.started:runner",
+        "sequence": 2,
+        "tank_event_seq": 2,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "claude",
+        "type": "turn.started",
+        "created_at": "2026-05-12T00:00:04.000Z",
+        "written_at": "2026-05-12T00:00:04.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude"
+        },
+        "visibility": "durable"
+      }
+    },
+    {
+      "name": "turn completed",
+      "event": {
+        "event_id": "turn_contract:turn.completed:provider-result-1",
+        "order_key": "order-0006",
+        "sequence": 6,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "claude",
+        "type": "turn.completed",
+        "created_at": "2026-05-12T00:00:05.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-result-1"
+        },
+        "visibility": "durable",
+        "payload": {
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 8
+          }
+        }
+      }
+    },
+    {
+      "name": "turn failed",
+      "event": {
+        "event_id": "turn_contract:turn.failed:provider_failure",
+        "order_key": "order-0007",
+        "sequence": 7,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "codex",
+        "type": "turn.failed",
+        "created_at": "2026-05-12T00:00:06.000Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex"
+        },
+        "visibility": "durable",
+        "payload": {
+          "reason": "provider_failure",
+          "error": "quota exceeded"
+        }
+      }
+    },
+    {
+      "name": "turn interrupted",
+      "event": {
+        "event_id": "turn_contract:turn.interrupted:client_interrupt",
+        "order_key": "order-0008",
+        "sequence": 8,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "claude",
+        "type": "turn.interrupted",
+        "created_at": "2026-05-12T00:00:07.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "reason": "client_interrupt"
+        }
+      }
+    },
+    {
+      "name": "item started",
+      "event": {
+        "event_id": "turn_contract:item.started:toolu-read:provider-message-1",
+        "order_key": "order-0009",
+        "sequence": 9,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "toolu-read",
+        "parent_id": "turn_contract",
+        "actor": "tool",
+        "source": "claude",
+        "type": "item.started",
+        "created_at": "2026-05-12T00:00:08.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-message-1"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "tool",
+          "title": "Read",
+          "name": "Read",
+          "input": {
+            "file_path": "README.md"
+          }
+        }
+      }
+    },
+    {
+      "name": "item delta",
+      "event": {
+        "event_id": "turn_contract:item.delta:assistant-message:provider-item-1",
+        "order_key": "order-0010",
+        "sequence": 10,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "assistant-message",
+        "parent_id": "turn_contract",
+        "actor": "assistant",
+        "source": "codex",
+        "type": "item.delta",
+        "created_at": "2026-05-12T00:00:09.000Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex",
+          "provider_event_id": "provider-item-1"
+        },
+        "visibility": "live-only",
+        "payload": {
+          "kind": "agent_message",
+          "delta": "Hello"
+        }
+      }
+    },
+    {
+      "name": "item completed",
+      "event": {
+        "event_id": "turn_contract:item.completed:assistant-message:provider-item-1",
+        "order_key": "order-0011",
+        "sequence": 11,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "assistant-message",
+        "parent_id": "turn_contract",
+        "actor": "assistant",
+        "source": "claude",
+        "type": "item.completed",
+        "created_at": "2026-05-12T00:00:10.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-item-1"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "message",
+          "text": "Replay and live delivery now converge."
+        }
+      }
+    },
+    {
+      "name": "item failed",
+      "event": {
+        "event_id": "turn_contract:item.failed:toolu-read:provider-item-2",
+        "order_key": "order-0012",
+        "sequence": 12,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "toolu-read",
+        "parent_id": "turn_contract",
+        "actor": "tool",
+        "source": "codex",
+        "type": "item.failed",
+        "created_at": "2026-05-12T00:00:11.000Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex",
+          "provider_event_id": "provider-item-2"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "command_execution",
+          "title": "npm test",
+          "error": "exit code 1"
+        }
+      }
+    },
+    {
+      "name": "approval requested",
+      "event": {
+        "event_id": "turn_contract:tool.approval_requested:toolu-question:provider-message-2",
+        "order_key": "order-0013",
+        "sequence": 13,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "toolu-question",
+        "parent_id": "turn_contract",
+        "actor": "tool",
+        "source": "claude",
+        "type": "tool.approval_requested",
+        "created_at": "2026-05-12T00:00:12.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-message-2"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "needs_input",
+          "title": "Ask user question",
+          "name": "AskUserQuestion",
+          "input": {
+            "question": "Proceed?"
+          }
+        }
+      }
+    },
+    {
+      "name": "approval resolved",
+      "event": {
+        "event_id": "turn_contract:tool.approval_resolved:toolu-question:provider-message-3",
+        "order_key": "order-0014",
+        "sequence": 14,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "item_id": "toolu-question",
+        "parent_id": "turn_contract",
+        "actor": "tool",
+        "source": "claude",
+        "type": "tool.approval_resolved",
+        "created_at": "2026-05-12T00:00:13.000Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-message-3"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "needs_input",
+          "resolved": true,
+          "is_error": false
+        }
+      }
+    },
+    {
+      "name": "activity updated",
+      "event": {
+        "event_id": "evt-session-activity-updated",
+        "order_key": "order-0015",
+        "sequence": 15,
+        "conversation_id": "63",
+        "session_id": "63",
+        "actor": "runner",
+        "source": "tank",
+        "type": "session.activity_updated",
+        "created_at": "2026-05-12T00:00:14.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "backend-go"
+        },
+        "visibility": "durable",
+        "payload": {
+          "status": "streaming",
+          "last_order_key": "order-0014",
+          "unread_count": 3,
+          "needs_input": false,
+          "failed": false,
+          "active_turn_id": "turn_contract"
+        }
+      }
+    },
+    {
+      "name": "read state updated",
+      "event": {
+        "event_id": "evt-read-state-updated",
+        "order_key": "order-0016",
+        "sequence": 16,
+        "conversation_id": "63",
+        "session_id": "63",
+        "actor": "runner",
+        "source": "tank",
+        "type": "read_state.updated",
+        "created_at": "2026-05-12T00:00:15.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "backend-go"
+        },
+        "visibility": "audit-only",
+        "payload": {
+          "last_read_order_key": "order-0015"
+        }
+      }
+    }
+  ]
+}

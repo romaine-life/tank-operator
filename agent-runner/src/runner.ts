@@ -22,10 +22,14 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 
+import {
+  canonicalEventsForClaudeMessage,
+  claudeUserMessageText,
+  startsClaudeTurn,
+} from "./adapters/claude.js";
 import type { Config } from "./config.js";
 import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
 import {
-  itemEvent,
   normalizeClientNonce,
   turnEvent,
   userSubmissionEvents,
@@ -127,28 +131,6 @@ function isTankEvent(message: RunnerEvent): message is TankConversationEvent {
   return typeof message.event_id === "string" && typeof message.visibility === "string";
 }
 
-function userMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (
-          part &&
-          typeof part === "object" &&
-          "type" in part &&
-          (part as { type?: unknown }).type === "text" &&
-          "text" in part
-        ) {
-          return String((part as { text?: unknown }).text ?? "");
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return String(content ?? "");
-}
-
 export interface PendingTurn {
   turnID: string;
   clientNonce: string;
@@ -156,161 +138,6 @@ export interface PendingTurn {
   started: boolean;
   interrupted: boolean;
   terminalEmitted: boolean;
-}
-
-function providerEventID(message: RunnerEvent): string | undefined {
-  for (const key of ["uuid", "id", "message_id", "session_id"]) {
-    const value = message[key];
-    if (typeof value === "string" && value) return value;
-  }
-  return undefined;
-}
-
-function claudeMessageContent(message: RunnerEvent): unknown[] {
-  const body = message.message;
-  if (body && typeof body === "object" && "content" in body) {
-    const content = (body as { content?: unknown }).content;
-    return Array.isArray(content) ? content : [];
-  }
-  return [];
-}
-
-export function canonicalEventsForClaudeMessage(
-  cfg: Config,
-  turn: PendingTurn | null,
-  message: RunnerEvent,
-  needsInputItemIDs: Set<string>,
-): TankConversationEvent[] {
-  if (!turn) return [];
-  const providerID = providerEventID(message);
-  if (message.type === "assistant") {
-    const events: TankConversationEvent[] = [];
-    for (const [index, block] of claudeMessageContent(message).entries()) {
-      if (!block || typeof block !== "object") continue;
-      const item = block as Record<string, unknown>;
-      if (item.type === "text") {
-        const text = typeof item.text === "string" ? item.text : "";
-        if (!text) continue;
-        events.push(
-          itemEvent({
-            sessionID: cfg.sessionId,
-            turnID: turn.turnID,
-            source: "claude",
-            type: "item.completed",
-            itemID: `${turn.turnID}:assistant:${providerID ?? index}`,
-            actor: "assistant",
-            providerEventID: providerID,
-            payload: { kind: "message", text },
-          }),
-        );
-      } else if (item.type === "tool_use") {
-        const itemID =
-          typeof item.id === "string" && item.id ? item.id : `${turn.turnID}:tool:${index}`;
-        const name = typeof item.name === "string" ? item.name : "tool";
-        events.push(
-          itemEvent({
-            sessionID: cfg.sessionId,
-            turnID: turn.turnID,
-            source: "claude",
-            type: "item.started",
-            itemID,
-            actor: "tool",
-            providerEventID: providerID,
-            payload: {
-              kind: "tool",
-              title: name,
-              name,
-              input: item.input,
-            },
-          }),
-        );
-        if (name === "AskUserQuestion") {
-          needsInputItemIDs.add(itemID);
-          events.push(
-            itemEvent({
-              sessionID: cfg.sessionId,
-              turnID: turn.turnID,
-              source: "claude",
-              type: "tool.approval_requested",
-              itemID,
-              actor: "tool",
-              providerEventID: providerID,
-              payload: {
-                kind: "needs_input",
-                title: "Ask user question",
-                name,
-                input: item.input,
-              },
-            }),
-          );
-        }
-      }
-    }
-    return events;
-  }
-  if (message.type === "user") {
-    return claudeMessageContent(message).flatMap((block, index): TankConversationEvent[] => {
-      if (!block || typeof block !== "object") return [];
-      const item = block as Record<string, unknown>;
-      if (item.type !== "tool_result") return [];
-      const itemID =
-        typeof item.tool_use_id === "string" && item.tool_use_id
-          ? item.tool_use_id
-          : `${turn.turnID}:tool_result:${index}`;
-      const failed = item.is_error === true;
-      const completed = itemEvent({
-        sessionID: cfg.sessionId,
-        turnID: turn.turnID,
-        source: "claude",
-        type: failed ? "item.failed" : "item.completed",
-        itemID,
-        actor: "tool",
-        providerEventID: providerID,
-        payload: {
-          kind: "tool_result",
-          output: item.content,
-          is_error: failed,
-        },
-      });
-      if (!needsInputItemIDs.has(itemID)) return [completed];
-      needsInputItemIDs.delete(itemID);
-      return [
-        completed,
-        itemEvent({
-          sessionID: cfg.sessionId,
-          turnID: turn.turnID,
-          source: "claude",
-          type: "tool.approval_resolved",
-          itemID,
-          actor: "tool",
-          providerEventID: providerID,
-          payload: {
-            kind: "needs_input",
-            resolved: true,
-            is_error: failed,
-          },
-        }),
-      ];
-    });
-  }
-  if (message.type === "result") {
-    if (turn.interrupted && turn.terminalEmitted) return [];
-    const failed = message.is_error === true || message.subtype === "error";
-    return [
-      turnEvent({
-        sessionID: cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "claude",
-        type: turn.interrupted ? "turn.interrupted" : failed ? "turn.failed" : "turn.completed",
-        reason: turn.interrupted ? "client_interrupt" : failed ? "provider_failure" : undefined,
-        usage: message.usage,
-        error: failed ? message.result ?? message.error : undefined,
-        providerEventID: providerID,
-      }),
-    ];
-  }
-  return [];
 }
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -445,7 +272,7 @@ export class Runner {
 
   private async handleClientFrame(frame: ClientFrame): Promise<void> {
     if (frame.type === "user") {
-      const text = userMessageText(frame.message?.content);
+      const text = claudeUserMessageText(frame.message?.content);
       const pendingTurn = await this.recordUserSubmission(text, frame.message, frame.client_nonce);
       if (!pendingTurn) return;
       this.pendingTurns.push(pendingTurn);
@@ -500,7 +327,7 @@ export class Runner {
   }
 
   private async ensureActiveTurn(event: RunnerEvent): Promise<PendingTurn | null> {
-    if (!this.activeTurn && this.pendingTurns.length > 0 && startsProviderTurn(event)) {
+    if (!this.activeTurn && this.pendingTurns.length > 0 && startsClaudeTurn(event)) {
       this.activeTurn = this.pendingTurns.shift() ?? null;
       if (this.activeTurn && !this.activeTurn.started) {
         this.activeTurn.started = true;
@@ -562,8 +389,4 @@ export class Runner {
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
   }
-}
-
-function startsProviderTurn(event: RunnerEvent): boolean {
-  return event.type === "assistant" || event.type === "user" || event.type === "result";
 }
