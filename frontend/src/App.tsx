@@ -80,8 +80,29 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import {
+  initialConversationState,
+  reduceConversationEvents,
+  type ConversationReducerState,
+} from "./conversationReducer";
+import {
+  projectConversationState,
+  type ConversationViewEntry,
+} from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
+import {
+  applyProviderEvent,
+  isProviderAbortMessage,
+  parseProviderRunHistory,
+  providerFrameEffects,
+  type ToolKind,
+} from "./providerEventAdapters";
 import { ProviderIcon } from "./providerIcons";
+import {
+  isDurableTankConversationEvent,
+  isTankConversationEvent,
+  type TankConversationEvent,
+} from "./tankConversation";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 
 type SessionMode =
@@ -105,7 +126,6 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 type AgentSessionActivity = "waiting" | "working";
-type ToolKind = "mcp" | "shell";
 type TranscriptEntry = SandboxTranscriptEntry & {
   toolKind?: ToolKind;
   toolServer?: string;
@@ -1700,22 +1720,6 @@ function appendMeta(
   ];
 }
 
-function appendAssistantMessage(
-  entries: TranscriptEntry[],
-  id: string,
-  text: string,
-  time: string = nowIso(),
-): TranscriptEntry[] {
-  if (!text.trim()) return entries;
-  return upsertEntry(entries, {
-    id,
-    kind: "message",
-    role: "assistant",
-    text,
-    time,
-  });
-}
-
 function skillInvocationTitle(name: string): string {
   return `You started ${name} skill`;
 }
@@ -1723,40 +1727,6 @@ function skillInvocationTitle(name: string): string {
 function skillActionText(name: string): string {
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} skill`;
 }
-
-function skillSupplementalText(name: string, text: string): string {
-  const trimmed = text.trim();
-  const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
-  return trimmed.replace(triggerPattern, "").trim();
-}
-
-function skillNameFromTrigger(text: string): string | null {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^[$/]([A-Za-z0-9_-]{1,64})$/);
-  return match ? match[1] : null;
-}
-
-function hasSkillInvocation(entries: TranscriptEntry[], name: string): boolean {
-  return entries.some(
-    (entry) =>
-      entry.kind === "meta" &&
-      entry.meta?.title === skillInvocationTitle(name),
-  );
-}
-
-function hasUserMessageText(entries: TranscriptEntry[], text: string): boolean {
-  const normalized = text.trim();
-  return Boolean(
-    normalized &&
-      entries.some(
-        (entry) =>
-          entry.kind === "message" &&
-          entry.role === "user" &&
-          entry.text?.trim() === normalized,
-      ),
-  );
-}
-
 
 function appendSkillInvocation(
   entries: TranscriptEntry[],
@@ -1786,22 +1756,6 @@ function appendSkillInvocation(
   );
 }
 
-function describeUsage(usage: unknown): string {
-  if (!isJsonObject(usage)) return "";
-  const input = usage.input_tokens;
-  const cached = usage.cached_input_tokens;
-  const output = usage.output_tokens;
-  const reasoning = usage.reasoning_output_tokens;
-  return [
-    typeof input === "number" ? `input ${input}` : null,
-    typeof cached === "number" ? `cached ${cached}` : null,
-    typeof output === "number" ? `output ${output}` : null,
-    typeof reasoning === "number" ? `reasoning ${reasoning}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
 function eventID(event: JsonObject, fallbackPrefix: string): string {
   if (typeof event.uuid === "string" && event.uuid) return event.uuid;
   if (typeof event.id === "string" && event.id) return event.id;
@@ -1813,17 +1767,6 @@ function eventID(event: JsonObject, fallbackPrefix: string): string {
     return event.tank_order_key;
   }
   return `${fallbackPrefix}-${eventTime(event)}-${stableStringHash(shortJson(event))}`;
-}
-
-function eventOrderKey(event: JsonObject): string {
-  if (typeof event.order_key === "string" && event.order_key) {
-    return event.order_key;
-  }
-  if (typeof event.tank_order_key === "string" && event.tank_order_key) {
-    return event.tank_order_key;
-  }
-  const time = eventTime(event);
-  return [time, eventID(event, "event")].join("-");
 }
 
 function eventSequenceCursor(event: JsonObject): string {
@@ -1883,500 +1826,29 @@ function sdkHeartbeatInterval(value: unknown): number {
   return Math.min(60_000, Math.max(5_000, value));
 }
 
-function isSdkTimelineEvent(mode: SessionMode, event: JsonObject): boolean {
-  if (isCanonicalConversationEvent(event)) return event.visibility !== "live-only";
-  const type = event.type;
-  if (type === "tank.user_message") return true;
-  if (mode === "codex_gui") {
-    return (
-      type === "thread.started" ||
-      type === "turn.completed" ||
-      type === "turn.failed" ||
-      type === "turn.interrupted" ||
-      type === "item.completed" ||
-      type === "error"
-    );
-  }
-  if (type === "assistant" || type === "user" || type === "result" || type === "rate_limit") {
-    return true;
-  }
-  return (
-    type === "system" &&
-    (event.subtype === "init" ||
-      event.subtype === "compact_boundary" ||
-      event.subtype === "tool_use_summary" ||
-      event.subtype === "permission_denied" ||
-      event.subtype === "plugin_install")
-  );
-}
-
-function codexTurnScope(event: JsonObject): string {
-  const turnSeq = event.tank_turn_seq;
-  if (typeof turnSeq === "number" && Number.isFinite(turnSeq)) return String(turnSeq);
-  if (typeof turnSeq === "string" && turnSeq) return turnSeq;
-  return eventID(event, "codex-event");
-}
-
-function codexItemEntryId(event: JsonObject, item: JsonObject, fallbackPrefix: string): string {
-  const itemId = typeof item.id === "string" && item.id ? item.id : "";
-  if (itemId) return `${fallbackPrefix}-${codexTurnScope(event)}-${itemId}`;
-  return `${fallbackPrefix}-${eventID(event, fallbackPrefix)}`;
-}
-
-function codexToolEntry(event: JsonObject): TranscriptEntry | null {
-  const item = event.item;
-  if (!isJsonObject(item)) return null;
-  const id = codexItemEntryId(event, item, "codex-tool");
-  const status = codexItemStatus(event, item);
-  const itemType = item.type;
-  const time = eventTime(event);
-
-  if (itemType === "command_execution") {
-    const command = typeof item.command === "string" ? item.command : "command";
-    return {
-      id,
-      kind: "tool",
-      toolKind: "shell",
-      toolName: command,
-      toolInput: command,
-      toolOutput: shortJson(item.aggregated_output),
-      toolStatus: status,
-      time,
-    };
-  }
-
-  if (itemType === "file_change") {
-    return {
-      id,
-      kind: "tool",
-      toolName: "file change",
-      toolInput: shortJson(item.changes),
-      toolStatus: status,
-      time,
-    };
-  }
-
-  if (itemType === "mcp_tool_call") {
-    const server = typeof item.server === "string" ? item.server : "mcp";
-    const tool = typeof item.tool === "string" ? item.tool : "tool";
-    return {
-      id,
-      kind: "tool",
-      toolKind: "mcp",
-      toolServer: server,
-      toolAction: tool,
-      toolName: `${server}.${tool}`,
-      toolInput: shortJson(item.arguments),
-      toolOutput: shortJson(item.result ?? item.error),
-      toolStatus: status,
-      time,
-    };
-  }
-
-  if (itemType === "web_search") {
-    return {
-      id,
-      kind: "tool",
-      toolName: "web search",
-      toolInput: typeof item.query === "string" ? item.query : shortJson(item),
-      toolStatus: status,
-      time,
-    };
-  }
-
-  return null;
-}
-
-function codexItemStatus(event: JsonObject, item: JsonObject): string {
-  if (typeof item.status === "string" && item.status) return item.status;
-  if (event.type === "item.started") return "started";
-  if (event.type === "item.updated") return "running";
-  if (event.type === "item.completed") {
-    return item.error ? "failed" : "completed";
-  }
-  return String(event.type ?? "");
-}
-
-function isCodexAbortMessage(message: unknown): boolean {
-  return typeof message === "string" && /operation was aborted/i.test(message);
-}
-
-function isCodexToolishItemType(itemType: string): boolean {
-  return (
-    itemType === "command_execution" ||
-    itemType === "file_change" ||
-    itemType === "mcp_tool_call" ||
-    itemType === "web_search"
-  );
-}
-
-function tankUserMessageText(event: JsonObject): string {
-  if (isJsonObject(event.payload)) {
-    if (typeof event.payload.text === "string") return event.payload.text.trim();
-    if (typeof event.payload.message === "string") return event.payload.message.trim();
-    if (isJsonObject(event.payload.message)) {
-      const content = event.payload.message.content;
-      if (typeof content === "string") return content.trim();
-    }
-  }
-  if (typeof event.message === "string") return event.message.trim();
-  if (isJsonObject(event.message)) {
-    const content = event.message.content;
-    if (typeof content === "string") return content.trim();
-    if (Array.isArray(content)) {
-      return content
-        .map((block) =>
-          isJsonObject(block) && block.type === "text" && typeof block.text === "string"
-            ? block.text
-            : "",
-        )
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-    }
-  }
-  return "";
-}
-
-function isCanonicalConversationEvent(event: JsonObject): boolean {
-  return (
-    typeof event.event_id === "string" &&
-    typeof event.session_id === "string" &&
-    typeof event.visibility === "string" &&
-    typeof event.actor === "string" &&
-    typeof event.source === "string"
-  );
-}
-
-function applyCanonicalConversationEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
-  if (event.type === "user_message.created") {
-    return applyTankUserMessageEvent(entries, event);
-  }
-  // Phase 2 producers write canonical turn/item lifecycle for the future
-  // reducer. The legacy pane still renders provider-shaped events, so avoid
-  // showing duplicate lifecycle meta rows until Phase 3 switches projection.
-  return entries;
-}
-
-function applyTankUserMessageEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
-  const text = tankUserMessageText(event);
-  if (!text || hasUserMessageText(entries, text)) return entries;
-  const skillName = skillNameFromTrigger(text);
-  if (skillName && hasSkillInvocation(entries, skillName)) return entries;
-  return upsertEntry(entries, {
-    id: `tank-user-message-${eventID(event, "tank-user-message")}`,
-    kind: "message",
-    role: "user",
-    text,
-    time: eventTime(event),
-  });
-}
-
-function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
-  const type = event.type;
-  const time = eventTime(event);
-  if (type === "thread.started") {
-    const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
-    return appendMeta(entries, `codex-thread-${eventID(event, threadId || "codex-thread")}`, "Codex thread started", threadId, "info", time);
-  }
-  if (type === "turn.started") {
-    return appendMeta(entries, `codex-turn-started-${eventID(event, "codex-turn-started")}`, "Turn started", undefined, "info", time);
-  }
-  if (type === "turn.completed") {
-    return appendMeta(entries, `codex-turn-completed-${eventID(event, "codex-turn-completed")}`, "Turn completed", describeUsage(event.usage), "info", time);
-  }
-  if (type === "turn.interrupted") {
-    return appendMeta(
-      entries,
-      `codex-turn-interrupted-${eventID(event, "codex-turn-interrupted")}`,
-      "Turn stopped",
-      typeof event.reason === "string" ? event.reason : undefined,
-      "info",
-      time,
-    );
-  }
-  if (type === "turn.failed" || type === "error") {
-    const error = isJsonObject(event.error) ? event.error.message : event.message;
-    if (isCodexAbortMessage(error)) {
-      return appendMeta(
-        entries,
-        `codex-turn-stopped-${eventID(event, "codex-turn-stopped")}`,
-        "Turn stopped",
-        "The turn was interrupted before completion.",
-        "info",
-        time,
-      );
-    }
-    return appendMeta(
-      entries,
-      `codex-error-${eventID(event, "codex-error")}`,
-      type === "turn.failed" ? "Turn failed" : "Codex error",
-      typeof error === "string" ? error : shortJson(event),
-      "error",
-      time,
-    );
-  }
-  if (type === "item.started" || type === "item.updated" || type === "item.completed") {
-    const item = event.item;
-    if (!isJsonObject(item)) return entries;
-    if (item.type === "agent_message") {
-      return appendAssistantMessage(
-        entries,
-        codexItemEntryId(event, item, "codex-message"),
-        typeof item.text === "string" ? item.text : "",
-        time,
-      );
-    }
-    if (item.type === "reasoning") {
-      const id = codexItemEntryId(event, item, "codex-reasoning");
-      return upsertEntry(entries, {
-        id,
-        kind: "reasoning",
-        time,
-        reasoning: { text: typeof item.text === "string" ? item.text : shortJson(item) },
-      });
-    }
-    const toolEntry = codexToolEntry(event);
-    return toolEntry ? upsertEntry(entries, toolEntry) : entries;
-  }
-  return appendMeta(entries, `codex-event-${eventID(event, "codex-event")}`, String(type || "Codex event"), shortJson(event), "info", time);
-}
-
-function claudeTextFromContent(content: unknown, includeToolResults: boolean): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((block) => {
-      if (!isJsonObject(block)) return "";
-      if (block.type === "text" && typeof block.text === "string") return block.text;
-      if (includeToolResults && block.type === "tool_result") return shortJson(block.content);
-      return "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
-}
-
-function claudeToolEntries(event: JsonObject): TranscriptEntry[] {
-  const message = event.message;
-  if (!isJsonObject(message) || !Array.isArray(message.content)) return [];
-  const time = eventTime(event);
-  return message.content.flatMap((block): TranscriptEntry[] => {
-    if (!isJsonObject(block) || block.type !== "tool_use") return [];
-    const id = typeof block.id === "string" ? block.id : `claude-tool-${Date.now()}`;
-    const toolName = typeof block.name === "string" ? block.name : "tool";
-    const mcpMatch = /^mcp__([^_]+)__(.+)$/.exec(toolName);
-    const toolKind = mcpMatch ? "mcp" : toolName === "Bash" ? "shell" : undefined;
-    return [
-      {
-        id,
-        kind: "tool",
-        toolName,
-        ...(toolKind
-          ? {
-              toolKind,
-              ...(mcpMatch
-                ? {
-                    toolServer: mcpMatch[1],
-                    toolAction: mcpMatch[2],
-                  }
-                : {}),
-            }
-          : {}),
-        toolInput: shortJson(block.input),
-        toolStatus: "started",
-        time,
-      },
-    ];
-  });
-}
-
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const text = content
-      .map((b) => (isJsonObject(b) && b.type === "text" && typeof b.text === "string" ? b.text : ""))
-      .filter(Boolean)
-      .join("\n");
-    return text || shortJson(content);
-  }
-  return shortJson(content);
+function isSdkTimelineEvent(event: unknown): event is TankConversationEvent {
+  return isDurableTankConversationEvent(event);
 }
 
 function isScheduleWakeupToolName(name: string | undefined): boolean {
   return (name ?? "").toLowerCase() === "schedulewakeup";
 }
 
-function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
-  const message = event.message;
-  if (!isJsonObject(message) || !Array.isArray(message.content)) return entries;
-  const time = eventTime(event);
-  return message.content.reduce<TranscriptEntry[]>((nextEntries, block) => {
-    if (!isJsonObject(block) || block.type !== "tool_result") return nextEntries;
-    const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
-    if (!toolUseId) return nextEntries;
-    const existing = nextEntries.find((entry) => entry.id === toolUseId);
-    return upsertEntry(nextEntries, {
-      id: toolUseId,
-      kind: "tool",
-      toolName: existing?.toolName ?? "tool result",
-      toolInput: existing?.toolInput,
-      toolOutput: toolResultText(block.content),
-      toolStatus: block.is_error === true ? "failed" : "completed",
-      time: existing?.time ?? time,
-    });
-  }, entries);
-}
-
-function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
+function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
+  if (!isTankConversationEvent(event)) return null;
   const type = event.type;
-  const time = eventTime(event);
-  // Skip events that have no chat-visible meaning. stream_event is the
-  // SDK's typewriter-partial channel (deltas inside an in-flight turn) —
-  // the final `assistant` event carries the full content, so we silently
-  // drop the partials. Before this filter they fell through to the
-  // fallback appendMeta and briefly rendered as raw JSON until the
-  // history-replay path clobbered them.
-  if (
-    type === "system" ||
-    type === "stream_event" ||
-    type === "rate_limit_event" ||
-    type === "ai-title" ||
-    type === "last-prompt" ||
-    type === "attachment" ||
-    type === "queue-operation"
-  ) {
-    return entries;
-  }
-  if (type === "assistant") {
-    let nextEntries = entries;
-    for (const toolEntry of claudeToolEntries(event)) {
-      nextEntries = upsertEntry(nextEntries, toolEntry);
-    }
-    const message = event.message;
-    const text = isJsonObject(message) ? claudeTextFromContent(message.content, false) : "";
-    if (text) {
-      nextEntries = appendAssistantMessage(
-        nextEntries,
-        typeof event.uuid === "string" ? event.uuid : `claude-message-${Date.now()}`,
-        text,
-        time,
-      );
-    }
-    return nextEntries;
-  }
-  if (type === "user") {
-    // Reconstruct tool results first.
-    let nextEntries = applyClaudeToolResults(entries, event);
-    // Also reconstruct user text messages (initial prompt and follow-ups).
-    // These are stored in the JSONL but not re-emitted by the live stream
-    // (the frontend adds the user bubble directly in startRun). Use text
-    // deduplication so re-running this during live streaming is a no-op.
-    const message = event.message;
-    if (isJsonObject(message)) {
-      const texts: string[] = [];
-      if (typeof message.content === "string") {
-        // Initial prompt stored as a plain string.
-        const t = message.content.trim();
-        if (t) texts.push(t);
-      } else if (Array.isArray(message.content)) {
-        // A user event with tool_result blocks is a tool-response turn; any
-        // text blocks alongside them are echoed context (e.g. agent prompts),
-        // not human input — skip text extraction entirely for those events.
-        const hasToolResults = (message.content as unknown[]).some(
-          (b) => isJsonObject(b) && b.type === "tool_result",
-        );
-        if (!hasToolResults) {
-          for (const block of message.content as unknown[]) {
-            if (!isJsonObject(block) || block.type !== "text") continue;
-            const t = typeof block.text === "string" ? block.text.trim() : "";
-            if (t) texts.push(t);
-          }
-        }
-      }
-      const baseId = eventID(event, "claude-user-message");
-      for (const [index, text] of texts.entries()) {
-        const skillName = skillNameFromTrigger(text);
-        if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
-        if (hasUserMessageText(nextEntries, text)) continue;
-        nextEntries = upsertEntry(nextEntries, {
-          id: `${baseId}-${index}`,
-          kind: "message",
-          role: "user",
-          text,
-          time,
-        });
-      }
-    }
-    return nextEntries;
-  }
-  if (type === "result") {
-    const isError = event.is_error === true || event.subtype === "error";
-    const result = typeof event.result === "string" ? event.result : "";
-    const id = eventID(event, "claude-result");
-    if (!isError) {
-      if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-        return appendAssistantMessage(entries, `claude-result-message-${id}`, result, time);
-      }
-      return entries;
-    }
-    let nextEntries = appendMeta(
-      entries,
-      `claude-result-${id}`,
-      "Claude run failed",
-      result,
-      "error",
-      time,
-    );
-    if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${id}`, result, time);
-    }
-    return nextEntries;
-  }
-  return appendMeta(entries, `claude-event-${eventID(event, "claude-event")}`, String(type || "Claude event"), shortJson(event), "info", time);
-}
-
-function applyProviderEvent(
-  entries: TranscriptEntry[],
-  mode: SessionMode,
-  event: JsonObject,
-): TranscriptEntry[] {
-  if (isCanonicalConversationEvent(event)) {
-    return applyCanonicalConversationEvent(entries, event);
-  }
-  if (event.type === "tank.user_message") {
-    return applyTankUserMessageEvent(entries, event);
-  }
-  if (event.type === "tank.skill_invocation") {
-    const name = typeof event.name === "string" ? event.name.trim() : "";
-    const trigger = typeof event.trigger === "string" ? event.trigger : "";
-    return name
-      ? appendSkillInvocation(entries, name, skillSupplementalText(name, trigger), eventTime(event))
-      : entries;
-  }
-  if (mode === "codex_gui") return applyCodexEvent(entries, event);
-  return applyClaudeEvent(entries, event);
-}
-
-function sdkTerminalResult(event: JsonObject): SdkTerminalResult | null {
-  const type = event.type;
-  if (type === "result") {
-    const failed = event.is_error === true || event.subtype === "error";
-    return {
-      status: failed ? "error" : "done",
-      detail: typeof event.result === "string" ? event.result : undefined,
-    };
-  }
   if (type === "turn.completed") {
     return { status: "done" };
   }
   if (type === "turn.interrupted") {
     return { status: "stopped" };
   }
-  if (type === "turn.failed" || type === "error") {
-    const error = isJsonObject(event.error) ? event.error.message : event.message;
-    if (isCodexAbortMessage(error)) return { status: "stopped" };
+  if (type === "turn.failed") {
+    const error = event.payload?.error;
+    if (isProviderAbortMessage(error)) return { status: "stopped" };
     return {
       status: "error",
-      detail: typeof error === "string" ? error : shortJson(event),
+      detail: typeof error === "string" ? error : shortJson(event.payload ?? event),
     };
   }
   return null;
@@ -2388,8 +1860,8 @@ function sdkHistoryTerminalForRun(
 ): SdkTerminalResult | undefined {
   let afterRunUserMessage = false;
   for (const event of events) {
-    if (!isJsonObject(event)) continue;
-    if (event.type === "tank.user_message" || event.type === "user_message.created") {
+    if (!isTankConversationEvent(event)) continue;
+    if (event.type === "user_message.created") {
       if (afterRunUserMessage) return undefined;
       if (event.client_nonce === clientNonce) afterRunUserMessage = true;
       continue;
@@ -2504,9 +1976,7 @@ function normalizeToolState(status: string | undefined): string {
     normalized === "running" ||
     normalized === "pending" ||
     normalized === "in_progress" ||
-    normalized === "in-progress" ||
-    normalized === "item.started" ||
-    normalized === "item.updated"
+    normalized === "in-progress"
   ) {
     return "running";
   }
@@ -3021,49 +2491,23 @@ function entryMetaFingerprint(entry: TranscriptEntry): string | null {
   ].join("\u0000");
 }
 
-function annotateEntriesFromEvent(
-  before: TranscriptEntry[],
-  after: TranscriptEntry[],
-  source: "server" | "realtime",
-  event: JsonObject,
-): TranscriptEntry[] {
-  const known = new Set(before.map((entry) => entry.id));
-  const sourceEventId = eventID(event, `${source}-event`);
-  const orderKey = eventOrderKey(event);
-  return after.map((entry) =>
-    known.has(entry.id)
-      ? entry
-      : {
-          ...entry,
-          transcriptSource: source,
-          sourceEventId,
-          orderKey,
-        },
-  );
-}
-
-function applySdkProviderEvent(
-  entries: TranscriptEntry[],
-  mode: SessionMode,
-  event: JsonObject,
-  source: "server" | "realtime",
-): TranscriptEntry[] {
-  return annotateEntriesFromEvent(
-    entries,
-    applyProviderEvent(entries, mode, event),
-    source,
-    event,
-  );
-}
-
 function shouldDropRealtimeEntry(
   entry: TranscriptEntry,
   serverIds: Set<string>,
   serverEventIds: Set<string>,
   serverMetaFingerprints: Set<string>,
+  serverMessageFingerprints: Set<string>,
 ): boolean {
   if (serverIds.has(entry.id)) return true;
   if (entry.sourceEventId && serverEventIds.has(entry.sourceEventId)) return true;
+  const messageFingerprint = entryMessageFingerprint(entry);
+  if (
+    entry.localOnly &&
+    messageFingerprint &&
+    serverMessageFingerprints.has(messageFingerprint)
+  ) {
+    return true;
+  }
   const metaFingerprint = entryMetaFingerprint(entry);
   return Boolean(
     metaFingerprint &&
@@ -3086,6 +2530,11 @@ function pruneRealtimeEntries(
       .map(entryMetaFingerprint)
       .filter((fingerprint): fingerprint is string => fingerprint !== null),
   );
+  const serverMessageFingerprints = new Set(
+    server
+      .map(entryMessageFingerprint)
+      .filter((fingerprint): fingerprint is string => fingerprint !== null),
+  );
   return realtime.filter(
     (entry) =>
       !shouldDropRealtimeEntry(
@@ -3093,6 +2542,7 @@ function pruneRealtimeEntries(
         serverIds,
         serverEventIds,
         serverMetaFingerprints,
+        serverMessageFingerprints,
       ),
   );
 }
@@ -3143,20 +2593,31 @@ function mergeSdkTranscript(
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
-function parseRunHistory(text: string, mode: SessionMode): TranscriptEntry[] {
-  let acc: TranscriptEntry[] = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const ev = JSON.parse(line);
-      if (isJsonObject(ev)) {
-        acc = applyProviderEvent(acc, mode, ev);
-      }
-    } catch {
-      /* skip unparseable history lines */
-    }
-  }
-  return acc;
+function orderedConversationEvents(events: TankConversationEvent[]): TankConversationEvent[] {
+  return events
+    .map((event, index) => ({ event, index }))
+    .sort((a, b) => {
+      const keyCompare = conversationEventSortKey(a.event).localeCompare(
+        conversationEventSortKey(b.event),
+      );
+      return keyCompare !== 0 ? keyCompare : a.index - b.index;
+    })
+    .map((item) => item.event);
+}
+
+function conversationEventSortKey(event: TankConversationEvent): string {
+  return [
+    event.order_key ?? "",
+    event.created_at,
+    event.sequence == null ? "" : String(event.sequence).padStart(12, "0"),
+    event.event_id,
+  ].join("\u001f");
+}
+
+function conversationEntriesToTranscript(
+  entries: ConversationViewEntry[],
+): TranscriptEntry[] {
+  return entries.map((entry) => entry as TranscriptEntry);
 }
 
 type ActiveRunData = {
@@ -4075,6 +3536,10 @@ function HeadlessRun({
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
+  const sdkServerEventsRef = useRef<TankConversationEvent[]>([]);
+  const sdkRealtimeEventsRef = useRef<TankConversationEvent[]>([]);
+  const sdkConversationStateRef = useRef<ConversationReducerState>(initialConversationState);
+  const sdkAssistantDurationsRef = useRef<Map<string, number>>(new Map());
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
@@ -4099,9 +3564,9 @@ function HeadlessRun({
   // interval while running so the bar updates without a per-element timer.
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
-  // Context tokens used in the most recent assistant turn — updated via
-  // applyStdoutLine when an `assistant` or `result` event with usage info
-  // arrives. Drives the % ring in the composer footer.
+  // Context tokens used in the most recent assistant turn. Legacy streams
+  // update this from provider stdout; SDK sessions update it from the
+  // canonical conversation projection.
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
@@ -4233,7 +3698,34 @@ function HeadlessRun({
       orderKey: entry.orderKey ?? `${localOrderKey(nonce)}-${index}`,
     }));
   }
+  function applySdkAssistantDurations(entries: TranscriptEntry[]): TranscriptEntry[] {
+    if (sdkAssistantDurationsRef.current.size === 0) return entries;
+    return entries.map((entry) => {
+      if (entry.kind !== "message" || entry.role !== "assistant") return entry;
+      const durationMs = sdkAssistantDurationsRef.current.get(entry.id);
+      return durationMs == null ? entry : ({ ...entry, durationMs } as TranscriptEntry);
+    });
+  }
+  function reduceSdkConversationState(): ConversationReducerState {
+    return reduceConversationEvents(
+      orderedConversationEvents([
+        ...sdkServerEventsRef.current,
+        ...sdkRealtimeEventsRef.current,
+      ]),
+      initialConversationState,
+    );
+  }
   function syncSdkRenderedEntries(): void {
+    const state = reduceSdkConversationState();
+    sdkConversationStateRef.current = state;
+    const projection = projectConversationState(state);
+    sdkServerEntriesRef.current = applySdkAssistantDurations(
+      conversationEntriesToTranscript(projection.entries),
+    );
+    sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
+      sdkServerEntriesRef.current,
+      sdkRealtimeEntriesRef.current,
+    );
     const merged = mergeSdkTranscript(
       sdkServerEntriesRef.current,
       sdkRealtimeEntriesRef.current,
@@ -4241,15 +3733,61 @@ function HeadlessRun({
     setEntries((prev) =>
       transcriptComparable(prev) === transcriptComparable(merged) ? prev : merged,
     );
+    applySdkProjectionToUi(projection);
   }
-  function replaceSdkServerEntries(
-    serverEntries: TranscriptEntry[],
+  function applySdkProjectionToUi(
+    projection: ReturnType<typeof projectConversationState>,
+  ): void {
+    const total = totalContextTokens(projection.lastUsage as ClaudeUsage | undefined);
+    if (total > 0) setTokensUsed(total);
+
+    const sdkActive =
+      projection.runStatus === "submitted" ||
+      projection.runStatus === "streaming" ||
+      projection.runStatus === "needs_input";
+    if (projection.activeToolName) {
+      setActiveTool(projection.activeToolName, projection.activeItemId);
+    } else if (!sdkActive) {
+      setActiveTool(null);
+    }
+
+    if (currentRunRef.current) {
+      if (sdkActive) {
+        setRunStatus("running");
+        setRunning(true);
+      }
+      return;
+    }
+
+    if (sdkActive) {
+      setRunStatus("running");
+      setRunning(true);
+      setRunStartedAt((startedAt) => startedAt ?? Date.now());
+      setNow(Date.now());
+      return;
+    }
+
+    setRunning(false);
+    setActiveRunId(null);
+    if (projection.runStatus === "error") {
+      setRunStatus("error");
+      setLastStatusText("Error");
+    } else if (projection.runStatus === "stopped") {
+      setRunStatus("done");
+      setLastStatusText("Stopped");
+    } else {
+      setRunStatus((prev) => (prev === "running" ? "done" : prev));
+    }
+  }
+  function replaceSdkServerEvents(
+    serverEvents: TankConversationEvent[],
     clearRealtime = false,
   ): void {
-    sdkServerEntriesRef.current = serverEntries;
-    sdkRealtimeEntriesRef.current = clearRealtime
-      ? []
-      : pruneRealtimeEntries(serverEntries, sdkRealtimeEntriesRef.current);
+    sdkServerEventsRef.current = serverEvents;
+    if (clearRealtime) {
+      sdkRealtimeEventsRef.current = [];
+      sdkRealtimeEntriesRef.current = [];
+    }
     syncSdkRenderedEntries();
   }
   function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
@@ -4261,40 +3799,29 @@ function HeadlessRun({
     );
     syncSdkRenderedEntries();
   }
-  function advanceSdkTimelineCursor(event: JsonObject): void {
-    if (!isSdkTimelineEvent(session.mode, event)) return;
+  function advanceSdkTimelineCursor(event: unknown): void {
+    if (!isSdkTimelineEvent(event)) return;
     sdkTimelineCursorRef.current = advanceTimelineCursor(
       sdkTimelineCursorRef.current,
-      eventTimelineCursor(event),
+      eventTimelineCursor(event as unknown as JsonObject),
     );
   }
   function applySdkRealtimeEvent(event: JsonObject): void {
+    if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    const nextRealtime = applySdkProviderEvent(
-      sdkRealtimeEntriesRef.current,
-      session.mode,
-      event,
-      "realtime",
-    );
-    sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
-      sdkServerEntriesRef.current,
-      pruneLocalRealtimeEchoes(nextRealtime.slice(-500)),
-    );
+    if (!sdkRealtimeEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
+      sdkRealtimeEventsRef.current = [...sdkRealtimeEventsRef.current, event].slice(-1000);
+    }
     syncSdkRenderedEntries();
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
-    const update = (list: TranscriptEntry[]) => {
-      for (let i = list.length - 1; i >= 0; i -= 1) {
-        if (list[i].kind === "message" && list[i].role === "assistant") {
-          const next = [...list];
-          next[i] = { ...next[i], durationMs } as TranscriptEntry;
-          return next;
-        }
+    for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
+      const entry = sdkServerEntriesRef.current[i];
+      if (entry.kind === "message" && entry.role === "assistant") {
+        sdkAssistantDurationsRef.current.set(entry.id, durationMs);
+        break;
       }
-      return list;
-    };
-    sdkRealtimeEntriesRef.current = update(sdkRealtimeEntriesRef.current);
-    sdkServerEntriesRef.current = update(sdkServerEntriesRef.current);
+    }
     syncSdkRenderedEntries();
   }
   const queuedMessageSeqRef = useRef(0);
@@ -4458,8 +3985,8 @@ function HeadlessRun({
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
     // SDK pods have a durable canonical log in Cosmos session-events; hit
-    // that directly. Legacy path tries the structured replay first and falls
-    // back to raw JSONL history. Both feed the same applyProviderEvent.
+    // that directly. Legacy path tries structured run events first and falls
+    // back to adapter-parsed provider JSONL.
     const initial =
       session.runtime === "sdk"
         ? refreshSdkRunHistory(showHint)
@@ -4518,10 +4045,9 @@ function HeadlessRun({
   }
 
   // SDK-runtime history replay. Hits the canonical event log written by the
-  // pod-side agent-runner (Cosmos session-events container, exposed via
-  // /api/sessions/{id}/timeline). Each event is the same shape applyProviderEvent
-  // already consumes — the chat pane was built around Claude's stream-json,
-  // which the SDK is a TypeScript wrapper over the same binary's stdout.
+  // pod-side runner (Cosmos session-events container, exposed via
+  // /api/sessions/{id}/timeline), then renders through the same reducer and
+  // projection path used for live SDK frames.
   function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
     return refreshSdkRunHistoryResult(showHint, clearRealtime).then(
       (result) => result.replayed,
@@ -4566,18 +4092,18 @@ function HeadlessRun({
         if (!nextAfter || nextAfter === previousAfter) break;
       }
 
-      let acc: TranscriptEntry[] = [];
+      const canonicalEvents: TankConversationEvent[] = [];
       for (const ev of events) {
-        if (isJsonObject(ev)) {
+        if (isTankConversationEvent(ev)) {
           advanceSdkTimelineCursor(ev);
-          acc = applySdkProviderEvent(acc, session.mode, ev, "server");
+          if (ev.visibility !== "live-only") canonicalEvents.push(ev);
         }
       }
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(events, clientNonce)
         : undefined;
-      if (acc.length === 0) return { replayed: false, terminal };
-      replaceSdkServerEntries(acc, clearRealtime);
+      if (canonicalEvents.length === 0) return { replayed: false, terminal };
+      replaceSdkServerEvents(canonicalEvents, clearRealtime);
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -4620,7 +4146,7 @@ function HeadlessRun({
       .then((text) => {
         if (sessionIdRef.current !== refreshSessionId) return;
         if (!text) return;
-        const acc = parseRunHistory(text, session.mode);
+        const acc = parseProviderRunHistory(text, session.mode) as TranscriptEntry[];
         if (acc.length > 0) {
           let behind = false;
           setEntries((prev) => {
@@ -4996,6 +4522,10 @@ function HeadlessRun({
     sessionIdRef.current = session.id;
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
+    sdkServerEventsRef.current = [];
+    sdkRealtimeEventsRef.current = [];
+    sdkConversationStateRef.current = initialConversationState;
+    sdkAssistantDurationsRef.current = new Map();
     sdkTimelineCursorRef.current = null;
     setEntries([]);
     setQueuedMessages([]);
@@ -5343,33 +4873,14 @@ function HeadlessRun({
       return;
     }
     if (!isJsonObject(providerEvent)) return;
-    // Track context-window usage from claude's stream-json events. The
-    // assistant message and the final result both carry a `usage` block;
-    // the result is the most accurate "final state" so prefer it.
-    const t = (providerEvent as JsonObject).type;
-    if (t === "assistant") {
-      const msg = (providerEvent as JsonObject).message;
-      if (isJsonObject(msg)) {
-        const u = (msg as JsonObject).usage as ClaudeUsage | undefined;
-        const total = totalContextTokens(u);
-        if (total > 0) setTokensUsed(total);
-        // Track active tool — first tool_use block in content, if any.
-        if (Array.isArray(msg.content)) {
-          const toolBlock = (msg.content as unknown[]).find(
-            (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
-          );
-          const toolName = toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null;
-          const toolUseId = toolBlock && typeof toolBlock.id === "string" ? toolBlock.id : null;
-          setActiveTool(toolName, toolUseId);
-        }
-      }
-    } else if (t === "user") {
-      completeActiveTool();
-    } else if (t === "result") {
-      const u = (providerEvent as JsonObject).usage as ClaudeUsage | undefined;
-      const total = totalContextTokens(u);
-      if (total > 0) setTokensUsed(total);
-      setActiveTool(null);
+    const effects = providerFrameEffects(providerEvent);
+    const total = totalContextTokens(effects.usage as ClaudeUsage | undefined);
+    if (total > 0) setTokensUsed(total);
+    if (effects.activeTool) {
+      setActiveTool(effects.activeTool.name, effects.activeTool.id ?? null);
+    }
+    if ("completedToolUseId" in effects) {
+      completeActiveTool(effects.completedToolUseId ?? null);
     }
     setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
   }
@@ -5977,66 +5488,9 @@ function HeadlessRun({
         return;
       }
 
-      // Bookkeeping for usage/active-tool. Two flavors of SDK events come
-      // through this WS: claude's `{type:"assistant"|"user"|"result"}` and
-      // codex's `{type:"item.started"|"item.completed"|"turn.completed"}`.
-      // The chat pane renders both shapes via applyProviderEvent → the
-      // right applyXxxEvent for session.mode; the bookkeeping here also
-      // forks on the shape so the streaming pill + context pie work
-      // regardless of which runtime is streaming.
-      const t = parsed.type;
-      if (t === "assistant") {
-        const msg = parsed.message;
-        if (isJsonObject(msg)) {
-          const u = msg.usage as ClaudeUsage | undefined;
-          const total = totalContextTokens(u);
-          if (total > 0) setTokensUsed(total);
-          if (Array.isArray(msg.content)) {
-            const toolBlock = (msg.content as unknown[]).find(
-              (b): b is JsonObject => isJsonObject(b) && b.type === "tool_use",
-            );
-            const toolName =
-              toolBlock && typeof toolBlock.name === "string" ? toolBlock.name : null;
-            const toolUseId =
-              toolBlock && typeof toolBlock.id === "string" ? toolBlock.id : null;
-            setActiveTool(toolName, toolUseId);
-          }
-        }
-      } else if (t === "user") {
-        completeActiveTool();
-      } else if (t === "result") {
-        const u = parsed.usage as ClaudeUsage | undefined;
-        const total = totalContextTokens(u);
-        if (total > 0) setTokensUsed(total);
-        setActiveTool(null);
-      } else if (t === "item.started" || t === "item.updated") {
-        // Codex flag: a tool-like item (command_execution / file_change /
-        // mcp_tool_call / web_search) is in flight. Show its kind on the
-        // streaming pill the same way Claude's tool_use blocks do.
-        const item = parsed.item;
-        if (isJsonObject(item)) {
-          const itemType = typeof item.type === "string" ? item.type : "";
-          if (isCodexToolishItemType(itemType)) {
-            setActiveTool(itemType, typeof item.id === "string" ? item.id : null);
-          }
-        }
-      } else if (t === "item.completed") {
-        const item = parsed.item;
-        if (isJsonObject(item)) {
-          const itemType = typeof item.type === "string" ? item.type : "";
-          if (isCodexToolishItemType(itemType)) {
-            completeActiveTool(typeof item.id === "string" ? item.id : null);
-          }
-        }
-      } else if (t === "turn.completed") {
-        // Codex's per-turn closing event. Usage rides on the event itself
-        // (not nested under `message` like claude does).
-        const u = parsed.usage as ClaudeUsage | undefined;
-        const total = totalContextTokens(u);
-        if (total > 0) setTokensUsed(total);
-        setActiveTool(null);
-      }
-
+      // SDK chat state is derived only from TankConversationEvent frames.
+      // Raw provider frames may still fan out for audit/debug, but they do
+      // not mutate the chat transcript.
       applySdkRealtimeEvent(parsed);
 
       const terminal = sdkTerminalResult(parsed);
