@@ -22,6 +22,29 @@ export type TankEventType =
   | "session.activity_updated"
   | "read_state.updated";
 
+const TANK_EVENT_TYPES = new Set<string>([
+  "conversation.started",
+  "conversation.archived",
+  "user_message.created",
+  "turn.submitted",
+  "turn.started",
+  "turn.completed",
+  "turn.failed",
+  "turn.interrupted",
+  "item.started",
+  "item.delta",
+  "item.completed",
+  "item.failed",
+  "tool.approval_requested",
+  "tool.approval_resolved",
+  "session.activity_updated",
+  "read_state.updated",
+]);
+
+const TANK_ACTORS = new Set<string>(["user", "assistant", "system", "tool", "runner"]);
+const TANK_EVENT_SOURCES = new Set<string>(["tank", "claude", "codex", "legacy-run"]);
+const TANK_VISIBILITIES = new Set<string>(["durable", "live-only", "audit-only"]);
+
 export interface TankProducerMetadata {
   name?: string;
   version?: string;
@@ -48,4 +71,26 @@ export interface TankConversationEvent<
   producer?: TankProducerMetadata;
   visibility: TankVisibility;
   payload?: TPayload;
+}
+
+export function isTankConversationEvent(event: unknown): event is TankConversationEvent {
+  if (!event || typeof event !== "object") return false;
+  const candidate = event as Record<string, unknown>;
+  return (
+    typeof candidate.event_id === "string" &&
+    typeof candidate.session_id === "string" &&
+    typeof candidate.type === "string" &&
+    TANK_EVENT_TYPES.has(candidate.type) &&
+    typeof candidate.actor === "string" &&
+    TANK_ACTORS.has(candidate.actor) &&
+    typeof candidate.source === "string" &&
+    TANK_EVENT_SOURCES.has(candidate.source) &&
+    typeof candidate.created_at === "string" &&
+    typeof candidate.visibility === "string" &&
+    TANK_VISIBILITIES.has(candidate.visibility)
+  );
+}
+
+export function isDurableTankConversationEvent(event: unknown): event is TankConversationEvent {
+  return isTankConversationEvent(event) && event.visibility !== "live-only";
 }

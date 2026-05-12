@@ -17,6 +17,8 @@ export interface ConversationMessage {
   turnId?: string;
   clientNonce?: string;
   orderKey?: string;
+  sourceEventId?: string;
+  createdAt?: string;
 }
 
 export interface ConversationItem {
@@ -28,7 +30,10 @@ export interface ConversationItem {
   status: ConversationItemStatus;
   title?: string;
   text?: string;
+  payload?: Record<string, unknown>;
   orderKey?: string;
+  sourceEventId?: string;
+  createdAt?: string;
 }
 
 export interface ConversationReducerState {
@@ -41,6 +46,8 @@ export interface ConversationReducerState {
   activeItemId: string | null;
   needsInput: boolean;
   failed: boolean;
+  lastError: string | null;
+  lastUsage: unknown | null;
   lastOrderKey: string | null;
   lastReadOrderKey: string | null;
   unreadCount: number;
@@ -56,6 +63,8 @@ export const initialConversationState: ConversationReducerState = {
   activeItemId: null,
   needsInput: false,
   failed: false,
+  lastError: null,
+  lastUsage: null,
   lastOrderKey: null,
   lastReadOrderKey: null,
   unreadCount: 0,
@@ -86,6 +95,7 @@ export function conversationReducer(
         runStatus: "submitted",
         activeTurnId: event.turn_id ?? next.activeTurnId,
         failed: false,
+        lastError: null,
       };
     case "turn.started":
       return {
@@ -93,6 +103,7 @@ export function conversationReducer(
         runStatus: "streaming",
         activeTurnId: event.turn_id ?? next.activeTurnId,
         failed: false,
+        lastError: null,
       };
     case "turn.completed":
       return {
@@ -102,6 +113,8 @@ export function conversationReducer(
         activeItemId: null,
         needsInput: false,
         failed: false,
+        lastError: null,
+        lastUsage: event.payload?.usage ?? next.lastUsage,
       };
     case "turn.failed":
       return {
@@ -111,6 +124,8 @@ export function conversationReducer(
         activeItemId: null,
         needsInput: false,
         failed: true,
+        lastError: errorText(event),
+        lastUsage: event.payload?.usage ?? next.lastUsage,
       };
     case "turn.interrupted":
       return {
@@ -120,6 +135,7 @@ export function conversationReducer(
         activeItemId: null,
         needsInput: false,
         failed: false,
+        lastError: null,
       };
     case "item.started":
       return upsertItem(next, event, "started");
@@ -133,7 +149,13 @@ export function conversationReducer(
       );
     case "item.failed":
       return upsertItem(
-        { ...next, runStatus: "error", failed: true },
+        {
+          ...next,
+          runStatus: "error",
+          failed: true,
+          activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
+          lastError: errorText(event),
+        },
         event,
         "failed",
       );
@@ -149,11 +171,16 @@ export function conversationReducer(
         "started",
       );
     case "tool.approval_resolved":
-      return {
-        ...next,
-        runStatus: next.activeTurnId ? "streaming" : "ready",
-        needsInput: false,
-      };
+      return upsertItem(
+        {
+          ...next,
+          runStatus: next.activeTurnId ? "streaming" : "ready",
+          activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
+          needsInput: false,
+        },
+        event,
+        "completed",
+      );
     case "session.activity_updated":
       return applyActivity(next, event);
     case "read_state.updated":
@@ -183,6 +210,8 @@ function applyUserMessage(
     turnId: event.turn_id,
     clientNonce: event.client_nonce,
     orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
   };
   return {
     ...state,
@@ -202,16 +231,20 @@ function upsertItem(
   const id = event.item_id ?? event.event_id;
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, appendDelta ? "delta" : "text");
+  const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
     parentId: event.parent_id,
     actor: event.actor === "user" ? "runner" : event.actor,
-    kind: stringPayload(event, "kind") ?? defaultItemKind(event),
+    kind: stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
     status,
     title: stringPayload(event, "title") ?? existing?.title,
     text: appendDelta ? [existing?.text, text].filter(Boolean).join("") : (text ?? existing?.text),
+    payload,
     orderKey: event.order_key ?? existing?.orderKey,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at || existing?.createdAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))
@@ -277,6 +310,17 @@ function numberPayload(event: TankConversationEvent, key: string): number | unde
 function booleanPayload(event: TankConversationEvent, key: string): boolean | undefined {
   const value = event.payload?.[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+function errorText(event: TankConversationEvent): string | null {
+  const error = event.payload?.error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  const reason = stringPayload(event, "reason");
+  return reason ?? null;
 }
 
 function isRunStatus(value: string | undefined): value is ConversationRunStatus {

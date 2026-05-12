@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "tsx --test src/conversationReducer.test.ts",
+    "test": "tsx --test src/*.test.ts",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
