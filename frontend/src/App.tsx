@@ -116,6 +116,15 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   localOnly?: boolean;
   clientNonce?: string;
 };
+type SdkTerminalStatus = "done" | "error";
+type SdkTerminalResult = {
+  status: SdkTerminalStatus;
+  detail?: string;
+};
+type SdkHistoryRefreshResult = {
+  replayed: boolean;
+  terminal?: SdkTerminalResult;
+};
 type SkillStateName = "test" | "rollout";
 
 interface Session {
@@ -2176,6 +2185,53 @@ function applyProviderEvent(
   return applyClaudeEvent(entries, event);
 }
 
+function sdkTerminalResult(event: JsonObject): SdkTerminalResult | null {
+  const type = event.type;
+  if (type === "result") {
+    const failed = event.is_error === true || event.subtype === "error";
+    return {
+      status: failed ? "error" : "done",
+      detail: typeof event.result === "string" ? event.result : undefined,
+    };
+  }
+  if (type === "turn.completed") {
+    return { status: "done" };
+  }
+  if (type === "turn.failed" || type === "error") {
+    const error = isJsonObject(event.error) ? event.error.message : event.message;
+    return {
+      status: "error",
+      detail: typeof error === "string" ? error : shortJson(event),
+    };
+  }
+  return null;
+}
+
+function sdkHistoryTerminalForRun(
+  events: unknown[],
+  clientNonce: string,
+): SdkTerminalResult | undefined {
+  let afterRunUserMessage = false;
+  for (const event of events) {
+    if (!isJsonObject(event)) continue;
+    if (event.type === "tank.user_message") {
+      if (afterRunUserMessage) return undefined;
+      if (event.client_nonce === clientNonce) afterRunUserMessage = true;
+      continue;
+    }
+    if (!afterRunUserMessage) continue;
+    const terminal = sdkTerminalResult(event);
+    if (terminal) return terminal;
+  }
+  return undefined;
+}
+
+function sdkEventDocumentID(event: unknown): string {
+  if (!isJsonObject(event)) return "";
+  const id = event.id ?? event.uuid;
+  return typeof id === "string" ? id : "";
+}
+
 function isClaudeRunMode(mode: SessionMode): boolean {
   return mode === "claude_gui";
 }
@@ -3973,6 +4029,7 @@ function HeadlessRun({
     reconnects: number;
     offset: number;
     cancelled: boolean;
+    submitted?: boolean;
   } | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
@@ -4281,30 +4338,59 @@ function HeadlessRun({
   // already consumes — the chat pane was built around Claude's stream-json,
   // which the SDK is a TypeScript wrapper over the same binary's stdout.
   function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
+    return refreshSdkRunHistoryResult(showHint, clearRealtime).then(
+      (result) => result.replayed,
+    );
+  }
+
+  function refreshSdkRunHistoryResult(
+    showHint: boolean,
+    clearRealtime = false,
+    clientNonce?: string,
+  ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
-    return authedFetch(
-      `/api/sessions/${encodeURIComponent(refreshSessionId)}/events?limit=1000`,
-    )
-      .then(async (res) => {
-        if (!res.ok) return false;
+    const events: unknown[] = [];
+    const load = async (): Promise<SdkHistoryRefreshResult> => {
+      let after = "";
+      for (let page = 0; page < 50; page += 1) {
+        const params = new URLSearchParams({ limit: "1000" });
+        if (after) params.set("after", after);
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(refreshSessionId)}/events?${params.toString()}`,
+        );
+        if (!res.ok) return { replayed: false };
         const body = (await res.json()) as { session_id?: string; events?: unknown[] };
-        if (sessionIdRef.current !== refreshSessionId) return false;
-        if (!Array.isArray(body.events)) return false;
-        let acc: TranscriptEntry[] = [];
-        for (const ev of body.events) {
-          if (isJsonObject(ev)) {
-            acc = applySdkProviderEvent(acc, session.mode, ev, "server");
-          }
+        if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+        if (!Array.isArray(body.events)) return { replayed: false };
+        events.push(...body.events);
+        if (body.events.length < 1000) break;
+        const nextAfter = body.events
+          .map(sdkEventDocumentID)
+          .filter(Boolean)
+          .sort()
+          .at(-1);
+        if (!nextAfter || nextAfter === after) break;
+        after = nextAfter;
+      }
+
+      let acc: TranscriptEntry[] = [];
+      for (const ev of events) {
+        if (isJsonObject(ev)) {
+          acc = applySdkProviderEvent(acc, session.mode, ev, "server");
         }
-        if (acc.length === 0) return false;
-        replaceSdkServerEntries(acc, clearRealtime);
-        if (showHint) {
-          setContinueHintVisible(true);
-          window.setTimeout(() => setContinueHintVisible(false), 3000);
-        }
-        return true;
-      })
-      .catch(() => false);
+      }
+      const terminal = clientNonce
+        ? sdkHistoryTerminalForRun(events, clientNonce)
+        : undefined;
+      if (acc.length === 0) return { replayed: false, terminal };
+      replaceSdkServerEntries(acc, clearRealtime);
+      if (showHint) {
+        setContinueHintVisible(true);
+        window.setTimeout(() => setContinueHintVisible(false), 3000);
+      }
+      return { replayed: true, terminal };
+    };
+    return load().catch(() => ({ replayed: false }));
   }
 
   function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
@@ -5420,6 +5506,7 @@ function HeadlessRun({
       reconnects: 0,
       offset: 0,
       cancelled: false,
+      submitted: false,
     };
     currentRunRef.current = run;
     setActiveRunId(run.id);
@@ -5466,20 +5553,126 @@ function HeadlessRun({
     }
   }
 
-  // SDK-runtime live tap. Connects to the orchestrator's /agent-ws reverse
-  // proxy, which fans events from the pod-side agent-runner. Each WebSocket
-  // frame is one SDK event (same shape applyProviderEvent already handles),
-  // so the receive path is much simpler than the legacy stdout-chunking
-  // pipeline. Lifecycle is "open per turn, close on result event" — the
-  // agent-runner accepts user frames from any client and broadcasts events
-  // to every connected client, so re-opening on each turn is harmless.
-  function openSdkRunSocket(run: NonNullable<typeof currentRunRef.current>) {
+  // SDK-runtime socket lifecycle. The canonical event log is the source of
+  // truth; WebSocket frames are only the live transport. A dropped transport
+  // reconnects without re-sending the user prompt and catches up from
+  // history, so transient closes do not become chat-visible errors.
+  function finalizeSdkRun(
+    run: NonNullable<typeof currentRunRef.current>,
+    terminal: SdkTerminalResult,
+    options: {
+      closeSocket?: WebSocket;
+      refreshHistory?: boolean;
+      clearRealtime?: boolean;
+    } = {},
+  ): void {
+    if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+    currentRunRef.current = null;
+    const durationMs = Date.now() - run.turnStart;
+    updateSdkLastAssistantDuration(durationMs);
+    if (terminal.status === "done") {
+      setLastStatusText(
+        scheduledWakeupRef.current
+          ? "Wakeup scheduled"
+          : activeToolNameRef.current
+            ? `Used ${formatToolLabel(activeToolNameRef.current)}`
+            : "Done",
+      );
+      setRunStatus("done");
+      playTurnCompleteSound();
+    } else {
+      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
+      setRunStatus("error");
+    }
+    scheduledWakeupRef.current = false;
+    setActiveTool(null);
+    setRunning(false);
+    setActiveRunId(null);
+    if (options.closeSocket) {
+      if (wsRef.current === options.closeSocket) wsRef.current = null;
+      options.closeSocket.close();
+    }
+    if (options.refreshHistory ?? true) {
+      void refreshSdkRunHistory(false, options.clearRealtime ?? false);
+    }
+  }
+
+  function failSdkRunAfterSocketClose(
+    run: NonNullable<typeof currentRunRef.current>,
+    event: CloseEvent,
+  ): void {
+    if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+    currentRunRef.current = null;
+    setActiveRunId(null);
+    setLastStatusText("Connection lost");
+    scheduledWakeupRef.current = false;
+    setActiveTool(null);
+    setRunning(false);
+    const id = nextEntryId("ws-close");
+    appendSdkRealtimeEntries(
+      markLocalEntries(
+        appendMeta(
+          [],
+          id,
+          "Connection lost",
+          `WebSocket closed with code ${event.code}${
+            event.reason ? ` - ${event.reason}` : ""
+          }. Reconnect and history recovery failed.`,
+          "error",
+        ),
+        id,
+      ),
+    );
+    setRunStatus("error");
+    void refreshSdkRunHistory(false);
+  }
+
+  function reconnectSdkRunSocket(
+    run: NonNullable<typeof currentRunRef.current>,
+    event: CloseEvent,
+    ws: WebSocket,
+  ): void {
+    if (wsRef.current === ws) wsRef.current = null;
+    if (run.reconnects >= 8) {
+      void refreshSdkRunHistoryResult(false, false, run.id).then((result) => {
+        if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+        if (result.terminal) {
+          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
+          return;
+        }
+        failSdkRunAfterSocketClose(run, event);
+      });
+      return;
+    }
+
+    run.reconnects += 1;
+    const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
+    setLastStatusText("Reconnecting");
+    void refreshSdkRunHistoryResult(false, false, run.id).then((result) => {
+      if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+      if (result.terminal) {
+        finalizeSdkRun(run, result.terminal, { refreshHistory: false });
+        return;
+      }
+      window.setTimeout(() => {
+        if (currentRunRef.current?.id === run.id && !run.cancelled) {
+          openSdkRunSocket(run, true);
+        }
+      }, delay);
+    });
+  }
+
+  function openSdkRunSocket(
+    run: NonNullable<typeof currentRunRef.current>,
+    resume = false,
+  ) {
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
       `/api/sessions/${session.id}/agent-ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
     ws.onopen = () => {
+      if (resume && run.submitted) return;
       ws.send(
         JSON.stringify({
           type: "user",
@@ -5487,6 +5680,7 @@ function HeadlessRun({
           client_nonce: run.id,
         }),
       );
+      run.submitted = true;
     };
     ws.onmessage = (event) => {
       let parsed: unknown;
@@ -5564,32 +5758,13 @@ function HeadlessRun({
 
       applySdkRealtimeEvent(parsed);
 
-      // Terminal events. Each runtime closes the WS so a fresh open per
-      // turn works. The runners themselves stay alive for the pod's
-      // lifetime; only the SPA's WS lifecycle is per-turn.
-      //   claude: `result` (analog of codex's turn.completed)
-      //   codex:  `turn.completed` (success) / `turn.failed` (error)
-      const isTerminal =
-        t === "result" || t === "turn.completed" || t === "turn.failed";
-      if (isTerminal) {
-        currentRunRef.current = null;
-        const durationMs = Date.now() - run.turnStart;
-        updateSdkLastAssistantDuration(durationMs);
-        setLastStatusText(
-          scheduledWakeupRef.current
-            ? "Wakeup scheduled"
-            : activeToolNameRef.current
-              ? `Used ${formatToolLabel(activeToolNameRef.current)}`
-              : "Done",
-        );
-        scheduledWakeupRef.current = false;
-        setActiveTool(null);
-        setRunStatus("done");
-        setRunning(false);
-        setActiveRunId(null);
-        playTurnCompleteSound();
-        ws.close();
-        void refreshSdkRunHistory(false, true);
+      const terminal = sdkTerminalResult(parsed);
+      if (terminal) {
+        finalizeSdkRun(run, terminal, {
+          closeSocket: ws,
+          refreshHistory: true,
+          clearRealtime: true,
+        });
       }
     };
     ws.onerror = () => {
@@ -5599,36 +5774,10 @@ function HeadlessRun({
     };
     ws.onclose = (event) => {
       if (currentRunRef.current?.id !== run.id || run.cancelled) {
+        if (wsRef.current === ws) wsRef.current = null;
         return;
       }
-      // If the WS dropped before a `result` arrived, the runner is still
-      // chewing. The agent-runner replays unseen events to a fresh client
-      // via the canonical Cosmos log, but for simplicity v1 just shows
-      // "connection lost" — the user can refresh the page to pick up
-      // history. (Reconnect with replay is a follow-up.)
-      currentRunRef.current = null;
-      setActiveRunId(null);
-      setLastStatusText("Connection lost");
-      scheduledWakeupRef.current = false;
-      setActiveTool(null);
-      setRunning(false);
-      const id = nextEntryId("ws-close");
-      appendSdkRealtimeEntries(
-        markLocalEntries(
-          appendMeta(
-            [],
-            id,
-            "Connection lost",
-          `WebSocket closed with code ${event.code}${
-            event.reason ? ` — ${event.reason}` : ""
-          }. Reconnecting from history.`,
-          "error",
-          ),
-          id,
-        ),
-      );
-      setRunStatus("error");
-      void refreshSdkRunHistory(false);
+      reconnectSdkRunSocket(run, event, ws);
     };
   }
 
