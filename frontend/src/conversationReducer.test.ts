@@ -47,6 +47,33 @@ test("Codex interrupt is stopped state, not provider error", () => {
   assert.equal(state.messages.length, 1);
 });
 
+test("Normal turn reaches ready with one user message and assistant item", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "run-normal",
+      payload: { text: "summarize" },
+    }),
+    ev("2", "turn.submitted", { client_nonce: "run-normal" }),
+    ev("3", "turn.started", { source: "claude" }),
+    ev("4", "item.completed", {
+      actor: "assistant",
+      source: "claude",
+      item_id: "msg-1",
+      payload: { kind: "message", text: "summary" },
+    }),
+    ev("5", "turn.completed", { source: "claude" }),
+  ]);
+
+  assert.equal(state.runStatus, "ready");
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.text, "summarize");
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.actor, "assistant");
+  assert.equal(state.items[0]?.text, "summary");
+  assert.equal(state.activeTurnId, null);
+});
+
 test("Tool lifecycle replays to a completed tool item", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started"),
@@ -110,6 +137,48 @@ test("Approval pause is explicit needs-input state and resumes streaming", () =>
   assert.equal(state.needsInput, false);
   assert.equal(state.runStatus, "streaming");
   assert.equal(state.items[0]?.kind, "approval");
+});
+
+test("Provider error becomes terminal error state without needs-input", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "tool.approval_requested", {
+      item_id: "approval-1",
+      actor: "tool",
+      payload: { kind: "approval", title: "Run command" },
+    }),
+    ev("3", "turn.failed", {
+      source: "claude",
+      payload: { reason: "provider_failure", error: "quota exceeded" },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "error");
+  assert.equal(state.failed, true);
+  assert.equal(state.needsInput, false);
+  assert.equal(state.activeTurnId, null);
+});
+
+test("Activity and read-state events drive unread state", () => {
+  const state = reduceConversationEvents([
+    ev("1", "session.activity_updated", {
+      payload: {
+        status: "streaming",
+        needs_input: false,
+        failed: false,
+        active_turn_id: "turn-1",
+        unread_count: 3,
+      },
+    }),
+    ev("2", "read_state.updated", {
+      payload: { last_read_order_key: "0002" },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.activeTurnId, "turn-1");
+  assert.equal(state.lastReadOrderKey, "0002");
+  assert.equal(state.unreadCount, 0);
 });
 
 test("Replay and live delivery converge through event id dedupe", () => {

@@ -6,9 +6,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch, dispatchCreate } from "./runner.js";
+import {
+  canonicalEventsForCodexEvent,
+  dispatch,
+  dispatchCreate,
+  type AcceptedTurn,
+} from "./runner.js";
 import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
 import { userSubmissionEvents } from "./conversation.js";
+import type { Config } from "./config.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -36,6 +42,27 @@ function userMessageEvent() {
     runtime: "codex",
     now: "2026-05-12T00:00:00.000Z",
   }).userMessage;
+}
+
+function acceptedTurn(fields: Partial<AcceptedTurn> = {}): AcceptedTurn {
+  return {
+    turnID: "turn-run-123",
+    clientNonce: "run-123",
+    turnSeq: 7,
+    ...fields,
+  };
+}
+
+function cfg(): Config {
+  return {
+    sessionId: "63",
+    ownerEmail: "user@example.com",
+    cosmosEndpoint: "https://example.invalid",
+    cosmosDatabase: "tank-operator",
+    sessionEventsContainer: "session-events",
+    workspace: "/workspace",
+    wsPort: 8090,
+  };
 }
 
 test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
@@ -182,4 +209,78 @@ test("generated event ids sort by production order", () => {
   const second = nextSortableEventID(1000);
   const third = nextSortableEventID(1001);
   assert.deepEqual([third, first, second].sort(), [first, second, third]);
+});
+
+test("adapter maps Codex agent messages to durable Tank assistant items", () => {
+  const events = canonicalEventsForCodexEvent(
+    cfg(),
+    acceptedTurn(),
+    {
+      type: "item.completed",
+      item: {
+        id: "item_agent_1",
+        type: "agent_message",
+        text: "All tests passed.",
+      },
+    },
+  );
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "item.completed");
+  assert.equal(events[0]?.source, "codex");
+  assert.equal(events[0]?.actor, "assistant");
+  assert.equal(events[0]?.item_id, "item_agent_1");
+  assert.equal(events[0]?.visibility, "durable");
+  assert.equal(events[0]?.payload?.kind, "agent_message");
+  assert.equal(events[0]?.payload?.text, "All tests passed.");
+});
+
+test("adapter maps Codex item updates to live-only Tank deltas", () => {
+  const events = canonicalEventsForCodexEvent(
+    cfg(),
+    acceptedTurn(),
+    {
+      type: "item.updated",
+      item: {
+        id: "item_reasoning_1",
+        type: "reasoning",
+        text: "thinking",
+      },
+    },
+  );
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "item.delta");
+  assert.equal(events[0]?.actor, "assistant");
+  assert.equal(events[0]?.visibility, "live-only");
+});
+
+test("adapter maps Codex terminal events to Tank turn lifecycle", () => {
+  const completed = canonicalEventsForCodexEvent(
+    cfg(),
+    acceptedTurn(),
+    { type: "turn.completed", usage: { input_tokens: 10 } },
+  );
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0]?.type, "turn.completed");
+  assert.deepEqual(completed[0]?.payload?.usage, { input_tokens: 10 });
+
+  const failed = canonicalEventsForCodexEvent(
+    cfg(),
+    acceptedTurn(),
+    { type: "error", message: "quota exceeded" },
+  );
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0]?.type, "turn.failed");
+  assert.equal(failed[0]?.payload?.reason, "provider_failure");
+  assert.equal(failed[0]?.payload?.error, "quota exceeded");
+});
+
+test("adapter explicitly ignores unknown Codex provider event types", () => {
+  const events = canonicalEventsForCodexEvent(
+    cfg(),
+    acceptedTurn(),
+    { type: "future.experimental.event", value: true },
+  );
+  assert.deepEqual(events, []);
 });

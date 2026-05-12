@@ -149,7 +149,7 @@ function userMessageText(content: unknown): string {
   return String(content ?? "");
 }
 
-interface PendingTurn {
+export interface PendingTurn {
   turnID: string;
   clientNonce: string;
   text: string;
@@ -175,7 +175,7 @@ function claudeMessageContent(message: RunnerEvent): unknown[] {
   return [];
 }
 
-function canonicalEventsForClaudeMessage(
+export function canonicalEventsForClaudeMessage(
   cfg: Config,
   turn: PendingTurn | null,
   message: RunnerEvent,
