@@ -46,6 +46,19 @@ func TestSortSessionEventsPrefersTankOrderKey(t *testing.T) {
 	}
 }
 
+func TestSortSessionEventsRecognizesCanonicalOrderKey(t *testing.T) {
+	events := []map[string]any{
+		{"id": "a", "order_key": "0002", "written_at": "2026-05-12T01:00:01Z", "type": "second"},
+		{"id": "b", "order_key": "0001", "written_at": "2026-05-12T01:00:03Z", "type": "first"},
+	}
+
+	sortSessionEvents(events)
+
+	if got := events[0]["type"]; got != "first" {
+		t.Fatalf("first event = %v, want first", got)
+	}
+}
+
 func TestSortSessionEventsFallsBackToID(t *testing.T) {
 	events := []map[string]any{
 		{"id": "b", "type": "second"},
@@ -57,4 +70,50 @@ func TestSortSessionEventsFallsBackToID(t *testing.T) {
 	if got := events[0]["type"]; got != "first" {
 		t.Fatalf("first event = %v, want first", got)
 	}
+}
+
+func TestPaginateSessionEventsUsesRenderOrderCursor(t *testing.T) {
+	events := []map[string]any{
+		{"id": "random-c", "tank_order_key": "0003", "type": "third"},
+		{"id": "random-a", "tank_order_key": "0001", "type": "first"},
+		{"id": "random-b", "tank_order_key": "0002", "type": "second"},
+	}
+	sortSessionEvents(events)
+
+	firstPage := paginateSessionEvents(events, SessionEventCursor{}, 2)
+	if !firstPage.HasMore {
+		t.Fatal("first page HasMore = false, want true")
+	}
+	if got := eventTypes(firstPage.Events); got[0] != "first" || got[1] != "second" {
+		t.Fatalf("first page types = %#v, want first, second", got)
+	}
+
+	secondPage := paginateSessionEvents(events, SessionEventCursor{AfterOrderKey: firstPage.NextOrderKey}, 2)
+	if secondPage.HasMore {
+		t.Fatal("second page HasMore = true, want false")
+	}
+	if got := eventTypes(secondPage.Events); len(got) != 1 || got[0] != "third" {
+		t.Fatalf("second page types = %#v, want third", got)
+	}
+}
+
+func TestPaginateSessionEventsAcceptsLegacyDocumentIDCursor(t *testing.T) {
+	events := []map[string]any{
+		{"id": "b", "written_at": "2026-05-12T01:00:01Z", "type": "first"},
+		{"id": "a", "written_at": "2026-05-12T01:00:02Z", "type": "second"},
+	}
+	sortSessionEvents(events)
+
+	page := paginateSessionEvents(events, SessionEventCursor{AfterID: "b"}, 10)
+	if got := eventTypes(page.Events); len(got) != 1 || got[0] != "second" {
+		t.Fatalf("page types = %#v, want second", got)
+	}
+}
+
+func eventTypes(events []map[string]any) []string {
+	types := make([]string, 0, len(events))
+	for _, event := range events {
+		types = append(types, event["type"].(string))
+	}
+	return types
 }

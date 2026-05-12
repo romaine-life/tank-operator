@@ -28,15 +28,15 @@ var (
 )
 
 type Info struct {
-	ID           string         `json:"id"`
-	PodName      *string        `json:"pod_name"`
-	Owner        string         `json:"owner"`
-	Status       string         `json:"status"`
-	Mode         string         `json:"mode"`
+	ID      string  `json:"id"`
+	PodName *string `json:"pod_name"`
+	Owner   string  `json:"owner"`
+	Status  string  `json:"status"`
+	Mode    string  `json:"mode"`
 	// Runtime tells the SPA's chat pane which data-ingestion path to use
 	// for this session:
 	//   "sdk"    — pod has the agent-runner sidecar. Chat pane opens
-	//              /agent-ws (live) + /events (history).
+	//              /agent-ws (live) + /timeline (history).
 	//   "legacy" — no agent-runner sidecar. Chat pane uses /run (live)
 	//              + /runs/latest/events.json + /run/history (history).
 	// The renderer is the same for both; only the data source differs.
