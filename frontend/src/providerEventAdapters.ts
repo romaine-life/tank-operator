@@ -1,5 +1,4 @@
 import type { TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
-import { isTankConversationEvent, type TankConversationEvent } from "./tankConversation";
 
 export type ToolKind = "mcp" | "shell";
 
@@ -29,14 +28,12 @@ export function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function applyProviderEvent(
+export function applyLegacyProviderEvent(
   entries: ProviderTranscriptEntry[],
   mode: string,
   event: JsonObject,
 ): ProviderTranscriptEntry[] {
-  if (isTankConversationEvent(event)) {
-    return applyCanonicalConversationEvent(entries, event);
-  }
+  if (isCanonicalTankEnvelope(event)) return entries;
   if (event.type === "tank.user_message") {
     return applyTankUserMessageEvent(entries, event);
   }
@@ -51,7 +48,7 @@ export function applyProviderEvent(
   return applyClaudeEvent(entries, event);
 }
 
-export function parseProviderRunHistory(
+export function parseLegacyProviderRunHistory(
   text: string,
   mode: string,
 ): ProviderTranscriptEntry[] {
@@ -61,7 +58,7 @@ export function parseProviderRunHistory(
     try {
       const event = JSON.parse(line);
       if (isJsonObject(event)) {
-        acc = applyProviderEvent(acc, mode, event);
+        acc = applyLegacyProviderEvent(acc, mode, event);
       }
     } catch {
       /* skip unparseable history lines */
@@ -70,7 +67,7 @@ export function parseProviderRunHistory(
   return acc;
 }
 
-export function providerFrameEffects(event: JsonObject): ProviderFrameEffects {
+export function legacyProviderFrameEffects(event: JsonObject): ProviderFrameEffects {
   const type = event.type;
   if (type === "assistant") {
     const message = event.message;
@@ -124,19 +121,9 @@ export function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
 }
 
-function applyCanonicalConversationEvent(
-  entries: ProviderTranscriptEntry[],
-  event: TankConversationEvent,
-): ProviderTranscriptEntry[] {
-  if (event.type === "user_message.created") {
-    return applyTankUserMessageEvent(entries, event);
-  }
-  return entries;
-}
-
 function applyTankUserMessageEvent(
   entries: ProviderTranscriptEntry[],
-  event: TankConversationEvent | JsonObject,
+  event: JsonObject,
 ): ProviderTranscriptEntry[] {
   const text = tankUserMessageText(event);
   if (!text || hasUserMessageText(entries, text)) return entries;
@@ -512,7 +499,7 @@ function applyClaudeToolResults(
   }, entries);
 }
 
-function tankUserMessageText(event: TankConversationEvent | JsonObject): string {
+function tankUserMessageText(event: JsonObject): string {
   const payload = (event as { payload?: unknown }).payload;
   if (isJsonObject(payload)) {
     if (typeof payload.text === "string") return payload.text.trim();
@@ -540,6 +527,17 @@ function tankUserMessageText(event: TankConversationEvent | JsonObject): string 
     }
   }
   return "";
+}
+
+function isCanonicalTankEnvelope(event: JsonObject): boolean {
+  return (
+    typeof event.event_id === "string" &&
+    typeof event.session_id === "string" &&
+    typeof event.actor === "string" &&
+    typeof event.source === "string" &&
+    typeof event.created_at === "string" &&
+    typeof event.visibility === "string"
+  );
 }
 
 function claudeTextFromContent(content: unknown, includeToolResults: boolean): string {
