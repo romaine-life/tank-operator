@@ -36,6 +36,28 @@ test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
   assert.deepEqual(order, ["cosmos", "ws"]);
 });
 
+test("dispatch stamps same tank ordering metadata to cosmos and ws", async () => {
+  let cosmosMessage: any;
+  let wsMessage: any;
+  const ok = await dispatch(
+    {
+      async upsert(message) {
+        cosmosMessage = message;
+      },
+    },
+    {
+      broadcastEvent(message) {
+        wsMessage = message;
+      },
+    },
+    { type: "assistant", uuid: "x" } as any,
+  );
+  assert.equal(ok, true);
+  assert.equal(cosmosMessage.tank_event_seq, wsMessage.tank_event_seq);
+  assert.equal(cosmosMessage.tank_order_key, wsMessage.tank_order_key);
+  assert.equal(cosmosMessage.written_at, wsMessage.written_at);
+});
+
 test("canonical: cosmos failure suppresses ws broadcast", async () => {
   const order: Order = [];
   const ok = await dispatch(

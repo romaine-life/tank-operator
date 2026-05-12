@@ -40,14 +40,35 @@ interface DispatchSink {
 interface DispatchWS {
   broadcastEvent(message: SDKMessage): void;
 }
+
+let tankEventSeq = 0;
+
+function stampTankEvent(message: SDKMessage): SDKMessage {
+  tankEventSeq += 1;
+  const now = Date.now();
+  const uuid = (message as any).uuid;
+  const stableId = typeof uuid === "string" && uuid ? uuid : String(tankEventSeq);
+  return {
+    ...(message as Record<string, unknown>),
+    tank_event_seq: tankEventSeq,
+    tank_order_key: [
+      String(now).padStart(13, "0"),
+      String(tankEventSeq).padStart(8, "0"),
+      stableId,
+    ].join("-"),
+    written_at: new Date(now).toISOString(),
+  } as unknown as SDKMessage;
+}
+
 export async function dispatch(
   sink: DispatchSink,
   ws: DispatchWS,
   message: SDKMessage,
 ): Promise<boolean> {
-  if (isCanonical(message)) {
+  const stamped = stampTankEvent(message);
+  if (isCanonical(stamped)) {
     try {
-      await sink.upsert(message);
+      await sink.upsert(stamped);
     } catch (err) {
       console.error("cosmos upsert failed:", err);
       // Don't broadcast a live event we couldn't persist — the SPA's
@@ -55,7 +76,7 @@ export async function dispatch(
       return false;
     }
   }
-  ws.broadcastEvent(message);
+  ws.broadcastEvent(stamped);
   return true;
 }
 
