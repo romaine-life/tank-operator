@@ -22,6 +22,7 @@ type appServer struct {
 	runEvents     store.RunEventStore
 	turnQueue     store.TurnQueueStore
 	sessionEvents store.SessionEventStore
+	readStates    store.ConversationReadStateStore
 	eventBus      *sessions.EventBus
 	verifier      *auth.Verifier
 	minter        *auth.Minter
@@ -96,6 +97,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
 
 	// CLI / sandbox agent.
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)

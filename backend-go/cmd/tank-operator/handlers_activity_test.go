@@ -33,6 +33,7 @@ func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
 				"item_id": "ask-1",
 			}),
 		},
+		"",
 	)
 
 	if summary.Status != "needs_input" || !summary.NeedsInput {
@@ -60,6 +61,7 @@ func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
 			activityEvent("m2", "item.completed", "003", "assistant", map[string]any{"item_id": "msg-2"}),
 			activityEvent("done", "turn.completed", "004", "runner", map[string]any{"turn_id": "turn-1"}),
 		},
+		"",
 	)
 
 	if summary.UnreadCount != 1 {
@@ -67,6 +69,23 @@ func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
 	}
 	if summary.Status != "ready" || summary.Failed || summary.NeedsInput {
 		t.Fatalf("state = %#v, want ready/non-attention", summary)
+	}
+}
+
+func TestSummarizeSessionActivityAppliesPersistedReadState(t *testing.T) {
+	events := []map[string]any{
+		activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
+		activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"item_id": "msg-2"}),
+		activityEvent("m3", "item.completed", "003", "assistant", map[string]any{"item_id": "msg-3"}),
+	}
+	summary := summarizeSessionActivity(
+		sessionActivitySummary{SessionID: "63", Status: "ready"},
+		events,
+		activityEventCursor(events[1]),
+	)
+
+	if summary.UnreadCount != 1 {
+		t.Fatalf("unread = %d, want 1", summary.UnreadCount)
 	}
 }
 
@@ -110,6 +129,48 @@ func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 	}
 	if got.ActiveTurnID == nil || *got.ActiveTurnID != "turn-1" {
 		t.Fatalf("active turn = %#v, want turn-1", got.ActiveTurnID)
+	}
+}
+
+func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
+	client := fake.NewSimpleClientset(activitySessionPod("63", "user@example.com"))
+	readStates := store.NewStubConversationReadStateStore()
+	if _, err := readStates.Set(context.Background(), "user@example.com", "63", "001"); err != nil {
+		t.Fatal(err)
+	}
+	app := &appServer{
+		verifier: auth.NewVerifier(testJWT(t), "user@example.com"),
+		mgr: sessions.NewManager(
+			client,
+			nil,
+			compat.SessionsNamespace,
+			nil,
+			sessions.NewEventBus(),
+			sessions.ManagerOptions{},
+		),
+		sessionEvents: activityEventStore{events: map[string][]map[string]any{
+			"63": {
+				activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
+				activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"item_id": "msg-2"}),
+			},
+		}},
+		readStates: readStates,
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/activity", nil)
+	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	response := httptest.NewRecorder()
+
+	app.handleSessionActivity(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body sessionActivityResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Sessions) != 1 || body.Sessions[0].UnreadCount != 1 {
+		t.Fatalf("sessions = %#v, want one unread update", body.Sessions)
 	}
 }
 
