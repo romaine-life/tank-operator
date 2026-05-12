@@ -116,7 +116,7 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   localOnly?: boolean;
   clientNonce?: string;
 };
-type SdkTerminalStatus = "done" | "error";
+type SdkTerminalStatus = "done" | "error" | "stopped";
 type SdkTerminalResult = {
   status: SdkTerminalStatus;
   detail?: string;
@@ -1830,7 +1830,7 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
   const item = event.item;
   if (!isJsonObject(item)) return null;
   const id = codexItemEntryId(event, item, "codex-tool");
-  const status = typeof item.status === "string" ? item.status : String(event.type ?? "");
+  const status = codexItemStatus(event, item);
   const itemType = item.type;
   const time = eventTime(event);
 
@@ -1890,6 +1890,29 @@ function codexToolEntry(event: JsonObject): TranscriptEntry | null {
   return null;
 }
 
+function codexItemStatus(event: JsonObject, item: JsonObject): string {
+  if (typeof item.status === "string" && item.status) return item.status;
+  if (event.type === "item.started") return "started";
+  if (event.type === "item.updated") return "running";
+  if (event.type === "item.completed") {
+    return item.error ? "failed" : "completed";
+  }
+  return String(event.type ?? "");
+}
+
+function isCodexAbortMessage(message: unknown): boolean {
+  return typeof message === "string" && /operation was aborted/i.test(message);
+}
+
+function isCodexToolishItemType(itemType: string): boolean {
+  return (
+    itemType === "command_execution" ||
+    itemType === "file_change" ||
+    itemType === "mcp_tool_call" ||
+    itemType === "web_search"
+  );
+}
+
 function tankUserMessageText(event: JsonObject): string {
   if (typeof event.message === "string") return event.message.trim();
   if (isJsonObject(event.message)) {
@@ -1937,8 +1960,28 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
   if (type === "turn.completed") {
     return appendMeta(entries, `codex-turn-completed-${eventID(event, "codex-turn-completed")}`, "Turn completed", describeUsage(event.usage), "info", time);
   }
+  if (type === "turn.interrupted") {
+    return appendMeta(
+      entries,
+      `codex-turn-interrupted-${eventID(event, "codex-turn-interrupted")}`,
+      "Turn stopped",
+      typeof event.reason === "string" ? event.reason : undefined,
+      "info",
+      time,
+    );
+  }
   if (type === "turn.failed" || type === "error") {
     const error = isJsonObject(event.error) ? event.error.message : event.message;
+    if (isCodexAbortMessage(error)) {
+      return appendMeta(
+        entries,
+        `codex-turn-stopped-${eventID(event, "codex-turn-stopped")}`,
+        "Turn stopped",
+        "The turn was interrupted before completion.",
+        "info",
+        time,
+      );
+    }
     return appendMeta(
       entries,
       `codex-error-${eventID(event, "codex-error")}`,
@@ -2197,8 +2240,12 @@ function sdkTerminalResult(event: JsonObject): SdkTerminalResult | null {
   if (type === "turn.completed") {
     return { status: "done" };
   }
+  if (type === "turn.interrupted") {
+    return { status: "stopped" };
+  }
   if (type === "turn.failed" || type === "error") {
     const error = isJsonObject(event.error) ? event.error.message : event.message;
+    if (isCodexAbortMessage(error)) return { status: "stopped" };
     return {
       status: "error",
       detail: typeof error === "string" ? error : shortJson(event),
@@ -2335,7 +2382,9 @@ function normalizeToolState(status: string | undefined): string {
     normalized === "running" ||
     normalized === "pending" ||
     normalized === "in_progress" ||
-    normalized === "in-progress"
+    normalized === "in-progress" ||
+    normalized === "item.started" ||
+    normalized === "item.updated"
   ) {
     return "running";
   }
@@ -3940,8 +3989,11 @@ function HeadlessRun({
   const [slashIndex, setSlashIndex] = useState(0);
 
   useEffect(() => {
-    onActivityChange?.(session.id, running ? "working" : "waiting");
-  }, [onActivityChange, running, session.id]);
+    onActivityChange?.(
+      session.id,
+      running || activeToolName !== null ? "working" : "waiting",
+    );
+  }, [activeToolName, onActivityChange, running, session.id]);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
@@ -4842,7 +4894,7 @@ function HeadlessRun({
   // Skips when the slash palette is open — Esc closes the palette in that
   // case (handled below).
   useEffect(() => {
-    if (!running) return;
+    if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen) {
         e.preventDefault();
@@ -4851,7 +4903,7 @@ function HeadlessRun({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [running, slashOpen]);
+  }, [running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -5580,6 +5632,9 @@ function HeadlessRun({
       );
       setRunStatus("done");
       playTurnCompleteSound();
+    } else if (terminal.status === "stopped") {
+      setLastStatusText("Stopped");
+      setRunStatus("done");
     } else {
       setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
       setRunStatus("error");
@@ -5737,14 +5792,16 @@ function HeadlessRun({
         const item = parsed.item;
         if (isJsonObject(item)) {
           const itemType = typeof item.type === "string" ? item.type : "";
-          const toolish = new Set([
-            "command_execution",
-            "file_change",
-            "mcp_tool_call",
-            "web_search",
-          ]);
-          if (toolish.has(itemType)) {
+          if (isCodexToolishItemType(itemType)) {
             setActiveTool(itemType, typeof item.id === "string" ? item.id : null);
+          }
+        }
+      } else if (t === "item.completed") {
+        const item = parsed.item;
+        if (isJsonObject(item)) {
+          const itemType = typeof item.type === "string" ? item.type : "";
+          if (isCodexToolishItemType(itemType)) {
+            completeActiveTool(typeof item.id === "string" ? item.id : null);
           }
         }
       } else if (t === "turn.completed") {
