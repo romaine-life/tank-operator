@@ -91,10 +91,10 @@ import {
 } from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
 import {
-  applyProviderEvent,
+  applyLegacyProviderEvent,
   isProviderAbortMessage,
-  parseProviderRunHistory,
-  providerFrameEffects,
+  parseLegacyProviderRunHistory,
+  legacyProviderFrameEffects,
   type ToolKind,
 } from "./providerEventAdapters";
 import { ProviderIcon } from "./providerIcons";
@@ -169,9 +169,8 @@ interface Session {
   // Which data-ingestion path the chat pane should use for this session.
   // "sdk" → pod has the agent-runner sidecar; chat pane opens /agent-ws
   // + /timeline. "legacy" → no agent-runner; chat pane uses /run +
-  // /runs/latest/events.json + /run/history. Renderer is the same for
-  // both; only the event source differs. Absent on older pods — treated
-  // as "legacy".
+  // /runs/latest/events.json + /run/history through the legacy provider
+  // adapter. Absent on older pods — treated as "legacy".
   runtime?: "sdk" | "legacy";
   requested_at: string | null;
   created_at: string | null;
@@ -2440,9 +2439,9 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
 }
 
 // transcriptComparable returns a stable JSON of the transcript's load-bearing
-// fields, used to short-circuit no-op replay updates. Backend replay paths
-// (`/runs/latest/events.json` then `/run/history`) are the sole source of
-// truth for transcript state across reloads; there is no client-side cache.
+// fields, used to short-circuit no-op replay updates. SDK sessions rebuild
+// from canonical /timeline events; legacy sessions rebuild from
+// /runs/latest/events.json or /run/history. There is no client-side cache.
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
@@ -3981,6 +3980,7 @@ function HeadlessRun({
 
   useEffect(() => {
     if (!activeRunId || session.status !== "Active") return;
+    if (session.runtime === "sdk") return;
     const source = new EventSource(
       `/api/sessions/${encodeURIComponent(session.id)}/runs/${encodeURIComponent(activeRunId)}/events`,
       { withCredentials: true },
@@ -4013,7 +4013,7 @@ function HeadlessRun({
   // handleRunLifecycleEvent is intentionally omitted; it closes over current
   // run refs and state setters, while activeRunId controls subscription scope.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRunId, session.id, session.status]);
+  }, [activeRunId, session.id, session.runtime, session.status]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -4050,10 +4050,8 @@ function HeadlessRun({
     return () => main.removeEventListener("scroll", onScroll);
   }, []);
 
-  // History replay — fetch provider JSONL from the pod and replay each event
-  // through the matching provider parser. This is intentionally not limited
-  // to empty localStorage: a run can finish while the tab is closed, leaving
-  // localStorage with a stale partial transcript.
+  // History replay is intentionally not limited to empty transcript state: a
+  // run can finish while the tab is closed, leaving a stale partial transcript.
   const [historyAttempted, setHistoryAttempted] = useState(false);
   const [activeRunChecked, setActiveRunChecked] = useState(false);
   // Toggled briefly when entries are restored (from localStorage OR backend
@@ -4063,9 +4061,8 @@ function HeadlessRun({
     if (session.status !== "Active" || running) return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
-    // SDK pods have a durable canonical log in Cosmos session-events; hit
-    // that directly. Legacy path tries structured run events first and falls
-    // back to adapter-parsed provider JSONL.
+    // SDK pods render only the canonical session-events timeline. Legacy path
+    // tries structured run events first and then the provider JSONL adapter.
     const initial =
       session.runtime === "sdk"
         ? refreshSdkRunHistory(showHint)
@@ -4233,7 +4230,7 @@ function HeadlessRun({
       .then((text) => {
         if (sessionIdRef.current !== refreshSessionId) return;
         if (!text) return;
-        const acc = parseProviderRunHistory(text, session.mode) as TranscriptEntry[];
+        const acc = parseLegacyProviderRunHistory(text, session.mode) as TranscriptEntry[];
         if (acc.length > 0) {
           let behind = false;
           setEntries((prev) => {
@@ -4960,7 +4957,7 @@ function HeadlessRun({
       return;
     }
     if (!isJsonObject(providerEvent)) return;
-    const effects = providerFrameEffects(providerEvent);
+    const effects = legacyProviderFrameEffects(providerEvent);
     const total = totalContextTokens(effects.usage as ClaudeUsage | undefined);
     if (total > 0) setTokensUsed(total);
     if (effects.activeTool) {
@@ -4969,7 +4966,7 @@ function HeadlessRun({
     if ("completedToolUseId" in effects) {
       completeActiveTool(effects.completedToolUseId ?? null);
     }
-    setEntries((prev) => applyProviderEvent(prev, session.mode, providerEvent));
+    setEntries((prev) => applyLegacyProviderEvent(prev, session.mode, providerEvent));
   }
 
   function applyStdoutChunk(chunk: string) {
@@ -5056,7 +5053,11 @@ function HeadlessRun({
     if (session.runtime === "sdk") setSdkConnectionState("idle");
     wsRef.current?.close();
     wsRef.current = null;
-    window.setTimeout(() => refreshRunHistoryFromBackend(false), 250);
+    if (session.runtime === "sdk") {
+      void refreshSdkRunHistory(false, true);
+    } else {
+      window.setTimeout(() => refreshRunHistoryFromBackend(false), 250);
+    }
   }
 
   function scheduleLifecycleFinish(
