@@ -1,8 +1,6 @@
 // ScheduleWakeup detection in SDK events. The pod-side runner detects
-// the agent's tool_use call, waits delaySeconds in-process (the whole
-// reason for the persistent-process model), then re-enqueues the wakeup
-// prompt as the next user turn. Preserves in-memory state across the
-// wakeup boundary — no JSONL replay, no orchestrator polling.
+// the agent's tool_use call and persists the wakeup prompt as a delayed
+// turn-queue row. The same live pod runner claims it when available.
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
@@ -14,7 +12,7 @@ export interface WakeupRequest {
 // Scan an assistant SDK event's content blocks for a ScheduleWakeup
 // tool_use. The agent emits content as an array of typed blocks;
 // tool_use blocks carry { type, id, name, input }. Multiple wakeups
-// in one turn aren't a documented protocol — the last one wins.
+// in one turn aren't a documented protocol - the last one wins.
 export function extractWakeup(message: SDKMessage): WakeupRequest | null {
   if ((message as any).type !== "assistant") return null;
   const inner = (message as any).message;

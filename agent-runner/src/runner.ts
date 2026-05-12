@@ -32,6 +32,7 @@ import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
 import {
   normalizeClientNonce,
   turnEvent,
+  turnIDForClientNonce,
   userSubmissionEvents,
   type TankConversationEvent,
 } from "./conversation.js";
@@ -140,6 +141,7 @@ export interface PendingTurn {
   interrupted: boolean;
   terminalEmitted: boolean;
   queueRecord?: TurnRecord;
+  stopLeaseRenewal?: () => void;
 }
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -331,16 +333,28 @@ export class Runner {
   }
 
   private async acceptQueuedTurn(record: TurnRecord): Promise<void> {
+    const clientNonce = turnClientNonce(record);
+    if (await this.finalizeQueuedRecordIfAlreadyTerminal(record, clientNonce)) {
+      return;
+    }
+    if (this.turnQueue.attemptsExceeded(record)) {
+      await this.failQueuedRecord(
+        record,
+        new Error(`turn queue exceeded ${record.attempt_count ?? "unknown"} claim attempts`),
+      );
+      return;
+    }
     const pendingTurn = await this.recordUserSubmission(
       record.prompt,
       { role: "user", content: record.prompt },
-      turnClientNonce(record),
+      clientNonce,
       record,
     );
     if (!pendingTurn) {
       await this.turnQueue.markFailed(record, new Error("queued turn was not accepted"));
       return;
     }
+    pendingTurn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(record);
     this.pendingTurns.push(pendingTurn);
     this.userQueue.push({
       type: "user",
@@ -374,7 +388,8 @@ export class Runner {
     const userResult = await dispatchCreate(this.sink, this.ws, userMessage);
     if (userResult === "failed") return null;
     const submittedResult = await dispatchCreate(this.sink, this.ws, turnSubmitted);
-    if (submittedResult !== "created") return null;
+    if (submittedResult === "failed") return null;
+    if (submittedResult === "exists" && !queueRecord) return null;
     return {
       turnID,
       clientNonce,
@@ -435,6 +450,8 @@ export class Runner {
   ): Promise<void> {
     if (!turn.queueRecord) return;
     const record = turn.queueRecord;
+    turn.stopLeaseRenewal?.();
+    turn.stopLeaseRenewal = undefined;
     turn.queueRecord = undefined;
     try {
       if (type === "turn.completed") {
@@ -450,33 +467,86 @@ export class Runner {
   private async failActiveQueuedTurn(err: unknown): Promise<void> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
     if (!turn?.queueRecord) return;
+    if (!turn.terminalEmitted) {
+      turn.terminalEmitted = true;
+      const dispatched = await dispatch(
+        this.sink,
+        this.ws,
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "claude",
+          type: "turn.failed",
+          reason: "provider_failure",
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      if (!dispatched) return;
+    }
     await this.markQueuedTurnTerminal(turn, "turn.failed").catch((markErr) =>
       console.error("turn queue failure mark failed:", markErr, "original:", err),
     );
   }
 
   private scheduleWakeup(req: WakeupRequest): void {
-    setTimeout(() => {
-      void this.enqueueWakeup(req).catch((err) =>
-        console.error("schedule wakeup failed:", err),
-      );
-    }, req.delayMs);
+    void this.enqueueWakeup(req).catch((err) =>
+      console.error("schedule wakeup failed:", err),
+    );
   }
 
   private async enqueueWakeup(req: WakeupRequest): Promise<void> {
+    const delayMs = Math.max(0, req.delayMs);
+    await this.turnQueue.enqueueDelayed({
+      prompt: req.prompt,
+      clientNonce: `schedule_wakeup-${randomUUID()}`,
+      availableAt: new Date(Date.now() + delayMs).toISOString(),
+    });
+  }
+
+  private async finalizeQueuedRecordIfAlreadyTerminal(
+    record: TurnRecord,
+    clientNonce: string,
+  ): Promise<boolean> {
+    const terminal = await this.sink.findTurnTerminal(turnIDForClientNonce(clientNonce));
+    if (!terminal) return false;
+    if (terminal.type === "turn.completed") {
+      await this.turnQueue.markCompleted(record);
+    } else {
+      await this.turnQueue.markFailed(record, new Error(String(terminal.type)));
+    }
+    return true;
+  }
+
+  private async failQueuedRecord(record: TurnRecord, err: unknown): Promise<void> {
     const pendingTurn = await this.recordUserSubmission(
-      req.prompt,
-      { role: "user", content: req.prompt },
-      `schedule_wakeup:${randomUUID()}`,
+      record.prompt,
+      { role: "user", content: record.prompt },
+      turnClientNonce(record),
+      record,
     );
-    if (!pendingTurn) return;
-    this.pendingTurns.push(pendingTurn);
-    this.userQueue.push({
-      type: "user",
-      session_id: "",
-      message: { role: "user", content: req.prompt },
-      parent_tool_use_id: null,
-    } as unknown as SDKUserMessage);
+    if (!pendingTurn) {
+      await this.turnQueue.markFailed(record, err);
+      return;
+    }
+    pendingTurn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(record);
+    pendingTurn.terminalEmitted = true;
+    const dispatched = await dispatch(
+      this.sink,
+      this.ws,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: pendingTurn.turnID,
+        clientNonce: pendingTurn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "turn_queue_attempts_exceeded",
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    if (dispatched) {
+      await this.markQueuedTurnTerminal(pendingTurn, "turn.failed");
+    }
   }
 }
 
