@@ -109,9 +109,9 @@ func (s *appServer) handleRunWebSocket(w http.ResponseWriter, r *http.Request) {
 	pidPath := compat.RunPIDPath(runID)
 
 	if !params.Resume {
-		// Phase 1: enqueue a turn descriptor for every claude WS dispatch.
-		// Producer-only; the Phase 2 pod-side runner is the consumer. Codex
-		// path skipped — it stays per-turn with no long-lived runner.
+		// Legacy claude WS dispatch keeps a turn descriptor as an audit/request
+		// log. SDK runners ignore source=legacy-run rows; the old stream-json
+		// path still does the actual work here.
 		if provider == "claude" && s.turnQueue != nil {
 			if enqErr := s.turnQueue.Enqueue(ctx, store.TurnRecord{
 				RunID:          runID,

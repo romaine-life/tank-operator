@@ -26,8 +26,9 @@ const (
 
 // TurnRecord is a single queued turn descriptor. The orchestrator enqueues
 // one per dispatch; the pod-side runner claims pending rows in created_at
-// order, drives the agent, then marks them completed or failed. A restart
-// mid-turn can leave "claimed" rows behind for explicit recovery handling.
+// order, drives the agent, then marks them completed or failed. Recovery is
+// scoped to runner-process restarts while the session pod still exists; a dead
+// or deleted session pod remains terminal for that session.
 type TurnRecord struct {
 	RunID          string          `json:"run_id"`
 	SessionID      string          `json:"session_id"`

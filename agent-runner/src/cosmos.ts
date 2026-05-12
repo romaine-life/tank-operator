@@ -87,8 +87,9 @@ export class CosmosSink {
   // monotonic — naturally sorts by emit order). Partition is the
   // orchestrator's session_id (the integer "63") not the SDK's internal
   // session_id — the SPA queries on the integer (it knows the pod-level
-  // id), and pod restart may yield a new SDK session within the same
-  // tank-operator session. The SDK's session_id rides along as a field.
+  // id), and runner-process restart may yield a new SDK session within the
+  // same still-live tank-operator session. The SDK's session_id rides along
+  // as a field.
   async upsert(message: RunnerEvent & { uuid: string }): Promise<void> {
     const doc = this.docFromMessage(message);
     await this.container.items.upsert(doc);

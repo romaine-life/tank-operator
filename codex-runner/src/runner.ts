@@ -11,8 +11,9 @@
 //
 // Multi-turn coordination is explicit: only one runStreamed in flight
 // at a time. The Thread object keeps the conversation context across
-// turns (codex SDK persists threads to ~/.codex/sessions, so even pod
-// restart can resume via resumeThread()).
+// turns. Codex SDK persists threads to ~/.codex/sessions, which only helps
+// runner-process restarts inside the same live session pod; session pod death
+// is terminal and out of scope.
 //
 // Output fan-out per the producer contract:
 //   1. For every event, stamp a uuid + write to Cosmos FIRST (if canonical)
