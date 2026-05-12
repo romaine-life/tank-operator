@@ -374,6 +374,17 @@ func envDefault(name, fallback string) string {
 	return v
 }
 
+func parseEmailSet(raw string) map[string]bool {
+	m := map[string]bool{}
+	for _, entry := range strings.Split(raw, ",") {
+		email := strings.ToLower(strings.TrimSpace(entry))
+		if email != "" {
+			m[email] = true
+		}
+	}
+	return m
+}
+
 // parseInternalSubjects parses a comma-separated list of "ns/name" or "ns/name=email" entries
 // into a map[qualified]email. Plain entries without "=" are mapped to "".
 func parseInternalSubjects(raw string) map[string]string {

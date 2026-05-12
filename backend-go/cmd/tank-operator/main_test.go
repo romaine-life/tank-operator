@@ -63,6 +63,13 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestParseEmailSetNormalizesAndSkipsEmptyEntries(t *testing.T) {
+	got := parseEmailSet(" Alice@Example.test, ,BOB@example.test ")
+	if !got["alice@example.test"] || !got["bob@example.test"] || len(got) != 2 {
+		t.Fatalf("parseEmailSet = %#v", got)
+	}
+}
+
 func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{listOut: []sessions.Info{{ID: "1", Owner: "user@example.com"}}}
 	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), reader)

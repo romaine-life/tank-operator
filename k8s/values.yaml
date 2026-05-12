@@ -163,6 +163,12 @@ github:
 host:
   email: nelson@romaine.life
 
+# Comma-separated emails that receive super-admin behavior in MCP servers.
+# Empty means the orchestrator falls back to `host.email`, preserving the
+# single-operator default while making the role first-class configurable.
+superAdmins:
+  emails: nelson@romaine.life
+
 # Comma-separated "namespace/serviceaccount" pairs that may call the
 # /api/internal/* endpoints. The default covers mcp-github and mcp-tank-operator;
 # extend here when adding future in-cluster MCP servers that need the
