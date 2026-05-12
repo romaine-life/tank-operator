@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 const agentRunnerDialTimeout = 10 * time.Second
@@ -136,8 +137,9 @@ func podHasSDKRunner(pod *corev1.Pod) bool {
 
 // handleListSessionEvents reads canonical SDK events from the
 // `session-events` Cosmos container for the SPA's history-replay path.
-// Returns events strictly after the watermark `after` (a v7 UUID — sorts
-// by emit order), in ascending order, up to `limit` (max 1000).
+// Returns events strictly after `after_order_key`, the same cursor the SPA
+// renders by. The legacy `after` document-id cursor remains accepted for old
+// tabs.
 //
 // SPA contract: on session open, fetch with after="" to get the full
 // history; then open the WebSocket for live updates and dedupe by uuid.
@@ -157,7 +159,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	after := r.URL.Query().Get("after")
+	cursor := sessionEventCursorFromRequest(r)
 	limit := 200
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 1000 {
@@ -165,16 +167,36 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	events, err := s.sessionEvents.ListBySession(r.Context(), sessionID, after, limit)
+	page, err := s.sessionEvents.ListBySession(r.Context(), sessionID, cursor, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if events == nil {
-		events = []map[string]any{}
+	if page.Events == nil {
+		page.Events = []map[string]any{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": sessionID,
-		"events":     events,
+		"session_id":      sessionID,
+		"events":          page.Events,
+		"next_order_key":  page.NextOrderKey,
+		"has_more":        page.HasMore,
+		"cursor_semantic": "render_order",
 	})
+}
+
+func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
+	s.handleListSessionEvents(w, r)
+}
+
+func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
+	if afterOrderKey := r.URL.Query().Get("after_order_key"); afterOrderKey != "" {
+		return store.SessionEventCursor{AfterOrderKey: afterOrderKey}
+	}
+	if afterOrderKey := r.URL.Query().Get("after_sequence"); afterOrderKey != "" {
+		return store.SessionEventCursor{AfterOrderKey: afterOrderKey}
+	}
+	if afterID := r.URL.Query().Get("after"); afterID != "" {
+		return store.SessionEventCursor{AfterID: afterID}
+	}
+	return store.SessionEventCursor{}
 }

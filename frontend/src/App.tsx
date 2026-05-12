@@ -135,7 +135,7 @@ interface Session {
   mode: SessionMode;
   // Which data-ingestion path the chat pane should use for this session.
   // "sdk" → pod has the agent-runner sidecar; chat pane opens /agent-ws
-  // + /events. "legacy" → no agent-runner; chat pane uses /run +
+  // + /timeline. "legacy" → no agent-runner; chat pane uses /run +
   // /runs/latest/events.json + /run/history. Renderer is the same for
   // both; only the event source differs. Absent on older pods — treated
   // as "legacy".
@@ -1799,6 +1799,9 @@ function eventID(event: JsonObject, fallbackPrefix: string): string {
   if (typeof event.uuid === "string" && event.uuid) return event.uuid;
   if (typeof event.id === "string" && event.id) return event.id;
   if (typeof event.event_id === "string" && event.event_id) return event.event_id;
+  if (typeof event.order_key === "string" && event.order_key) {
+    return event.order_key;
+  }
   if (typeof event.tank_order_key === "string" && event.tank_order_key) {
     return event.tank_order_key;
   }
@@ -1806,6 +1809,9 @@ function eventID(event: JsonObject, fallbackPrefix: string): string {
 }
 
 function eventOrderKey(event: JsonObject): string {
+  if (typeof event.order_key === "string" && event.order_key) {
+    return event.order_key;
+  }
   if (typeof event.tank_order_key === "string" && event.tank_order_key) {
     return event.tank_order_key;
   }
@@ -2271,12 +2277,6 @@ function sdkHistoryTerminalForRun(
     if (terminal) return terminal;
   }
   return undefined;
-}
-
-function sdkEventDocumentID(event: unknown): string {
-  if (!isJsonObject(event)) return "";
-  const id = event.id ?? event.uuid;
-  return typeof id === "string" ? id : "";
 }
 
 function isClaudeRunMode(mode: SessionMode): boolean {
@@ -4386,7 +4386,7 @@ function HeadlessRun({
 
   // SDK-runtime history replay. Hits the canonical event log written by the
   // pod-side agent-runner (Cosmos session-events container, exposed via
-  // /api/sessions/{id}/events). Each event is the same shape applyProviderEvent
+  // /api/sessions/{id}/timeline). Each event is the same shape applyProviderEvent
   // already consumes — the chat pane was built around Claude's stream-json,
   // which the SDK is a TypeScript wrapper over the same binary's stdout.
   function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
@@ -4403,26 +4403,27 @@ function HeadlessRun({
     const refreshSessionId = session.id;
     const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      let after = "";
+      let afterOrderKey = "";
       for (let page = 0; page < 50; page += 1) {
         const params = new URLSearchParams({ limit: "1000" });
-        if (after) params.set("after", after);
+        if (afterOrderKey) params.set("after_order_key", afterOrderKey);
         const res = await authedFetch(
-          `/api/sessions/${encodeURIComponent(refreshSessionId)}/events?${params.toString()}`,
+          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
         );
         if (!res.ok) return { replayed: false };
-        const body = (await res.json()) as { session_id?: string; events?: unknown[] };
+        const body = (await res.json()) as {
+          session_id?: string;
+          events?: unknown[];
+          next_order_key?: string;
+          has_more?: boolean;
+        };
         if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
         if (!Array.isArray(body.events)) return { replayed: false };
         events.push(...body.events);
-        if (body.events.length < 1000) break;
-        const nextAfter = body.events
-          .map(sdkEventDocumentID)
-          .filter(Boolean)
-          .sort()
-          .at(-1);
-        if (!nextAfter || nextAfter === after) break;
-        after = nextAfter;
+        if (!body.has_more) break;
+        const nextAfter = typeof body.next_order_key === "string" ? body.next_order_key : "";
+        if (!nextAfter || nextAfter === afterOrderKey) break;
+        afterOrderKey = nextAfter;
       }
 
       let acc: TranscriptEntry[] = [];

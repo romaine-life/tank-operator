@@ -14,18 +14,18 @@ import (
 
 // appServer holds shared application state for all handlers.
 type appServer struct {
-	k8s        kubernetes.Interface
-	restCfg    *rest.Config
-	mgr        *sessions.Manager
-	profiles   profilesStore
+	k8s           kubernetes.Interface
+	restCfg       *rest.Config
+	mgr           *sessions.Manager
+	profiles      profilesStore
 	activeRuns    store.ActiveRunStore
 	runEvents     store.RunEventStore
 	turnQueue     store.TurnQueueStore
 	sessionEvents store.SessionEventStore
 	eventBus      *sessions.EventBus
-	verifier   *auth.Verifier
-	minter     *auth.Minter
-	namespace  string
+	verifier      *auth.Verifier
+	minter        *auth.Minter
+	namespace     string
 
 	// internalAllowedSubjects maps "namespace/serviceaccount" → email for internal SA auth.
 	internalAllowedSubjects map[string]string
@@ -90,10 +90,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/run", s.handleRunWebSocket)
 
 	// SDK runtime surface. The same chat pane consumes /agent-ws (live)
-	// and /events (history) when session.runtime is "sdk" — the data
+	// and /timeline (history) when session.runtime is "sdk" — the data
 	// source differs from the legacy path, but the renderer is the same.
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
+	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 
 	// CLI / sandbox agent.
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
