@@ -1979,10 +1979,15 @@ function applyClaudeToolResults(entries: TranscriptEntry[], event: JsonObject): 
 function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): TranscriptEntry[] {
   const type = event.type;
   const time = eventTime(event);
-  // Skip internal claude-code events that appear in the JSONL file but are
-  // not streamed via WebSocket and have no chat-visible meaning.
+  // Skip events that have no chat-visible meaning. stream_event is the
+  // SDK's typewriter-partial channel (deltas inside an in-flight turn) —
+  // the final `assistant` event carries the full content, so we silently
+  // drop the partials. Before this filter they fell through to the
+  // fallback appendMeta and briefly rendered as raw JSON until the
+  // history-replay path clobbered them.
   if (
     type === "system" ||
+    type === "stream_event" ||
     type === "rate_limit_event" ||
     type === "ai-title" ||
     type === "last-prompt" ||
