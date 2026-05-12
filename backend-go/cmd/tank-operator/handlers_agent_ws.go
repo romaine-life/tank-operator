@@ -57,8 +57,8 @@ func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusServiceUnavailable, "pod has no IP yet")
 		return
 	}
-	if !podHasAgentRunner(pod) {
-		writeError(w, http.StatusBadRequest, "session pod has no agent-runner container (legacy claude_cli/codex/pi modes don't use the SDK runner)")
+	if !podHasSDKRunner(pod) {
+		writeError(w, http.StatusBadRequest, "session pod has no SDK runner container (legacy claude_cli/codex_cli/pi modes don't use a runner)")
 		return
 	}
 
@@ -117,12 +117,17 @@ func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-// podHasAgentRunner returns true if the pod spec includes the
-// agent-runner container (claude_gui mode only today; Phase B
-// added it conditionally in compat.PodManifest).
-func podHasAgentRunner(pod *corev1.Pod) bool {
+// podHasSDKRunner returns true if the pod spec includes either of the
+// SDK runner sidecars: agent-runner (claude_gui, @anthropic-ai/claude-
+// agent-sdk) or codex-runner (codex_gui, @openai/codex-sdk). Both
+// listen on the same agent-ws port and speak the same client-side
+// protocol, so the WS reverse-proxy doesn't care which one is on the
+// other end. Without this, codex_gui sessions were 400'd at WS upgrade
+// despite having a working codex-runner — visible to the user as a
+// codex session timing out the moment they tried to send a message.
+func podHasSDKRunner(pod *corev1.Pod) bool {
 	for _, c := range pod.Spec.Containers {
-		if c.Name == "agent-runner" {
+		if c.Name == "agent-runner" || c.Name == "codex-runner" {
 			return true
 		}
 	}
