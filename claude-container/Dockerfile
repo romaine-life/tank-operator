@@ -12,6 +12,19 @@ RUN npx tsc
 # Prune dev deps for a smaller runtime payload.
 RUN npm prune --omit=dev
 
+# Stage 1b: build the codex-runner from codex-runner/. Sibling of
+# agent-runner — drives @openai/codex-sdk for codex_gui sessions instead
+# of @anthropic-ai/claude-agent-sdk. Baked into all three session images
+# (claude/codex/pi) for build symmetry; only the codex pod spec runs it.
+FROM node:20-alpine AS codex-runner-build
+WORKDIR /src/codex-runner
+COPY codex-runner/package.json codex-runner/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+COPY codex-runner/tsconfig.json ./
+COPY codex-runner/src ./src
+RUN npx tsc
+RUN npm prune --omit=dev
+
 # Stage 2: runtime image. azure-mcp + github-mcp + k8s-mcp run as in-cluster
 # HTTP MCP servers. The container reaches them via the mcp-auth-proxy sidecar
 # on 127.0.0.1, which reads the projected SA token fresh per request and
@@ -121,13 +134,19 @@ RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
 # Phase B agent-runner: long-lived pod-side process that drives
 # @anthropic-ai/claude-agent-sdk, fans events to Cosmos (durable) + a
-# local WebSocket (live tap). Shipped inert in Phase B — no container
-# in the pod spec invokes it yet; Phase C wires the orchestrator's
-# WebSocket reverse-proxy and the per-session opt-in label that turns
-# it on. Entrypoint: `node /opt/agent-runner/dist/index.js`.
+# local WebSocket (live tap). Entrypoint: `node /opt/agent-runner/dist/index.js`.
 COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
 COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
 COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
+
+# Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
+# Baked into all three session images so the build is symmetric; only
+# the codex pod spec invokes it as a sidecar. The same WS port + Cosmos
+# container shape lets the orchestrator's reverse-proxy and the SPA's
+# chat pane consume both runtimes uniformly.
+COPY --from=codex-runner-build /src/codex-runner/dist /opt/codex-runner/dist
+COPY --from=codex-runner-build /src/codex-runner/node_modules /opt/codex-runner/node_modules
+COPY --from=codex-runner-build /src/codex-runner/package.json /opt/codex-runner/package.json
 
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
 # bootstrap script are mounted from the chart-managed tank-session-config

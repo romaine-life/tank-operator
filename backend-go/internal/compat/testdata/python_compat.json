@@ -53,11 +53,13 @@
     },
     "container_images": {
       "claude": "romainecr.azurecr.io/codex-container:latest",
+      "codex-runner": "romainecr.azurecr.io/codex-container:latest",
       "mcp-auth-proxy": "romainecr.azurecr.io/codex-container:latest"
     },
     "container_names": [
       "mcp-auth-proxy",
-      "claude"
+      "claude",
+      "codex-runner"
     ],
     "input": {
       "mode": "codex_headless",

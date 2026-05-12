@@ -187,14 +187,15 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 	}
 }
 
-// runtimeFromPod returns "sdk" if the pod has the Phase B agent-runner
-// container in its spec, "legacy" otherwise. The SPA branches on this
-// to pick the new typed-event consumer or the old stream-json one.
-// Old pods that pre-date the Phase B image roll won't have the
-// container; they stay on the legacy path until reaped.
+// runtimeFromPod returns "sdk" if the pod has either of the SDK runner
+// sidecars in its spec (agent-runner for claude_gui, codex-runner for
+// codex_gui), "legacy" otherwise. The SPA's chat pane branches on this
+// to pick the canonical-event data source vs the old stream-json one.
+// Pods that pre-date the runner roll stay on the legacy path until
+// reaped.
 func runtimeFromPod(pod *corev1.Pod) string {
 	for _, c := range pod.Spec.Containers {
-		if c.Name == "agent-runner" {
+		if c.Name == "agent-runner" || c.Name == "codex-runner" {
 			return "sdk"
 		}
 	}

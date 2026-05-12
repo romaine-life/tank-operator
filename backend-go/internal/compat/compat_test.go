@@ -144,7 +144,9 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 
 	spec := manifest["spec"].(map[string]any)
 	containers := spec["containers"].([]any)
-	if got, want := len(containers), 2; got != want {
+	// codex_gui now adds a third container, codex-runner (the @openai/
+	// codex-sdk runner), so the pod has 3 containers, not 2.
+	if got, want := len(containers), 3; got != want {
 		t.Fatalf("container count = %d, want %d", got, want)
 	}
 	if got, want := containers[0].(map[string]any)["name"], "mcp-auth-proxy"; got != want {
@@ -161,9 +163,17 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := ports[0].(map[string]any)["name"], "sandbox-agent"; got != want {
 		t.Fatalf("main container port name = %v, want %q", got, want)
 	}
+	codexRunner := containers[2].(map[string]any)
+	if got, want := codexRunner["name"], "codex-runner"; got != want {
+		t.Fatalf("codex-runner container name = %v, want %q", got, want)
+	}
+	if got, want := codexRunner["image"], "codex-image"; got != want {
+		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
+	}
 	volumes := spec["volumes"].([]any)
-	// codex_gui mode adds session-config + codex-creds volumes.
-	if got, want := len(volumes), 2; got != want {
+	// codex_gui adds session-config + codex-creds + workspace emptyDir
+	// (shared between the claude container and the codex-runner sidecar).
+	if got, want := len(volumes), 3; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
 }
