@@ -7,9 +7,8 @@
 #
 # Distinct from the tank-operator CI Entra app (which is for tofu/ACR push
 # from GitHub Actions). The CI app's SP creates this one and becomes its
-# owner; without the explicit `owners` attribute, the azuread provider
-# doesn't record ownership and `Application.ReadWrite.OwnedBy` returns 403
-# on any follow-up Graph call.
+# owner; keep the explicit `owners` attribute so ownership remains visible in
+# the app registration.
 
 resource "azuread_application" "oauth" {
   display_name = "tank-operator-oauth"
@@ -61,10 +60,7 @@ resource "azuread_application" "oauth_test" {
   # owns standby DNS/count reconciliation.
   sign_in_audience               = "AzureADandPersonalMicrosoftAccount"
   fallback_public_client_enabled = true
-  owners = [
-    data.azuread_client_config.current.object_id,
-    module.mcp_azure_personal.managed_identity_principal_id,
-  ]
+  owners                         = [data.azuread_client_config.current.object_id]
 
   api {
     requested_access_token_version = 2
@@ -115,18 +111,4 @@ resource "azurerm_key_vault_secret" "oauth_test_client_id" {
   name         = "tank-operator-test-oauth-client-id"
   value        = azuread_application.oauth_test.client_id
   key_vault_id = data.azurerm_key_vault.main.id
-}
-
-# Allow the azure-personal MCP UAMI to patch redirect URIs on app
-# registrations it explicitly owns, without granting broad directory list
-# permissions. The test OAuth app grants ownership above; production remains
-# owned only by the infra deployment identity.
-data "azuread_service_principal" "microsoft_graph" {
-  client_id = "00000003-0000-0000-c000-000000000000"
-}
-
-resource "azuread_app_role_assignment" "mcp_azure_personal_application_readwrite_ownedby" {
-  app_role_id         = data.azuread_service_principal.microsoft_graph.app_role_ids["Application.ReadWrite.OwnedBy"]
-  principal_object_id = module.mcp_azure_personal.managed_identity_principal_id
-  resource_object_id  = data.azuread_service_principal.microsoft_graph.object_id
 }
