@@ -14,6 +14,40 @@ test("canonical: user, assistant, result messages", () => {
   assert.equal(isCanonical({ type: "result", subtype: "success" } as any), true);
 });
 
+test("canonical: durable Tank conversation envelope", () => {
+  assert.equal(
+    isCanonical({
+      event_id: "turn_1:item.started:toolu_1",
+      session_id: "63",
+      turn_id: "turn_1",
+      item_id: "toolu_1",
+      actor: "tool",
+      source: "claude",
+      type: "item.started",
+      created_at: "2026-05-12T00:00:00Z",
+      visibility: "durable",
+    } as any),
+    true,
+  );
+});
+
+test("NOT canonical: live-only Tank conversation envelope", () => {
+  assert.equal(
+    isCanonical({
+      event_id: "turn_1:item.delta:toolu_1",
+      session_id: "63",
+      turn_id: "turn_1",
+      item_id: "toolu_1",
+      actor: "tool",
+      source: "claude",
+      type: "item.delta",
+      created_at: "2026-05-12T00:00:00Z",
+      visibility: "live-only",
+    } as any),
+    false,
+  );
+});
+
 test("canonical: system init + compact_boundary + tool_use_summary", () => {
   assert.equal(isCanonical({ type: "system", subtype: "init" } as any), true);
   assert.equal(

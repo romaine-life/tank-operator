@@ -24,6 +24,13 @@ import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.js";
 import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
+import {
+  itemEvent,
+  normalizeClientNonce,
+  turnEvent,
+  userSubmissionEvents,
+  type TankConversationEvent,
+} from "./conversation.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
@@ -37,6 +44,7 @@ import { WSFanout, type ClientFrame } from "./ws.js";
 // Callers that don't care about the outcome can ignore it.
 interface DispatchSink {
   upsert(message: RunnerEvent & { uuid: string }): Promise<void>;
+  create?(message: RunnerEvent & { uuid: string }): Promise<"created" | "exists">;
 }
 interface DispatchWS {
   broadcastEvent(message: RunnerEvent): void;
@@ -47,17 +55,30 @@ let tankEventSeq = 0;
 function stampTankEvent(message: RunnerEvent): RunnerEvent & { uuid: string } {
   tankEventSeq += 1;
   const now = Date.now();
-  const uuid = typeof message.uuid === "string" && message.uuid ? message.uuid : randomUUID();
+  const eventID = typeof message.event_id === "string" && message.event_id ? message.event_id : "";
+  const uuid = typeof message.uuid === "string" && message.uuid ? message.uuid : eventID || randomUUID();
+  const writtenAt = new Date(now).toISOString();
+  const tankOrderKey = [
+    String(now).padStart(13, "0"),
+    String(tankEventSeq).padStart(8, "0"),
+    uuid,
+  ].join("-");
   return {
     ...message,
     uuid,
+    ...(eventID ? { event_id: eventID } : {}),
     tank_event_seq: tankEventSeq,
-    tank_order_key: [
-      String(now).padStart(13, "0"),
-      String(tankEventSeq).padStart(8, "0"),
-      uuid,
-    ].join("-"),
-    written_at: new Date(now).toISOString(),
+    tank_order_key: tankOrderKey,
+    written_at: writtenAt,
+    ...(isTankEvent(message)
+      ? {
+          order_key:
+            typeof message.order_key === "string" && message.order_key ? message.order_key : tankOrderKey,
+          sequence: typeof message.sequence === "number" ? message.sequence : tankEventSeq,
+          created_at:
+            typeof message.created_at === "string" && message.created_at ? message.created_at : writtenAt,
+        }
+      : {}),
   };
 }
 
@@ -81,6 +102,31 @@ export async function dispatch(
   return true;
 }
 
+export async function dispatchCreate(
+  sink: DispatchSink,
+  ws: DispatchWS,
+  message: RunnerEvent,
+): Promise<"created" | "exists" | "failed"> {
+  const stamped = stampTankEvent(message);
+  if (!isCanonical(stamped)) {
+    ws.broadcastEvent(stamped);
+    return "created";
+  }
+  try {
+    const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
+    if (result === "exists") return "exists";
+  } catch (err) {
+    console.error("cosmos create failed:", err);
+    return "failed";
+  }
+  ws.broadcastEvent(stamped);
+  return "created";
+}
+
+function isTankEvent(message: RunnerEvent): message is TankConversationEvent {
+  return typeof message.event_id === "string" && typeof message.visibility === "string";
+}
+
 function userMessageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -101,6 +147,170 @@ function userMessageText(content: unknown): string {
       .join("\n");
   }
   return String(content ?? "");
+}
+
+interface PendingTurn {
+  turnID: string;
+  clientNonce: string;
+  text: string;
+  started: boolean;
+  interrupted: boolean;
+  terminalEmitted: boolean;
+}
+
+function providerEventID(message: RunnerEvent): string | undefined {
+  for (const key of ["uuid", "id", "message_id", "session_id"]) {
+    const value = message[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return undefined;
+}
+
+function claudeMessageContent(message: RunnerEvent): unknown[] {
+  const body = message.message;
+  if (body && typeof body === "object" && "content" in body) {
+    const content = (body as { content?: unknown }).content;
+    return Array.isArray(content) ? content : [];
+  }
+  return [];
+}
+
+function canonicalEventsForClaudeMessage(
+  cfg: Config,
+  turn: PendingTurn | null,
+  message: RunnerEvent,
+  needsInputItemIDs: Set<string>,
+): TankConversationEvent[] {
+  if (!turn) return [];
+  const providerID = providerEventID(message);
+  if (message.type === "assistant") {
+    const events: TankConversationEvent[] = [];
+    for (const [index, block] of claudeMessageContent(message).entries()) {
+      if (!block || typeof block !== "object") continue;
+      const item = block as Record<string, unknown>;
+      if (item.type === "text") {
+        const text = typeof item.text === "string" ? item.text : "";
+        if (!text) continue;
+        events.push(
+          itemEvent({
+            sessionID: cfg.sessionId,
+            turnID: turn.turnID,
+            source: "claude",
+            type: "item.completed",
+            itemID: `${turn.turnID}:assistant:${providerID ?? index}`,
+            actor: "assistant",
+            providerEventID: providerID,
+            payload: { kind: "message", text },
+          }),
+        );
+      } else if (item.type === "tool_use") {
+        const itemID =
+          typeof item.id === "string" && item.id ? item.id : `${turn.turnID}:tool:${index}`;
+        const name = typeof item.name === "string" ? item.name : "tool";
+        events.push(
+          itemEvent({
+            sessionID: cfg.sessionId,
+            turnID: turn.turnID,
+            source: "claude",
+            type: "item.started",
+            itemID,
+            actor: "tool",
+            providerEventID: providerID,
+            payload: {
+              kind: "tool",
+              title: name,
+              name,
+              input: item.input,
+            },
+          }),
+        );
+        if (name === "AskUserQuestion") {
+          needsInputItemIDs.add(itemID);
+          events.push(
+            itemEvent({
+              sessionID: cfg.sessionId,
+              turnID: turn.turnID,
+              source: "claude",
+              type: "tool.approval_requested",
+              itemID,
+              actor: "tool",
+              providerEventID: providerID,
+              payload: {
+                kind: "needs_input",
+                title: "Ask user question",
+                name,
+                input: item.input,
+              },
+            }),
+          );
+        }
+      }
+    }
+    return events;
+  }
+  if (message.type === "user") {
+    return claudeMessageContent(message).flatMap((block, index): TankConversationEvent[] => {
+      if (!block || typeof block !== "object") return [];
+      const item = block as Record<string, unknown>;
+      if (item.type !== "tool_result") return [];
+      const itemID =
+        typeof item.tool_use_id === "string" && item.tool_use_id
+          ? item.tool_use_id
+          : `${turn.turnID}:tool_result:${index}`;
+      const failed = item.is_error === true;
+      const completed = itemEvent({
+        sessionID: cfg.sessionId,
+        turnID: turn.turnID,
+        source: "claude",
+        type: failed ? "item.failed" : "item.completed",
+        itemID,
+        actor: "tool",
+        providerEventID: providerID,
+        payload: {
+          kind: "tool_result",
+          output: item.content,
+          is_error: failed,
+        },
+      });
+      if (!needsInputItemIDs.has(itemID)) return [completed];
+      needsInputItemIDs.delete(itemID);
+      return [
+        completed,
+        itemEvent({
+          sessionID: cfg.sessionId,
+          turnID: turn.turnID,
+          source: "claude",
+          type: "tool.approval_resolved",
+          itemID,
+          actor: "tool",
+          providerEventID: providerID,
+          payload: {
+            kind: "needs_input",
+            resolved: true,
+            is_error: failed,
+          },
+        }),
+      ];
+    });
+  }
+  if (message.type === "result") {
+    if (turn.interrupted && turn.terminalEmitted) return [];
+    const failed = message.is_error === true || message.subtype === "error";
+    return [
+      turnEvent({
+        sessionID: cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: turn.interrupted ? "turn.interrupted" : failed ? "turn.failed" : "turn.completed",
+        reason: turn.interrupted ? "client_interrupt" : failed ? "provider_failure" : undefined,
+        usage: message.usage,
+        error: failed ? message.result ?? message.error : undefined,
+        providerEventID: providerID,
+      }),
+    ];
+  }
+  return [];
 }
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -142,6 +352,9 @@ export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
+  private readonly pendingTurns: PendingTurn[] = [];
+  private readonly needsInputItemIDs = new Set<string>();
+  private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
   private userFrameChain: Promise<void> = Promise.resolve();
 
@@ -190,17 +403,38 @@ export class Runner {
     } catch (err) {
       console.error("SDK query exited with error:", err);
     } finally {
+      if (signal.aborted) {
+        await this.interruptActiveTurn("runner_shutdown");
+      }
       this.userQueue.close();
       this.ws.close();
     }
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
+    const runnerEvent = message as RunnerEvent;
+    const activeTurn = await this.ensureActiveTurn(runnerEvent);
+
     // 1+2. Dual-sink dispatch (cosmos-first ordering). Extracted so the
     // contract — canonical: cosmos before ws, ws skipped on cosmos
     // failure; live-only: ws only — can be tested without spinning up a
     // Runner.
-    await dispatch(this.sink, this.ws, message);
+    await dispatch(this.sink, this.ws, runnerEvent);
+
+    for (const event of canonicalEventsForClaudeMessage(
+      this.cfg,
+      activeTurn,
+      runnerEvent,
+      this.needsInputItemIDs,
+    )) {
+      await dispatch(this.sink, this.ws, event);
+      if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
+        if (activeTurn) activeTurn.terminalEmitted = true;
+      }
+    }
+    if (runnerEvent.type === "result" && this.activeTurn === activeTurn) {
+      this.activeTurn = null;
+    }
 
     // 3. ScheduleWakeup detection
     const wakeup = extractWakeup(message);
@@ -212,12 +446,9 @@ export class Runner {
   private async handleClientFrame(frame: ClientFrame): Promise<void> {
     if (frame.type === "user") {
       const text = userMessageText(frame.message?.content);
-      const persisted = await dispatch(this.sink, this.ws, {
-        type: "tank.user_message",
-        message: text,
-        ...(frame.client_nonce ? { client_nonce: frame.client_nonce } : {}),
-      });
-      if (!persisted) return;
+      const pendingTurn = await this.recordUserSubmission(text, frame.message, frame.client_nonce);
+      if (!pendingTurn) return;
+      this.pendingTurns.push(pendingTurn);
 
       // Hand to the SDK iterator only after Tank owns the durable user
       // message. The SDK enforces "wait for result before next message"
@@ -229,8 +460,83 @@ export class Runner {
         parent_tool_use_id: null,
       } as unknown as SDKUserMessage);
     } else if (frame.type === "interrupt") {
+      await this.interruptActiveTurn("client_interrupt");
       this.sdkQuery?.interrupt();
     }
+  }
+
+  private async recordUserSubmission(
+    text: string,
+    message: unknown,
+    rawClientNonce: unknown,
+  ): Promise<PendingTurn | null> {
+    const clientNonce = normalizeClientNonce(rawClientNonce);
+    if (!clientNonce) {
+      await dispatch(this.sink, this.ws, {
+        type: "error",
+        message: "client_nonce is required for user submissions",
+      });
+      return null;
+    }
+    const { turnID, userMessage, turnSubmitted } = userSubmissionEvents({
+      sessionID: this.cfg.sessionId,
+      clientNonce,
+      text,
+      message,
+      runtime: "claude",
+    });
+    const userResult = await dispatchCreate(this.sink, this.ws, userMessage);
+    if (userResult === "failed") return null;
+    const submittedResult = await dispatchCreate(this.sink, this.ws, turnSubmitted);
+    if (submittedResult !== "created") return null;
+    return {
+      turnID,
+      clientNonce,
+      text,
+      started: false,
+      interrupted: false,
+      terminalEmitted: false,
+    };
+  }
+
+  private async ensureActiveTurn(event: RunnerEvent): Promise<PendingTurn | null> {
+    if (!this.activeTurn && this.pendingTurns.length > 0 && startsProviderTurn(event)) {
+      this.activeTurn = this.pendingTurns.shift() ?? null;
+      if (this.activeTurn && !this.activeTurn.started) {
+        this.activeTurn.started = true;
+        await dispatch(
+          this.sink,
+          this.ws,
+          turnEvent({
+            sessionID: this.cfg.sessionId,
+            turnID: this.activeTurn.turnID,
+            clientNonce: this.activeTurn.clientNonce,
+            source: "claude",
+            type: "turn.started",
+          }),
+        );
+      }
+    }
+    return this.activeTurn;
+  }
+
+  private async interruptActiveTurn(reason: "client_interrupt" | "runner_shutdown"): Promise<void> {
+    const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
+    if (!turn || turn.terminalEmitted) return;
+    turn.interrupted = true;
+    turn.terminalEmitted = true;
+    await dispatch(
+      this.sink,
+      this.ws,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.interrupted",
+        reason,
+      }),
+    );
   }
 
   private scheduleWakeup(req: WakeupRequest): void {
@@ -242,12 +548,13 @@ export class Runner {
   }
 
   private async enqueueWakeup(req: WakeupRequest): Promise<void> {
-    const persisted = await dispatch(this.sink, this.ws, {
-      type: "tank.user_message",
-      message: req.prompt,
-      source: "schedule_wakeup",
-    });
-    if (!persisted) return;
+    const pendingTurn = await this.recordUserSubmission(
+      req.prompt,
+      { role: "user", content: req.prompt },
+      `schedule_wakeup:${randomUUID()}`,
+    );
+    if (!pendingTurn) return;
+    this.pendingTurns.push(pendingTurn);
     this.userQueue.push({
       type: "user",
       session_id: "",
@@ -255,4 +562,8 @@ export class Runner {
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
   }
+}
+
+function startsProviderTurn(event: RunnerEvent): boolean {
+  return event.type === "assistant" || event.type === "user" || event.type === "result";
 }
