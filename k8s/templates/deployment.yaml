@@ -120,6 +120,12 @@ spec:
             # host-owned repos when a non-host caller touches them.
             - name: HOST_EMAIL
               value: {{ .Values.host.email | quote }}
+            # Comma-separated emails that receive explicit super-admin
+            # behavior in MCP servers. Empty falls back to HOST_EMAIL in
+            # the orchestrator for compatibility with single-operator
+            # deployments.
+            - name: SUPER_ADMIN_EMAILS
+              value: {{ .Values.superAdmins.emails | quote }}
             # Comma-separated "namespace/serviceaccount" pairs allowed to call
             # /api/internal/*. Widened here to include mcp-tank-operator in
             # addition to mcp-github. Override in per-slot value overlays when

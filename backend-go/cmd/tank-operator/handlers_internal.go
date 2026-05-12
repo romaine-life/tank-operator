@@ -58,6 +58,7 @@ func (s *appServer) doInternalResolveCaller(w http.ResponseWriter, r *http.Reque
 	}
 
 	hostEmail := os.Getenv("HOST_EMAIL")
+	superAdmins := parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostEmail))
 	var installationID *int64
 
 	if s.profiles != nil {
@@ -74,6 +75,7 @@ func (s *appServer) doInternalResolveCaller(w http.ResponseWriter, r *http.Reque
 		"email":           email,
 		"installation_id": installationID,
 		"is_host":         strings.EqualFold(email, hostEmail),
+		"is_super_admin":  superAdmins[strings.ToLower(strings.TrimSpace(email))],
 		"host_email":      hostEmail,
 		"pod_name":        podName,
 	})
