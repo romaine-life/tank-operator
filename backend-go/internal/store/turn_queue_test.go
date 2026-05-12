@@ -6,8 +6,8 @@ import (
 )
 
 // TestTurnDocShape pins the wire JSON the orchestrator writes to Cosmos.
-// The Phase 2 pod-side runner reads these exact fields; any drift here is
-// a wire-shape regression that the runner will silently misparse.
+// The pod-side SDK runners read these exact fields; any drift here is a
+// wire-shape regression that the runners will silently misparse.
 func TestTurnDocShape(t *testing.T) {
 	claimed := "2026-05-11T17:00:00Z"
 	rec := TurnRecord{
@@ -29,7 +29,7 @@ func TestTurnDocShape(t *testing.T) {
 	doc := turnDoc(rec)
 
 	if got, want := doc["id"], "turn:abc123"; got != want {
-		t.Fatalf("id = %q, want %q (Phase 2 runner reads by 'turn:<run_id>')", got, want)
+		t.Fatalf("id = %q, want %q (runner reads by 'turn:<run_id>')", got, want)
 	}
 	if got, want := doc["session_id"], "61"; got != want {
 		t.Fatalf("session_id = %q (must match container partition key /session_id)", got)
@@ -60,8 +60,8 @@ func TestTurnDocShape(t *testing.T) {
 	}
 }
 
-// TestTurnDocRoundtrip ensures the Phase 2 runner can decode what the
-// producer wrote without information loss on any field.
+// TestTurnDocRoundtrip ensures the SDK runners can decode what the producer
+// wrote without information loss on any field.
 func TestTurnDocRoundtrip(t *testing.T) {
 	orig := TurnRecord{
 		RunID:          "abc",

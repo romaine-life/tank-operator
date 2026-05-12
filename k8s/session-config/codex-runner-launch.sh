@@ -25,7 +25,8 @@ configure_codex() {
   # legacy headless-run.sh uses). Copy + chmod 600 — not symlink,
   # because the CLI rewrites this file on token refresh and the
   # secret mount is read-only tmpfs. The rewritten file is lost on
-  # pod restart; that's fine, the cached refresh_token in the secret
+  # container restart within the same live session pod; that's fine, the
+  # cached refresh_token in the secret
   # is still valid for the next pod.
   if [ ! -f /etc/codex-creds/auth.json ]; then
     echo "no codex credentials found in /etc/codex-creds/auth.json" >&2

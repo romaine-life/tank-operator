@@ -273,6 +273,12 @@ session/provider before producing canonical events. `/agent-ws` remains live
 delivery only; clients reconnect against `/timeline` instead of resending the
 prompt.
 
+Durability scope: queued SDK turns are intended to survive browser disconnects,
+orchestrator restarts/rollouts, and runner-process restarts while the session
+pod itself is still live. Session-pod deletion or death is terminal for the
+session and its `emptyDir` workspace; recovering a dead session pod is not part
+of this protocol.
+
 Activity summary:
 
 `GET /api/sessions/activity`

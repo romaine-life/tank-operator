@@ -59,10 +59,9 @@ func (m *Manager) DispatchHeadless(ctx context.Context, p DispatchParams) error 
 	streamPath := compat.RunStreamPath(runID)
 	pidPath := compat.RunPIDPath(runID)
 
-	// Phase 1 of the SDK migration: enqueue a turn descriptor for every
-	// claude dispatch. The pod-side runner (Phase 2) will consume these
-	// rows; for now this is a write-only record that the headless-run.sh
-	// path continues to do the actual work. Codex skipped — its dispatch
+	// Legacy claude dispatch keeps a turn descriptor as an audit/request log.
+	// SDK runners ignore source=legacy-run rows; headless-run.sh still does
+	// the actual work here. Codex skipped because its dispatch
 	// shape stays per-turn, no long-lived runner.
 	if provider == "claude" && p.TurnQueue != nil {
 		if enqErr := p.TurnQueue.Enqueue(ctx, store.TurnRecord{
@@ -77,8 +76,8 @@ func (m *Manager) DispatchHeadless(ctx context.Context, p DispatchParams) error 
 			SkillName:      p.SkillName,
 			FollowUp:       p.FollowUp,
 		}); enqErr != nil {
-			// Non-fatal in Phase 1: the headless-run.sh path is still the
-			// load-bearing dispatch. Surfaces as a slog.Warn so a real
+			// Non-fatal: the headless-run.sh path is still the load-bearing
+			// dispatch. Surfaces as a slog.Warn so a real
 			// Cosmos outage shows up in logs without breaking sessions.
 			slog.Warn("turn queue enqueue failed",
 				"session", p.SessionID, "run_id", runID, "err", enqErr)
