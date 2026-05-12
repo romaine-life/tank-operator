@@ -75,15 +75,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
 
-	// Legacy run endpoints — used by sessions whose pod has no
-	// agent-runner sidecar (codex_gui, claude_cli, pi, and pre-Phase-B
-	// claude_gui pods). The SPA's chat pane uses these for the legacy
-	// data-ingestion path. They are not being deprecated: codex doesn't
-	// have an Anthropic-equivalent SDK to wrap, so the legacy stream
-	// path is its first-class runtime. (An earlier comment here said
-	// "Phase F2 deletes these" — that plan was authored under a wrong
-	// assumption that the SPA's chat pane would be replaced. The chat
-	// pane stays. These endpoints stay.)
+	// Legacy run endpoints - used by sessions whose pod has no SDK runner
+	// sidecar (claude_cli, codex_cli, pi, and older GUI pods). The SPA's
+	// chat pane uses these for the legacy data-ingestion path. They are not
+	// being deleted: CLI/config modes still dispatch short-lived runs through
+	// this stream-json surface.
 	mux.HandleFunc("GET /api/sessions/{session_id}/run/active", s.handleGetActiveRun)
 	mux.HandleFunc("GET /api/sessions/{session_id}/run/history", s.handleRunHistory)
 	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events", s.handleLatestRunEvents)
@@ -95,6 +91,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// and /timeline (history) when session.runtime is "sdk" — the data
 	// source differs from the legacy path, but the renderer is the same.
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
+	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)

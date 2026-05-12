@@ -178,6 +178,40 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	}
 }
 
+func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
+	tests := map[string]string{
+		ClaudeGUIMode: "agent-runner",
+		CodexGUIMode:  "codex-runner",
+	}
+	for mode, runnerName := range tests {
+		t.Run(mode, func(t *testing.T) {
+			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
+				SessionImage:                 "claude-image",
+				CodexSessionImage:            "codex-image",
+				CosmosEndpoint:               "https://cosmos.example",
+				CosmosDatabase:               "tank-db",
+				CosmosSessionEventsContainer: "events",
+				CosmosTurnQueueContainer:     "turns",
+			})
+			spec := manifest["spec"].(map[string]any)
+			containers := spec["containers"].([]any)
+			env := containerEnv(findContainer(t, containers, runnerName))
+			if got, want := env["COSMOS_ENDPOINT"], "https://cosmos.example"; got != want {
+				t.Fatalf("COSMOS_ENDPOINT = %v, want %q", got, want)
+			}
+			if got, want := env["COSMOS_DATABASE"], "tank-db"; got != want {
+				t.Fatalf("COSMOS_DATABASE = %v, want %q", got, want)
+			}
+			if got, want := env["COSMOS_SESSION_EVENTS_CONTAINER"], "events"; got != want {
+				t.Fatalf("COSMOS_SESSION_EVENTS_CONTAINER = %v, want %q", got, want)
+			}
+			if got, want := env["COSMOS_TURN_QUEUE_CONTAINER"], "turns"; got != want {
+				t.Fatalf("COSMOS_TURN_QUEUE_CONTAINER = %v, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPythonCompatFixture(t *testing.T) {
 	fixture := loadFixture(t)
 
@@ -342,14 +376,30 @@ func claudeEnv(containers []any) map[string]any {
 		if container["name"] != "claude" {
 			continue
 		}
-		out := map[string]any{}
-		for _, envItem := range container["env"].([]any) {
-			env := envItem.(map[string]any)
-			out[env["name"].(string)] = env["value"]
-		}
-		return out
+		return containerEnv(container)
 	}
 	return nil
+}
+
+func findContainer(t *testing.T, containers []any, name string) map[string]any {
+	t.Helper()
+	for _, item := range containers {
+		container := item.(map[string]any)
+		if container["name"] == name {
+			return container
+		}
+	}
+	t.Fatalf("container %q not found", name)
+	return nil
+}
+
+func containerEnv(container map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, envItem := range container["env"].([]any) {
+		env := envItem.(map[string]any)
+		out[env["name"].(string)] = env["value"]
+	}
+	return out
 }
 
 func claudeCommand(containers []any) []any {

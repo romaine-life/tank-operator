@@ -35,6 +35,7 @@ import {
   userSubmissionEvents,
   type TankConversationEvent,
 } from "./conversation.js";
+import { TurnQueue, turnClientNonce, type TurnRecord } from "./turnQueue.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
@@ -138,6 +139,7 @@ export interface PendingTurn {
   started: boolean;
   interrupted: boolean;
   terminalEmitted: boolean;
+  queueRecord?: TurnRecord;
 }
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
@@ -178,6 +180,7 @@ class AsyncQueue<T> {
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
+  private readonly turnQueue: TurnQueue;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   private readonly needsInputItemIDs = new Set<string>();
@@ -188,6 +191,7 @@ export class Runner {
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
     this.ws = new WSFanout(cfg.wsPort);
+    this.turnQueue = new TurnQueue(cfg, "claude");
     this.ws.onMessage((frame) => {
       if (frame.type === "user") {
         this.userFrameChain = this.userFrameChain
@@ -202,6 +206,12 @@ export class Runner {
   // Run forever (or until externally aborted). Drives the SDK against
   // the user queue and fans events out to both sinks.
   async run(signal: AbortSignal): Promise<void> {
+    const stopPolling = this.startTurnQueuePolling(signal);
+    const onAbort = () => {
+      this.userQueue.close();
+      this.sdkQuery?.interrupt();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
     const options: Options = {
       cwd: this.cfg.workspace,
       // The api-proxy injects OAuth from KV when the placeholder bearer
@@ -229,7 +239,10 @@ export class Runner {
       }
     } catch (err) {
       console.error("SDK query exited with error:", err);
+      await this.failActiveQueuedTurn(err);
     } finally {
+      signal.removeEventListener("abort", onAbort);
+      stopPolling();
       if (signal.aborted) {
         await this.interruptActiveTurn("runner_shutdown");
       }
@@ -254,9 +267,12 @@ export class Runner {
       runnerEvent,
       this.needsInputItemIDs,
     )) {
-      await dispatch(this.sink, this.ws, event);
+      const dispatched = await dispatch(this.sink, this.ws, event);
       if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
         if (activeTurn) activeTurn.terminalEmitted = true;
+        if (dispatched && activeTurn?.queueRecord) {
+          await this.markQueuedTurnTerminal(activeTurn, event.type);
+        }
       }
     }
     if (runnerEvent.type === "result" && this.activeTurn === activeTurn) {
@@ -292,10 +308,53 @@ export class Runner {
     }
   }
 
+  private startTurnQueuePolling(signal: AbortSignal): () => void {
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+    };
+    void (async () => {
+      while (!stopped && !signal.aborted) {
+        try {
+          const record = await this.turnQueue.claimNext();
+          if (record) {
+            await this.acceptQueuedTurn(record);
+            continue;
+          }
+        } catch (err) {
+          console.error("turn queue poll failed:", err);
+        }
+        await sleep(this.cfg.turnQueuePollMs, signal, () => stopped);
+      }
+    })().catch((err) => console.error("turn queue poller crashed:", err));
+    return stop;
+  }
+
+  private async acceptQueuedTurn(record: TurnRecord): Promise<void> {
+    const pendingTurn = await this.recordUserSubmission(
+      record.prompt,
+      { role: "user", content: record.prompt },
+      turnClientNonce(record),
+      record,
+    );
+    if (!pendingTurn) {
+      await this.turnQueue.markFailed(record, new Error("queued turn was not accepted"));
+      return;
+    }
+    this.pendingTurns.push(pendingTurn);
+    this.userQueue.push({
+      type: "user",
+      session_id: "",
+      message: { role: "user", content: record.prompt },
+      parent_tool_use_id: null,
+    } as unknown as SDKUserMessage);
+  }
+
   private async recordUserSubmission(
     text: string,
     message: unknown,
     rawClientNonce: unknown,
+    queueRecord?: TurnRecord,
   ): Promise<PendingTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
@@ -323,6 +382,7 @@ export class Runner {
       started: false,
       interrupted: false,
       terminalEmitted: false,
+      ...(queueRecord ? { queueRecord } : {}),
     };
   }
 
@@ -352,7 +412,7 @@ export class Runner {
     if (!turn || turn.terminalEmitted) return;
     turn.interrupted = true;
     turn.terminalEmitted = true;
-    await dispatch(
+    const dispatched = await dispatch(
       this.sink,
       this.ws,
       turnEvent({
@@ -363,6 +423,35 @@ export class Runner {
         type: "turn.interrupted",
         reason,
       }),
+    );
+    if (dispatched && turn.queueRecord) {
+      await this.markQueuedTurnTerminal(turn, "turn.interrupted");
+    }
+  }
+
+  private async markQueuedTurnTerminal(
+    turn: PendingTurn,
+    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+  ): Promise<void> {
+    if (!turn.queueRecord) return;
+    const record = turn.queueRecord;
+    turn.queueRecord = undefined;
+    try {
+      if (type === "turn.completed") {
+        await this.turnQueue.markCompleted(record);
+      } else {
+        await this.turnQueue.markFailed(record, new Error(type));
+      }
+    } catch (err) {
+      console.error("turn queue terminal mark failed:", err);
+    }
+  }
+
+  private async failActiveQueuedTurn(err: unknown): Promise<void> {
+    const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
+    if (!turn?.queueRecord) return;
+    await this.markQueuedTurnTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("turn queue failure mark failed:", markErr, "original:", err),
     );
   }
 
@@ -389,4 +478,19 @@ export class Runner {
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
   }
+}
+
+function sleep(ms: number, signal: AbortSignal, stopped: () => boolean): Promise<void> {
+  if (signal.aborted || stopped()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, Math.max(100, ms));
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }

@@ -1,5 +1,5 @@
 // Per-pod WebSocket fan-out. The orchestrator reverse-proxies the SPA's
-// WebSocket onto this server (Phase C wiring). One pod has one runner has
+// WebSocket onto this server. One pod has one runner has
 // one WS server — multiple SPA clients (e.g., user has two tabs open)
 // connect to the same instance and each gets the full event stream.
 //

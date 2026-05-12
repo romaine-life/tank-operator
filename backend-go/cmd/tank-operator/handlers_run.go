@@ -118,6 +118,7 @@ func (s *appServer) handleRunWebSocket(w http.ResponseWriter, r *http.Request) {
 				SessionID:      sessionID,
 				Email:          user.Email,
 				Provider:       provider,
+				Source:         "legacy-run",
 				Prompt:         params.Prompt,
 				Model:          model,
 				PermissionMode: permMode,

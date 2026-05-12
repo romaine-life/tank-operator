@@ -14,6 +14,8 @@ export interface Config {
   cosmosEndpoint: string;
   cosmosDatabase: string;
   sessionEventsContainer: string;
+  turnQueueContainer: string;
+  turnQueuePollMs: number;
   workspace: string;
   mcpConfig: string;
   wsPort: number;
@@ -37,6 +39,9 @@ export function loadConfig(): Config {
     cosmosDatabase: process.env.COSMOS_DATABASE?.trim() || "tank-operator",
     sessionEventsContainer:
       process.env.COSMOS_SESSION_EVENTS_CONTAINER?.trim() || "session-events",
+    turnQueueContainer:
+      process.env.COSMOS_TURN_QUEUE_CONTAINER?.trim() || "turn-queue",
+    turnQueuePollMs: parseInt(process.env.TURN_QUEUE_POLL_MS?.trim() || "1000", 10),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     mcpConfig: process.env.MCP_CONFIG?.trim() || "/workspace/.mcp.json",
     wsPort: parseInt(process.env.AGENT_RUNNER_WS_PORT?.trim() || "8090", 10),

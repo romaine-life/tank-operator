@@ -57,11 +57,10 @@ func main() {
 	// 6. Init run events store.
 	runEventsStore := buildRunEventStore(azCred)
 
-	// 6b. Init turn queue store (Phase 1 of SDK migration).
+	// 6b. Init turn queue store for durable SDK submissions.
 	turnQueueStore := buildTurnQueueStore(azCred)
 
-	// 6c. Init session events store (Phase C — reader side of the
-	// agent-runner's canonical event stream).
+	// 6c. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(azCred)
 
 	// 6d. Init per-user SDK conversation read-state store.
@@ -106,6 +105,7 @@ func main() {
 			CosmosEndpoint:               envDefault("COSMOS_ENDPOINT", ""),
 			CosmosDatabase:               envDefault("COSMOS_DATABASE", "tank-operator"),
 			CosmosSessionEventsContainer: envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
+			CosmosTurnQueueContainer:     envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
 		},
 		OAuthGatewayHost: os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:     os.Getenv("CLAUDE_API_PROXY_HOST"),

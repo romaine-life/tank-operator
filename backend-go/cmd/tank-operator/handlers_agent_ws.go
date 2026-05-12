@@ -28,15 +28,15 @@ type agentWSMessage struct {
 }
 
 // handleAgentWebSocket reverse-proxies the SPA's WebSocket onto the
-// pod's agent-runner (Phase B Node service listening on
-// localhost:AgentRunnerWSPort). Auth happens here (JWT via cookie or
-// query param); inside the cluster the orchestrator-to-pod hop trusts
-// network policy and the pod's owner label check.
+// pod-side SDK runner listening on localhost:AgentRunnerWSPort. Auth happens
+// here (JWT via cookie or query param); inside the cluster the
+// orchestrator-to-pod hop trusts network policy and the pod's owner label
+// check.
 //
 // Bytes are piped raw — no message inspection, no serialization touch.
 // The runner produces the wire format; this handler is a pure pipe so
-// SDK protocol changes don't require orchestrator changes. Phase 4 adds one
-// orchestrator-owned transport envelope around that pipe: replay missed
+// SDK protocol changes don't require orchestrator changes. The handler adds
+// one orchestrator-owned transport envelope around that pipe: replay missed
 // durable events from Cosmos before flushing buffered live runner frames.
 func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireWSAuth(w, r)

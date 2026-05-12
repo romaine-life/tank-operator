@@ -104,6 +104,10 @@ spec:
               value: {{ .Values.cosmos.activeRunsContainer | quote }}
             - name: COSMOS_RUN_EVENTS_CONTAINER
               value: {{ .Values.cosmos.runEventsContainer | quote }}
+            - name: COSMOS_SESSION_EVENTS_CONTAINER
+              value: {{ .Values.cosmos.sessionEventsContainer | quote }}
+            - name: COSMOS_TURN_QUEUE_CONTAINER
+              value: {{ .Values.cosmos.turnQueueContainer | quote }}
             # GitHub App slug used to build the install URL in the
             # onboarding flow (#57 stage 2). The App's Setup URL in the
             # GitHub UI must point at /api/github/install/callback for

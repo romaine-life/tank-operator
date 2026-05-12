@@ -12,6 +12,8 @@ export interface Config {
   cosmosEndpoint: string;
   cosmosDatabase: string;
   sessionEventsContainer: string;
+  turnQueueContainer: string;
+  turnQueuePollMs: number;
   workspace: string;
   wsPort: number;
 }
@@ -34,6 +36,9 @@ export function loadConfig(): Config {
     cosmosDatabase: process.env.COSMOS_DATABASE?.trim() || "tank-operator",
     sessionEventsContainer:
       process.env.COSMOS_SESSION_EVENTS_CONTAINER?.trim() || "session-events",
+    turnQueueContainer:
+      process.env.COSMOS_TURN_QUEUE_CONTAINER?.trim() || "turn-queue",
+    turnQueuePollMs: parseInt(process.env.TURN_QUEUE_POLL_MS?.trim() || "1000", 10),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     // The orchestrator reverse-proxies the SPA's /agent-ws onto this port.
     // Same port as agent-runner — only one runner per pod, no collision risk.

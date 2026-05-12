@@ -38,6 +38,7 @@ import {
   turnEvent,
   userSubmissionEvents,
 } from "./conversation.js";
+import { TurnQueue, turnClientNonce, type TurnRecord } from "./turnQueue.js";
 import { WSFanout, type ClientFrame } from "./ws.js";
 
 // AsyncQueue — one writer, one consumer. WS frames push; the run loop
@@ -116,7 +117,9 @@ export async function dispatchCreate(
     return "created";
   }
   try {
-    const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
+    const result = sink.create
+      ? await sink.create(stamped)
+      : (await sink.upsert(stamped), "created");
     if (result === "exists") return "exists";
   } catch (err) {
     console.error("cosmos create failed:", err);
@@ -136,12 +139,17 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-export type AcceptedTurn = CodexAdapterTurn;
+export type AcceptedTurn = CodexAdapterTurn & { queueRecord?: TurnRecord };
 
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
-  private readonly userQueue = new AsyncQueue<{ text: string; clientNonce?: string }>();
+  private readonly turnQueue: TurnQueue;
+  private readonly userQueue = new AsyncQueue<{
+    text: string;
+    clientNonce?: string;
+    queueRecord?: TurnRecord;
+  }>();
   private readonly codex: Codex;
   private readonly codexAdapter: CodexTankEventAdapter;
   private thread: Thread | null = null;
@@ -152,6 +160,7 @@ export class Runner {
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
     this.ws = new WSFanout(cfg.wsPort);
+    this.turnQueue = new TurnQueue(cfg, "codex");
     this.ws.onMessage((frame) => this.handleClientFrame(frame));
 
     // Codex SDK spawns the codex CLI subprocess; the CLI reads
@@ -165,80 +174,43 @@ export class Runner {
   // message, runs one turn, drains its events. The thread persists
   // across iterations so codex sees the full conversation context.
   async run(signal: AbortSignal): Promise<void> {
-    this.thread = this.codex.startThread({
-      workingDirectory: this.cfg.workspace,
-      // /workspace inside session pods isn't a git repo (and may never be —
-      // users mount projects ad hoc). Without this flag the CLI exits with
-      // "Not inside a trusted directory and --skip-git-repo-check was not
-      // specified." Same flag legacy headless-run.sh has always passed.
-      skipGitRepoCheck: true,
-      sandboxMode: "danger-full-access",
-      approvalPolicy: "never",
-    });
-    while (!signal.aborted) {
-      const next = await this.userQueue.next();
-      if (next.done) break;
-      const { text: input, clientNonce } = next.value;
-      const turnSeq = ++this.turnSeq;
-      const turn = await this.recordUserSubmission(input, clientNonce, turnSeq);
-      if (!turn) continue;
-
-      await dispatch(
-        this.sink,
-        this.ws,
-        turnEvent({
-          sessionID: this.cfg.sessionId,
-          turnID: turn.turnID,
-          clientNonce: turn.clientNonce,
-          source: "codex",
-          type: "turn.started",
-        }),
-      );
-
-      this.currentAbort = new AbortController();
-      // If the outer signal aborts mid-turn, also abort the in-flight
-      // codex subprocess. AbortSignal.any-style propagation done manually
-      // since Node 20's AbortSignal.any is stage 3.
-      const onOuterAbort = () => this.currentAbort?.abort();
-      signal.addEventListener("abort", onOuterAbort, { once: true });
-
-      try {
-        const streamed = await this.thread.runStreamed(input, {
-          signal: this.currentAbort.signal,
-        });
-        for await (const event of streamed.events) {
-          if (signal.aborted) break;
-          const codexEvent = {
-            ...(event as CodexEvent),
-            tank_turn_seq: turnSeq,
-          };
-          await dispatch(this.sink, this.ws, codexEvent);
-          for (const canonicalEvent of this.codexAdapter.canonicalEventsForCodexEvent(turn, codexEvent)) {
-            await dispatch(this.sink, this.ws, canonicalEvent);
-          }
-        }
-      } catch (err) {
-        const interrupted = this.currentAbort.signal.aborted && isAbortError(err);
-        if (interrupted) {
-          await dispatch(this.sink, this.ws, {
-            ...turnEvent({
-              sessionID: this.cfg.sessionId,
-              turnID: turn.turnID,
-              clientNonce: turn.clientNonce,
-              source: "codex",
-              type: "turn.interrupted",
-              reason: this.interruptRequested ? "client_interrupt" : "runner_shutdown",
-            }),
-            tank_turn_seq: turnSeq,
-          } as CodexEvent);
-          console.info("codex turn interrupted");
+    const stopPolling = this.startTurnQueuePolling(signal);
+    const onAbort = () => {
+      this.userQueue.close();
+      this.currentAbort?.abort();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      this.thread = this.codex.startThread({
+        workingDirectory: this.cfg.workspace,
+        // /workspace inside session pods isn't a git repo (and may never be —
+        // users mount projects ad hoc). Without this flag the CLI exits with
+        // "Not inside a trusted directory and --skip-git-repo-check was not
+        // specified." Same flag legacy headless-run.sh has always passed.
+        skipGitRepoCheck: true,
+        sandboxMode: "danger-full-access",
+        approvalPolicy: "never",
+      });
+      while (!signal.aborted) {
+        const next = await this.userQueue.next();
+        if (next.done) break;
+        const { text: input, clientNonce, queueRecord } = next.value;
+        const turnSeq = ++this.turnSeq;
+        const turn = await this.recordUserSubmission(
+          input,
+          clientNonce,
+          turnSeq,
+          queueRecord,
+        );
+        if (!turn) {
+          if (queueRecord)
+            await this.turnQueue.markFailed(
+              queueRecord,
+              new Error("queued turn was not accepted"),
+            );
           continue;
         }
-        // Synthetic error event so the SPA sees something when the SDK
-        // throws (e.g., process exit, network failure, quota error that
-        // surfaced as an exception rather than a turn.failed).
-        const errMessage =
-          err instanceof Error ? err.message : String(err);
+
         await dispatch(
           this.sink,
           this.ws,
@@ -247,25 +219,134 @@ export class Runner {
             turnID: turn.turnID,
             clientNonce: turn.clientNonce,
             source: "codex",
-            type: "turn.failed",
-            reason: "provider_failure",
-            error: errMessage,
+            type: "turn.started",
           }),
         );
-        await dispatch(this.sink, this.ws, {
-          type: "error",
-          message: errMessage,
-          tank_turn_seq: turnSeq,
-        });
-        console.error("codex turn failed:", err);
-      } finally {
-        signal.removeEventListener("abort", onOuterAbort);
-        this.currentAbort = null;
-        this.interruptRequested = false;
+
+        this.currentAbort = new AbortController();
+        // If the outer signal aborts mid-turn, also abort the in-flight
+        // codex subprocess. AbortSignal.any-style propagation done manually
+        // since Node 20's AbortSignal.any is stage 3.
+        const onOuterAbort = () => this.currentAbort?.abort();
+        signal.addEventListener("abort", onOuterAbort, { once: true });
+
+        try {
+          const streamed = await this.thread.runStreamed(input, {
+            signal: this.currentAbort.signal,
+          });
+          for await (const event of streamed.events) {
+            if (signal.aborted) break;
+            const codexEvent = {
+              ...(event as CodexEvent),
+              tank_turn_seq: turnSeq,
+            };
+            await dispatch(this.sink, this.ws, codexEvent);
+            for (const canonicalEvent of this.codexAdapter.canonicalEventsForCodexEvent(
+              turn,
+              codexEvent,
+            )) {
+              const dispatched = await dispatch(
+                this.sink,
+                this.ws,
+                canonicalEvent,
+              );
+              if (
+                dispatched &&
+                (canonicalEvent.type === "turn.completed" ||
+                  canonicalEvent.type === "turn.failed" ||
+                  canonicalEvent.type === "turn.interrupted")
+              ) {
+                await this.markQueuedTurnTerminal(turn, canonicalEvent.type);
+              }
+            }
+          }
+        } catch (err) {
+          const interrupted =
+            this.currentAbort.signal.aborted && isAbortError(err);
+          if (interrupted) {
+            const dispatched = await dispatch(this.sink, this.ws, {
+              ...turnEvent({
+                sessionID: this.cfg.sessionId,
+                turnID: turn.turnID,
+                clientNonce: turn.clientNonce,
+                source: "codex",
+                type: "turn.interrupted",
+                reason: this.interruptRequested
+                  ? "client_interrupt"
+                  : "runner_shutdown",
+              }),
+              tank_turn_seq: turnSeq,
+            } as CodexEvent);
+            if (dispatched) {
+              await this.markQueuedTurnTerminal(turn, "turn.interrupted");
+            }
+            console.info("codex turn interrupted");
+            continue;
+          }
+          // Synthetic error event so the SPA sees something when the SDK
+          // throws (e.g., process exit, network failure, quota error that
+          // surfaced as an exception rather than a turn.failed).
+          const errMessage = err instanceof Error ? err.message : String(err);
+          const dispatched = await dispatch(
+            this.sink,
+            this.ws,
+            turnEvent({
+              sessionID: this.cfg.sessionId,
+              turnID: turn.turnID,
+              clientNonce: turn.clientNonce,
+              source: "codex",
+              type: "turn.failed",
+              reason: "provider_failure",
+              error: errMessage,
+            }),
+          );
+          if (dispatched) {
+            await this.markQueuedTurnTerminal(turn, "turn.failed");
+          }
+          await dispatch(this.sink, this.ws, {
+            type: "error",
+            message: errMessage,
+            tank_turn_seq: turnSeq,
+          });
+          console.error("codex turn failed:", err);
+        } finally {
+          signal.removeEventListener("abort", onOuterAbort);
+          this.currentAbort = null;
+          this.interruptRequested = false;
+        }
       }
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      stopPolling();
+      this.userQueue.close();
+      this.ws.close();
     }
-    this.userQueue.close();
-    this.ws.close();
+  }
+
+  private startTurnQueuePolling(signal: AbortSignal): () => void {
+    let stopped = false;
+    const stop = () => {
+      stopped = true;
+    };
+    void (async () => {
+      while (!stopped && !signal.aborted) {
+        try {
+          const record = await this.turnQueue.claimNext();
+          if (record) {
+            this.userQueue.push({
+              text: record.prompt,
+              clientNonce: turnClientNonce(record),
+              queueRecord: record,
+            });
+            continue;
+          }
+        } catch (err) {
+          console.error("turn queue poll failed:", err);
+        }
+        await sleep(this.cfg.turnQueuePollMs, signal, () => stopped);
+      }
+    })().catch((err) => console.error("turn queue poller crashed:", err));
+    return stop;
   }
 
   private handleClientFrame(frame: ClientFrame): void {
@@ -300,6 +381,7 @@ export class Runner {
     text: string,
     rawClientNonce: unknown,
     turnSeq: number,
+    queueRecord?: TurnRecord,
   ): Promise<AcceptedTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
@@ -327,6 +409,48 @@ export class Runner {
       tank_turn_seq: turnSeq,
     });
     if (submittedResult !== "created") return null;
-    return { turnID, clientNonce, turnSeq };
+    return {
+      turnID,
+      clientNonce,
+      turnSeq,
+      ...(queueRecord ? { queueRecord } : {}),
+    };
   }
+
+  private async markQueuedTurnTerminal(
+    turn: AcceptedTurn,
+    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+  ): Promise<void> {
+    if (!turn.queueRecord) return;
+    const record = turn.queueRecord;
+    turn.queueRecord = undefined;
+    try {
+      if (type === "turn.completed") {
+        await this.turnQueue.markCompleted(record);
+      } else {
+        await this.turnQueue.markFailed(record, new Error(type));
+      }
+    } catch (err) {
+      console.error("turn queue terminal mark failed:", err);
+    }
+  }
+}
+
+function sleep(
+  ms: number,
+  signal: AbortSignal,
+  stopped: () => boolean,
+): Promise<void> {
+  if (signal.aborted || stopped()) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, Math.max(100, ms));
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timeout);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }

@@ -250,6 +250,29 @@ Body:
 { "last_read_order_key": "001..." }
 ```
 
+Durable SDK turn submission:
+
+`POST /api/sessions/{session_id}/turns`
+
+Body:
+
+```json
+{
+  "client_nonce": "run_abc123",
+  "prompt": "Implement the change",
+  "model": "claude-sonnet-4-6",
+  "permission_mode": "bypassPermissions",
+  "skill_name": "test",
+  "follow_up": true
+}
+```
+
+The backend validates session ownership and SDK runtime, writes a `turn-queue`
+row with `source=sdk`, and returns `202 Accepted`. Runners claim the row by
+session/provider before producing canonical events. `/agent-ws` remains live
+delivery only; clients reconnect against `/timeline` instead of resending the
+prompt.
+
 Activity summary:
 
 `GET /api/sessions/activity`
