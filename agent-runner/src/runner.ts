@@ -235,12 +235,24 @@ export class Runner {
 
   private scheduleWakeup(req: WakeupRequest): void {
     setTimeout(() => {
-      this.userQueue.push({
-        type: "user",
-        session_id: "",
-        message: { role: "user", content: req.prompt },
-        parent_tool_use_id: null,
-      } as unknown as SDKUserMessage);
+      void this.enqueueWakeup(req).catch((err) =>
+        console.error("schedule wakeup failed:", err),
+      );
     }, req.delayMs);
+  }
+
+  private async enqueueWakeup(req: WakeupRequest): Promise<void> {
+    const persisted = await dispatch(this.sink, this.ws, {
+      type: "tank.user_message",
+      message: req.prompt,
+      source: "schedule_wakeup",
+    });
+    if (!persisted) return;
+    this.userQueue.push({
+      type: "user",
+      session_id: "",
+      message: { role: "user", content: req.prompt },
+      parent_tool_use_id: null,
+    } as unknown as SDKUserMessage);
   }
 }

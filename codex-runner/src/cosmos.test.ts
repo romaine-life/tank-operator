@@ -16,6 +16,10 @@ test("canonical: turn.completed + turn.failed", () => {
   assert.equal(isCanonical({ type: "turn.failed", error: { message: "x" } } as never), true);
 });
 
+test("canonical: turn.interrupted", () => {
+  assert.equal(isCanonical({ type: "turn.interrupted", reason: "client_interrupt" }), true);
+});
+
 test("canonical: item.completed (the main durable signal)", () => {
   assert.equal(
     isCanonical({

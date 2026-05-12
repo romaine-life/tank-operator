@@ -18,6 +18,7 @@
 //   tank.user_message  — user's prompt as submitted through Tank's WS bridge
 //   turn.completed     — turn-end marker with usage
 //   turn.failed        — turn-level error
+//   turn.interrupted   — Tank interrupt/cancel marker
 //   item.completed     — main durable signal: agent_message, reasoning,
 //                        command_execution, file_change, mcp_tool_call,
 //                        web_search, todo_list, error items
@@ -41,6 +42,7 @@ const CANONICAL_TYPES = new Set<string>([
   "tank.user_message",
   "turn.completed",
   "turn.failed",
+  "turn.interrupted",
   "item.completed",
   "error",
 ]);

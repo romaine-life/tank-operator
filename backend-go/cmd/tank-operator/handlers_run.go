@@ -386,6 +386,11 @@ func (s *appServer) streamRunEvents(w http.ResponseWriter, r *http.Request, sess
 	}
 
 	var lastEventID int64
+	if rawLastEventID := strings.TrimSpace(r.Header.Get("Last-Event-ID")); rawLastEventID != "" {
+		if parsed, err := strconv.ParseInt(rawLastEventID, 10, 64); err == nil && parsed > 0 {
+			lastEventID = parsed
+		}
+	}
 	pollTicker := time.NewTicker(2 * time.Second)
 	keepaliveTicker := time.NewTicker(15 * time.Second)
 	defer pollTicker.Stop()
@@ -575,13 +580,16 @@ func buildStdoutObserver(ctx context.Context, runEventStore store.RunEventStore,
 
 		lineBuf.WriteString(text)
 		buf := lineBuf.String()
-		scanner := bufio.NewScanner(strings.NewReader(buf))
-		remaining := buf
+		lastNewline := strings.LastIndexByte(buf, '\n')
+		if lastNewline < 0 {
+			return
+		}
+		complete := buf[:lastNewline+1]
+		remaining := buf[lastNewline+1:]
+		scanner := bufio.NewScanner(strings.NewReader(complete))
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			remaining = strings.TrimPrefix(remaining, line+"\n")
-
 			line = strings.TrimSpace(line)
 			if line == "" || line[0] != '{' {
 				continue
@@ -593,27 +601,38 @@ func buildStdoutObserver(ctx context.Context, runEventStore store.RunEventStore,
 			msgType, _ := msg["type"].(string)
 			switch msgType {
 			case "assistant":
-				content, _ := msg["message"].(map[string]any)
-				if content == nil {
-					content, _ = msg["content"].(map[string]any)
+				for _, item := range messageContentBlocks(msg) {
+					itemMap, _ := item.(map[string]any)
+					if itemMap == nil {
+						continue
+					}
+					if itemMap["type"] == "tool_use" {
+						_, _ = runEventStore.Append(ctx, email, sessionID, runID, "run.tool.started", map[string]any{
+							"name":        itemMap["name"],
+							"tool_use_id": itemMap["id"],
+							"tool_name":   itemMap["name"],
+							"tool_id":     itemMap["id"],
+						})
+					}
 				}
-				if content != nil {
-					contentArr, _ := content["content"].([]any)
-					for _, item := range contentArr {
-						itemMap, _ := item.(map[string]any)
-						if itemMap == nil {
-							continue
-						}
-						if itemMap["type"] == "tool_use" {
-							_, _ = runEventStore.Append(ctx, email, sessionID, runID, "run.tool.started", map[string]any{
-								"tool_name": itemMap["name"],
-								"tool_id":   itemMap["id"],
-							})
-						}
+			case "user":
+				for _, item := range messageContentBlocks(msg) {
+					itemMap, _ := item.(map[string]any)
+					if itemMap == nil {
+						continue
+					}
+					if itemMap["type"] == "tool_result" {
+						_, _ = runEventStore.Append(ctx, email, sessionID, runID, "run.tool.completed", map[string]any{
+							"tool_use_id": itemMap["tool_use_id"],
+							"output":      toolResultText(itemMap["content"]),
+							"is_error":    itemMap["is_error"] == true,
+						})
 					}
 				}
 			case "result":
 				_, _ = runEventStore.Append(ctx, email, sessionID, runID, "run.message.created", map[string]any{
+					"role":    "assistant",
+					"text":    msg["result"],
 					"content": msg["result"],
 				})
 			}
@@ -623,6 +642,54 @@ func buildStdoutObserver(ctx context.Context, runEventStore store.RunEventStore,
 		lineBuf.Reset()
 		lineBuf.WriteString(remaining)
 	}
+}
+
+func messageContentBlocks(msg map[string]any) []any {
+	for _, key := range []string{"message", "content"} {
+		content, _ := msg[key].(map[string]any)
+		if content == nil {
+			continue
+		}
+		if contentArr, _ := content["content"].([]any); contentArr != nil {
+			return contentArr
+		}
+	}
+	if contentArr, _ := msg["content"].([]any); contentArr != nil {
+		return contentArr
+	}
+	return nil
+}
+
+func toolResultText(value any) string {
+	switch content := value.(type) {
+	case string:
+		return content
+	case []any:
+		var parts []string
+		for _, item := range content {
+			itemMap, _ := item.(map[string]any)
+			if itemMap == nil {
+				continue
+			}
+			if text, _ := itemMap["text"].(string); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return shortJSON(value)
+	}
+}
+
+func shortJSON(value any) string {
+	if value == nil {
+		return ""
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprint(value)
+	}
+	return string(b)
 }
 
 func mustJSON(v any) []byte {

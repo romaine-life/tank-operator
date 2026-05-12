@@ -95,6 +95,16 @@ export async function dispatch(
   return true;
 }
 
+function isAbortError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return (
+    err.name === "AbortError" ||
+    code === "ABORT_ERR" ||
+    /operation was aborted/i.test(err.message)
+  );
+}
+
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly ws: WSFanout;
@@ -102,6 +112,7 @@ export class Runner {
   private readonly codex: Codex;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
+  private interruptRequested = false;
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
@@ -134,12 +145,13 @@ export class Runner {
       if (next.done) break;
       const { text: input, clientNonce } = next.value;
       const turnSeq = ++this.turnSeq;
-      await dispatch(this.sink, this.ws, {
+      const persisted = await dispatch(this.sink, this.ws, {
         type: "tank.user_message",
         message: input,
         tank_turn_seq: turnSeq,
         ...(clientNonce ? { client_nonce: clientNonce } : {}),
       });
+      if (!persisted) continue;
 
       this.currentAbort = new AbortController();
       // If the outer signal aborts mid-turn, also abort the in-flight
@@ -160,6 +172,18 @@ export class Runner {
           });
         }
       } catch (err) {
+        const interrupted = this.currentAbort.signal.aborted && isAbortError(err);
+        if (interrupted) {
+          if (!signal.aborted || this.interruptRequested) {
+            await dispatch(this.sink, this.ws, {
+              type: "turn.interrupted",
+              reason: this.interruptRequested ? "client_interrupt" : "runner_shutdown",
+              tank_turn_seq: turnSeq,
+            });
+          }
+          console.info("codex turn interrupted");
+          continue;
+        }
         // Synthetic error event so the SPA sees something when the SDK
         // throws (e.g., process exit, network failure, quota error that
         // surfaced as an exception rather than a turn.failed).
@@ -174,6 +198,7 @@ export class Runner {
       } finally {
         signal.removeEventListener("abort", onOuterAbort);
         this.currentAbort = null;
+        this.interruptRequested = false;
       }
     }
     this.userQueue.close();
@@ -203,6 +228,7 @@ export class Runner {
         this.userQueue.push({ text, clientNonce: frame.client_nonce });
       }
     } else if (frame.type === "interrupt") {
+      this.interruptRequested = true;
       this.currentAbort?.abort();
     }
   }
