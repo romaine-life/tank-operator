@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -30,6 +32,7 @@ type sessionActivitySummary struct {
 
 type unreadOutputMarker struct {
 	orderKey string
+	cursor   string
 	id       string
 }
 
@@ -58,7 +61,16 @@ func (s *appServer) handleSessionActivity(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		out = append(out, summarizeSessionActivity(summary, events))
+		readState, err := s.getSessionReadState(r, user.Email, info.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		readOrderKey := ""
+		if readState != nil {
+			readOrderKey = readState.LastReadOrderKey
+		}
+		out = append(out, summarizeSessionActivity(summary, events, readOrderKey))
 	}
 
 	writeJSON(w, http.StatusOK, sessionActivityResponse{Sessions: out})
@@ -98,8 +110,7 @@ func defaultSessionActivity(info sessions.Info) sessionActivitySummary {
 	return summary
 }
 
-func summarizeSessionActivity(summary sessionActivitySummary, events []map[string]any) sessionActivitySummary {
-	var readOrderKey string
+func summarizeSessionActivity(summary sessionActivitySummary, events []map[string]any, readOrderKey string) sessionActivitySummary {
 	outputMarkers := make([]unreadOutputMarker, 0)
 
 	for _, event := range events {
@@ -116,6 +127,7 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 		if isUnreadOutputEvent(event) {
 			outputMarkers = append(outputMarkers, unreadOutputMarker{
 				orderKey: activityEventOrderKey(event),
+				cursor:   activityEventCursor(event),
 				id:       unreadOutputID(event),
 			})
 		}
@@ -169,9 +181,12 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 		case "session.activity_updated":
 			applyActivityUpdatedEvent(&summary, event)
 		case "read_state.updated":
-			readOrderKey = activityPayloadString(event, "last_read_order_key")
-			if readOrderKey == "" {
-				readOrderKey = activityEventOrderKey(event)
+			eventReadOrderKey := activityPayloadString(event, "last_read_order_key")
+			if eventReadOrderKey == "" {
+				eventReadOrderKey = activityEventOrderKey(event)
+			}
+			if eventReadOrderKey > readOrderKey {
+				readOrderKey = eventReadOrderKey
 			}
 		}
 	}
@@ -259,7 +274,7 @@ func isUnreadOutputEvent(event map[string]any) bool {
 func countUnreadOutputs(markers []unreadOutputMarker, readOrderKey string) int {
 	seen := make(map[string]struct{}, len(markers))
 	for _, marker := range markers {
-		if readOrderKey != "" && (marker.orderKey == "" || marker.orderKey <= readOrderKey) {
+		if readOrderKey != "" && !unreadMarkerAfterRead(marker, readOrderKey) {
 			continue
 		}
 		id := marker.id
@@ -272,6 +287,19 @@ func countUnreadOutputs(markers []unreadOutputMarker, readOrderKey string) int {
 		seen[id] = struct{}{}
 	}
 	return len(seen)
+}
+
+func unreadMarkerAfterRead(marker unreadOutputMarker, readOrderKey string) bool {
+	if readOrderKey == "" {
+		return true
+	}
+	if strings.Contains(readOrderKey, "\x1f") {
+		return marker.cursor != "" && marker.cursor > readOrderKey
+	}
+	if marker.orderKey != "" {
+		return marker.orderKey > readOrderKey
+	}
+	return marker.cursor > readOrderKey
 }
 
 func unreadOutputID(event map[string]any) string {
@@ -290,6 +318,54 @@ func activityEventType(event map[string]any) string {
 
 func activityEventOrderKey(event map[string]any) string {
 	for _, field := range []string{"order_key", "tank_order_key"} {
+		if value, _ := event[field].(string); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityEventCursor(event map[string]any) string {
+	parts := []string{
+		activityEventOrderKey(event),
+		activityEventOrderTime(event),
+		activityEventSequence(event),
+		activityEventDocumentID(event),
+	}
+	return strings.Join(parts, "\x1f")
+}
+
+func activityEventSequence(event map[string]any) string {
+	for _, field := range []string{"sequence", "tank_event_seq"} {
+		switch value := event[field].(type) {
+		case int:
+			return strconv.Itoa(value)
+		case int64:
+			return strconv.FormatInt(value, 10)
+		case float64:
+			if value == float64(int64(value)) {
+				return strconv.FormatInt(int64(value), 10)
+			}
+		case string:
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func activityEventDocumentID(event map[string]any) string {
+	for _, field := range []string{"id", "uuid", "event_id"} {
+		if value, _ := event[field].(string); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func activityEventOrderTime(event map[string]any) string {
+	for _, field := range []string{"written_at", "timestamp", "time", "created_at"} {
 		if value, _ := event[field].(string); value != "" {
 			return value
 		}

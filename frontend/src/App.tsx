@@ -3523,6 +3523,7 @@ function HeadlessRun({
   visible,
   onRename,
   onSessionPatch,
+  onSessionActivityChanged,
   runPrefs,
   setRunPref,
   user,
@@ -3531,6 +3532,7 @@ function HeadlessRun({
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
+  onSessionActivityChanged: () => void;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
@@ -3649,7 +3651,12 @@ function HeadlessRun({
   const runEventsRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<void> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
+  const sdkLastReadSentRef = useRef<string | null>(null);
+  const sdkReadStateInFlightRef = useRef<string | null>(null);
+  const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
   const runPrefsRef = useRef(runPrefs);
@@ -3730,6 +3737,7 @@ function HeadlessRun({
       transcriptComparable(prev) === transcriptComparable(merged) ? prev : merged,
     );
     applySdkProjectionToUi(projection);
+    scheduleSdkReadStateUpdate();
   }
   function applySdkProjectionToUi(
     projection: ReturnType<typeof projectConversationState>,
@@ -3802,6 +3810,67 @@ function HeadlessRun({
       eventTimelineCursor(event as unknown as JsonObject),
     );
   }
+  function scheduleSdkReadStateUpdate(): void {
+    if (session.runtime !== "sdk" || !visibleRef.current) return;
+    if (document.visibilityState !== "visible") return;
+    const cursor = sdkTimelineCursorRef.current;
+    if (!cursor) return;
+    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
+    if (sdkReadStateInFlightRef.current && cursor <= sdkReadStateInFlightRef.current) return;
+    if (sdkReadStateTimerRef.current !== null) {
+      window.clearTimeout(sdkReadStateTimerRef.current);
+    }
+    sdkReadStateTimerRef.current = window.setTimeout(() => {
+      sdkReadStateTimerRef.current = null;
+      void flushSdkReadStateUpdate();
+    }, 400);
+  }
+  async function flushSdkReadStateUpdate(): Promise<void> {
+    if (session.runtime !== "sdk" || !visibleRef.current) return;
+    if (document.visibilityState !== "visible") return;
+    const cursor = sdkTimelineCursorRef.current;
+    if (!cursor) return;
+    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
+    sdkReadStateInFlightRef.current = cursor;
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(session.id)}/read-state`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ last_read_order_key: cursor }),
+        },
+      );
+      if (!res.ok) return;
+      const body = (await res.json().catch(() => null)) as {
+        read_state?: { last_read_order_key?: unknown } | null;
+      } | null;
+      const serverCursor =
+        typeof body?.read_state?.last_read_order_key === "string" &&
+        body.read_state.last_read_order_key
+          ? body.read_state.last_read_order_key
+          : cursor;
+      sdkLastReadSentRef.current = advanceTimelineCursor(
+        sdkLastReadSentRef.current,
+        serverCursor,
+      );
+      onSessionActivityChanged();
+    } catch {
+      // Replay/live updates can retry from the latest cursor; backend writes
+      // are monotonic.
+    } finally {
+      if (sdkReadStateInFlightRef.current === cursor) {
+        sdkReadStateInFlightRef.current = null;
+      }
+      const latest = sdkTimelineCursorRef.current;
+      if (
+        latest &&
+        (!sdkLastReadSentRef.current || latest > sdkLastReadSentRef.current)
+      ) {
+        scheduleSdkReadStateUpdate();
+      }
+    }
+  }
   function applySdkRealtimeEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
@@ -3872,8 +3941,22 @@ function HeadlessRun({
         window.clearTimeout(runLifecycleFinishTimerRef.current);
         runLifecycleFinishTimerRef.current = null;
       }
+      if (sdkReadStateTimerRef.current !== null) {
+        window.clearTimeout(sdkReadStateTimerRef.current);
+        sdkReadStateTimerRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (!visible && sdkReadStateTimerRef.current !== null) {
+      window.clearTimeout(sdkReadStateTimerRef.current);
+      sdkReadStateTimerRef.current = null;
+      return;
+    }
+    if (visible) scheduleSdkReadStateUpdate();
+  }, [session.id, visible]);
 
   useEffect(() => {
     if (!visible || session.status !== "Active") return;
@@ -4071,8 +4154,16 @@ function HeadlessRun({
           events?: unknown[];
           next_order_key?: string;
           has_more?: boolean;
+          read_state?: { last_read_order_key?: unknown } | null;
         };
         if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+        const lastReadOrderKey = body.read_state?.last_read_order_key;
+        if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
+          sdkLastReadSentRef.current = advanceTimelineCursor(
+            sdkLastReadSentRef.current,
+            lastReadOrderKey,
+          );
+        }
         if (!Array.isArray(body.events)) return { replayed: false };
         events.push(...body.events);
         const previousAfter = afterOrderKey;
@@ -7872,6 +7963,7 @@ export function App() {
                       visible={active === s.id}
                       onRename={renameSession}
                       onSessionPatch={patchSession}
+                      onSessionActivityChanged={() => void refreshSessionActivity()}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}

@@ -64,6 +64,9 @@ func main() {
 	// agent-runner's canonical event stream).
 	sessionEventsStore := buildSessionEventStore(azCred)
 
+	// 6d. Init per-user SDK conversation read-state store.
+	readStateStore := buildConversationReadStateStore(azCred)
+
 	// 7. Init event bus.
 	eventBus := sessions.NewEventBus()
 
@@ -139,6 +142,7 @@ func main() {
 		runEvents:               runEventsStore,
 		turnQueue:               turnQueueStore,
 		sessionEvents:           sessionEventsStore,
+		readStates:              readStateStore,
 		eventBus:                eventBus,
 		verifier:                verifier,
 		minter:                  minter,
@@ -265,6 +269,24 @@ func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.Ses
 	return s
 }
 
+func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential) store.ConversationReadStateStore {
+	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
+	if endpoint == "" || azCred == nil {
+		return store.NewStubConversationReadStateStore()
+	}
+	s, err := store.NewCosmosConversationReadStateStore(
+		endpoint,
+		envDefault("COSMOS_DATABASE", "tank-operator"),
+		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
+		azCred,
+	)
+	if err != nil {
+		slog.Warn("conversation read-state store disabled", "error", err)
+		return store.NewStubConversationReadStateStore()
+	}
+	return s
+}
+
 func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential) store.TurnQueueStore {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
@@ -340,7 +362,7 @@ func (r *stubSessionRegistry) NextSessionID(_ context.Context) (string, error) {
 	r.counter++
 	return fmt.Sprintf("%d", r.counter), nil
 }
-func (r *stubSessionRegistry) Upsert(_ context.Context, _ compat.SessionRecord) error { return nil }
+func (r *stubSessionRegistry) Upsert(_ context.Context, _ compat.SessionRecord) error  { return nil }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error        { return nil }
 

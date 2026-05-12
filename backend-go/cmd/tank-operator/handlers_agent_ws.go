@@ -255,6 +255,11 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	readState, err := s.getSessionReadState(r, user.Email, sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if page.Events == nil {
 		page.Events = []map[string]any{}
 	}
@@ -264,6 +269,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		"next_order_key":  page.NextOrderKey,
 		"has_more":        page.HasMore,
 		"cursor_semantic": "render_order",
+		"read_state":      sessionReadStateBody(readState),
 	})
 }
 
