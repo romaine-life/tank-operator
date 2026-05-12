@@ -1,6 +1,6 @@
 // Package conversation contains Tank's provider-neutral conversation event
-// envelope. Keep these types in sync with
-// schemas/tank-conversation-event.schema.json.
+// envelope. The JSON Schema is the source of truth; contract tests keep these
+// enums in sync with schemas/tank-conversation-event.schema.json.
 package conversation
 
 type Actor string

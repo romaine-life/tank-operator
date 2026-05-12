@@ -72,6 +72,11 @@ References:
 Every Tank event has a stable envelope. The shared JSON Schema lives at
 `schemas/tank-conversation-event.schema.json`; TypeScript and Go stubs live at
 `frontend/src/tankConversation.ts` and `backend-go/internal/conversation`.
+The JSON Schema is the source of truth for `actor`, `source`, `visibility`,
+and event `type` enums. Changes to those enums must update the schema first;
+`scripts/check-tank-conversation-contract.mjs` and the Go conversation package
+test then verify the frontend, agent-runner, codex-runner, and Go definitions
+match it.
 
 Required fields:
 
@@ -262,6 +267,9 @@ Storage:
 
 - New provider events must map to Tank events, be marked `live-only`, or be
   explicitly ignored with a test.
+- New canonical Tank event types must be added to the JSON Schema first, then
+  to the Go and TypeScript contract constants in the same change. The contract
+  check is expected to fail until every package agrees.
 - Replay and live delivery must produce the same reducer state for the same
   canonical event sequence.
 - `client_nonce` is the idempotency boundary for user submission. The durable
