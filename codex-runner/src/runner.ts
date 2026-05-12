@@ -134,7 +134,7 @@ function isAbortError(err: unknown): boolean {
   );
 }
 
-interface AcceptedTurn {
+export interface AcceptedTurn {
   turnID: string;
   clientNonce: string;
   turnSeq: number;
@@ -173,7 +173,7 @@ function codexItemPayload(item: Record<string, unknown>): Record<string, unknown
   };
 }
 
-function canonicalEventsForCodexEvent(
+export function canonicalEventsForCodexEvent(
   cfg: Config,
   turn: AcceptedTurn,
   event: CodexEvent,

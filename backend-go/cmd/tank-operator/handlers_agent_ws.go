@@ -18,6 +18,14 @@ import (
 )
 
 const agentRunnerDialTimeout = 10 * time.Second
+const agentWSReplayPageLimit = 1000
+const agentWSReplayMaxPages = 50
+
+type agentWSMessage struct {
+	mt   websocket.MessageType
+	data []byte
+	err  error
+}
 
 // handleAgentWebSocket reverse-proxies the SPA's WebSocket onto the
 // pod's agent-runner (Phase B Node service listening on
@@ -27,7 +35,9 @@ const agentRunnerDialTimeout = 10 * time.Second
 //
 // Bytes are piped raw — no message inspection, no serialization touch.
 // The runner produces the wire format; this handler is a pure pipe so
-// SDK protocol changes don't require orchestrator changes.
+// SDK protocol changes don't require orchestrator changes. Phase 4 adds one
+// orchestrator-owned transport envelope around that pipe: replay missed
+// durable events from Cosmos before flushing buffered live runner frames.
 func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireWSAuth(w, r)
 	if !ok {
@@ -83,9 +93,35 @@ func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 	defer podConn.Close(websocket.StatusNormalClosure, "")
 
-	// Bidirectional pipe — independent goroutines per direction so neither
-	// blocks the other. First error in either direction (close, network
-	// hiccup, browser disconnect, pod crash) tears down both sides.
+	// Buffer pod frames before replay so any live events produced during the
+	// Cosmos catch-up are delivered after the subscribe ack.
+	podMessages := make(chan agentWSMessage, 1024)
+	go readAgentWSMessages(r.Context(), podConn, podMessages)
+
+	cursor := sessionEventCursorFromRequest(r)
+	replayed, lastOrderKey, replayErr := s.replaySessionEventsToWebSocket(
+		r.Context(),
+		browserConn,
+		sessionID,
+		cursor,
+	)
+	if replayErr != nil {
+		_ = browserConn.Write(r.Context(), websocket.MessageText, mustJSON(map[string]any{
+			"type":    "tank.transport.error",
+			"error":   "replay_failed",
+			"message": replayErr.Error(),
+		}))
+		browserConn.Close(websocket.StatusInternalError, "replay failed")
+		return
+	}
+	_ = browserConn.Write(r.Context(), websocket.MessageText, mustJSON(map[string]any{
+		"type":                  "tank.transport.subscribed",
+		"session_id":            sessionID,
+		"last_order_key":        lastOrderKey,
+		"replayed":              replayed,
+		"heartbeat_interval_ms": 15000,
+	}))
+
 	errCh := make(chan error, 2)
 	go func() {
 		for {
@@ -100,22 +136,69 @@ func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}()
-	go func() {
-		for {
-			mt, data, err := podConn.Read(r.Context())
-			if err != nil {
-				errCh <- err
+	for {
+		select {
+		case firstErr := <-errCh:
+			if firstErr != nil {
+				slog.Debug("agent-ws pipe ended", "session", sessionID, "err", firstErr)
+			}
+			return
+		case msg, open := <-podMessages:
+			if !open {
 				return
 			}
-			if err := browserConn.Write(r.Context(), mt, data); err != nil {
-				errCh <- err
+			if msg.err != nil {
+				slog.Debug("agent-ws pod reader ended", "session", sessionID, "err", msg.err)
+				return
+			}
+			if err := browserConn.Write(r.Context(), msg.mt, msg.data); err != nil {
+				slog.Debug("agent-ws browser write ended", "session", sessionID, "err", err)
 				return
 			}
 		}
-	}()
-	if firstErr := <-errCh; firstErr != nil {
-		slog.Debug("agent-ws pipe ended", "session", sessionID, "err", firstErr)
 	}
+}
+
+func readAgentWSMessages(ctx context.Context, conn *websocket.Conn, out chan<- agentWSMessage) {
+	defer close(out)
+	for {
+		mt, data, err := conn.Read(ctx)
+		if err != nil {
+			out <- agentWSMessage{err: err}
+			return
+		}
+		out <- agentWSMessage{mt: mt, data: append([]byte(nil), data...)}
+	}
+}
+
+func (s *appServer) replaySessionEventsToWebSocket(
+	ctx context.Context,
+	conn *websocket.Conn,
+	sessionID string,
+	cursor store.SessionEventCursor,
+) (int, string, error) {
+	replayed := 0
+	lastOrderKey := cursor.AfterOrderKey
+	for pageNo := 0; pageNo < agentWSReplayMaxPages; pageNo++ {
+		page, err := s.sessionEvents.ListBySession(ctx, sessionID, cursor, agentWSReplayPageLimit)
+		if err != nil {
+			return replayed, lastOrderKey, err
+		}
+		for _, event := range page.Events {
+			if err := conn.Write(ctx, websocket.MessageText, mustJSON(event)); err != nil {
+				return replayed, lastOrderKey, err
+			}
+			replayed++
+		}
+		if page.NextOrderKey != "" {
+			lastOrderKey = page.NextOrderKey
+		}
+		if !page.HasMore || page.NextOrderKey == "" || page.NextOrderKey == cursor.AfterOrderKey {
+			break
+		}
+		cursor = store.SessionEventCursor{AfterOrderKey: page.NextOrderKey}
+	}
+	return replayed, lastOrderKey, nil
 }
 
 // podHasSDKRunner returns true if the pod spec includes either of the
@@ -191,6 +274,15 @@ func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request
 func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
 	if afterOrderKey := r.URL.Query().Get("after_order_key"); afterOrderKey != "" {
 		return store.SessionEventCursor{AfterOrderKey: afterOrderKey}
+	}
+	if lastOrderKey := r.URL.Query().Get("last_order_key"); lastOrderKey != "" {
+		return store.SessionEventCursor{AfterOrderKey: lastOrderKey}
+	}
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		return store.SessionEventCursor{AfterOrderKey: cursor}
+	}
+	if cursor := r.URL.Query().Get("last_cursor"); cursor != "" {
+		return store.SessionEventCursor{AfterOrderKey: cursor}
 	}
 	if afterOrderKey := r.URL.Query().Get("after_sequence"); afterOrderKey != "" {
 		return store.SessionEventCursor{AfterOrderKey: afterOrderKey}

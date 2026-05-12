@@ -6,9 +6,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch, dispatchCreate } from "./runner.js";
+import {
+  canonicalEventsForClaudeMessage,
+  dispatch,
+  dispatchCreate,
+  type PendingTurn,
+} from "./runner.js";
 import { isCanonical } from "./cosmos.js";
 import { userSubmissionEvents } from "./conversation.js";
+import type { Config } from "./config.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -36,6 +42,31 @@ function userMessageEvent() {
     runtime: "claude",
     now: "2026-05-12T00:00:00.000Z",
   }).userMessage;
+}
+
+function pendingTurn(fields: Partial<PendingTurn> = {}): PendingTurn {
+  return {
+    turnID: "turn-run-123",
+    clientNonce: "run-123",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    ...fields,
+  };
+}
+
+function cfg(): Config {
+  return {
+    sessionId: "63",
+    ownerEmail: "user@example.com",
+    cosmosEndpoint: "https://example.invalid",
+    cosmosDatabase: "tank-operator",
+    sessionEventsContainer: "session-events",
+    workspace: "/workspace",
+    mcpConfig: "/workspace/.mcp.json",
+    wsPort: 8090,
+  };
 }
 
 test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
@@ -207,4 +238,126 @@ test("system without subtype: not canonical (defensive default)", async () => {
   await dispatch(sink, ws, { type: "system" } as any);
   assert.equal(cosmosCalled, false);
   assert.equal(broadcasted, true);
+});
+
+test("adapter maps Claude assistant text and tool_use blocks to Tank items", () => {
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    pendingTurn(),
+    {
+      type: "assistant",
+      uuid: "claude-msg-1",
+      message: {
+        content: [
+          { type: "text", text: "I will inspect the workspace." },
+          {
+            type: "tool_use",
+            id: "toolu_read",
+            name: "Read",
+            input: { file_path: "README.md" },
+          },
+        ],
+      },
+    },
+    new Set<string>(),
+  );
+
+  assert.deepEqual(events.map((event) => event.type), [
+    "item.completed",
+    "item.started",
+  ]);
+  assert.equal(events[0]?.actor, "assistant");
+  assert.equal(events[0]?.payload?.kind, "message");
+  assert.equal(events[0]?.payload?.text, "I will inspect the workspace.");
+  assert.equal(events[1]?.actor, "tool");
+  assert.equal(events[1]?.item_id, "toolu_read");
+  assert.equal(events[1]?.payload?.title, "Read");
+});
+
+test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
+  const needsInputItemIDs = new Set<string>();
+  const requested = canonicalEventsForClaudeMessage(
+    cfg(),
+    pendingTurn(),
+    {
+      type: "assistant",
+      uuid: "claude-msg-approval",
+      message: {
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_ask",
+            name: "AskUserQuestion",
+            input: { question: "Proceed?" },
+          },
+        ],
+      },
+    },
+    needsInputItemIDs,
+  );
+
+  assert.deepEqual(requested.map((event) => event.type), [
+    "item.started",
+    "tool.approval_requested",
+  ]);
+  assert.equal(needsInputItemIDs.has("toolu_ask"), true);
+
+  const resolved = canonicalEventsForClaudeMessage(
+    cfg(),
+    pendingTurn(),
+    {
+      type: "user",
+      uuid: "claude-tool-result",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_ask",
+            content: "yes",
+            is_error: false,
+          },
+        ],
+      },
+    },
+    needsInputItemIDs,
+  );
+
+  assert.deepEqual(resolved.map((event) => event.type), [
+    "item.completed",
+    "tool.approval_resolved",
+  ]);
+  assert.equal(needsInputItemIDs.has("toolu_ask"), false);
+});
+
+test("adapter maps Claude result failures and interrupts to terminal turn events", () => {
+  const failed = canonicalEventsForClaudeMessage(
+    cfg(),
+    pendingTurn(),
+    {
+      type: "result",
+      subtype: "error",
+      result: "provider failed",
+      uuid: "claude-result-failed",
+    },
+    new Set<string>(),
+  );
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0]?.type, "turn.failed");
+  assert.equal(failed[0]?.payload?.reason, "provider_failure");
+  assert.equal(failed[0]?.payload?.error, "provider failed");
+
+  const interrupted = canonicalEventsForClaudeMessage(
+    cfg(),
+    pendingTurn({ interrupted: true }),
+    {
+      type: "result",
+      subtype: "success",
+      result: "stopped",
+      uuid: "claude-result-interrupted",
+    },
+    new Set<string>(),
+  );
+  assert.equal(interrupted.length, 1);
+  assert.equal(interrupted[0]?.type, "turn.interrupted");
+  assert.equal(interrupted[0]?.payload?.reason, "client_interrupt");
 });

@@ -110,6 +110,56 @@ func TestPaginateSessionEventsAcceptsLegacyDocumentIDCursor(t *testing.T) {
 	}
 }
 
+func TestPaginateSessionEventsUsesFullCursorWhenOrderKeysCollide(t *testing.T) {
+	events := []map[string]any{
+		{
+			"id":         "same-order-a",
+			"order_key":  "0001",
+			"sequence":   float64(1),
+			"created_at": "2026-05-12T01:00:01Z",
+			"type":       "first",
+		},
+		{
+			"id":         "same-order-b",
+			"order_key":  "0001",
+			"sequence":   float64(2),
+			"created_at": "2026-05-12T01:00:01Z",
+			"type":       "second",
+		},
+		{
+			"id":         "same-order-c",
+			"order_key":  "0001",
+			"sequence":   float64(3),
+			"created_at": "2026-05-12T01:00:01Z",
+			"type":       "third",
+		},
+	}
+	sortSessionEvents(events)
+
+	firstPage := paginateSessionEvents(events, SessionEventCursor{}, 2)
+	if got := eventTypes(firstPage.Events); len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("first page types = %#v, want first, second", got)
+	}
+
+	secondPage := paginateSessionEvents(events, SessionEventCursor{AfterOrderKey: firstPage.NextOrderKey}, 2)
+	if got := eventTypes(secondPage.Events); len(got) != 1 || got[0] != "third" {
+		t.Fatalf("second page types = %#v, want third", got)
+	}
+}
+
+func TestPaginateSessionEventsUnknownCursorRestartsFromBeginning(t *testing.T) {
+	events := []map[string]any{
+		{"id": "a", "tank_order_key": "0001", "type": "first"},
+		{"id": "b", "tank_order_key": "0002", "type": "second"},
+	}
+	sortSessionEvents(events)
+
+	page := paginateSessionEvents(events, SessionEventCursor{AfterOrderKey: "missing"}, 10)
+	if got := eventTypes(page.Events); len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("page types = %#v, want first, second", got)
+	}
+}
+
 func eventTypes(events []map[string]any) []string {
 	types := make([]string, 0, len(events))
 	for _, event := range events {

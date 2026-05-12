@@ -117,6 +117,13 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   clientNonce?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
+type SdkConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "connection_lost"
+  | "reconnecting"
+  | "resumed";
 type SdkTerminalResult = {
   status: SdkTerminalStatus;
   detail?: string;
@@ -1817,6 +1824,90 @@ function eventOrderKey(event: JsonObject): string {
   }
   const time = eventTime(event);
   return [time, eventID(event, "event")].join("-");
+}
+
+function eventSequenceCursor(event: JsonObject): string {
+  const sequence = event.sequence ?? event.tank_event_seq;
+  if (typeof sequence === "number" && Number.isFinite(sequence)) {
+    return String(sequence);
+  }
+  if (typeof sequence === "string" && sequence) return sequence;
+  return "";
+}
+
+function eventTimelineTime(event: JsonObject): string {
+  for (const field of ["written_at", "timestamp", "time", "created_at"]) {
+    const value = event[field];
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+function eventTimelineCursor(event: JsonObject): string | null {
+  const order = typeof event.order_key === "string" && event.order_key
+    ? event.order_key
+    : typeof event.tank_order_key === "string" && event.tank_order_key
+      ? event.tank_order_key
+      : "";
+  const time = eventTimelineTime(event);
+  const sequence = eventSequenceCursor(event);
+  const id = eventID(event, "event");
+  if (!order && !time && !sequence && !id) return null;
+  return [order, time, sequence, id].join("\u001f");
+}
+
+function advanceTimelineCursor(current: string | null, next: string | null): string | null {
+  if (!next) return current;
+  if (!current || next > current) return next;
+  return current;
+}
+
+function sdkConnectionLabel(state: SdkConnectionState): string | null {
+  switch (state) {
+    case "connecting":
+      return "Connecting";
+    case "connection_lost":
+      return "Connection lost";
+    case "reconnecting":
+      return "Reconnecting";
+    case "resumed":
+      return "Resumed";
+    case "idle":
+    case "connected":
+      return null;
+  }
+}
+
+function sdkHeartbeatInterval(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 15_000;
+  return Math.min(60_000, Math.max(5_000, value));
+}
+
+function isSdkTimelineEvent(mode: SessionMode, event: JsonObject): boolean {
+  if (isCanonicalConversationEvent(event)) return event.visibility !== "live-only";
+  const type = event.type;
+  if (type === "tank.user_message") return true;
+  if (mode === "codex_gui") {
+    return (
+      type === "thread.started" ||
+      type === "turn.completed" ||
+      type === "turn.failed" ||
+      type === "turn.interrupted" ||
+      type === "item.completed" ||
+      type === "error"
+    );
+  }
+  if (type === "assistant" || type === "user" || type === "result" || type === "rate_limit") {
+    return true;
+  }
+  return (
+    type === "system" &&
+    (event.subtype === "init" ||
+      event.subtype === "compact_boundary" ||
+      event.subtype === "tool_use_summary" ||
+      event.subtype === "permission_denied" ||
+      event.subtype === "plugin_install")
+  );
 }
 
 function codexTurnScope(event: JsonObject): string {
@@ -4096,11 +4187,14 @@ function HeadlessRun({
   const wsRef = useRef<WebSocket | null>(null);
   const runEventsRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<void> | null>(null);
+  const sdkTimelineCursorRef = useRef<string | null>(null);
   const sessionIdRef = useRef(session.id);
   const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
   const runPrefsRef = useRef(runPrefs);
   const stdoutBufferRef = useRef("");
+  const [sdkConnectionState, setSdkConnectionState] =
+    useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
     id: string;
     prompt: string;
@@ -4167,7 +4261,15 @@ function HeadlessRun({
     );
     syncSdkRenderedEntries();
   }
+  function advanceSdkTimelineCursor(event: JsonObject): void {
+    if (!isSdkTimelineEvent(session.mode, event)) return;
+    sdkTimelineCursorRef.current = advanceTimelineCursor(
+      sdkTimelineCursorRef.current,
+      eventTimelineCursor(event),
+    );
+  }
   function applySdkRealtimeEvent(event: JsonObject): void {
+    advanceSdkTimelineCursor(event);
     const nextRealtime = applySdkProviderEvent(
       sdkRealtimeEntriesRef.current,
       session.mode,
@@ -4451,15 +4553,23 @@ function HeadlessRun({
         if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
         if (!Array.isArray(body.events)) return { replayed: false };
         events.push(...body.events);
-        if (!body.has_more) break;
+        const previousAfter = afterOrderKey;
         const nextAfter = typeof body.next_order_key === "string" ? body.next_order_key : "";
-        if (!nextAfter || nextAfter === afterOrderKey) break;
-        afterOrderKey = nextAfter;
+        if (nextAfter) {
+          afterOrderKey = nextAfter;
+          sdkTimelineCursorRef.current = advanceTimelineCursor(
+            sdkTimelineCursorRef.current,
+            nextAfter,
+          );
+        }
+        if (!body.has_more) break;
+        if (!nextAfter || nextAfter === previousAfter) break;
       }
 
       let acc: TranscriptEntry[] = [];
       for (const ev of events) {
         if (isJsonObject(ev)) {
+          advanceSdkTimelineCursor(ev);
           acc = applySdkProviderEvent(acc, session.mode, ev, "server");
         }
       }
@@ -4886,12 +4996,14 @@ function HeadlessRun({
     sessionIdRef.current = session.id;
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
+    sdkTimelineCursorRef.current = null;
     setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
     setHistoryAttempted(false);
     setActiveRunChecked(false);
     setContinueHintVisible(false);
+    setSdkConnectionState("idle");
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -5343,6 +5455,7 @@ function HeadlessRun({
     setActiveTool(null);
     setRunning(false);
     setActiveRunId(null);
+    if (session.runtime === "sdk") setSdkConnectionState("idle");
     wsRef.current?.close();
     wsRef.current = null;
     window.setTimeout(() => refreshRunHistoryFromBackend(false), 250);
@@ -5431,7 +5544,11 @@ function HeadlessRun({
     setActiveRunId(run.id);
     setRunStartedAt(startedAt);
     setNow(Date.now());
-    openRunSocket(run, true);
+    if (session.runtime === "sdk") {
+      openSdkRunSocket(run, true);
+    } else {
+      openRunSocket(run, true);
+    }
     return true;
   }
 
@@ -5454,6 +5571,7 @@ function HeadlessRun({
     scheduledWakeupRef.current = false;
     setActiveTool(null);
     setRunning(false);
+    if (session.runtime === "sdk") setSdkConnectionState("idle");
     setActiveRunId(null);
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
   }
@@ -5675,6 +5793,7 @@ function HeadlessRun({
     setActiveTool(null);
     setRunning(false);
     setActiveRunId(null);
+    setSdkConnectionState("idle");
     if (options.closeSocket) {
       if (wsRef.current === options.closeSocket) wsRef.current = null;
       options.closeSocket.close();
@@ -5695,6 +5814,7 @@ function HeadlessRun({
     scheduledWakeupRef.current = false;
     setActiveTool(null);
     setRunning(false);
+    setSdkConnectionState("connection_lost");
     const id = nextEntryId("ws-close");
     appendSdkRealtimeEntries(
       markLocalEntries(
@@ -5734,6 +5854,7 @@ function HeadlessRun({
 
     run.reconnects += 1;
     const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
+    setSdkConnectionState("reconnecting");
     setLastStatusText("Reconnecting");
     void refreshSdkRunHistoryResult(false, false, run.id).then((result) => {
       if (currentRunRef.current?.id !== run.id || run.cancelled) return;
@@ -5743,7 +5864,7 @@ function HeadlessRun({
       }
       window.setTimeout(() => {
         if (currentRunRef.current?.id === run.id && !run.cancelled) {
-          openSdkRunSocket(run, true);
+          openSdkRunSocket(run, run.submitted === true);
         }
       }, delay);
     });
@@ -5753,13 +5874,32 @@ function HeadlessRun({
     run: NonNullable<typeof currentRunRef.current>,
     resume = false,
   ) {
+    setSdkConnectionState(resume ? "reconnecting" : "connecting");
+    const params = new URLSearchParams();
+    if (sdkTimelineCursorRef.current) {
+      params.set("last_order_key", sdkTimelineCursorRef.current);
+    }
+    const query = params.toString();
     const wsUrl =
       `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
-      `/api/sessions/${session.id}/agent-ws`;
+      `/api/sessions/${session.id}/agent-ws${query ? `?${query}` : ""}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-    ws.onopen = () => {
+    let heartbeatTimer: number | null = null;
+    let heartbeatTimeout: number | null = null;
+    const clearHeartbeat = () => {
+      if (heartbeatTimer !== null) {
+        window.clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      if (heartbeatTimeout !== null) {
+        window.clearTimeout(heartbeatTimeout);
+        heartbeatTimeout = null;
+      }
+    };
+    const sendUserFrame = () => {
       if (resume && run.submitted) return;
+      if (!run.prompt && resume) return;
       ws.send(
         JSON.stringify({
           type: "user",
@@ -5768,6 +5908,30 @@ function HeadlessRun({
         }),
       );
       run.submitted = true;
+    };
+    const startHeartbeat = (intervalMs: number) => {
+      clearHeartbeat();
+      const sendHeartbeat = () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(
+          JSON.stringify({
+            type: "heartbeat",
+            sent_at: Date.now(),
+            last_order_key: sdkTimelineCursorRef.current ?? undefined,
+          }),
+        );
+        if (heartbeatTimeout !== null) window.clearTimeout(heartbeatTimeout);
+        heartbeatTimeout = window.setTimeout(() => {
+          if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+          setSdkConnectionState("connection_lost");
+          ws.close(4000, "heartbeat timeout");
+        }, intervalMs * 2);
+      };
+      heartbeatTimer = window.setInterval(sendHeartbeat, intervalMs);
+      sendHeartbeat();
+    };
+    ws.onopen = () => {
+      setSdkConnectionState(resume ? "reconnecting" : "connecting");
     };
     ws.onmessage = (event) => {
       let parsed: unknown;
@@ -5784,6 +5948,34 @@ function HeadlessRun({
         return;
       }
       if (!isJsonObject(parsed)) return;
+      if (parsed.type === "tank.transport.subscribed") {
+        const lastOrderKey = parsed.last_order_key;
+        if (typeof lastOrderKey === "string" && lastOrderKey) {
+          sdkTimelineCursorRef.current = advanceTimelineCursor(
+            sdkTimelineCursorRef.current,
+            lastOrderKey,
+          );
+        }
+        setSdkConnectionState(resume ? "resumed" : "connected");
+        run.reconnects = 0;
+        startHeartbeat(sdkHeartbeatInterval(parsed.heartbeat_interval_ms));
+        if (!resume && !run.submitted) sendUserFrame();
+        return;
+      }
+      if (parsed.type === "heartbeat_ack" || parsed.type === "pong") {
+        if (heartbeatTimeout !== null) {
+          window.clearTimeout(heartbeatTimeout);
+          heartbeatTimeout = null;
+        }
+        setSdkConnectionState((prev) =>
+          prev === "connection_lost" || prev === "reconnecting" ? "connected" : prev,
+        );
+        return;
+      }
+      if (parsed.type === "tank.transport.error") {
+        setSdkConnectionState("connection_lost");
+        return;
+      }
 
       // Bookkeeping for usage/active-tool. Two flavors of SDK events come
       // through this WS: claude's `{type:"assistant"|"user"|"result"}` and
@@ -5858,14 +6050,17 @@ function HeadlessRun({
     };
     ws.onerror = () => {
       if (!run.cancelled) {
+        setSdkConnectionState("connection_lost");
         setLastStatusText("Reconnecting");
       }
     };
     ws.onclose = (event) => {
+      clearHeartbeat();
       if (currentRunRef.current?.id !== run.id || run.cancelled) {
         if (wsRef.current === ws) wsRef.current = null;
         return;
       }
+      setSdkConnectionState("connection_lost");
       reconnectSdkRunSocket(run, event, ws);
     };
   }
@@ -6053,6 +6248,8 @@ function HeadlessRun({
   const verb = activeToolName
     ? `Using ${formatToolLabel(activeToolName)}`
     : STREAM_VERBS[verbIndex];
+  const connectionLabel =
+    session.runtime === "sdk" ? sdkConnectionLabel(sdkConnectionState) : null;
 
   const sendStdin = (text: string) => {
     wsRef.current?.send(JSON.stringify({ stdin: text }));
@@ -6619,6 +6816,9 @@ function HeadlessRun({
               </span>
             )}
           </span>
+          {connectionLabel && (
+            <span className="run-status-connection">{connectionLabel}</span>
+          )}
           {running && (
             <>
               <span className="run-status-elapsed" title="elapsed">
