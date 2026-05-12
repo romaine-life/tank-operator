@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pod-side launch shim for the Phase B agent-runner Node service.
+# Pod-side launch shim for the agent-runner Node service.
 # Mirrors the credential-setup logic from headless-run.sh (which runs
 # per-turn in the legacy dispatch path); here we do it ONCE per pod
 # lifetime, then exec the long-lived runner that drives the SDK.

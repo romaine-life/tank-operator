@@ -25,15 +25,16 @@ const (
 )
 
 // TurnRecord is a single queued turn descriptor. The orchestrator enqueues
-// one per dispatch; the pod-side runner (Phase 2) claims pending rows in
-// created_at order, drives the agent, then marks completed. Pod or
-// orchestrator restart mid-turn leaves the row as "claimed" — the runner
-// recovers on relaunch by either resuming or marking failed.
+// one per dispatch; the pod-side runner claims pending rows in created_at
+// order, drives the agent, then marks them completed or failed. A restart
+// mid-turn can leave "claimed" rows behind for explicit recovery handling.
 type TurnRecord struct {
 	RunID          string          `json:"run_id"`
 	SessionID      string          `json:"session_id"`
 	Email          string          `json:"email"`
 	Provider       string          `json:"provider"`
+	Source         string          `json:"source,omitempty"`
+	ClientNonce    string          `json:"client_nonce,omitempty"`
 	Prompt         string          `json:"prompt"`
 	Model          string          `json:"model,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
@@ -46,9 +47,9 @@ type TurnRecord struct {
 }
 
 // TurnQueueStore persists per-session turn descriptors. The orchestrator
-// is the only producer today; the pod-side runner (Phase 2) is the
-// consumer. Containers partition on session_id so a session's turn
-// history is one-partition reads.
+// is the only producer today; the pod-side SDK runners are the consumers.
+// Containers partition on session_id so a session's turn history is
+// one-partition reads.
 type TurnQueueStore interface {
 	Enqueue(ctx context.Context, rec TurnRecord) error
 	NextPending(ctx context.Context, sessionID string) (*TurnRecord, error)
@@ -184,6 +185,8 @@ func turnDoc(r TurnRecord) map[string]any {
 		"session_id":      r.SessionID,
 		"email":           r.Email,
 		"provider":        r.Provider,
+		"source":          r.Source,
+		"client_nonce":    r.ClientNonce,
 		"prompt":          r.Prompt,
 		"follow_up":       r.FollowUp,
 		"status":          string(r.Status),
@@ -203,6 +206,8 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		SessionID      string  `json:"session_id"`
 		Email          string  `json:"email"`
 		Provider       string  `json:"provider"`
+		Source         string  `json:"source"`
+		ClientNonce    string  `json:"client_nonce"`
 		Prompt         string  `json:"prompt"`
 		Model          string  `json:"model"`
 		PermissionMode string  `json:"permission_mode"`
@@ -221,6 +226,8 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		SessionID:      d.SessionID,
 		Email:          d.Email,
 		Provider:       d.Provider,
+		Source:         d.Source,
+		ClientNonce:    d.ClientNonce,
 		Prompt:         d.Prompt,
 		Model:          d.Model,
 		PermissionMode: d.PermissionMode,
@@ -267,7 +274,7 @@ func (s *cosmosTurnQueueStore) ListBySession(ctx context.Context, sessionID stri
 // reads return nothing, never error.
 type StubTurnQueueStore struct{}
 
-func (StubTurnQueueStore) Enqueue(_ context.Context, _ TurnRecord) error            { return nil }
+func (StubTurnQueueStore) Enqueue(_ context.Context, _ TurnRecord) error { return nil }
 func (StubTurnQueueStore) NextPending(_ context.Context, _ string) (*TurnRecord, error) {
 	return nil, nil
 }

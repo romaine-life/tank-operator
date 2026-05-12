@@ -19,11 +19,11 @@ type DispatchParams struct {
 	SessionID      string
 	Prompt         string
 	FollowUp       bool
-	Model          string // already validated against [A-Za-z0-9._-]{1,64}
-	PermissionMode string // already validated against [A-Za-z0-9._-]{1,64}
-	SkillName      string // already validated against [A-Za-z0-9_-]{1,64}
+	Model          string               // already validated against [A-Za-z0-9._-]{1,64}
+	PermissionMode string               // already validated against [A-Za-z0-9._-]{1,64}
+	SkillName      string               // already validated against [A-Za-z0-9_-]{1,64}
 	ActiveRuns     store.ActiveRunStore // may be nil
-	TurnQueue      store.TurnQueueStore // may be nil; only the claude path consumes this in Phase 2
+	TurnQueue      store.TurnQueueStore // may be nil; legacy-run records are not consumed by SDK runners
 	Events         *EventBus
 }
 
@@ -70,6 +70,7 @@ func (m *Manager) DispatchHeadless(ctx context.Context, p DispatchParams) error 
 			SessionID:      p.SessionID,
 			Email:          p.Email,
 			Provider:       provider,
+			Source:         "legacy-run",
 			Prompt:         p.Prompt,
 			Model:          p.Model,
 			PermissionMode: p.PermissionMode,

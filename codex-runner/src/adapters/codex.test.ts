@@ -17,6 +17,8 @@ function cfg(): Config {
     cosmosEndpoint: "https://example.invalid",
     cosmosDatabase: "tank-operator",
     sessionEventsContainer: "session-events",
+    turnQueueContainer: "turn-queue",
+    turnQueuePollMs: 1000,
     workspace: "/workspace",
     wsPort: 8090,
   };

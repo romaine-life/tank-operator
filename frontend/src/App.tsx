@@ -5228,6 +5228,32 @@ function HeadlessRun({
     startRun(promptText, displayText, skillName);
   }
 
+  async function enqueueSdkTurn(run: NonNullable<typeof currentRunRef.current>): Promise<void> {
+    const res = await authedFetch(`/api/sessions/${session.id}/turns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_nonce: run.id,
+        prompt: run.prompt,
+        model: run.model,
+        permission_mode: run.permissionMode,
+        skill_name: run.skillName,
+        follow_up: run.followUp,
+      }),
+    });
+    if (!res.ok) {
+      let detail = `submit failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    run.submitted = true;
+  }
+
   async function markTestState(state: TestState) {
     setTestState(state);
     setRolloutState(null);
@@ -5348,7 +5374,28 @@ function HeadlessRun({
     // X-clear button stays visible. Force the mirror clean.
     setComposerText("");
     if (session.runtime === "sdk") {
-      openSdkRunSocket(run);
+      void enqueueSdkTurn(run)
+        .then(() => {
+          if (currentRunRef.current?.id === run.id && !run.cancelled) {
+            openSdkRunSocket(run);
+          }
+        })
+        .catch((err) => {
+          if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+          currentRunRef.current = null;
+          setRunning(false);
+          setActiveRunId(null);
+          setRunStatus("error");
+          setSdkConnectionState("idle");
+          setLastStatusText("Error");
+          const id = nextEntryId("sdk-submit-error");
+          appendSdkRealtimeEntries(
+            markLocalEntries(
+              appendMeta([], id, "Submit failed", err instanceof Error ? err.message : String(err), "error"),
+              id,
+            ),
+          );
+        });
     } else {
       openRunSocket(run, false);
     }

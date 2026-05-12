@@ -143,11 +143,10 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 	}
 }
 
-// runtimeFromPod drives the SPA's choice between RunPaneSDK (Phase B+
-// pods with the agent-runner container) and the legacy HeadlessRun
-// renderer. The contract is observable as a JSON field on /api/sessions
-// — keep it pinned so we don't silently start routing legacy pods to
-// the SDK pane (or vice versa) when refactoring container detection.
+// runtimeFromPod drives the SPA's choice between SDK pods with a runner
+// container and the legacy HeadlessRun renderer. The contract is observable
+// as a JSON field on /api/sessions; keep it pinned so we don't silently route
+// legacy pods to the SDK pane (or vice versa) when refactoring container detection.
 func TestRuntimeFromPodDetectsAgentRunner(t *testing.T) {
 	withRunner := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
 	withRunner.Spec.Containers = append(withRunner.Spec.Containers, corev1.Container{Name: "agent-runner"})

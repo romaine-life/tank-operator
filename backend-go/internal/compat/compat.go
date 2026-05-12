@@ -11,22 +11,22 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode               = "api_key"
-	ClaudeCLIMode            = "claude_cli"
-	ClaudeGUIMode            = "claude_gui"
-	ConfigMode               = "config"
-	CodexConfigMode          = "codex_config"
-	CodexCLIMode             = "codex_cli"
-	CodexGUIMode             = "codex_gui"
-	PiConfigMode             = "pi_config"
-	PiCLIMode                = "pi_cli"
-	DefaultSessionMode       = ClaudeCLIMode
-	MaxNameLength            = 80
-	SessionsNamespace        = "tank-operator-sessions"
-	SessionServiceAccount    = "claude-session"
-	SessionConfigMap         = "tank-session-config"
-	SandboxAgentPort         = 2468
-	AgentRunnerWSPort        = 8090
+	APIKeyMode            = "api_key"
+	ClaudeCLIMode         = "claude_cli"
+	ClaudeGUIMode         = "claude_gui"
+	ConfigMode            = "config"
+	CodexConfigMode       = "codex_config"
+	CodexCLIMode          = "codex_cli"
+	CodexGUIMode          = "codex_gui"
+	PiConfigMode          = "pi_config"
+	PiCLIMode             = "pi_cli"
+	DefaultSessionMode    = ClaudeCLIMode
+	MaxNameLength         = 80
+	SessionsNamespace     = "tank-operator-sessions"
+	SessionServiceAccount = "claude-session"
+	SessionConfigMap      = "tank-session-config"
+	SandboxAgentPort      = 2468
+	AgentRunnerWSPort     = 8090
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -142,16 +142,16 @@ type ManifestOptions struct {
 	GitHubAppSecret string
 	// Secret name for pod-side Azure workload-identity config
 	// (AZURE_CLIENT_ID + AZURE_TENANT_ID). envFrom on the claude container
-	// so the Phase B agent-runner can talk to Cosmos via federated SA token.
-	// May be empty in Phase A test envs where the ExternalSecret isn't wired.
+	// so SDK runners can talk to Cosmos via federated SA token. May be empty
+	// in test envs where the ExternalSecret isn't wired.
 	SessionAzureConfigSecret string
-	// Phase B agent-runner — Cosmos endpoint and session-events container,
-	// passed through the pod env so the runner can connect. AgentRunnerWSPort
-	// is the localhost port the runner's WebSocket listens on (orchestrator
-	// reverse-proxies onto it in Phase C).
+	// SDK runners need Cosmos config for session-events and the turn queue.
+	// AgentRunnerWSPort is the localhost port the runner's WebSocket listens
+	// on; the orchestrator reverse-proxies /agent-ws onto it.
 	CosmosEndpoint               string
 	CosmosDatabase               string
 	CosmosSessionEventsContainer string
+	CosmosTurnQueueContainer     string
 	AgentRunnerWSPort            int
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
@@ -397,12 +397,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		claudeContainer,
 	}
 
-	// Phase B agent-runner sidecar — claude_gui only. Shares /workspace
+	// SDK agent-runner sidecar - claude_gui only. Shares /workspace
 	// with the claude container via the emptyDir above so the agent's
 	// edits show up in the terminal pane. Same image (binary baked in
 	// via the Dockerfile multi-stage build); different command + env.
-	// Ships INERT in Phase B — Phase C wires the orchestrator's
-	// reverse-proxy that actually drives the WebSocket port.
+	// The runner claims durable turn-queue rows and serves live events
+	// through the WebSocket port.
 	if wantAgentRunner {
 		runnerVolumeMounts := append([]any{}, configMounts...)
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
@@ -429,6 +429,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
 			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
 			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
+			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
 			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
@@ -503,6 +504,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
 			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
 			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
+			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
 		}
@@ -638,6 +640,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.CosmosSessionEventsContainer == "" {
 		opts.CosmosSessionEventsContainer = "session-events"
+	}
+	if opts.CosmosTurnQueueContainer == "" {
+		opts.CosmosTurnQueueContainer = "turn-queue"
 	}
 	if opts.AgentRunnerWSPort == 0 {
 		opts.AgentRunnerWSPort = AgentRunnerWSPort
