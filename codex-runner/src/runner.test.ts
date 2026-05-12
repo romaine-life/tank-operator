@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { dispatch } from "./runner.js";
-import type { CodexEvent } from "./cosmos.js";
+import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -34,6 +34,29 @@ test("canonical: cosmos before ws (read-your-writes ordering)", async () => {
   } as CodexEvent);
   assert.equal(ok, true);
   assert.deepEqual(order, ["cosmos", "ws"]);
+});
+
+test("dispatch stamps same tank ordering metadata to cosmos and ws", async () => {
+  let cosmosEvent: any;
+  let wsEvent: any;
+  const ok = await dispatch(
+    {
+      async upsert(event) {
+        cosmosEvent = event;
+      },
+    },
+    {
+      broadcastEvent(event) {
+        wsEvent = event;
+      },
+    },
+    { type: "item.completed", item: { id: "i1" } } as CodexEvent,
+  );
+  assert.equal(ok, true);
+  assert.equal(cosmosEvent.uuid, wsEvent.uuid);
+  assert.equal(cosmosEvent.tank_event_seq, wsEvent.tank_event_seq);
+  assert.equal(cosmosEvent.tank_order_key, wsEvent.tank_order_key);
+  assert.equal(cosmosEvent.written_at, wsEvent.written_at);
 });
 
 test("canonical: cosmos failure suppresses ws broadcast", async () => {
@@ -83,4 +106,18 @@ test("error events ARE canonical (durable error log)", async () => {
     { type: "error", message: "x" } as CodexEvent,
   );
   assert.deepEqual(order, ["cosmos", "ws"]);
+});
+
+test("tank.user_message is canonical so replay preserves user bubbles", () => {
+  assert.equal(
+    isCanonical({ type: "tank.user_message", message: "hello" }),
+    true,
+  );
+});
+
+test("generated event ids sort by production order", () => {
+  const first = nextSortableEventID(1000);
+  const second = nextSortableEventID(1000);
+  const third = nextSortableEventID(1001);
+  assert.deepEqual([third, first, second].sort(), [first, second, third]);
 });

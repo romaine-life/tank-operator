@@ -44,14 +44,21 @@ test("NOT canonical: unknown event types", () => {
   assert.equal(isCanonical({ type: "" }), false);
 });
 
-test("stampEventID attaches a v4 uuid without mutating the input", () => {
+test("canonical: tank.user_message", () => {
+  assert.equal(isCanonical({ type: "tank.user_message", message: "hello" }), true);
+});
+
+test("stampEventID attaches a sortable uuid and order metadata without mutating the input", () => {
   const before = { type: "thread.started", thread_id: "t1" };
   const after = stampEventID(before);
   assert.equal(typeof after.uuid, "string");
   assert.match(
     after.uuid,
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    /^\d{13}-\d{6}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
+  assert.equal(typeof after.tank_event_seq, "number");
+  assert.equal(typeof after.tank_order_key, "string");
+  assert.equal(typeof after.written_at, "string");
   // Input untouched: pins purity at this boundary so retries don't
   // double-stamp.
   assert.equal((before as { uuid?: string }).uuid, undefined);

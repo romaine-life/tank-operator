@@ -73,16 +73,52 @@ func (s *cosmosSessionEventStore) ListBySession(ctx context.Context, tankSession
 			out = append(out, doc)
 		}
 	}
-	// Cosmos should already sort by the ORDER BY clause, but the pager
-	// concatenation across pages can return slightly out-of-order rows
-	// on the page boundary; an explicit sort is cheap and removes the
-	// edge case for the SPA's dedupe-by-uuid path.
+	// New runner events carry tank_order_key (producer write time + local
+	// sequence + event id). Older Claude docs use UUIDv7 and old Codex docs
+	// used UUIDv4, so fall back through write timestamps before id to avoid
+	// reshuffling existing sessions on every history refresh.
+	sortSessionEvents(out)
+	return out, nil
+}
+
+func sortSessionEvents(out []map[string]any) {
 	sort.SliceStable(out, func(i, j int) bool {
+		ki := eventOrderKey(out[i])
+		kj := eventOrderKey(out[j])
+		if ki != "" && kj != "" && ki != kj {
+			return ki < kj
+		}
+		if ki != kj {
+			return kj == ""
+		}
+		ti := eventOrderTime(out[i])
+		tj := eventOrderTime(out[j])
+		if ti != "" && tj != "" && ti != tj {
+			return ti < tj
+		}
+		if ti != tj {
+			return tj == ""
+		}
 		ai, _ := out[i]["id"].(string)
 		aj, _ := out[j]["id"].(string)
 		return ai < aj
 	})
-	return out, nil
+}
+
+func eventOrderKey(doc map[string]any) string {
+	if value, ok := doc["tank_order_key"].(string); ok && value != "" {
+		return value
+	}
+	return ""
+}
+
+func eventOrderTime(doc map[string]any) string {
+	for _, field := range []string{"written_at", "timestamp", "time", "created_at"} {
+		if value, ok := doc[field].(string); ok && value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Stub for local dev where Cosmos isn't configured.

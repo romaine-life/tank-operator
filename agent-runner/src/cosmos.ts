@@ -84,7 +84,10 @@ export class CosmosSink {
       id: (message as any).uuid as string,
       tank_session_id: this.cfg.sessionId,
       email: this.cfg.ownerEmail,
-      written_at: new Date().toISOString(),
+      written_at:
+        typeof (message as any).written_at === "string"
+          ? ((message as any).written_at as string)
+          : new Date().toISOString(),
     };
     await this.container.items.upsert(doc);
   }

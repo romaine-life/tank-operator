@@ -110,6 +110,11 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   toolKind?: ToolKind;
   toolServer?: string;
   toolAction?: string;
+  transcriptSource?: "server" | "realtime";
+  sourceEventId?: string;
+  orderKey?: string;
+  localOnly?: boolean;
+  clientNonce?: string;
 };
 type SkillStateName = "test" | "rollout";
 
@@ -1564,11 +1569,21 @@ function normalizeIsoTimestamp(value: unknown): string | null {
 
 function eventTime(event: JsonObject): string {
   return (
+    normalizeIsoTimestamp(event.written_at) ??
     normalizeIsoTimestamp(event.timestamp) ??
     normalizeIsoTimestamp(event.time) ??
     normalizeIsoTimestamp(event.created_at) ??
     nowIso()
   );
+}
+
+function stableStringHash(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function upsertEntry(entries: TranscriptEntry[], entry: TranscriptEntry): TranscriptEntry[] {
@@ -1676,16 +1691,13 @@ function appendAssistantMessage(
   time: string = nowIso(),
 ): TranscriptEntry[] {
   if (!text.trim()) return entries;
-  return [
-    ...entries,
-    {
-      id,
-      kind: "message",
-      role: "assistant",
-      text,
-      time,
-    },
-  ];
+  return upsertEntry(entries, {
+    id,
+    kind: "message",
+    role: "assistant",
+    text,
+    time,
+  });
 }
 
 function skillInvocationTitle(name: string): string {
@@ -1761,10 +1773,41 @@ function describeUsage(usage: unknown): string {
     .join(" · ");
 }
 
+function eventID(event: JsonObject, fallbackPrefix: string): string {
+  if (typeof event.uuid === "string" && event.uuid) return event.uuid;
+  if (typeof event.id === "string" && event.id) return event.id;
+  if (typeof event.event_id === "string" && event.event_id) return event.event_id;
+  if (typeof event.tank_order_key === "string" && event.tank_order_key) {
+    return event.tank_order_key;
+  }
+  return `${fallbackPrefix}-${eventTime(event)}-${stableStringHash(shortJson(event))}`;
+}
+
+function eventOrderKey(event: JsonObject): string {
+  if (typeof event.tank_order_key === "string" && event.tank_order_key) {
+    return event.tank_order_key;
+  }
+  const time = eventTime(event);
+  return [time, eventID(event, "event")].join("-");
+}
+
+function codexTurnScope(event: JsonObject): string {
+  const turnSeq = event.tank_turn_seq;
+  if (typeof turnSeq === "number" && Number.isFinite(turnSeq)) return String(turnSeq);
+  if (typeof turnSeq === "string" && turnSeq) return turnSeq;
+  return eventID(event, "codex-event");
+}
+
+function codexItemEntryId(event: JsonObject, item: JsonObject, fallbackPrefix: string): string {
+  const itemId = typeof item.id === "string" && item.id ? item.id : "";
+  if (itemId) return `${fallbackPrefix}-${codexTurnScope(event)}-${itemId}`;
+  return `${fallbackPrefix}-${eventID(event, fallbackPrefix)}`;
+}
+
 function codexToolEntry(event: JsonObject): TranscriptEntry | null {
   const item = event.item;
   if (!isJsonObject(item)) return null;
-  const id = typeof item.id === "string" ? item.id : `codex-tool-${Date.now()}`;
+  const id = codexItemEntryId(event, item, "codex-tool");
   const status = typeof item.status === "string" ? item.status : String(event.type ?? "");
   const itemType = item.type;
   const time = eventTime(event);
@@ -1832,35 +1875,30 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
     const text = typeof event.message === "string" ? event.message.trim() : "";
     const skillName = skillNameFromTrigger(text);
     if (skillName && hasSkillInvocation(entries, skillName)) return entries;
-    if (!text || entries.some((entry) => entry.kind === "message" && entry.role === "user" && entry.text === text)) {
-      return entries;
-    }
-    return [
-      ...entries,
-      {
-        id: `codex-user-message-${Date.now()}`,
-        kind: "message",
-        role: "user",
-        text,
-        time,
-      },
-    ];
+    if (!text) return entries;
+    return upsertEntry(entries, {
+      id: `codex-user-message-${eventID(event, "codex-user-message")}`,
+      kind: "message",
+      role: "user",
+      text,
+      time,
+    });
   }
   if (type === "thread.started") {
     const threadId = typeof event.thread_id === "string" ? event.thread_id : "";
-    return appendMeta(entries, `codex-thread-${threadId || Date.now()}`, "Codex thread started", threadId, "info", time);
+    return appendMeta(entries, `codex-thread-${eventID(event, threadId || "codex-thread")}`, "Codex thread started", threadId, "info", time);
   }
   if (type === "turn.started") {
-    return appendMeta(entries, `codex-turn-started-${Date.now()}`, "Turn started", undefined, "info", time);
+    return appendMeta(entries, `codex-turn-started-${eventID(event, "codex-turn-started")}`, "Turn started", undefined, "info", time);
   }
   if (type === "turn.completed") {
-    return appendMeta(entries, `codex-turn-completed-${Date.now()}`, "Turn completed", describeUsage(event.usage), "info", time);
+    return appendMeta(entries, `codex-turn-completed-${eventID(event, "codex-turn-completed")}`, "Turn completed", describeUsage(event.usage), "info", time);
   }
   if (type === "turn.failed" || type === "error") {
     const error = isJsonObject(event.error) ? event.error.message : event.message;
     return appendMeta(
       entries,
-      `codex-error-${Date.now()}`,
+      `codex-error-${eventID(event, "codex-error")}`,
       type === "turn.failed" ? "Turn failed" : "Codex error",
       typeof error === "string" ? error : shortJson(event),
       "error",
@@ -1873,12 +1911,13 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
     if (item.type === "agent_message") {
       return appendAssistantMessage(
         entries,
-        typeof item.id === "string" ? item.id : `codex-message-${Date.now()}`,
+        codexItemEntryId(event, item, "codex-message"),
         typeof item.text === "string" ? item.text : "",
+        time,
       );
     }
     if (item.type === "reasoning") {
-      const id = typeof item.id === "string" ? item.id : `codex-reasoning-${Date.now()}`;
+      const id = codexItemEntryId(event, item, "codex-reasoning");
       return upsertEntry(entries, {
         id,
         kind: "reasoning",
@@ -1889,7 +1928,7 @@ function applyCodexEvent(entries: TranscriptEntry[], event: JsonObject): Transcr
     const toolEntry = codexToolEntry(event);
     return toolEntry ? upsertEntry(entries, toolEntry) : entries;
   }
-  return appendMeta(entries, `codex-event-${Date.now()}`, String(type || "Codex event"), shortJson(event), "info", time);
+  return appendMeta(entries, `codex-event-${eventID(event, "codex-event")}`, String(type || "Codex event"), shortJson(event), "info", time);
 }
 
 function claudeTextFromContent(content: unknown, includeToolResults: boolean): string {
@@ -2042,21 +2081,17 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
           }
         }
       }
-      for (const text of texts) {
+      const baseId = eventID(event, "claude-user-message");
+      for (const [index, text] of texts.entries()) {
         const skillName = skillNameFromTrigger(text);
         if (skillName && hasSkillInvocation(nextEntries, skillName)) continue;
-        if (!nextEntries.some((e) => e.kind === "message" && e.role === "user" && e.text === text)) {
-          nextEntries = [
-            ...nextEntries,
-            {
-              id: typeof event.uuid === "string" ? event.uuid : `user-msg-${Date.now()}`,
-              kind: "message" as const,
-              role: "user" as const,
-              text,
-              time,
-            },
-          ];
-        }
+        nextEntries = upsertEntry(nextEntries, {
+          id: `${baseId}-${index}`,
+          kind: "message",
+          role: "user",
+          text,
+          time,
+        });
       }
     }
     return nextEntries;
@@ -2064,26 +2099,27 @@ function applyClaudeEvent(entries: TranscriptEntry[], event: JsonObject): Transc
   if (type === "result") {
     const isError = event.is_error === true || event.subtype === "error";
     const result = typeof event.result === "string" ? event.result : "";
+    const id = eventID(event, "claude-result");
     if (!isError) {
       if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-        return appendAssistantMessage(entries, `claude-result-message-${Date.now()}`, result, time);
+        return appendAssistantMessage(entries, `claude-result-message-${id}`, result, time);
       }
       return entries;
     }
     let nextEntries = appendMeta(
       entries,
-      `claude-result-${Date.now()}`,
+      `claude-result-${id}`,
       "Claude run failed",
       result,
       "error",
       time,
     );
     if (result && !entries.some((entry) => entry.kind === "message" && entry.text === result)) {
-      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${Date.now()}`, result, time);
+      nextEntries = appendAssistantMessage(nextEntries, `claude-result-message-${id}`, result, time);
     }
     return nextEntries;
   }
-  return appendMeta(entries, `claude-event-${Date.now()}`, String(type || "Claude event"), shortJson(event), "info", time);
+  return appendMeta(entries, `claude-event-${eventID(event, "claude-event")}`, String(type || "Claude event"), shortJson(event), "info", time);
 }
 
 function applyProviderEvent(
@@ -2674,8 +2710,10 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
       if (entry.kind === "message") {
         return {
           kind: entry.kind,
+          id: entry.id,
           role: entry.role,
           text: entry.text,
+          durationMs: (entry as Record<string, unknown>).durationMs,
         };
       }
       if (entry.kind === "tool") {
@@ -2701,6 +2739,143 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
       };
     }),
   );
+}
+
+function entryMessageFingerprint(entry: TranscriptEntry): string | null {
+  if (entry.kind !== "message" || !entry.role || !entry.text) return null;
+  const text = entry.text.trim();
+  return text ? `${entry.role}:${text}` : null;
+}
+
+function entryMetaFingerprint(entry: TranscriptEntry): string | null {
+  if (entry.kind !== "meta") return null;
+  return [
+    entry.meta?.title ?? "",
+    entry.meta?.detail ?? "",
+    entry.meta?.severity ?? "",
+  ].join("\u0000");
+}
+
+function annotateEntriesFromEvent(
+  before: TranscriptEntry[],
+  after: TranscriptEntry[],
+  source: "server" | "realtime",
+  event: JsonObject,
+): TranscriptEntry[] {
+  const known = new Set(before.map((entry) => entry.id));
+  const sourceEventId = eventID(event, `${source}-event`);
+  const orderKey = eventOrderKey(event);
+  return after.map((entry) =>
+    known.has(entry.id)
+      ? entry
+      : {
+          ...entry,
+          transcriptSource: source,
+          sourceEventId,
+          orderKey,
+        },
+  );
+}
+
+function applySdkProviderEvent(
+  entries: TranscriptEntry[],
+  mode: SessionMode,
+  event: JsonObject,
+  source: "server" | "realtime",
+): TranscriptEntry[] {
+  return annotateEntriesFromEvent(
+    entries,
+    applyProviderEvent(entries, mode, event),
+    source,
+    event,
+  );
+}
+
+function shouldDropRealtimeEntry(
+  entry: TranscriptEntry,
+  serverIds: Set<string>,
+  serverEventIds: Set<string>,
+  serverMetaFingerprints: Set<string>,
+): boolean {
+  if (serverIds.has(entry.id)) return true;
+  if (entry.sourceEventId && serverEventIds.has(entry.sourceEventId)) return true;
+  const metaFingerprint = entryMetaFingerprint(entry);
+  return Boolean(
+    metaFingerprint &&
+      entry.localOnly &&
+      serverMetaFingerprints.has(metaFingerprint),
+  );
+}
+
+function pruneRealtimeEntries(
+  server: TranscriptEntry[],
+  realtime: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (server.length === 0) return realtime;
+  const serverIds = new Set(server.map((entry) => entry.id));
+  const serverEventIds = new Set(
+    server.map((entry) => entry.sourceEventId).filter((id): id is string => Boolean(id)),
+  );
+  const serverMetaFingerprints = new Set(
+    server
+      .map(entryMetaFingerprint)
+      .filter((fingerprint): fingerprint is string => fingerprint !== null),
+  );
+  return realtime.filter(
+    (entry) =>
+      !shouldDropRealtimeEntry(
+        entry,
+        serverIds,
+        serverEventIds,
+        serverMetaFingerprints,
+      ),
+  );
+}
+
+function pruneLocalRealtimeEchoes(realtime: TranscriptEntry[]): TranscriptEntry[] {
+  const nonLocalMessageFingerprints = new Set(
+    realtime
+      .filter((entry) => !entry.localOnly)
+      .map(entryMessageFingerprint)
+      .filter((fingerprint): fingerprint is string => fingerprint !== null),
+  );
+  if (nonLocalMessageFingerprints.size === 0) return realtime;
+  return realtime.filter((entry) => {
+    if (!entry.localOnly) return true;
+    const fingerprint = entryMessageFingerprint(entry);
+    return !fingerprint || !nonLocalMessageFingerprints.has(fingerprint);
+  });
+}
+
+function dedupeAdjacentAssistantEchoes(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const out: TranscriptEntry[] = [];
+  for (const entry of entries) {
+    const prev = out[out.length - 1];
+    if (
+      prev?.kind === "message" &&
+      entry.kind === "message" &&
+      prev.role === "assistant" &&
+      entry.role === "assistant" &&
+      prev.text?.trim() &&
+      prev.text.trim() === entry.text?.trim()
+    ) {
+      out[out.length - 1] = entry.transcriptSource === "server" ? entry : prev;
+      continue;
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+function mergeSdkTranscript(
+  server: TranscriptEntry[],
+  realtime: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (realtime.length === 0) return server;
+  const extra = pruneRealtimeEntries(server, realtime);
+  if (server.length === 0) return dedupeAdjacentAssistantEchoes(extra);
+  if (extra.length === 0) return server;
+  return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
 function parseRunHistory(text: string, mode: SessionMode): TranscriptEntry[] {
@@ -3633,6 +3808,8 @@ function HeadlessRun({
   onActivityChange?: (id: string, activity: AgentSessionActivity) => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
+  const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
@@ -3767,6 +3944,78 @@ function HeadlessRun({
   function nextEntryId(prefix: string): string {
     entryIdSeqRef.current += 1;
     return `${prefix}-${session.id}-${entryIdSeqRef.current}`;
+  }
+  function localOrderKey(prefix: string): string {
+    return [
+      String(Date.now()).padStart(13, "0"),
+      String(entryIdSeqRef.current + 1).padStart(8, "0"),
+      prefix,
+    ].join("-");
+  }
+  function markLocalEntries(localEntries: TranscriptEntry[], nonce: string): TranscriptEntry[] {
+    return localEntries.map((entry, index) => ({
+      ...entry,
+      transcriptSource: "realtime",
+      localOnly: true,
+      clientNonce: nonce,
+      orderKey: entry.orderKey ?? `${localOrderKey(nonce)}-${index}`,
+    }));
+  }
+  function syncSdkRenderedEntries(): void {
+    const merged = mergeSdkTranscript(
+      sdkServerEntriesRef.current,
+      sdkRealtimeEntriesRef.current,
+    );
+    setEntries((prev) =>
+      transcriptComparable(prev) === transcriptComparable(merged) ? prev : merged,
+    );
+  }
+  function replaceSdkServerEntries(
+    serverEntries: TranscriptEntry[],
+    clearRealtime = false,
+  ): void {
+    sdkServerEntriesRef.current = serverEntries;
+    sdkRealtimeEntriesRef.current = clearRealtime
+      ? []
+      : pruneRealtimeEntries(serverEntries, sdkRealtimeEntriesRef.current);
+    syncSdkRenderedEntries();
+  }
+  function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
+    sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
+      sdkServerEntriesRef.current,
+      pruneLocalRealtimeEchoes(
+        [...sdkRealtimeEntriesRef.current, ...localEntries].slice(-500),
+      ),
+    );
+    syncSdkRenderedEntries();
+  }
+  function applySdkRealtimeEvent(event: JsonObject): void {
+    const nextRealtime = applySdkProviderEvent(
+      sdkRealtimeEntriesRef.current,
+      session.mode,
+      event,
+      "realtime",
+    );
+    sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
+      sdkServerEntriesRef.current,
+      pruneLocalRealtimeEchoes(nextRealtime.slice(-500)),
+    );
+    syncSdkRenderedEntries();
+  }
+  function updateSdkLastAssistantDuration(durationMs: number): void {
+    const update = (list: TranscriptEntry[]) => {
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        if (list[i].kind === "message" && list[i].role === "assistant") {
+          const next = [...list];
+          next[i] = { ...next[i], durationMs } as TranscriptEntry;
+          return next;
+        }
+      }
+      return list;
+    };
+    sdkRealtimeEntriesRef.current = update(sdkRealtimeEntriesRef.current);
+    sdkServerEntriesRef.current = update(sdkServerEntriesRef.current);
+    syncSdkRenderedEntries();
   }
   const queuedMessageSeqRef = useRef(0);
   function nextQueuedMessageId(): string {
@@ -3993,7 +4242,7 @@ function HeadlessRun({
   // /api/sessions/{id}/events). Each event is the same shape applyProviderEvent
   // already consumes — the chat pane was built around Claude's stream-json,
   // which the SDK is a TypeScript wrapper over the same binary's stdout.
-  function refreshSdkRunHistory(showHint: boolean): Promise<boolean> {
+  function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
     const refreshSessionId = session.id;
     return authedFetch(
       `/api/sessions/${encodeURIComponent(refreshSessionId)}/events?limit=1000`,
@@ -4006,17 +4255,11 @@ function HeadlessRun({
         let acc: TranscriptEntry[] = [];
         for (const ev of body.events) {
           if (isJsonObject(ev)) {
-            acc = applyProviderEvent(acc, session.mode, ev);
+            acc = applySdkProviderEvent(acc, session.mode, ev, "server");
           }
         }
         if (acc.length === 0) return false;
-        setEntries((prev) => {
-          if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
-          // For SDK history we trust the server's canonical log over any
-          // partial in-memory state. The dedupe-by-uuid in upsertEntry handles
-          // any overlap if a live event arrived before history finished.
-          return acc;
-        });
+        replaceSdkServerEntries(acc, clearRealtime);
         if (showHint) {
           setContinueHintVisible(true);
           window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -4433,6 +4676,8 @@ function HeadlessRun({
   // history sync to run again. The replay paths repopulate from backend.
   useEffect(() => {
     sessionIdRef.current = session.id;
+    sdkServerEntriesRef.current = [];
+    sdkRealtimeEntriesRef.current = [];
     setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
@@ -5140,19 +5385,31 @@ function HeadlessRun({
     };
     currentRunRef.current = run;
     setActiveRunId(run.id);
+    const optimisticTime = nowIso();
     if (skillName) {
-      setEntries((prev) => appendSkillInvocation(prev, skillName, trimmed, nowIso()));
+      if (session.runtime === "sdk") {
+        appendSdkRealtimeEntries(
+          markLocalEntries(
+            appendSkillInvocation([], skillName, trimmed, optimisticTime),
+            run.id,
+          ),
+        );
+      } else {
+        setEntries((prev) => appendSkillInvocation(prev, skillName, trimmed, optimisticTime));
+      }
     } else {
-      setEntries((prev) => [
-        ...prev,
-        {
+      const userEntry = {
           id: nextEntryId("user"),
           kind: "message",
           role: "user",
           text: displayText,
-          time: nowIso(),
-        },
-      ]);
+          time: optimisticTime,
+        } as TranscriptEntry;
+      if (session.runtime === "sdk") {
+        appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
+      } else {
+        setEntries((prev) => [...prev, userEntry]);
+      }
     }
     setRunStatus("running");
     setRunning(true);
@@ -5197,12 +5454,11 @@ function HeadlessRun({
       try {
         parsed = JSON.parse(String(event.data));
       } catch {
-        setEntries((prev) =>
-          appendMeta(
-            prev,
-            nextEntryId("agent-ws-message"),
-            "agent-ws message",
-            String(event.data),
+        const id = nextEntryId("agent-ws-message");
+        appendSdkRealtimeEntries(
+          markLocalEntries(
+            appendMeta([], id, "agent-ws message", String(event.data)),
+            id,
           ),
         );
         return;
@@ -5267,7 +5523,7 @@ function HeadlessRun({
         setActiveTool(null);
       }
 
-      setEntries((prev) => applyProviderEvent(prev, session.mode, parsed));
+      applySdkRealtimeEvent(parsed);
 
       // Terminal events. Each runtime closes the WS so a fresh open per
       // turn works. The runners themselves stay alive for the pod's
@@ -5279,16 +5535,7 @@ function HeadlessRun({
       if (isTerminal) {
         currentRunRef.current = null;
         const durationMs = Date.now() - run.turnStart;
-        setEntries((prev) => {
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (prev[i].kind === "message" && prev[i].role === "assistant") {
-              const updated = [...prev];
-              updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
-              return updated;
-            }
-          }
-          return prev;
-        });
+        updateSdkLastAssistantDuration(durationMs);
         setLastStatusText(
           scheduledWakeupRef.current
             ? "Wakeup scheduled"
@@ -5303,6 +5550,7 @@ function HeadlessRun({
         setActiveRunId(null);
         playTurnCompleteSound();
         ws.close();
+        void refreshSdkRunHistory(false, true);
       }
     };
     ws.onerror = () => {
@@ -5325,18 +5573,23 @@ function HeadlessRun({
       scheduledWakeupRef.current = false;
       setActiveTool(null);
       setRunning(false);
-      setEntries((entries) =>
-        appendMeta(
-          entries,
-          nextEntryId("ws-close"),
-          "Connection lost",
+      const id = nextEntryId("ws-close");
+      appendSdkRealtimeEntries(
+        markLocalEntries(
+          appendMeta(
+            [],
+            id,
+            "Connection lost",
           `WebSocket closed with code ${event.code}${
             event.reason ? ` — ${event.reason}` : ""
-          }. Reload to resume.`,
+          }. Reconnecting from history.`,
           "error",
+          ),
+          id,
         ),
       );
       setRunStatus("error");
+      void refreshSdkRunHistory(false);
     };
   }
 

@@ -102,6 +102,7 @@ export class Runner {
   private readonly codex: Codex;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
+  private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
@@ -132,6 +133,12 @@ export class Runner {
       const next = await this.userQueue.next();
       if (next.done) break;
       const input = next.value;
+      const turnSeq = ++this.turnSeq;
+      await dispatch(this.sink, this.ws, {
+        type: "tank.user_message",
+        message: input,
+        tank_turn_seq: turnSeq,
+      });
 
       this.currentAbort = new AbortController();
       // If the outer signal aborts mid-turn, also abort the in-flight
@@ -146,7 +153,10 @@ export class Runner {
         });
         for await (const event of streamed.events) {
           if (signal.aborted) break;
-          await dispatch(this.sink, this.ws, event as CodexEvent);
+          await dispatch(this.sink, this.ws, {
+            ...(event as CodexEvent),
+            tank_turn_seq: turnSeq,
+          });
         }
       } catch (err) {
         // Synthetic error event so the SPA sees something when the SDK
@@ -157,6 +167,7 @@ export class Runner {
         await dispatch(this.sink, this.ws, {
           type: "error",
           message: errMessage,
+          tank_turn_seq: turnSeq,
         });
         console.error("codex turn failed:", err);
       } finally {
