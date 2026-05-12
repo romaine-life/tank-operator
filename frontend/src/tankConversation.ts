@@ -1,28 +1,16 @@
-export type TankActor = "user" | "assistant" | "system" | "tool" | "runner";
+export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"] as const;
 
-export type TankEventSource = "tank" | "claude" | "codex" | "legacy-run";
+export type TankActor = (typeof TANK_ACTORS)[number];
 
-export type TankVisibility = "durable" | "live-only" | "audit-only";
+export const TANK_EVENT_SOURCES = ["tank", "claude", "codex", "legacy-run"] as const;
 
-export type TankEventType =
-  | "conversation.started"
-  | "conversation.archived"
-  | "user_message.created"
-  | "turn.submitted"
-  | "turn.started"
-  | "turn.completed"
-  | "turn.failed"
-  | "turn.interrupted"
-  | "item.started"
-  | "item.delta"
-  | "item.completed"
-  | "item.failed"
-  | "tool.approval_requested"
-  | "tool.approval_resolved"
-  | "session.activity_updated"
-  | "read_state.updated";
+export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 
-const TANK_EVENT_TYPES = new Set<string>([
+export const TANK_VISIBILITIES = ["durable", "live-only", "audit-only"] as const;
+
+export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
+
+export const TANK_EVENT_TYPES = [
   "conversation.started",
   "conversation.archived",
   "user_message.created",
@@ -39,11 +27,14 @@ const TANK_EVENT_TYPES = new Set<string>([
   "tool.approval_resolved",
   "session.activity_updated",
   "read_state.updated",
-]);
+] as const;
 
-const TANK_ACTORS = new Set<string>(["user", "assistant", "system", "tool", "runner"]);
-const TANK_EVENT_SOURCES = new Set<string>(["tank", "claude", "codex", "legacy-run"]);
-const TANK_VISIBILITIES = new Set<string>(["durable", "live-only", "audit-only"]);
+export type TankEventType = (typeof TANK_EVENT_TYPES)[number];
+
+const TANK_EVENT_TYPE_SET = new Set<string>(TANK_EVENT_TYPES);
+const TANK_ACTOR_SET = new Set<string>(TANK_ACTORS);
+const TANK_EVENT_SOURCE_SET = new Set<string>(TANK_EVENT_SOURCES);
+const TANK_VISIBILITY_SET = new Set<string>(TANK_VISIBILITIES);
 
 export interface TankProducerMetadata {
   name?: string;
@@ -80,14 +71,14 @@ export function isTankConversationEvent(event: unknown): event is TankConversati
     typeof candidate.event_id === "string" &&
     typeof candidate.session_id === "string" &&
     typeof candidate.type === "string" &&
-    TANK_EVENT_TYPES.has(candidate.type) &&
+    TANK_EVENT_TYPE_SET.has(candidate.type) &&
     typeof candidate.actor === "string" &&
-    TANK_ACTORS.has(candidate.actor) &&
+    TANK_ACTOR_SET.has(candidate.actor) &&
     typeof candidate.source === "string" &&
-    TANK_EVENT_SOURCES.has(candidate.source) &&
+    TANK_EVENT_SOURCE_SET.has(candidate.source) &&
     typeof candidate.created_at === "string" &&
     typeof candidate.visibility === "string" &&
-    TANK_VISIBILITIES.has(candidate.visibility)
+    TANK_VISIBILITY_SET.has(candidate.visibility)
   );
 }
 

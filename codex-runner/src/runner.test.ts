@@ -13,7 +13,7 @@ import {
   type AcceptedTurn,
 } from "./runner.js";
 import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
-import { userSubmissionEvents } from "./conversation.js";
+import { isTankConversationEvent, userSubmissionEvents, type TankConversationEvent } from "./conversation.js";
 import type { Config } from "./config.js";
 
 type Order = string[];
@@ -42,6 +42,19 @@ function userMessageEvent() {
     runtime: "codex",
     now: "2026-05-12T00:00:00.000Z",
   }).userMessage;
+}
+
+function assertTankEventFixture(event: TankConversationEvent, label = event.type) {
+  assert.equal(isTankConversationEvent(event), true, `${label} should satisfy the Tank envelope`);
+}
+
+function assertStampedTankEvent(event: TankConversationEvent & { order_key?: unknown; sequence?: unknown }) {
+  assertTankEventFixture(event);
+  assert.equal(
+    typeof event.order_key === "string" || typeof event.sequence === "number",
+    true,
+    `${event.type} should have a replay order cursor`,
+  );
 }
 
 function acceptedTurn(fields: Partial<AcceptedTurn> = {}): AcceptedTurn {
@@ -137,6 +150,8 @@ test("dispatchCreate uses event_id as the durable id for canonical Tank events",
   assert.equal(cosmosEvent.order_key, cosmosEvent.tank_order_key);
   assert.equal(cosmosEvent.sequence, cosmosEvent.tank_event_seq);
   assert.equal(wsEvent.uuid, cosmosEvent.uuid);
+  assertStampedTankEvent(cosmosEvent);
+  assertStampedTankEvent(wsEvent);
 });
 
 test("dispatchCreate suppresses duplicate client_nonce submissions", async () => {
@@ -233,6 +248,7 @@ test("adapter maps Codex agent messages to durable Tank assistant items", () => 
   assert.equal(events[0]?.visibility, "durable");
   assert.equal(events[0]?.payload?.kind, "agent_message");
   assert.equal(events[0]?.payload?.text, "All tests passed.");
+  assertTankEventFixture(events[0]!);
 });
 
 test("adapter maps Codex item updates to live-only Tank deltas", () => {
@@ -253,6 +269,7 @@ test("adapter maps Codex item updates to live-only Tank deltas", () => {
   assert.equal(events[0]?.type, "item.delta");
   assert.equal(events[0]?.actor, "assistant");
   assert.equal(events[0]?.visibility, "live-only");
+  assertTankEventFixture(events[0]!);
 });
 
 test("adapter maps Codex terminal events to Tank turn lifecycle", () => {
@@ -262,6 +279,7 @@ test("adapter maps Codex terminal events to Tank turn lifecycle", () => {
     { type: "turn.completed", usage: { input_tokens: 10 } },
   );
   assert.equal(completed.length, 1);
+  assertTankEventFixture(completed[0]!);
   assert.equal(completed[0]?.type, "turn.completed");
   assert.deepEqual(completed[0]?.payload?.usage, { input_tokens: 10 });
 
@@ -271,6 +289,7 @@ test("adapter maps Codex terminal events to Tank turn lifecycle", () => {
     { type: "error", message: "quota exceeded" },
   );
   assert.equal(failed.length, 1);
+  assertTankEventFixture(failed[0]!);
   assert.equal(failed[0]?.type, "turn.failed");
   assert.equal(failed[0]?.payload?.reason, "provider_failure");
   assert.equal(failed[0]?.payload?.error, "quota exceeded");

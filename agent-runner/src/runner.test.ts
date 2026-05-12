@@ -13,7 +13,7 @@ import {
   type PendingTurn,
 } from "./runner.js";
 import { isCanonical } from "./cosmos.js";
-import { userSubmissionEvents } from "./conversation.js";
+import { isTankConversationEvent, userSubmissionEvents, type TankConversationEvent } from "./conversation.js";
 import type { Config } from "./config.js";
 
 type Order = string[];
@@ -42,6 +42,19 @@ function userMessageEvent() {
     runtime: "claude",
     now: "2026-05-12T00:00:00.000Z",
   }).userMessage;
+}
+
+function assertTankEventFixture(event: TankConversationEvent, label = event.type) {
+  assert.equal(isTankConversationEvent(event), true, `${label} should satisfy the Tank envelope`);
+}
+
+function assertStampedTankEvent(event: TankConversationEvent & { order_key?: unknown; sequence?: unknown }) {
+  assertTankEventFixture(event);
+  assert.equal(
+    typeof event.order_key === "string" || typeof event.sequence === "number",
+    true,
+    `${event.type} should have a replay order cursor`,
+  );
 }
 
 function pendingTurn(fields: Partial<PendingTurn> = {}): PendingTurn {
@@ -157,6 +170,8 @@ test("dispatchCreate uses event_id as the durable id for canonical Tank events",
   assert.equal(cosmosMessage.order_key, cosmosMessage.tank_order_key);
   assert.equal(cosmosMessage.sequence, cosmosMessage.tank_event_seq);
   assert.equal(wsMessage.uuid, cosmosMessage.uuid);
+  assertStampedTankEvent(cosmosMessage);
+  assertStampedTankEvent(wsMessage);
 });
 
 test("dispatchCreate suppresses duplicate client_nonce submissions", async () => {
@@ -266,6 +281,7 @@ test("adapter maps Claude assistant text and tool_use blocks to Tank items", () 
     "item.completed",
     "item.started",
   ]);
+  for (const event of events) assertTankEventFixture(event);
   assert.equal(events[0]?.actor, "assistant");
   assert.equal(events[0]?.payload?.kind, "message");
   assert.equal(events[0]?.payload?.text, "I will inspect the workspace.");
@@ -300,6 +316,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
     "item.started",
     "tool.approval_requested",
   ]);
+  for (const event of requested) assertTankEventFixture(event);
   assert.equal(needsInputItemIDs.has("toolu_ask"), true);
 
   const resolved = canonicalEventsForClaudeMessage(
@@ -326,6 +343,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
     "item.completed",
     "tool.approval_resolved",
   ]);
+  for (const event of resolved) assertTankEventFixture(event);
   assert.equal(needsInputItemIDs.has("toolu_ask"), false);
 });
 
@@ -342,6 +360,7 @@ test("adapter maps Claude result failures and interrupts to terminal turn events
     new Set<string>(),
   );
   assert.equal(failed.length, 1);
+  assertTankEventFixture(failed[0]!);
   assert.equal(failed[0]?.type, "turn.failed");
   assert.equal(failed[0]?.payload?.reason, "provider_failure");
   assert.equal(failed[0]?.payload?.error, "provider failed");
@@ -358,6 +377,7 @@ test("adapter maps Claude result failures and interrupts to terminal turn events
     new Set<string>(),
   );
   assert.equal(interrupted.length, 1);
+  assertTankEventFixture(interrupted[0]!);
   assert.equal(interrupted[0]?.type, "turn.interrupted");
   assert.equal(interrupted[0]?.payload?.reason, "client_interrupt");
 });

@@ -1,26 +1,37 @@
 import { createHash } from "node:crypto";
 
-export type TankActor = "user" | "assistant" | "system" | "tool" | "runner";
-export type TankEventSource = "tank" | "claude" | "codex" | "legacy-run";
-export type TankVisibility = "durable" | "live-only" | "audit-only";
+export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"] as const;
 
-export type TankEventType =
-  | "conversation.started"
-  | "conversation.archived"
-  | "user_message.created"
-  | "turn.submitted"
-  | "turn.started"
-  | "turn.completed"
-  | "turn.failed"
-  | "turn.interrupted"
-  | "item.started"
-  | "item.delta"
-  | "item.completed"
-  | "item.failed"
-  | "tool.approval_requested"
-  | "tool.approval_resolved"
-  | "session.activity_updated"
-  | "read_state.updated";
+export type TankActor = (typeof TANK_ACTORS)[number];
+
+export const TANK_EVENT_SOURCES = ["tank", "claude", "codex", "legacy-run"] as const;
+
+export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
+
+export const TANK_VISIBILITIES = ["durable", "live-only", "audit-only"] as const;
+
+export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
+
+export const TANK_EVENT_TYPES = [
+  "conversation.started",
+  "conversation.archived",
+  "user_message.created",
+  "turn.submitted",
+  "turn.started",
+  "turn.completed",
+  "turn.failed",
+  "turn.interrupted",
+  "item.started",
+  "item.delta",
+  "item.completed",
+  "item.failed",
+  "tool.approval_requested",
+  "tool.approval_resolved",
+  "session.activity_updated",
+  "read_state.updated",
+] as const;
+
+export type TankEventType = (typeof TANK_EVENT_TYPES)[number];
 
 export interface TankConversationEvent {
   event_id: string;
@@ -47,35 +58,24 @@ export interface TankConversationEvent {
   [key: string]: unknown;
 }
 
-const TANK_EVENT_TYPES = new Set<string>([
-  "conversation.started",
-  "conversation.archived",
-  "user_message.created",
-  "turn.submitted",
-  "turn.started",
-  "turn.completed",
-  "turn.failed",
-  "turn.interrupted",
-  "item.started",
-  "item.delta",
-  "item.completed",
-  "item.failed",
-  "tool.approval_requested",
-  "tool.approval_resolved",
-  "session.activity_updated",
-  "read_state.updated",
-]);
+const TANK_EVENT_TYPE_SET = new Set<string>(TANK_EVENT_TYPES);
+const TANK_ACTOR_SET = new Set<string>(TANK_ACTORS);
+const TANK_EVENT_SOURCE_SET = new Set<string>(TANK_EVENT_SOURCES);
+const TANK_VISIBILITY_SET = new Set<string>(TANK_VISIBILITIES);
 
 export function isTankConversationEvent(event: { [key: string]: unknown }): event is TankConversationEvent {
   return (
     typeof event.event_id === "string" &&
     typeof event.session_id === "string" &&
     typeof event.type === "string" &&
-    TANK_EVENT_TYPES.has(event.type) &&
+    TANK_EVENT_TYPE_SET.has(event.type) &&
     typeof event.actor === "string" &&
+    TANK_ACTOR_SET.has(event.actor) &&
     typeof event.source === "string" &&
+    TANK_EVENT_SOURCE_SET.has(event.source) &&
     typeof event.created_at === "string" &&
-    typeof event.visibility === "string"
+    typeof event.visibility === "string" &&
+    TANK_VISIBILITY_SET.has(event.visibility)
   );
 }
 
