@@ -5204,8 +5204,13 @@ function HeadlessRun({
       }
       if (!isJsonObject(parsed)) return;
 
-      // Mirror the bookkeeping applyStdoutLine does for usage/active-tool so
-      // the context-window pie and the streaming pill stay accurate.
+      // Bookkeeping for usage/active-tool. Two flavors of SDK events come
+      // through this WS: claude's `{type:"assistant"|"user"|"result"}` and
+      // codex's `{type:"item.started"|"item.completed"|"turn.completed"}`.
+      // The chat pane renders both shapes via applyProviderEvent → the
+      // right applyXxxEvent for session.mode; the bookkeeping here also
+      // forks on the shape so the streaming pill + context pie work
+      // regardless of which runtime is streaming.
       const t = parsed.type;
       if (t === "assistant") {
         const msg = parsed.message;
@@ -5231,14 +5236,42 @@ function HeadlessRun({
         const total = totalContextTokens(u);
         if (total > 0) setTokensUsed(total);
         setActiveTool(null);
+      } else if (t === "item.started" || t === "item.updated") {
+        // Codex flag: a tool-like item (command_execution / file_change /
+        // mcp_tool_call / web_search) is in flight. Show its kind on the
+        // streaming pill the same way Claude's tool_use blocks do.
+        const item = parsed.item;
+        if (isJsonObject(item)) {
+          const itemType = typeof item.type === "string" ? item.type : "";
+          const toolish = new Set([
+            "command_execution",
+            "file_change",
+            "mcp_tool_call",
+            "web_search",
+          ]);
+          if (toolish.has(itemType)) {
+            setActiveTool(itemType, typeof item.id === "string" ? item.id : null);
+          }
+        }
+      } else if (t === "turn.completed") {
+        // Codex's per-turn closing event. Usage rides on the event itself
+        // (not nested under `message` like claude does).
+        const u = parsed.usage as ClaudeUsage | undefined;
+        const total = totalContextTokens(u);
+        if (total > 0) setTokensUsed(total);
+        setActiveTool(null);
       }
 
       setEntries((prev) => applyProviderEvent(prev, session.mode, parsed));
 
-      // Terminal events. A `result` marks the turn done; the SPA closes the
-      // WS — the next user submit opens a fresh one. The runner stays alive
-      // for the pod's lifetime; the WS is per-turn for the SPA's convenience.
-      if (t === "result") {
+      // Terminal events. Each runtime closes the WS so a fresh open per
+      // turn works. The runners themselves stay alive for the pod's
+      // lifetime; only the SPA's WS lifecycle is per-turn.
+      //   claude: `result` (analog of codex's turn.completed)
+      //   codex:  `turn.completed` (success) / `turn.failed` (error)
+      const isTerminal =
+        t === "result" || t === "turn.completed" || t === "turn.failed";
+      if (isTerminal) {
         currentRunRef.current = null;
         const durationMs = Date.now() - run.turnStart;
         setEntries((prev) => {

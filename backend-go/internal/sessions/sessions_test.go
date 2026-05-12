@@ -161,6 +161,20 @@ func TestRuntimeFromPodDetectsAgentRunner(t *testing.T) {
 	}
 }
 
+func TestRuntimeFromPodDetectsCodexRunner(t *testing.T) {
+	// codex_gui pods get codex-runner instead of agent-runner. The SPA
+	// treats either as "sdk" runtime — same data source, different
+	// SDK underneath. A regression here would route the wrong path.
+	withCodexRunner := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
+	withCodexRunner.Spec.Containers = append(
+		withCodexRunner.Spec.Containers,
+		corev1.Container{Name: "codex-runner"},
+	)
+	if got := runtimeFromPod(withCodexRunner); got != "sdk" {
+		t.Fatalf("runtime with codex-runner = %q, want sdk", got)
+	}
+}
+
 func TestInfoFromPodSurfacesRuntime(t *testing.T) {
 	pod := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
 	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "agent-runner"})

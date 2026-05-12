@@ -100,6 +100,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"tank-bootstrap.sh", "/opt/tank/bootstrap.sh"},
 	{"headless-run.sh", "/opt/tank/headless-run.sh"},
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
+	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
 }
 
 // noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
@@ -294,16 +295,16 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
 	}
 
-	// Phase B: shared /workspace across the claude container (sandbox-agent +
-	// the in-browser terminal pane) and the agent-runner container (drives
-	// the SDK). Without this, the agent's writes wouldn't be visible in the
-	// terminal pane and vice versa. emptyDir lives for the pod's lifetime,
-	// matching today's "pod restart loses workspace state" semantics.
-	// claude_gui is the only mode where the agent-runner exists today; the
-	// volume is harmless for the others but we keep it gated to avoid pod
-	// spec churn on legacy modes.
+	// Shared /workspace across the user-facing container and the
+	// SDK runner sidecar. Without this, the agent's writes wouldn't be
+	// visible in the in-browser terminal and vice versa. emptyDir lives
+	// for the pod's lifetime, matching today's "pod restart loses
+	// workspace state" semantics. claude_gui uses agent-runner,
+	// codex_gui uses codex-runner; both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
-	if wantAgentRunner {
+	wantCodexRunner := mode == CodexGUIMode
+	wantSDKRunner := wantAgentRunner || wantCodexRunner
+	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
 			"emptyDir": map[string]any{},
@@ -462,6 +463,65 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			runnerContainer["envFrom"] = envFrom
 		}
 		containers = append(containers, runnerContainer)
+	}
+
+	// Codex-runner sidecar — codex_gui only. Sibling of agent-runner:
+	// same workspace mount, same Cosmos endpoint, same WS port (only
+	// one runner per pod, never both). Different SDK underneath, plus
+	// the codex-credentials secret mount so the SDK-spawned codex CLI
+	// can read auth.json.
+	if wantCodexRunner {
+		runnerVolumeMounts := append([]any{}, configMounts...)
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+		if opts.CodexCredsSecret != "" {
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "codex-creds",
+				"mountPath": "/etc/codex-creds",
+				"readOnly":  true,
+			})
+		}
+		codexRunnerEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.labels['tank-operator/session-id']",
+					},
+				},
+			},
+			map[string]any{
+				"name": "POD_OWNER_EMAIL",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.annotations['tank-operator/owner-email']",
+					},
+				},
+			},
+			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
+			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
+			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
+			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
+		}
+		codexRunnerContainer := map[string]any{
+			"name":            "codex-runner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/codex-runner-launch.sh"},
+			"ports": []any{map[string]any{
+				"name":          "agent-ws",
+				"containerPort": opts.AgentRunnerWSPort,
+			}},
+			"env":          codexRunnerEnv,
+			"volumeMounts": runnerVolumeMounts,
+		}
+		if len(envFrom) > 0 {
+			codexRunnerContainer["envFrom"] = envFrom
+		}
+		containers = append(containers, codexRunnerContainer)
 	}
 
 	spec := map[string]any{
