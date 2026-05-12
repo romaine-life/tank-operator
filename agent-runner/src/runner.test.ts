@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { dispatch } from "./runner.js";
+import { isCanonical } from "./cosmos.js";
 
 type Order = string[];
 function makeSink(order: Order, opts: { throws?: Error } = {}) {
@@ -56,6 +57,35 @@ test("dispatch stamps same tank ordering metadata to cosmos and ws", async () =>
   assert.equal(cosmosMessage.tank_event_seq, wsMessage.tank_event_seq);
   assert.equal(cosmosMessage.tank_order_key, wsMessage.tank_order_key);
   assert.equal(cosmosMessage.written_at, wsMessage.written_at);
+});
+
+test("tank.user_message is canonical so Claude replay preserves user bubbles", () => {
+  assert.equal(
+    isCanonical({ type: "tank.user_message", message: "hello" }),
+    true,
+  );
+});
+
+test("dispatch assigns a shared uuid to Tank-owned user messages", async () => {
+  let cosmosMessage: any;
+  let wsMessage: any;
+  const ok = await dispatch(
+    {
+      async upsert(message) {
+        cosmosMessage = message;
+      },
+    },
+    {
+      broadcastEvent(message) {
+        wsMessage = message;
+      },
+    },
+    { type: "tank.user_message", message: "hello" },
+  );
+  assert.equal(ok, true);
+  assert.equal(typeof cosmosMessage.uuid, "string");
+  assert.equal(cosmosMessage.uuid, wsMessage.uuid);
+  assert.equal(cosmosMessage.tank_order_key, wsMessage.tank_order_key);
 });
 
 test("canonical: cosmos failure suppresses ws broadcast", async () => {

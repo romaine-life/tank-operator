@@ -15,7 +15,7 @@
 import { WebSocketServer, type WebSocket } from "ws";
 
 export type ClientFrame =
-  | { type: "user"; message: { role: "user"; content: unknown } }
+  | { type: "user"; message: { role: "user"; content: unknown }; client_nonce?: string }
   | { type: "interrupt" }
   | { type: "ping" };
 
