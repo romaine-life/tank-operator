@@ -1,0 +1,183 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+)
+
+func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
+	summary := summarizeSessionActivity(
+		sessionActivitySummary{SessionID: "63", Status: "ready"},
+		[]map[string]any{
+			activityEvent("u1", "user_message.created", "001", "user", nil),
+			activityEvent("t1", "turn.started", "002", "runner", map[string]any{"turn_id": "turn-1"}),
+			activityEvent("m1", "item.completed", "003", "assistant", map[string]any{
+				"turn_id": "turn-1",
+				"item_id": "msg-1",
+			}),
+			activityEvent("a1", "tool.approval_requested", "004", "tool", map[string]any{
+				"turn_id": "turn-1",
+				"item_id": "ask-1",
+			}),
+		},
+	)
+
+	if summary.Status != "needs_input" || !summary.NeedsInput {
+		t.Fatalf("status/needs = %q/%v, want needs_input/true", summary.Status, summary.NeedsInput)
+	}
+	if summary.ActiveTurnID == nil || *summary.ActiveTurnID != "turn-1" {
+		t.Fatalf("active turn = %#v, want turn-1", summary.ActiveTurnID)
+	}
+	if summary.UnreadCount != 2 {
+		t.Fatalf("unread = %d, want 2", summary.UnreadCount)
+	}
+	if summary.LastOrderKey == nil || *summary.LastOrderKey != "004" {
+		t.Fatalf("last order = %#v, want 004", summary.LastOrderKey)
+	}
+}
+
+func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
+	summary := summarizeSessionActivity(
+		sessionActivitySummary{SessionID: "63", Status: "ready"},
+		[]map[string]any{
+			activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
+			activityEvent("r1", "read_state.updated", "002", "runner", map[string]any{
+				"payload": map[string]any{"last_read_order_key": "001"},
+			}),
+			activityEvent("m2", "item.completed", "003", "assistant", map[string]any{"item_id": "msg-2"}),
+			activityEvent("done", "turn.completed", "004", "runner", map[string]any{"turn_id": "turn-1"}),
+		},
+	)
+
+	if summary.UnreadCount != 1 {
+		t.Fatalf("unread = %d, want 1", summary.UnreadCount)
+	}
+	if summary.Status != "ready" || summary.Failed || summary.NeedsInput {
+		t.Fatalf("state = %#v, want ready/non-attention", summary)
+	}
+}
+
+func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
+	client := fake.NewSimpleClientset(activitySessionPod("63", "user@example.com"))
+	app := &appServer{
+		verifier: auth.NewVerifier(testJWT(t), "user@example.com"),
+		mgr: sessions.NewManager(
+			client,
+			nil,
+			compat.SessionsNamespace,
+			nil,
+			sessions.NewEventBus(),
+			sessions.ManagerOptions{},
+		),
+		sessionEvents: activityEventStore{events: map[string][]map[string]any{
+			"63": {
+				activityEvent("started", "turn.started", "001", "runner", map[string]any{"turn_id": "turn-1"}),
+			},
+		}},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/activity", nil)
+	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	response := httptest.NewRecorder()
+
+	app.handleSessionActivity(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body sessionActivityResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Sessions) != 1 {
+		t.Fatalf("sessions = %#v, want one", body.Sessions)
+	}
+	got := body.Sessions[0]
+	if got.SessionID != "63" || got.Status != "streaming" {
+		t.Fatalf("summary = %#v, want session 63 streaming", got)
+	}
+	if got.ActiveTurnID == nil || *got.ActiveTurnID != "turn-1" {
+		t.Fatalf("active turn = %#v, want turn-1", got.ActiveTurnID)
+	}
+}
+
+type activityEventStore struct {
+	events map[string][]map[string]any
+}
+
+func (s activityEventStore) ListBySession(_ context.Context, sessionID string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
+	if cursor.AfterOrderKey != "" {
+		return store.SessionEventPage{Events: []map[string]any{}}, nil
+	}
+	events := s.events[sessionID]
+	next := ""
+	if len(events) > 0 {
+		next, _ = events[len(events)-1]["order_key"].(string)
+	}
+	return store.SessionEventPage{Events: events, NextOrderKey: next, HasMore: false}, nil
+}
+
+func activityEvent(eventID, eventType, orderKey, actor string, fields map[string]any) map[string]any {
+	event := map[string]any{
+		"event_id":   eventID,
+		"type":       eventType,
+		"order_key":  orderKey,
+		"actor":      actor,
+		"session_id": "63",
+		"created_at": "2026-05-12T00:00:00Z",
+		"visibility": "durable",
+	}
+	for key, value := range fields {
+		event[key] = value
+	}
+	return event
+}
+
+func activitySessionPod(id, owner string) *corev1.Pod {
+	created := metav1.NewTime(time.Date(2026, 5, 12, 0, 0, 1, 0, time.UTC))
+	ready := metav1.NewTime(time.Date(2026, 5, 12, 0, 0, 3, 0, time.UTC))
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "session-" + id,
+			Namespace:         compat.SessionsNamespace,
+			CreationTimestamp: created,
+			Labels: map[string]string{
+				"tank-operator/owner":      compat.OwnerLabel(owner),
+				"tank-operator/session-id": id,
+				"tank-operator/mode":       "codex_headless",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "mcp-auth-proxy"},
+				{Name: "claude", Ports: []corev1.ContainerPort{{Name: "sandbox-agent", ContainerPort: 2468}}},
+				{Name: "codex-runner"},
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{
+				Type:               corev1.PodReady,
+				Status:             corev1.ConditionTrue,
+				LastTransitionTime: ready,
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{
+				{Name: "mcp-auth-proxy", Ready: true},
+				{Name: "claude", Ready: true},
+				{Name: "codex-runner", Ready: true},
+			},
+		},
+	}
+}

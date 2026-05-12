@@ -99,6 +99,13 @@ import {
 } from "./providerEventAdapters";
 import { ProviderIcon } from "./providerIcons";
 import {
+  normalizeSessionActivity,
+  sessionActivityChips,
+  sessionActivityDotStatus,
+  sessionActivityStatusLabel,
+  type SessionActivitySummary,
+} from "./sessionActivity";
+import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
   type TankConversationEvent,
@@ -125,7 +132,6 @@ type DefaultSessionMode = Extract<
 >;
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
-type AgentSessionActivity = "waiting" | "working";
 type TranscriptEntry = SandboxTranscriptEntry & {
   toolKind?: ToolKind;
   toolServer?: string;
@@ -689,22 +695,20 @@ function defaultModeFor(provider: Provider, interaction: SessionInteraction): De
 
 function sessionStatusDotClass(
   session: Session,
-  activity?: AgentSessionActivity,
+  activity?: SessionActivitySummary,
 ): string {
-  if (session.status === "Active" && HEADLESS_MODES.has(session.mode)) {
-    return `status-dot status-agent-${activity === "working" ? "working" : "waiting"}`;
-  }
-  return `status-dot status-${session.status.toLowerCase()}`;
+  return `status-dot status-${sessionActivityDotStatus(
+    session.status,
+    HEADLESS_MODES.has(session.mode),
+    activity,
+  )}`;
 }
 
 function sessionStatusLabel(
   session: Session,
-  activity?: AgentSessionActivity,
+  activity?: SessionActivitySummary,
 ): string {
-  if (session.status === "Active" && HEADLESS_MODES.has(session.mode)) {
-    return activity === "working" ? "Working" : "Waiting";
-  }
-  return session.status;
+  return sessionActivityStatusLabel(session.status, HEADLESS_MODES.has(session.mode), activity);
 }
 
 function errorMessage(error: unknown): string {
@@ -1402,7 +1406,7 @@ function DemoLanding() {
           <ul className="sessions">
             {demoSessions.map((s) => {
               const isActive = s.id === selected?.id;
-              const statusDotClass = sessionStatusDotClass(s, "waiting");
+              const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
               return (
@@ -3522,7 +3526,6 @@ function HeadlessRun({
   runPrefs,
   setRunPref,
   user,
-  onActivityChange,
 }: {
   session: Session;
   visible: boolean;
@@ -3531,7 +3534,6 @@ function HeadlessRun({
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
-  onActivityChange?: (id: string, activity: AgentSessionActivity) => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -3575,12 +3577,6 @@ function HeadlessRun({
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
 
-  useEffect(() => {
-    onActivityChange?.(
-      session.id,
-      running || activeToolName !== null ? "working" : "waiting",
-    );
-  }, [activeToolName, onActivityChange, running, session.id]);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
@@ -6970,7 +6966,7 @@ export function App() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
-  const [sessionActivities, setSessionActivities] = useState<Record<string, AgentSessionActivity>>({});
+  const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -6988,16 +6984,6 @@ export function App() {
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
-  );
-
-  const updateSessionActivity = useCallback(
-    (id: string, activity: AgentSessionActivity) => {
-      setSessionActivities((prev) => {
-        if (prev[id] === activity) return prev;
-        return { ...prev, [id]: activity };
-      });
-    },
-    [],
   );
 
   useEffect(() => {
@@ -7048,8 +7034,28 @@ export function App() {
     }
   }
 
+  async function refreshSessionActivity() {
+    try {
+      const res = await authedFetch("/api/sessions/activity");
+      if (!res.ok) throw new Error(`activity failed: ${res.status}`);
+      const body = (await res.json()) as { sessions?: unknown[] };
+      const next: Record<string, SessionActivitySummary> = {};
+      if (Array.isArray(body.sessions)) {
+        for (const raw of body.sessions) {
+          const activity = normalizeSessionActivity(raw);
+          if (activity) next[activity.session_id] = activity;
+        }
+      }
+      setSessionActivities(next);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   useEffect(() => {
-    if (user) void refresh();
+    if (!user) return;
+    void refresh();
+    void refreshSessionActivity();
   }, [user]);
 
   useEffect(() => {
@@ -7103,8 +7109,18 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
+    if (!sessions.some((s) => HEADLESS_MODES.has(s.mode))) return;
+    const t = setInterval(refreshSessionActivity, POLL_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, [sessions, user]);
+
+  useEffect(() => {
+    if (!user) return;
     const source = new EventSource("/api/sessions/events", { withCredentials: true });
-    const refreshSessions = () => void refresh();
+    const refreshSessions = () => {
+      void refresh();
+      void refreshSessionActivity();
+    };
     source.addEventListener("sessions-changed", refreshSessions);
     return () => {
       source.removeEventListener("sessions-changed", refreshSessions);
@@ -7115,7 +7131,9 @@ export function App() {
   useEffect(() => {
     if (!user) return;
     const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState !== "visible") return;
+      void refresh();
+      void refreshSessionActivity();
     };
     document.addEventListener("visibilitychange", refreshIfVisible);
     window.addEventListener("focus", refreshIfVisible);
@@ -7153,7 +7171,7 @@ export function App() {
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
-      const next: Record<string, AgentSessionActivity> = {};
+      const next: Record<string, SessionActivitySummary> = {};
       for (const [id, activity] of Object.entries(prev)) {
         if (existing.has(id) && !closingIds.has(id)) {
           next[id] = activity;
@@ -7279,6 +7297,7 @@ export function App() {
         writeSessionInteraction(created.id, defaultInteraction);
       }
       await refresh();
+      await refreshSessionActivity();
       activate(created.id);
       startEditing(created.id, created.name);
     } catch (e) {
@@ -7381,6 +7400,7 @@ export function App() {
       const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`delete failed: ${res.status}`);
       await refresh();
+      await refreshSessionActivity();
     } catch (e) {
       setClosingIds((prev) => {
         const next = new Set(prev);
@@ -7576,6 +7596,7 @@ export function App() {
               const isActive = active === s.id && !isClosing;
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
+              const activityChips = sessionActivityChips(sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               const skillStateClass = sessionSkillStateClass(s);
@@ -7670,6 +7691,16 @@ export function App() {
                   </div>
                   <div className="session-row-bottom">
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
+                    {activityChips.map((chip) => (
+                      <span
+                        key={chip.key}
+                        className={`session-activity-chip is-${chip.tone}`}
+                        title={chip.title}
+                        aria-label={chip.title}
+                      >
+                        {chip.label}
+                      </span>
+                    ))}
                     {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
@@ -7844,7 +7875,6 @@ export function App() {
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
-                      onActivityChange={updateSessionActivity}
                     />
                   </div>
                 ) : (
