@@ -24,6 +24,12 @@ staticOverride:
   writerImage: alpine:3.20
   writerImagePullPolicy: IfNotPresent
 
+hotSwapBackend:
+  enabled: true
+  mountPath: /var/run/tank-operator-hot
+  target: /var/run/tank-operator-hot/tank-operator-go
+  childCommand: /app/tank-operator-go
+
 namespaces:
   orchestrator: tank-operator
   sessions: tank-operator-sessions

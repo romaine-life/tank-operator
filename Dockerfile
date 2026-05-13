@@ -13,12 +13,14 @@ COPY backend-go/go.mod backend-go/go.sum ./
 RUN go mod download
 COPY backend-go/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-operator-go ./cmd/tank-operator
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
 
 FROM alpine:3.20
 RUN adduser -D -u 1000 app
 WORKDIR /app
 COPY --from=frontend /frontend/dist /app/static
 COPY --from=backend-go /out/tank-operator-go /app/tank-operator-go
+COPY --from=backend-go /out/tank-supervisor /app/tank-supervisor
 ENV TANK_OPERATOR_STATIC_DIR=/app/static
 EXPOSE 8000
 USER 1000
