@@ -171,11 +171,39 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
 	}
 	volumes := spec["volumes"].([]any)
-	// codex_gui adds session-config + codex-creds + workspace emptyDir
-	// (shared between the claude container and the codex-runner sidecar).
-	if got, want := len(volumes), 3; got != want {
+	// codex_gui adds session-config + workspace emptyDir (shared between
+	// the claude container and the codex-runner sidecar). Codex auth is
+	// proxy-owned, so the real codex-credentials Secret is not mounted.
+	if got, want := len(volumes), 2; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
+}
+
+func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		CodexAPIProxyIP:         "10.0.0.50",
+		OAuthGatewayCAConfigMap: "claude-oauth-ca",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	assertHostAlias(t, spec, "10.0.0.50", "chatgpt.com")
+	assertNoVolume(t, spec["volumes"].([]any), "codex-creds")
+	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
+
+	containers := spec["containers"].([]any)
+	claudeEnv := containerEnv(findContainer(t, containers, "claude"))
+	if got, want := claudeEnv["CODEX_CA_CERTIFICATE"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
+		t.Fatalf("claude CODEX_CA_CERTIFICATE = %v, want %q", got, want)
+	}
+	codexRunner := findContainer(t, containers, "codex-runner")
+	runnerEnv := containerEnv(codexRunner)
+	if got, want := runnerEnv["CODEX_CA_CERTIFICATE"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
+		t.Fatalf("runner CODEX_CA_CERTIFICATE = %v, want %q", got, want)
+	}
+	assertNoVolumeMount(t, codexRunner, "codex-creds")
+	assertVolumeMount(t, codexRunner, "oauth-gateway-ca")
 }
 
 func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
@@ -391,6 +419,64 @@ func findContainer(t *testing.T, containers []any, name string) map[string]any {
 	}
 	t.Fatalf("container %q not found", name)
 	return nil
+}
+
+func assertHostAlias(t *testing.T, spec map[string]any, ip, hostname string) {
+	t.Helper()
+	for _, item := range spec["hostAliases"].([]any) {
+		alias := item.(map[string]any)
+		if alias["ip"] != ip {
+			continue
+		}
+		for _, host := range alias["hostnames"].([]any) {
+			if host == hostname {
+				return
+			}
+		}
+	}
+	t.Fatalf("hostAlias %s -> %s not found", hostname, ip)
+}
+
+func assertVolume(t *testing.T, volumes []any, name string) {
+	t.Helper()
+	for _, item := range volumes {
+		volume := item.(map[string]any)
+		if volume["name"] == name {
+			return
+		}
+	}
+	t.Fatalf("volume %q not found", name)
+}
+
+func assertNoVolume(t *testing.T, volumes []any, name string) {
+	t.Helper()
+	for _, item := range volumes {
+		volume := item.(map[string]any)
+		if volume["name"] == name {
+			t.Fatalf("volume %q should not be present", name)
+		}
+	}
+}
+
+func assertVolumeMount(t *testing.T, container map[string]any, name string) {
+	t.Helper()
+	for _, item := range container["volumeMounts"].([]any) {
+		mount := item.(map[string]any)
+		if mount["name"] == name {
+			return
+		}
+	}
+	t.Fatalf("volumeMount %q not found", name)
+}
+
+func assertNoVolumeMount(t *testing.T, container map[string]any, name string) {
+	t.Helper()
+	for _, item := range container["volumeMounts"].([]any) {
+		mount := item.(map[string]any)
+		if mount["name"] == name {
+			t.Fatalf("volumeMount %q should not be present", name)
+		}
+	}
 }
 
 func containerEnv(container map[string]any) map[string]any {

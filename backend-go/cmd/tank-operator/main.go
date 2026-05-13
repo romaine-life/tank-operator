@@ -107,8 +107,9 @@ func main() {
 			CosmosSessionEventsContainer: envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
 			CosmosTurnQueueContainer:     envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
 		},
-		OAuthGatewayHost: os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:     os.Getenv("CLAUDE_API_PROXY_HOST"),
+		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
+		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
 	})
 
 	// 9. Init auth signer + verifier (RS256, signing key in KV).

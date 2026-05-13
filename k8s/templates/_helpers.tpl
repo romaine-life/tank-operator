@@ -58,6 +58,10 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ printf "claude-api-proxy.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.apiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.codexApiProxyHost" -}}
+{{- if .Values.testEnv.enabled -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
+{{- end -}}
+
 
 {{- define "tank-operator.githubAppSecret" -}}
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-github-app-creds" .Release.Name }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}

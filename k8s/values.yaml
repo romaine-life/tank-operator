@@ -108,6 +108,12 @@ apiProxy:
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
 
+# Codex API proxy: a second Envoy + ext_proc deployment using the same image
+# and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and owns the
+# real ChatGPT OAuth refresh chain for Codex sessions.
+codexApiProxy:
+  serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
+
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
 # token, observes upstream 401s, calls platform.claude.com with the current
@@ -224,21 +230,16 @@ externalSecret:
     # `<orchestrator-namespace>-claude-code-credentials`, so each test env
     # gets its own refresh-token chain.
     kvKey: ""
-  # OpenAI codex subscription credentials. Unlike claudeCredentials,
-  # this Secret lives in the SESSIONS namespace — codex_subscription
-  # pods mount it directly (no api-proxy in front today). The
-  # ExternalSecret is templated by externalsecret-codex.yaml.
-  #
-  # The orchestrator's harvest path (codex_config save-credentials) is
-  # the only writer; ESO mirrors KV → this Secret. A future rotation-
-  # write-back from the pod side (or a codex proxy that owns rotation
-  # centrally) is deferred — see the codex paths in
-  # backend-go/internal/sessions/dispatch.go for the current shape.
+  # OpenAI Codex subscription credentials. The primary Secret lives in the
+  # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
+  # session launchers write a placeholder chatgptAuthTokens auth.json and
+  # route chatgpt.com through the proxy, which injects/rotates the real
+  # tokens and writes back to KV. A sessions-namespace compatibility mirror
+  # remains only for legacy Pi CLI until that mode gets the same proxy path.
   codexCredentials:
     secretName: codex-credentials
-    # Key inside the K8s Secret. Codex launchers read
-    # /etc/codex-creds/auth.json; Secret-volume keys mount as filenames, so
-    # this name has to be `auth.json`.
+    # Key inside the K8s Secret. The proxy mounts this as
+    # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
   # Auth secrets for the orchestrator's MSAL → backend JWT flow. ENTRA_CLIENT_ID

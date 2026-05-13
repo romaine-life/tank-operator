@@ -51,8 +51,6 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
-            - name: CODEX_CREDS_SECRET
-              value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -69,6 +67,8 @@ spec:
               value: {{ include "tank-operator.oauthGatewayHost" . | quote }}
             - name: CLAUDE_API_PROXY_HOST
               value: {{ include "tank-operator.apiProxyHost" . | quote }}
+            - name: CODEX_API_PROXY_HOST
+              value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state

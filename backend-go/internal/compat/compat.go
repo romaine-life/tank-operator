@@ -121,11 +121,13 @@ type ManifestOptions struct {
 	ArgoCDTrackingApp     string
 	SandboxAgentPort      int
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP string
-	APIProxyIP     string
+	OAuthGatewayIP  string
+	APIProxyIP      string
+	CodexAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
-	// Secret name for codex credentials.
+	// Secret name for codex credentials. Legacy only; live Codex sessions
+	// use codex-api-proxy and do not mount the real refresh-token Secret.
 	CodexCredsSecret string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
@@ -332,8 +334,34 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
-	// Codex credentials secret mount (codex_cli, codex_gui, pi_cli).
-	if (mode == CodexCLIMode || mode == CodexGUIMode || mode == PiCLIMode) && opts.CodexCredsSecret != "" {
+	// Codex API proxy host alias and CA cert. Codex is a Rust binary, so
+	// NODE_EXTRA_CA_CERTS is not enough; CODEX_CA_CERTIFICATE is the env var
+	// the upstream client uses for reqwest and websocket TLS.
+	if (mode == CodexCLIMode || mode == CodexGUIMode) && opts.CodexAPIProxyIP != "" {
+		hostAliases = append(hostAliases, map[string]any{
+			"ip":        opts.CodexAPIProxyIP,
+			"hostnames": []any{"chatgpt.com"},
+		})
+		if opts.OAuthGatewayCAConfigMap != "" {
+			env = append(env,
+				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
+				map[string]any{"name": "CODEX_CA_CERTIFICATE", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
+			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+			volumes = append(volumes, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
+			})
+		}
+	}
+
+	// Legacy Pi sessions still use Codex credentials directly. Codex CLI/GUI
+	// sessions do not mount this Secret; codex-api-proxy owns refresh.
+	if mode == PiCLIMode && opts.CodexCredsSecret != "" {
 		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
 			"name":      "codex-creds",
 			"mountPath": "/etc/codex-creds",
@@ -456,19 +484,19 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	// Codex-runner sidecar — codex_gui only. Sibling of agent-runner:
 	// same workspace mount, same Cosmos endpoint, same WS port (only
-	// one runner per pod, never both). Different SDK underneath, plus
-	// the codex-credentials secret mount so the SDK-spawned codex CLI
-	// can read auth.json.
+	// one runner per pod, never both). Different SDK underneath. Auth is
+	// a pod-local placeholder auth.json plus codex-api-proxy injection;
+	// the runner never mounts the real codex-credentials Secret.
 	if wantCodexRunner {
 		runnerVolumeMounts := append([]any{}, configMounts...)
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 			"name":      "workspace",
 			"mountPath": "/workspace",
 		})
-		if opts.CodexCredsSecret != "" {
+		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name":      "codex-creds",
-				"mountPath": "/etc/codex-creds",
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
 				"readOnly":  true,
 			})
 		}
@@ -495,6 +523,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
+		}
+		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
+			codexRunnerEnv = append(codexRunnerEnv,
+				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
+				map[string]any{"name": "CODEX_CA_CERTIFICATE", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
 		}
 		codexRunnerContainer := map[string]any{
 			"name":            "codex-runner",
