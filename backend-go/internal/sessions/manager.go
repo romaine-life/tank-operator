@@ -28,10 +28,10 @@ const (
 	defaultReaperInterval = 60 * time.Second
 	podReadyTimeout       = 90 * time.Second
 
-	headlessRunExitMarker   = "__TANK_RUN_EXIT__:"
-	maxHeadlessPromptBytes  = 256 * 1024
-	headlessArgPattern      = `^[A-Za-z0-9._-]{1,64}$`
-	runIDPattern            = `^[A-Za-z0-9._-]{1,80}$`
+	headlessRunExitMarker  = "__TANK_RUN_EXIT__:"
+	maxHeadlessPromptBytes = 256 * 1024
+	headlessArgPattern     = `^[A-Za-z0-9._-]{1,64}$`
+	runIDPattern           = `^[A-Za-z0-9._-]{1,80}$`
 )
 
 var (
@@ -113,8 +113,9 @@ type Manager struct {
 	reaperInterval time.Duration
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP string
-	apiProxyIP     string
+	oauthGatewayIP  string
+	apiProxyIP      string
+	codexAPIProxyIP string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -122,13 +123,14 @@ type Manager struct {
 
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
-	ManifestOpts     compat.ManifestOptions
-	IdleTimeout      time.Duration
-	ReaperInterval   time.Duration
-	OAuthGatewayHost string
-	APIProxyHost     string
-	ActiveRuns       store.ActiveRunStore
-	RunEvents        store.RunEventStore
+	ManifestOpts      compat.ManifestOptions
+	IdleTimeout       time.Duration
+	ReaperInterval    time.Duration
+	OAuthGatewayHost  string
+	APIProxyHost      string
+	CodexAPIProxyHost string
+	ActiveRuns        store.ActiveRunStore
+	RunEvents         store.RunEventStore
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, events *EventBus, opts ManagerOptions) *Manager {
@@ -164,6 +166,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.APIProxyHost != "" {
 		m.apiProxyIP = resolveIP(opts.APIProxyHost)
+	}
+	if opts.CodexAPIProxyHost != "" {
+		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
 	}
 	return m
 }
@@ -285,6 +290,9 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	if m.apiProxyIP == "" {
 		m.apiProxyIP = resolveIP(os.Getenv("CLAUDE_API_PROXY_HOST"))
 	}
+	if m.codexAPIProxyIP == "" {
+		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -300,6 +308,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	opts := m.manifestOpts
 	opts.OAuthGatewayIP = m.oauthGatewayIP
 	opts.APIProxyIP = m.apiProxyIP
+	opts.CodexAPIProxyIP = m.codexAPIProxyIP
 	opts.GlimmungContextJSON = contextJSON
 
 	manifest := compat.PodManifest(sessionID, owner, mode, opts)

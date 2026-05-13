@@ -9,6 +9,7 @@ follow_up="${3:-false}"
 model="${4:-}"
 permission_mode="${5:-}"
 skill_name="${6:-}"
+CODEX_PLACEHOLDER_ID_TOKEN="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InRhbmstb3BlcmF0b3JAbG9jYWwiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X3BsYW5fdHlwZSI6InBybyIsImNoYXRncHRfdXNlcl9pZCI6Im1hbmFnZWQtYnktdGFuay1vcGVyYXRvciIsImNoYXRncHRfYWNjb3VudF9pZCI6Im1hbmFnZWQtYnktdGFuay1vcGVyYXRvciJ9fQ.signature"
 
 if [ -z "$provider" ] || [ -z "$prompt_file" ] || [ ! -f "$prompt_file" ]; then
   echo "usage: headless-run.sh <claude|codex> <prompt-file> [follow_up] [model] [permission_mode] [skill_name]" >&2
@@ -139,12 +140,18 @@ notification_method = "bel"
 ${mcp_blocks}
 EOF
 
-  if [ ! -f /etc/codex-creds/auth.json ]; then
-    echo "no codex credentials found in /etc/codex-creds/auth.json" >&2
-    echo "spawn a 'Codex config' session and save credentials first." >&2
-    exit 78
-  fi
-  cp /etc/codex-creds/auth.json "$HOME/.codex/auth.json"
+  cat > "$HOME/.codex/auth.json" <<EOF
+{
+  "auth_mode": "chatgptAuthTokens",
+  "tokens": {
+    "id_token": "${CODEX_PLACEHOLDER_ID_TOKEN}",
+    "access_token": "managed-by-tank-operator",
+    "refresh_token": "",
+    "account_id": "managed-by-tank-operator"
+  },
+  "last_refresh": "2099-01-01T00:00:00Z"
+}
+EOF
   chmod 600 "$HOME/.codex/auth.json"
 }
 

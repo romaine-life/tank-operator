@@ -54,7 +54,7 @@ session lifecycle goal changes.
 ```
 backend-go/                   Go orchestrator (Cosmos + KV + k8s exec)
 frontend/                     Vite + React UI
-api-proxy/                    Envoy ext_proc (Python): injects Anthropic OAuth, refreshes on 401
+api-proxy/                    Envoy ext_proc (Python): injects provider OAuth, refreshes on 401
 agent-container/              Long-lived pod-side runner (Go) — in progress, see CLAUDE.md
 claude-container/             Claude session image bootstrap + Dockerfile
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret

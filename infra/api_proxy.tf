@@ -1,10 +1,10 @@
 # ============================================================================
 # Anthropic API proxy — Azure side
 # ============================================================================
-# UAMI for the Envoy + ext_proc sidecar that fronts api.anthropic.com.
-# The proxy reads the Anthropic OAuth blob from the orchestrator-namespace
-# Secret (mirrored by ESO) and writes the rotated blob back to KV after
-# every successful refresh.
+# UAMI for the Envoy + ext_proc sidecars that front provider APIs
+# (api.anthropic.com and chatgpt.com). The proxies read OAuth blobs from
+# orchestrator-namespace Secrets (mirrored by ESO) and write rotated blobs
+# back to KV after successful refresh.
 #
 # Separate from `claude-credentials-refresher-identity` (the orchestrator's
 # UAMI) on least-privilege grounds: the api-proxy doesn't need any K8s

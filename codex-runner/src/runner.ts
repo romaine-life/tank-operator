@@ -169,7 +169,8 @@ export class Runner {
     this.ws.onMessage((frame) => this.handleClientFrame(frame));
 
     // Codex SDK spawns the codex CLI subprocess; the CLI reads
-    // ~/.codex/auth.json (mounted from the codex-credentials secret).
+    // ~/.codex/auth.json. The launcher writes placeholder subscription
+    // auth and codex-api-proxy injects/rotates the real token centrally.
     // No CODEX_API_KEY needed — subscription auth path.
     this.codex = new Codex();
     this.codexAdapter = new CodexTankEventAdapter(cfg);
@@ -204,7 +205,10 @@ export class Runner {
         if (
           queueRecord &&
           clientNonce &&
-          (await this.finalizeQueuedRecordIfAlreadyTerminal(queueRecord, clientNonce))
+          (await this.finalizeQueuedRecordIfAlreadyTerminal(
+            queueRecord,
+            clientNonce,
+          ))
         ) {
           continue;
         }
@@ -214,7 +218,9 @@ export class Runner {
             clientNonce,
             turnSeq,
             queueRecord,
-            new Error(`turn queue exceeded ${queueRecord.attempt_count ?? "unknown"} claim attempts`),
+            new Error(
+              `turn queue exceeded ${queueRecord.attempt_count ?? "unknown"} claim attempts`,
+            ),
           );
           continue;
         }
@@ -229,7 +235,7 @@ export class Runner {
             await this.turnQueue.markFailed(
               queueRecord,
               new Error("queued turn was not accepted"),
-          );
+            );
           continue;
         }
         if (queueRecord) {
@@ -469,7 +475,9 @@ export class Runner {
     record: TurnRecord,
     clientNonce: string,
   ): Promise<boolean> {
-    const terminal = await this.sink.findTurnTerminal(turnIDForClientNonce(clientNonce));
+    const terminal = await this.sink.findTurnTerminal(
+      turnIDForClientNonce(clientNonce),
+    );
     if (!terminal) return false;
     if (terminal.type === "turn.completed") {
       await this.turnQueue.markCompleted(record);
@@ -486,7 +494,12 @@ export class Runner {
     queueRecord: TurnRecord,
     err: unknown,
   ): Promise<void> {
-    const turn = await this.recordUserSubmission(text, clientNonce, turnSeq, queueRecord);
+    const turn = await this.recordUserSubmission(
+      text,
+      clientNonce,
+      turnSeq,
+      queueRecord,
+    );
     if (!turn) {
       await this.turnQueue.markFailed(queueRecord, err);
       return;

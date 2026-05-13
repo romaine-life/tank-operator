@@ -1,10 +1,10 @@
-// Runtime config sourced from env vars. Mirrors agent-runner/src/config.ts —
+// Runtime config sourced from env vars. Mirrors agent-runner/src/config.ts:
 // same downward-API + Cosmos plumbing, different SDK underneath.
 //
 // Auth path: codex-sdk wraps the codex CLI subprocess, which reads
-// ~/.codex/auth.json. The chart mounts that file from the codex-credentials
-// Secret. The SDK inherits process.env and the CLI reads auth.json as
-// normal — no CODEX_API_KEY env var required (subscription auth path).
+// ~/.codex/auth.json. The launcher writes a placeholder chatgptAuthTokens
+// file; codex-api-proxy injects the real ChatGPT bearer and owns token
+// rotation centrally. No CODEX_API_KEY env var is required.
 
 export interface Config {
   sessionId: string;
@@ -38,10 +38,13 @@ export function loadConfig(): Config {
       process.env.COSMOS_SESSION_EVENTS_CONTAINER?.trim() || "session-events",
     turnQueueContainer:
       process.env.COSMOS_TURN_QUEUE_CONTAINER?.trim() || "turn-queue",
-    turnQueuePollMs: parseInt(process.env.TURN_QUEUE_POLL_MS?.trim() || "1000", 10),
+    turnQueuePollMs: parseInt(
+      process.env.TURN_QUEUE_POLL_MS?.trim() || "1000",
+      10,
+    ),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     // The orchestrator reverse-proxies the SPA's /agent-ws onto this port.
-    // Same port as agent-runner — only one runner per pod, no collision risk.
+    // Same port as agent-runner: only one runner per pod, no collision risk.
     wsPort: parseInt(process.env.AGENT_RUNNER_WS_PORT?.trim() || "8090", 10),
   };
 }
