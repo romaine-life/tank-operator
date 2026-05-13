@@ -26,6 +26,26 @@ type mcpServerEntry struct {
 	Enabled   bool   `json:"enabled"`
 }
 
+type fileEntryResponse struct {
+	Name      string  `json:"name"`
+	Type      string  `json:"type"`
+	Size      int64   `json:"size"`
+	GitHubURL *string `json:"github_url"`
+}
+
+type fileListResponse struct {
+	Path    string              `json:"path"`
+	Entries []fileEntryResponse `json:"entries"`
+}
+
+type selectedFileResponse struct {
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated"`
+	Text      string `json:"text"`
+	Binary    bool   `json:"binary"`
+}
+
 // handleListFiles lists the directory contents at the given path query param.
 func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
@@ -50,8 +70,40 @@ func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	script := fmt.Sprintf(
-		`python3 -c "import os,json; p=%s; entries=[{'name':e,'is_dir':os.path.isdir(os.path.join(p,e))} for e in os.listdir(p)]; print(json.dumps(entries))"`,
+		`python3 - %s %s <<'PY'
+import json
+import os
+import stat
+import sys
+
+p = sys.argv[1]
+rel_path = sys.argv[2]
+entries = []
+for name in sorted(os.listdir(p), key=lambda s: s.lower()):
+    full = os.path.join(p, name)
+    try:
+        st = os.lstat(full)
+    except OSError:
+        continue
+    mode = st.st_mode
+    if stat.S_ISLNK(mode):
+        typ = "symlink"
+    elif stat.S_ISDIR(mode):
+        typ = "dir"
+    elif stat.S_ISREG(mode):
+        typ = "file"
+    else:
+        typ = "other"
+    entries.append({
+        "name": name,
+        "type": typ,
+        "size": 0 if typ == "dir" else st.st_size,
+        "github_url": None,
+    })
+print(json.dumps({"path": rel_path, "entries": entries}))
+PY`,
 		shellQuote(absPath),
+		shellQuote(workspaceRelPath(absPath)),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
@@ -59,12 +111,12 @@ func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var entries []map[string]any
-	if err := json.Unmarshal(out, &entries); err != nil {
+	var body fileListResponse
+	if err := json.Unmarshal(out, &body); err != nil {
 		writeError(w, http.StatusInternalServerError, "parse dir listing: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleGetFileContent returns the first 262144 bytes of a file as text.
@@ -91,21 +143,50 @@ func (s *appServer) handleGetFileContent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
-		[]string{"head", "-c", fmt.Sprintf("%d", maxFileBytes+1), "--", absPath})
+	script := fmt.Sprintf(
+		`python3 - %s %d %s <<'PY'
+import json
+import os
+import sys
+
+p = sys.argv[1]
+max_bytes = int(sys.argv[2])
+rel_path = sys.argv[3]
+st = os.stat(p)
+with open(p, "rb") as fh:
+    data = fh.read(max_bytes + 1)
+truncated = len(data) > max_bytes
+data = data[:max_bytes]
+try:
+    text = data.decode("utf-8")
+    binary = False
+except UnicodeDecodeError:
+    text = ""
+    binary = True
+print(json.dumps({
+    "path": rel_path,
+    "size": st.st_size,
+    "truncated": truncated,
+    "text": text,
+    "binary": binary,
+}))
+PY`,
+		shellQuote(absPath),
+		maxFileBytes,
+		shellQuote(workspaceRelPath(absPath)),
+	)
+	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	truncated := len(out) > maxFileBytes
-	if truncated {
-		out = out[:maxFileBytes]
+	var body selectedFileResponse
+	if err := json.Unmarshal(out, &body); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse file content: "+err.Error())
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"content":   string(out),
-		"truncated": truncated,
-	})
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleGetFileRaw returns raw file bytes (up to 8 MiB).
@@ -168,7 +249,25 @@ func (s *appServer) handleWalkFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	script := fmt.Sprintf(
-		`python3 -c "import os,json; p=%s; result=[]; [result.extend([{'path':os.path.join(root,f),'is_dir':False} for f in files]+[{'path':os.path.join(root,d),'is_dir':True} for d in dirs]) for root,dirs,files in os.walk(p)]; print(json.dumps(result))"`,
+		`python3 - %s <<'PY'
+import json
+import os
+import sys
+
+p = sys.argv[1]
+root = "/workspace"
+paths = []
+for current, dirs, files in os.walk(p):
+    dirs[:] = sorted(
+        [d for d in dirs if d not in {".git", "node_modules"}],
+        key=lambda s: s.lower(),
+    )
+    for name in sorted(files, key=lambda s: s.lower()):
+        rel = os.path.relpath(os.path.join(current, name), root)
+        if not rel.startswith(".." + os.sep) and rel != "..":
+            paths.append(rel)
+print(json.dumps({"paths": paths}))
+PY`,
 		shellQuote(absPath),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
@@ -177,12 +276,17 @@ func (s *appServer) handleWalkFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var entries []map[string]any
-	if err := json.Unmarshal(out, &entries); err != nil {
+	var body struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
 		writeError(w, http.StatusInternalServerError, "parse walk: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	if body.Paths == nil {
+		body.Paths = []string{}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleUploadFile uploads raw body as a file.
@@ -219,7 +323,12 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"path": destPath})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":     workspaceRelPath(destPath),
+		"abs_path": destPath,
+		"name":     name,
+		"size":     len(data),
+	})
 }
 
 // handleWriteFile writes text content to a file.
@@ -258,7 +367,13 @@ func (s *appServer) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"path": absPath})
+	writeJSON(w, http.StatusOK, selectedFileResponse{
+		Path:      workspaceRelPath(absPath),
+		Size:      int64(len([]byte(body.Text))),
+		Truncated: false,
+		Text:      body.Text,
+		Binary:    false,
+	})
 }
 
 // handleListSkills lists SKILL.md files in the session.
@@ -397,4 +512,10 @@ func (s *appServer) resolveSessionPod(ctx context.Context, email, sessionID stri
 // shellQuote single-quotes a string for use in shell commands.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func workspaceRelPath(absPath string) string {
+	rel := strings.TrimPrefix(absPath, workspaceRoot)
+	rel = strings.TrimPrefix(rel, "/")
+	return rel
 }
