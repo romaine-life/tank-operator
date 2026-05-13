@@ -152,8 +152,8 @@ COPY --from=codex-runner-build /src/codex-runner/dist /opt/codex-runner/dist
 COPY --from=codex-runner-build /src/codex-runner/node_modules /opt/codex-runner/node_modules
 COPY --from=codex-runner-build /src/codex-runner/package.json /opt/codex-runner/package.json
 
-# Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
-# bootstrap script are mounted from the chart-managed tank-session-config
+# Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and
+# launcher scripts are mounted from the chart-managed tank-session-config
 # ConfigMap. Keep the parent directories in the image so the orchestrator can
 # mount individual files with subPath without rebuilding the image for
 # docs/config/script changes.

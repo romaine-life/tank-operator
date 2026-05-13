@@ -13,7 +13,7 @@ changes, run the relevant language/tooling checks available in the pod
 (`pytest`, `npm`, `go test`, `helm template`, etc.). The normal container
 build gate is the repo's PR CI: `.github/workflows/docker-build-check.yml`
 runs a throwaway Docker build with `push: false`. If a change touches
-Dockerfiles, image build inputs, lockfiles, entrypoints, bootstrap scripts,
+Dockerfiles, image build inputs, lockfiles, entrypoints, launcher scripts,
 baked assets, or Helm image wiring and you need image-build feedback before a
 PR is ready, trigger that workflow manually with `git_ref`. Release/deploy
 workflows are the only image-publishing path. If you truly need an image build

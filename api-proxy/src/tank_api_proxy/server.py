@@ -91,7 +91,7 @@ log = logging.getLogger(__name__)
 ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 
-# The placeholder claude-container/tank-bootstrap.sh writes into
+# The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
 # Bearer injection" — anything else (worker_jwt, missing, future
