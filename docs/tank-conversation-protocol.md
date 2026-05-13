@@ -2,6 +2,19 @@
 
 Status: draft ADR for issue #402.
 
+## Durability Boundary
+
+For this document, "session pod" means the Kubernetes pod backing one Tank
+session, including its workspace `emptyDir` and the pod-side Claude/Codex
+runner containers.
+
+Tank's messaging durability target is the live-session case: browser
+disconnects, frontend reloads, orchestrator restarts/rollouts, and
+runner-process restarts while that same session pod is still alive. Session-pod
+deletion or death is a terminal session lifecycle event and is intentionally
+not a messaging durability target. The protocol must not promise session-pod
+resurrection or preservation of in-flight agent work after the pod is gone.
+
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
 producers, Cosmos and the backend are the source of truth, and React renders a
@@ -280,8 +293,8 @@ against `/timeline` instead of resending the prompt.
 Durability scope: queued SDK turns are intended to survive browser disconnects,
 orchestrator restarts/rollouts, and runner-process restarts while the session
 pod itself is still live. Session-pod deletion or death is terminal for the
-session and its `emptyDir` workspace; recovering a dead session pod is not part
-of this protocol.
+session and its `emptyDir` workspace; recovering a dead session pod is an
+explicit non-goal for this protocol.
 
 Activity summary:
 

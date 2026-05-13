@@ -2596,6 +2596,10 @@ function mergeSdkTranscript(
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
+function countTranscriptMessages(entries: TranscriptEntry[]): number {
+  return entries.filter((entry) => entry.kind === "message").length;
+}
+
 function orderedConversationEvents(events: TankConversationEvent[]): TankConversationEvent[] {
   return events
     .map((event, index) => ({ event, index }))
@@ -3793,6 +3797,34 @@ function HeadlessRun({
     }
     syncSdkRenderedEntries();
   }
+  function canClearSdkRealtime(
+    serverEvents: TankConversationEvent[],
+    expectedCursor: string | null,
+  ): boolean {
+    // Cosmos writes happen before live WS frames, but the replay query can
+    // still arrive behind the tab's live cursor. Keep realtime entries until
+    // replay can replace them without reducing the visible message transcript.
+    const serverCursor = serverEvents.reduce<string | null>(
+      (cursor, event) =>
+        advanceTimelineCursor(
+          cursor,
+          eventTimelineCursor(event as unknown as JsonObject),
+        ),
+      null,
+    );
+    if (expectedCursor && (!serverCursor || serverCursor < expectedCursor)) {
+      return false;
+    }
+    const serverProjection = projectConversationState(
+      reduceConversationEvents(orderedConversationEvents(serverEvents)),
+    );
+    const serverEntries = conversationEntriesToTranscript(serverProjection.entries);
+    const currentEntries = mergeSdkTranscript(
+      sdkServerEntriesRef.current,
+      sdkRealtimeEntriesRef.current,
+    );
+    return countTranscriptMessages(serverEntries) >= countTranscriptMessages(currentEntries);
+  }
   function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
@@ -4136,6 +4168,7 @@ function HeadlessRun({
     clientNonce?: string,
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
+    const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
     const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       let afterOrderKey = "";
@@ -4187,7 +4220,10 @@ function HeadlessRun({
         ? sdkHistoryTerminalForRun(events, clientNonce)
         : undefined;
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
-      replaceSdkServerEvents(canonicalEvents, clearRealtime);
+      replaceSdkServerEvents(
+        canonicalEvents,
+        clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
+      );
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);

@@ -1,0 +1,5 @@
+{
+  "name": "@tank/runner-shared",
+  "private": true,
+  "type": "module"
+}

@@ -85,7 +85,10 @@ export class CodexTankEventAdapter {
           : itemFailed
             ? "item.failed"
             : "item.completed";
-    const payload = this.codexItemPayload(itemID, itemRecord, { delta: event.type === "item.updated" });
+    const payload = this.codexItemPayload(itemID, itemRecord, {
+      delta: event.type === "item.updated",
+      fallbackText: event.type === "item.completed" ? this.itemTextByID.get(itemID) : undefined,
+    });
     if (event.type === "item.started") this.rememberItemText(itemID, codexItemText(itemRecord));
     if (event.type === "item.completed") this.itemTextByID.delete(itemID);
     return [
@@ -106,9 +109,9 @@ export class CodexTankEventAdapter {
   private codexItemPayload(
     itemID: string,
     item: Record<string, unknown>,
-    opts: { delta?: boolean } = {},
+    opts: { delta?: boolean; fallbackText?: string } = {},
   ): Record<string, unknown> {
-    const text = codexItemText(item);
+    const text = codexItemText(item) ?? opts.fallbackText;
     return {
       kind: typeof item.type === "string" && item.type ? item.type : "item",
       title:

@@ -89,6 +89,40 @@ test("preserves completed Codex text as durable Tank item text", () => {
   assert.equal(event.payload?.delta, undefined);
 });
 
+test("carries streamed Codex text into durable completion when final item omits text", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  mappedEvent(adapter, {
+    type: "item.updated",
+    item: {
+      id: "item_agent_streamed",
+      type: "agent_message",
+      text: "Partial",
+    },
+  });
+  mappedEvent(adapter, {
+    type: "item.updated",
+    item: {
+      id: "item_agent_streamed",
+      type: "agent_message",
+      text: "Partial response",
+    },
+  });
+
+  const completed = mappedEvent(adapter, {
+    type: "item.completed",
+    item: {
+      id: "item_agent_streamed",
+      type: "agent_message",
+    },
+  });
+
+  assert.equal(completed.type, "item.completed");
+  assert.equal(completed.visibility, "durable");
+  assert.equal(completed.payload?.kind, "agent_message");
+  assert.equal(completed.payload?.text, "Partial response");
+  assert.equal(completed.payload?.delta, undefined);
+});
+
 test("maps Codex tool items to Tank tool items with command payload", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",
