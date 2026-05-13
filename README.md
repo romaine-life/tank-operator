@@ -126,6 +126,37 @@ notifications, tray/menu/global shortcuts, or deeper clipboard integration.
 ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 `romainecr.azurecr.io/tank-operator:<sha>` (and `:latest`) by `.github/workflows/build.yml`.
 
+## Glimmung Test-Slot Hot Swap
+
+Tank validation slots run the orchestrator through `/app/tank-supervisor` when
+`testEnv.enabled=true`. The chart mounts `/var/run/tank-operator-hot` for
+backend artifacts and `/var/run/tank-operator-static-override` for frontend
+assets. Production keeps the normal `/app/tank-operator-go` command and image
+rollout path.
+
+Project metadata for Glimmung:
+
+```json
+{
+  "test_slot_hot_swap": {
+    "enabled": true,
+    "static": {
+      "enabled": true,
+      "source": "frontend/dist",
+      "target": "/var/run/tank-operator-static-override"
+    },
+    "backend": {
+      "enabled": true,
+      "strategy": "supervisor",
+      "build_command": "cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator",
+      "artifact": "/tmp/tank-operator-go",
+      "target": "/var/run/tank-operator-hot/tank-operator-go",
+      "health_path": "/healthz"
+    }
+  }
+}
+```
+
 Auth: the SPA uses MSAL.js to obtain an Entra ID token, POSTs it to
 `/api/auth/microsoft/login`, and the orchestrator mints an RS256 session
 JWT signed by a Key Vault Key (private bytes never leave KV; see

@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -112,22 +114,19 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/run", s.handleInternalRunSession)
 
 	// Static files.
-	staticDir := os.Getenv("TANK_OPERATOR_STATIC_DIR")
-	if staticDir != "" {
-		if _, err := os.Stat(staticDir); err == nil {
-			fs := http.FileServer(http.Dir(staticDir))
-			mux.Handle("GET /assets/", fs)
-			mux.Handle("GET /fonts/", fs)
-			mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/manifest.webmanifest")
-			})
-			mux.HandleFunc("GET /_styleguide", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/index.html")
-			})
-			mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/index.html")
-			})
-		}
+	staticRoots := tankStaticRoots()
+	if staticRoots.enabled() {
+		mux.HandleFunc("GET /assets/", s.serveStaticAsset(staticRoots, "assets"))
+		mux.HandleFunc("GET /fonts/", s.serveStaticAsset(staticRoots, "fonts"))
+		mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "manifest.webmanifest")
+		})
+		mux.HandleFunc("GET /_styleguide", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "index.html")
+		})
+		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "index.html")
+		})
 	}
 }
 
@@ -140,4 +139,84 @@ func (s *appServer) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
 		"entra_authority": "https://login.microsoftonline.com/common",
 	})
+}
+
+type tankStaticRootSet struct {
+	override string
+	base     string
+}
+
+func tankStaticRoots() tankStaticRootSet {
+	return tankStaticRootSet{
+		override: os.Getenv("TANK_OPERATOR_STATIC_OVERRIDE_DIR"),
+		base:     os.Getenv("TANK_OPERATOR_STATIC_DIR"),
+	}
+}
+
+func (r tankStaticRootSet) enabled() bool {
+	for _, root := range []string{r.override, r.base} {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appServer) serveStaticAsset(roots tankStaticRootSet, prefix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/"+prefix+"/")
+		serveTankStaticFile(w, r, roots, prefix, filepath.FromSlash(rel))
+	}
+}
+
+func serveTankStaticFile(w http.ResponseWriter, r *http.Request, roots tankStaticRootSet, parts ...string) {
+	found, ok := tankStaticFile(roots, parts...)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, found)
+}
+
+func tankStaticFile(roots tankStaticRootSet, parts ...string) (string, bool) {
+	for _, root := range []string{roots.override, roots.base} {
+		if root == "" {
+			continue
+		}
+		if found, ok := tankStaticFileInRoot(root, parts...); ok {
+			return found, true
+		}
+	}
+	return "", false
+}
+
+func tankStaticFileInRoot(root string, parts ...string) (string, bool) {
+	for _, part := range parts {
+		if part == "" || filepath.IsAbs(part) {
+			return "", false
+		}
+		for _, segment := range strings.Split(filepath.Clean(part), string(filepath.Separator)) {
+			if segment == ".." {
+				return "", false
+			}
+		}
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	candidate := filepath.Join(append([]string{rootAbs}, parts...)...)
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return "", false
+	}
+	info, err := os.Stat(candidateAbs)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return candidateAbs, true
 }
