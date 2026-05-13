@@ -188,15 +188,14 @@ externalSecret:
   # credentials from KV via per-server
   # ExternalSecrets, NOT from this Secret.
   #
-  # Both auth paths are bundled in every pod; the orchestrator stamps
-  # TANK_SESSION_MODE on each Pod to pick which one the bootstrap uses:
+  # Legacy session env vars. The current GUI runners and headless-run.sh own
+  # mode-specific credential setup; keep these only while old API-key/session
+  # paths still consume the Secret.
   #   - api_key:      ANTHROPIC_API_KEY → console.anthropic.com billing.
   #                   Populate via scripts/setup-anthropic-key.ps1 (or .sh).
   #   - subscription: CLAUDE_CODE_CREDENTIALS_JSON → snapshot of an
-  #                   already-logged-in machine's ~/.claude/.credentials.json,
-  #                   bootstrap writes it back to that path so the TUI treats
-  #                   the pod as a logged-in subscriber. Populate via
-  #                   scripts/setup-claude-credentials.ps1 (or .sh).
+  #                   already-logged-in machine's ~/.claude/.credentials.json.
+  #                   Populate via scripts/setup-claude-credentials.ps1 (or .sh).
   #
   # The block is named `githubApp` and the K8s Secret is `github-app-creds`
   # for legacy reasons — it used to carry the GitHub App private key, until
@@ -237,9 +236,9 @@ externalSecret:
   # backend-go/internal/sessions/dispatch.go for the current shape.
   codexCredentials:
     secretName: codex-credentials
-    # Key inside the K8s Secret. The bootstrap reads
-    # /etc/codex-creds/auth.json — Secret-volume keys mount as filenames,
-    # so this name has to be `auth.json`.
+    # Key inside the K8s Secret. Codex launchers read
+    # /etc/codex-creds/auth.json; Secret-volume keys mount as filenames, so
+    # this name has to be `auth.json`.
     secretKey: auth.json
     kvKey: codex-credentials
   # Auth secrets for the orchestrator's MSAL → backend JWT flow. ENTRA_CLIENT_ID

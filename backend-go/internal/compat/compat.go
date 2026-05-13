@@ -97,7 +97,6 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"default-claude.md", "/workspace/CLAUDE.md"},
 	{"default-claude.md", "/workspace/AGENTS.md"},
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
-	{"tank-bootstrap.sh", "/opt/tank/bootstrap.sh"},
 	{"headless-run.sh", "/opt/tank/headless-run.sh"},
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
@@ -111,16 +110,6 @@ var noClaudeHijackModes = map[string]bool{
 	CodexGUIMode:    true,
 	PiConfigMode:    true,
 }
-
-// codexModes need the codex-credentials secret mount.
-var codexModes = map[string]bool{
-	CodexConfigMode: false, // codex_config harvests; no mount
-	CodexCLIMode:    true,
-	CodexGUIMode:    true,
-}
-
-// piCLIMode also mounts codex creds (for Pi auth translation).
-const piCLIMode = PiCLIMode
 
 type ManifestOptions struct {
 	SessionImage          string
@@ -280,7 +269,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Environment variables for the claude container.
 	env := []any{
 		map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
-		map[string]any{"name": "TANK_SESSION_MODE", "value": mode},
 		map[string]any{"name": "TANK_GLIMMUNG_CONTEXT_JSON", "value": opts.GlimmungContextJSON},
 		map[string]any{"name": "TANK_GLIMMUNG_RUN_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_run_ref")},
 		map[string]any{"name": "TANK_GLIMMUNG_ISSUE_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_issue_ref")},
