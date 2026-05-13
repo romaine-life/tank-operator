@@ -24,7 +24,10 @@ func requireInternalCaller(k8s kubernetes.Interface, allowedSubjects map[string]
 				writeError(w, auth.ErrorStatus(err), err.Error())
 				return
 			}
-			subject, err := auth.ValidateSAToken(r.Context(), k8s, token, []string{"tank-operator"})
+			// The internal API is already narrowed by exact service-account
+			// allowlist. Accept the caller's normal Kubernetes API token so
+			// MCP servers do not need a second projected token just for Tank.
+			subject, err := auth.ValidateSAToken(r.Context(), k8s, token, nil)
 			if err != nil {
 				writeError(w, auth.ErrorStatus(err), err.Error())
 				return
