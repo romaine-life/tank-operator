@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
@@ -16,6 +17,14 @@ const (
 	maxFileBytes = 262144  // 256 KiB
 	maxRawBytes  = 8388608 // 8 MiB
 )
+
+type mcpServerEntry struct {
+	Name      string `json:"name"`
+	Transport string `json:"transport"`
+	Target    string `json:"target"`
+	Source    string `json:"source"`
+	Enabled   bool   `json:"enabled"`
+}
 
 // handleListFiles lists the directory contents at the given path query param.
 func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -301,16 +310,69 @@ func (s *appServer) handleListMCPServers(w http.ResponseWriter, r *http.Request)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
 		[]string{"bash", "-lc", "cat /workspace/.mcp.json 2>/dev/null || echo '{}'"})
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{})
+		writeJSON(w, http.StatusOK, map[string]any{"entries": []mcpServerEntry{}})
 		return
 	}
 
 	var mcpConfig map[string]any
 	if err := json.Unmarshal(out, &mcpConfig); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{})
+		writeJSON(w, http.StatusOK, map[string]any{"entries": []mcpServerEntry{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, mcpConfig)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": parseMCPServerEntries(mcpConfig, "/workspace/.mcp.json"),
+	})
+}
+
+func parseMCPServerEntries(config map[string]any, source string) []mcpServerEntry {
+	rawServers, ok := config["mcpServers"].(map[string]any)
+	if !ok {
+		return []mcpServerEntry{}
+	}
+
+	entries := make([]mcpServerEntry, 0, len(rawServers))
+	for name, raw := range rawServers {
+		value, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		transport := stringValue(value["type"])
+		command := stringValue(value["command"])
+		if transport == "" {
+			if command != "" {
+				transport = "stdio"
+			} else {
+				transport = "unknown"
+			}
+		}
+		entries = append(entries, mcpServerEntry{
+			Name:      name,
+			Transport: transport,
+			Target:    firstNonEmpty(stringValue(value["url"]), command),
+			Source:    source,
+			Enabled:   true,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
+	})
+	return entries
+}
+
+func stringValue(value any) string {
+	if s, ok := value.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
