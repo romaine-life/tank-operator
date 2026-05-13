@@ -8,6 +8,7 @@ COPY agent-runner/package.json agent-runner/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY agent-runner/tsconfig.json ./
 COPY agent-runner/src ./src
+COPY runner-shared /src/runner-shared
 RUN npx tsc
 # Prune dev deps for a smaller runtime payload.
 RUN npm prune --omit=dev
@@ -22,6 +23,7 @@ COPY codex-runner/package.json codex-runner/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY codex-runner/tsconfig.json ./
 COPY codex-runner/src ./src
+COPY runner-shared /src/runner-shared
 RUN npx tsc
 RUN npm prune --omit=dev
 
@@ -138,6 +140,8 @@ RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
 COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
 COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
+
+COPY runner-shared /opt/runner-shared
 
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
 # Baked into all three session images so the build is symmetric; only

@@ -30,6 +30,25 @@ ACR, the Key Vault) also lives in
 [infra-bootstrap](https://github.com/nelsong6/infra-bootstrap) and is
 referenced here as data sources.
 
+## Messaging durability scope
+
+For messaging docs, "session pod" means the Kubernetes pod backing one user
+session, including its workspace `emptyDir` and the pod-side Claude/Codex
+runner containers.
+
+SDK GUI turns are durable across browser disconnects, frontend reloads,
+orchestrator rollouts, and runner-process restarts inside the same still-live
+session pod. The browser submits turns through
+`POST /api/sessions/{session_id}/turns`, runners claim `turn-queue` rows, and
+the UI replays durable conversation events from `/timeline` before attaching to
+live `/agent-ws` frames.
+
+Session-pod deletion or death is intentionally outside the messaging
+durability goal. A dead session pod means the session and its `emptyDir`
+workspace are gone; Tank does not try to resurrect that pod or preserve
+in-flight agent work after it. Do not treat that as a product gap unless the
+session lifecycle goal changes.
+
 ## Repo layout
 
 ```
