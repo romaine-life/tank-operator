@@ -25,12 +25,12 @@ func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
 			activityEvent("u1", "user_message.created", "001", "user", nil),
 			activityEvent("t1", "turn.started", "002", "runner", map[string]any{"turn_id": "turn-1"}),
 			activityEvent("m1", "item.completed", "003", "assistant", map[string]any{
-				"turn_id": "turn-1",
-				"item_id": "msg-1",
+				"turn_id":     "turn-1",
+				"timeline_id": "msg-1",
 			}),
 			activityEvent("a1", "tool.approval_requested", "004", "tool", map[string]any{
-				"turn_id": "turn-1",
-				"item_id": "ask-1",
+				"turn_id":     "turn-1",
+				"timeline_id": "ask-1",
 			}),
 		},
 		"",
@@ -54,11 +54,11 @@ func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
 	summary := summarizeSessionActivity(
 		sessionActivitySummary{SessionID: "63", Status: "ready"},
 		[]map[string]any{
-			activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
+			activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
 			activityEvent("r1", "read_state.updated", "002", "runner", map[string]any{
 				"payload": map[string]any{"last_read_order_key": "001"},
 			}),
-			activityEvent("m2", "item.completed", "003", "assistant", map[string]any{"item_id": "msg-2"}),
+			activityEvent("m2", "item.completed", "003", "assistant", map[string]any{"timeline_id": "msg-2"}),
 			activityEvent("done", "turn.completed", "004", "runner", map[string]any{"turn_id": "turn-1"}),
 		},
 		"",
@@ -74,9 +74,9 @@ func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
 
 func TestSummarizeSessionActivityAppliesPersistedReadState(t *testing.T) {
 	events := []map[string]any{
-		activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
-		activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"item_id": "msg-2"}),
-		activityEvent("m3", "item.completed", "003", "assistant", map[string]any{"item_id": "msg-3"}),
+		activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
+		activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"timeline_id": "msg-2"}),
+		activityEvent("m3", "item.completed", "003", "assistant", map[string]any{"timeline_id": "msg-3"}),
 	}
 	summary := summarizeSessionActivity(
 		sessionActivitySummary{SessionID: "63", Status: "ready"},
@@ -150,8 +150,8 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 		),
 		sessionEvents: activityEventStore{events: map[string][]map[string]any{
 			"63": {
-				activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"item_id": "msg-1"}),
-				activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"item_id": "msg-2"}),
+				activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
+				activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"timeline_id": "msg-2"}),
 			},
 		}},
 		readStates: readStates,
@@ -204,7 +204,7 @@ func activityEvent(eventID, eventType, orderKey, actor string, fields map[string
 	switch eventType {
 	case "user_message.created":
 		event["turn_id"] = "turn-1"
-		event["item_id"] = "turn-1:user"
+		event["timeline_id"] = "turn-1:user"
 		event["client_nonce"] = "client-1"
 		event["payload"] = map[string]any{"text": "hello", "display": map[string]any{"kind": "plain"}}
 	case "turn.submitted":
@@ -215,11 +215,11 @@ func activityEvent(eventID, eventType, orderKey, actor string, fields map[string
 		event["turn_id"] = "turn-1"
 	case "item.started", "item.delta", "item.completed", "item.failed":
 		event["turn_id"] = "turn-1"
-		event["item_id"] = "item-1"
+		event["timeline_id"] = "item-1"
 		event["payload"] = map[string]any{"kind": "message"}
 	case "tool.approval_requested", "tool.approval_resolved":
 		event["turn_id"] = "turn-1"
-		event["item_id"] = "approval-1"
+		event["timeline_id"] = "approval-1"
 		event["payload"] = map[string]any{"kind": "needs_input"}
 	case "read_state.updated":
 		event["payload"] = map[string]any{"last_read_order_key": orderKey}

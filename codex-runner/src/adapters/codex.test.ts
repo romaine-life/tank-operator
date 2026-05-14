@@ -83,7 +83,8 @@ test("preserves completed Codex text as durable Tank item text", () => {
   assert.equal(event.type, "item.completed");
   assert.equal(event.source, "codex");
   assert.equal(event.actor, "assistant");
-  assert.equal(event.item_id, "item_agent_1");
+  assert.equal(event.timeline_id, "turn-run-123:item:item_agent_1");
+  assert.equal(event.provider_item_id, "item_agent_1");
   assert.equal(event.visibility, "durable");
   assert.equal(event.payload?.kind, "agent_message");
   assert.equal(event.payload?.text, "All tests passed.");
@@ -139,7 +140,8 @@ test("maps Codex tool items to Tank tool items with command payload", () => {
 
   assert.equal(event.type, "item.completed");
   assert.equal(event.actor, "tool");
-  assert.equal(event.item_id, "item_command_1");
+  assert.equal(event.timeline_id, "turn-run-123:item:item_command_1");
+  assert.equal(event.provider_item_id, "item_command_1");
   assert.equal(event.payload?.kind, "command_execution");
   assert.equal(event.payload?.title, "npm test");
   assert.equal(event.payload?.text, "ok");

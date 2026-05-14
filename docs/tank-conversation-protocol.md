@@ -110,7 +110,8 @@ Optional fields:
 
 - `conversation_id`: alias for future non-session conversations. Defaults to
   `session_id` for current Tank sessions.
-- `item_id`: required when the event concerns a durable unit inside a turn.
+- `timeline_id`: Tank-owned durable identity for a rendered timeline unit.
+- `provider_item_id`: raw provider-scoped item id, preserved only as metadata.
 - `parent_id`: causal linkage, such as an item under a turn or approval under a
   tool call.
 - `client_nonce`: idempotency key for user submissions.
@@ -122,8 +123,8 @@ Optional fields:
 Per-event requirements are enforced by
 `schemas/tank-conversation-event.schema.json` and runtime validators. The
 general envelope is not enough for validity. For example,
-`user_message.created` requires `turn_id`, `item_id`, `client_nonce`, and
-`payload.text`; `item.*` requires `turn_id`, `item_id`, and `payload.kind`.
+`user_message.created` requires `turn_id`, `timeline_id`, `client_nonce`, and
+`payload.text`; `item.*` requires `turn_id`, `timeline_id`, and `payload.kind`.
 Malformed Tank-owned events must be rejected before persistence or websocket
 fanout rather than rendered with fallback ids or empty text.
 
@@ -223,7 +224,7 @@ Claude SDK adapter:
 | First SDK output for a turn | `turn.started` | Current Claude SDK stream does not always expose a clean turn marker; adapter may synthesize this after the durable user message. |
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |
-| `user` tool_result block | `item.completed` or `item.failed` | Completes the matching tool item by `item_id`. |
+| `user` tool_result block | `item.completed` or `item.failed` | Completes the matching tool item by `timeline_id`; provider ids remain metadata. |
 | `result` success | `turn.completed` | Include usage when present. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |

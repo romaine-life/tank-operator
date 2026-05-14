@@ -56,7 +56,8 @@ export interface TankConversationEvent<
   conversation_id?: string;
   session_id: string;
   turn_id?: string;
-  item_id?: string;
+  timeline_id?: string;
+  provider_item_id?: string;
   parent_id?: string;
   client_nonce?: string;
   actor: TankActor;
@@ -98,7 +99,7 @@ function isValidEventByType(event: Record<string, unknown>): boolean {
     case "user_message.created":
       return event.actor === "user" &&
         event.source === "tank" &&
-        hasStrings(event, ["turn_id", "item_id", "client_nonce"]) &&
+        hasStrings(event, ["turn_id", "timeline_id", "client_nonce"]) &&
         isUserMessagePayload(event.payload);
     case "turn.submitted":
       return event.actor === "runner" &&
@@ -114,11 +115,11 @@ function isValidEventByType(event: Record<string, unknown>): boolean {
     case "item.delta":
     case "item.completed":
     case "item.failed":
-      return hasStrings(event, ["turn_id", "item_id"]) && isStringPayload(event.payload, "kind");
+      return hasStrings(event, ["turn_id", "timeline_id"]) && isStringPayload(event.payload, "kind");
     case "tool.approval_requested":
     case "tool.approval_resolved":
       return event.actor === "tool" &&
-        hasStrings(event, ["turn_id", "item_id"]) &&
+        hasStrings(event, ["turn_id", "timeline_id"]) &&
         isStringPayload(event.payload, "kind");
     case "session.activity_updated":
       return isStringPayload(event.payload, "status");

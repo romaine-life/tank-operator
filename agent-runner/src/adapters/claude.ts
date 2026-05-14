@@ -41,7 +41,7 @@ export function canonicalEventsForClaudeMessage(
   cfg: Config,
   turn: ClaudeTurnContext | null,
   message: RunnerEvent,
-  needsInputItemIDs: Set<string>,
+  needsInputProviderItemIDs: Set<string>,
 ): TankConversationEvent[] {
   if (!turn) return [];
   const providerID = providerEventID(message);
@@ -59,7 +59,7 @@ export function canonicalEventsForClaudeMessage(
             turnID: turn.turnID,
             source: "claude",
             type: "item.completed",
-            itemID: claudeBlockItemID({
+            providerItemID: claudeBlockProviderItemID({
               turnID: turn.turnID,
               actorPart: "assistant",
               providerID,
@@ -73,10 +73,10 @@ export function canonicalEventsForClaudeMessage(
           }),
         );
       } else if (item.type === "tool_use") {
-        const itemID =
+        const providerItemID =
           typeof item.id === "string" && item.id
             ? item.id
-            : claudeBlockItemID({
+            : claudeBlockProviderItemID({
                 turnID: turn.turnID,
                 actorPart: "tool",
                 providerID,
@@ -91,7 +91,7 @@ export function canonicalEventsForClaudeMessage(
             turnID: turn.turnID,
             source: "claude",
             type: "item.started",
-            itemID,
+            providerItemID,
             actor: "tool",
             providerEventID: providerID,
             payload: {
@@ -103,14 +103,14 @@ export function canonicalEventsForClaudeMessage(
           }),
         );
         if (name === "AskUserQuestion") {
-          needsInputItemIDs.add(itemID);
+          needsInputProviderItemIDs.add(providerItemID);
           events.push(
             itemEvent({
               sessionID: cfg.sessionId,
               turnID: turn.turnID,
               source: "claude",
               type: "tool.approval_requested",
-              itemID,
+              providerItemID,
               actor: "tool",
               providerEventID: providerID,
               payload: {
@@ -131,10 +131,10 @@ export function canonicalEventsForClaudeMessage(
       if (!block || typeof block !== "object") return [];
       const item = block as Record<string, unknown>;
       if (item.type !== "tool_result") return [];
-      const itemID =
+      const providerItemID =
         typeof item.tool_use_id === "string" && item.tool_use_id
           ? item.tool_use_id
-          : claudeBlockItemID({
+          : claudeBlockProviderItemID({
               turnID: turn.turnID,
               actorPart: "tool",
               providerID,
@@ -148,7 +148,7 @@ export function canonicalEventsForClaudeMessage(
         turnID: turn.turnID,
         source: "claude",
         type: failed ? "item.failed" : "item.completed",
-        itemID,
+        providerItemID,
         actor: "tool",
         providerEventID: providerID,
         payload: {
@@ -157,8 +157,8 @@ export function canonicalEventsForClaudeMessage(
           is_error: failed,
         },
       });
-      if (!needsInputItemIDs.has(itemID)) return [completed];
-      needsInputItemIDs.delete(itemID);
+      if (!needsInputProviderItemIDs.has(providerItemID)) return [completed];
+      needsInputProviderItemIDs.delete(providerItemID);
       return [
         completed,
         itemEvent({
@@ -166,7 +166,7 @@ export function canonicalEventsForClaudeMessage(
           turnID: turn.turnID,
           source: "claude",
           type: "tool.approval_resolved",
-          itemID,
+          providerItemID,
           actor: "tool",
           providerEventID: providerID,
           payload: {
@@ -215,7 +215,7 @@ function claudeMessageContent(message: RunnerEvent): unknown[] {
   return [];
 }
 
-function claudeBlockItemID(args: {
+function claudeBlockProviderItemID(args: {
   turnID: string;
   actorPart: "assistant" | "tool";
   providerID: string | undefined;
@@ -224,7 +224,7 @@ function claudeBlockItemID(args: {
   block: unknown;
 }): string {
   const messagePart = args.providerID ?? `message_${stableBlockDigest(args.block)}`;
-  return `${args.turnID}:${args.actorPart}:${messagePart}:${args.blockType}:${args.index}`;
+  return `${args.actorPart}:${messagePart}:${args.blockType}:${args.index}`;
 }
 
 function stableBlockDigest(block: unknown): string {

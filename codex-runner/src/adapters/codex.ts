@@ -11,8 +11,8 @@ export interface CodexAdapterTurn {
 function codexProviderEventID(event: CodexEvent): string | undefined {
   const item = event.item;
   if (item && typeof item === "object") {
-    const itemID = (item as { id?: unknown }).id;
-    if (typeof itemID === "string" && itemID) return itemID;
+    const providerItemID = (item as { id?: unknown }).id;
+    if (typeof providerItemID === "string" && providerItemID) return providerItemID;
   }
   for (const key of ["turn_id", "thread_id", "id", "uuid"]) {
     const value = event[key];
@@ -73,7 +73,7 @@ export class CodexTankEventAdapter {
     const item = event.item;
     if (!item || typeof item !== "object") return [];
     const itemRecord = item as Record<string, unknown>;
-    const itemID =
+    const providerItemID =
       typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
     const itemFailed = itemRecord.error !== undefined;
     const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
@@ -85,19 +85,19 @@ export class CodexTankEventAdapter {
           : itemFailed
             ? "item.failed"
             : "item.completed";
-    const payload = this.codexItemPayload(itemID, itemRecord, {
+    const payload = this.codexItemPayload(providerItemID, itemRecord, {
       delta: event.type === "item.updated",
-      fallbackText: event.type === "item.completed" ? this.itemTextByID.get(itemID) : undefined,
+      fallbackText: event.type === "item.completed" ? this.itemTextByID.get(providerItemID) : undefined,
     });
-    if (event.type === "item.started") this.rememberItemText(itemID, codexItemText(itemRecord));
-    if (event.type === "item.completed") this.itemTextByID.delete(itemID);
+    if (event.type === "item.started") this.rememberItemText(providerItemID, codexItemText(itemRecord));
+    if (event.type === "item.completed") this.itemTextByID.delete(providerItemID);
     return [
       itemEvent({
         sessionID: this.cfg.sessionId,
         turnID: turn.turnID,
         source: "codex",
         type,
-        itemID,
+        providerItemID,
         actor,
         providerEventID: providerID,
         visibility: event.type === "item.updated" ? "live-only" : "durable",
@@ -107,7 +107,7 @@ export class CodexTankEventAdapter {
   }
 
   private codexItemPayload(
-    itemID: string,
+    providerItemID: string,
     item: Record<string, unknown>,
     opts: { delta?: boolean; fallbackText?: string } = {},
   ): Record<string, unknown> {
@@ -122,7 +122,7 @@ export class CodexTankEventAdapter {
             : typeof item.type === "string"
               ? item.type
               : "item",
-      ...(opts.delta ? { delta: this.deltaForItemText(itemID, text) } : { text }),
+      ...(opts.delta ? { delta: this.deltaForItemText(providerItemID, text) } : { text }),
       command: item.command,
       arguments: item.arguments,
       result: item.result,
@@ -131,14 +131,14 @@ export class CodexTankEventAdapter {
     };
   }
 
-  private rememberItemText(itemID: string, text: string | undefined): void {
-    if (text !== undefined) this.itemTextByID.set(itemID, text);
+  private rememberItemText(providerItemID: string, text: string | undefined): void {
+    if (text !== undefined) this.itemTextByID.set(providerItemID, text);
   }
 
-  private deltaForItemText(itemID: string, text: string | undefined): string | undefined {
+  private deltaForItemText(providerItemID: string, text: string | undefined): string | undefined {
     if (text === undefined) return undefined;
-    const previous = this.itemTextByID.get(itemID) ?? "";
-    this.itemTextByID.set(itemID, text);
+    const previous = this.itemTextByID.get(providerItemID) ?? "";
+    this.itemTextByID.set(providerItemID, text);
     return previous && text.startsWith(previous) ? text.slice(previous.length) : text;
   }
 }

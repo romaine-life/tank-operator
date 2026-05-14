@@ -87,7 +87,7 @@ func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 		"order_key":    "order-1",
 		"session_id":   "63",
 		"turn_id":      "turn-1",
-		"item_id":      "turn-1:user",
+		"timeline_id":  "turn-1:user",
 		"client_nonce": "client-1",
 		"actor":        "user",
 		"source":       "tank",
@@ -113,9 +113,9 @@ func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 			error: "client_nonce",
 		},
 		{
-			name:  "missing item id",
-			edit:  func(event map[string]any) { delete(event, "item_id") },
-			error: "item_id",
+			name:  "missing timeline id",
+			edit:  func(event map[string]any) { delete(event, "timeline_id") },
+			error: "timeline_id",
 		},
 		{
 			name: "missing text",

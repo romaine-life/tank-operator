@@ -70,7 +70,8 @@ type Event struct {
 	ConversationID string           `json:"conversation_id,omitempty"`
 	SessionID      string           `json:"session_id"`
 	TurnID         string           `json:"turn_id,omitempty"`
-	ItemID         string           `json:"item_id,omitempty"`
+	TimelineID     string           `json:"timeline_id,omitempty"`
+	ProviderItemID string           `json:"provider_item_id,omitempty"`
 	ParentID       string           `json:"parent_id,omitempty"`
 	ClientNonce    string           `json:"client_nonce,omitempty"`
 	Actor          Actor            `json:"actor"`
@@ -136,12 +137,12 @@ func ValidateEventMap(event map[string]any) error {
 			return fmt.Errorf("%s must be actor=runner", eventType)
 		}
 	case EventItemStarted, EventItemDelta, EventItemCompleted, EventItemFailed:
-		if err := requireFields(event, "turn_id", "item_id"); err != nil {
+		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
 		}
 		return requirePayloadString(event, "kind")
 	case EventApprovalRequested, EventApprovalResolved:
-		if err := requireFields(event, "turn_id", "item_id"); err != nil {
+		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
 		}
 		if Actor(stringField(event, "actor")) != ActorTool {
@@ -157,7 +158,7 @@ func ValidateEventMap(event map[string]any) error {
 }
 
 func validateUserMessageCreated(event map[string]any) error {
-	if err := requireFields(event, "turn_id", "item_id", "client_nonce"); err != nil {
+	if err := requireFields(event, "turn_id", "timeline_id", "client_nonce"); err != nil {
 		return err
 	}
 	if Actor(stringField(event, "actor")) != ActorUser || Source(stringField(event, "source")) != SourceTank {
