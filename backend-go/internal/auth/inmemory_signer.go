@@ -41,3 +41,7 @@ func (m *InMemoryJWT) PublicKey(_ context.Context, kid string) (*rsa.PublicKey, 
 	}
 	return m.pub, nil
 }
+
+func (m *InMemoryJWT) CurrentJWK(_ context.Context) (JWK, error) {
+	return rsaPublicJWK(m.kid, m.pub), nil
+}

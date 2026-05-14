@@ -50,6 +50,10 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ .Release.Name }}{{- else -}}{{ .Values.session.registryScope }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.internalURL" -}}
+{{ printf "http://tank-operator.%s.svc.cluster.local" (include "tank-operator.orchestratorNamespace" .) }}
+{{- end -}}
+
 {{- define "tank-operator.oauthGatewayHost" -}}
 {{- if .Values.testEnv.enabled -}}{{ printf "claude-oauth-gateway.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.oauthGateway.serviceHost }}{{- end -}}
 {{- end -}}

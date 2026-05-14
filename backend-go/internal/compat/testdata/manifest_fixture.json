@@ -51,7 +51,8 @@
         "azure.workload.identity/use": "true",
         "tank-operator/mode": "codex_gui",
         "tank-operator/owner": "u-db1458e0eb6e9e75",
-        "tank-operator/session-id": "12"
+        "tank-operator/session-id": "12",
+        "tank-operator/session-scope": "default"
       },
       "name": "session-12",
       "namespace": "tank-operator-sessions"

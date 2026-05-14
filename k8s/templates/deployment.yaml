@@ -58,6 +58,8 @@ spec:
               value: {{ include "tank-operator.sessionConfigMap" . | quote }}
             - name: SESSION_REGISTRY_SCOPE
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
+            - name: TANK_OPERATOR_INTERNAL_URL
+              value: {{ include "tank-operator.internalURL" . | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
@@ -94,7 +96,7 @@ spec:
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
             # credential rotation lives in the api-proxy's ext_proc sidecar
-            # (k8s/templates/api-proxy.yaml) — same UAMI, same env.
+            # (k8s/templates/api-proxy.yaml) â€” same UAMI, same env.
             #
             # Token file is mounted by the WI webhook because the pod
             # carries the `azure.workload.identity/use=true` label;
@@ -109,7 +111,7 @@ spec:
             - name: AZURE_AUTHORITY_HOST
               value: https://login.microsoftonline.com/
             # Cosmos DB profile store (#57). Auth is via the same workload
-            # identity as the KV writer above — DefaultAzureCredential picks
+            # identity as the KV writer above â€” DefaultAzureCredential picks
             # up the federated SA-token. Empty COSMOS_ENDPOINT puts the
             # backend's profiles store in degraded "stub" mode (logged
             # warning at startup, in-memory Profile returned for any
@@ -131,22 +133,16 @@ spec:
             # the redirect to complete.
             - name: GITHUB_APP_SLUG
               value: {{ .Values.github.appSlug | quote }}
-            # Cluster operator email (#57 stage 3) — tagged on the
-            # /api/internal/resolve-caller response so mcp-github can
-            # use the host's romaine-life-app installation for
-            # host-owned repos when a non-host caller touches them.
+            # Cluster operator email used when Tank mints GitHub MCP
+            # attestations for the host's sessions.
             - name: HOST_EMAIL
               value: {{ .Values.host.email | quote }}
             # Comma-separated emails that receive explicit super-admin
-            # behavior in MCP servers. Empty falls back to HOST_EMAIL in
-            # the orchestrator for compatibility with single-operator
-            # deployments.
+            # behavior in MCP servers. Empty uses HOST_EMAIL.
             - name: SUPER_ADMIN_EMAILS
               value: {{ .Values.superAdmins.emails | quote }}
             # Comma-separated "namespace/serviceaccount" pairs allowed to call
-            # /api/internal/*. Widened here to include mcp-tank-operator in
-            # addition to mcp-github. Override in per-slot value overlays when
-            # the SA namespace differs.
+            # the general /api/internal/session endpoints.
             - name: INTERNAL_API_ALLOWED_SUBJECTS
               value: {{ .Values.internalApi.allowedSubjects | quote }}
             # Public hostname the orchestrator uses to build session URLs in
@@ -154,7 +150,7 @@ spec:
             - name: TANK_UI_HOST
               value: {{ .Values.internalApi.tankUiHost | quote }}
             # Session-JWT signing key in Key Vault. The orchestrator never
-            # holds the private bytes — it calls KV's Sign operation per mint
+            # holds the private bytes â€” it calls KV's Sign operation per mint
             # via workload identity. See infra/jwt_signing_key.tf.
             - name: JWT_KV_VAULT
               value: {{ .Values.jwt.kvVault | quote }}
@@ -222,7 +218,7 @@ spec:
         - name: claude-credentials
           secret:
             # ESO-managed; the orchestrator's in-process rotation writes
-            # to KV and ESO mirrors KV → here within ~1m. Marked optional
+            # to KV and ESO mirrors KV â†’ here within ~1m. Marked optional
             # so first install doesn't crash-loop the pod before ESO has
             # synced (or before "+ config sub" has seeded credentials).
             secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}

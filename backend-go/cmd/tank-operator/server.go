@@ -27,6 +27,9 @@ type appServer struct {
 	verifier      *auth.Verifier
 	minter        *auth.Minter
 	namespace     string
+	sessionScope  string
+
+	sessionServiceAccount string
 
 	// internalAllowedSubjects maps "namespace/serviceaccount" → email for internal SA auth.
 	internalAllowedSubjects map[string]string
@@ -47,6 +50,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// GitHub install.
 	mux.HandleFunc("GET /api/github/install/url", s.handleGitHubInstallURL)
 	mux.HandleFunc("GET /api/github/install/callback", s.handleGitHubInstallCallback)
+	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
@@ -86,8 +90,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
 
-	// Internal API (SA token auth).
-	mux.HandleFunc("GET /api/internal/resolve-caller", s.handleInternalResolveCaller)
+	// Internal API.
+	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
+	mux.HandleFunc("POST /api/internal/github/attestation", s.handleInternalGitHubAttestation)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)

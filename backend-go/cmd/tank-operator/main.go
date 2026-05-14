@@ -67,6 +67,8 @@ func main() {
 
 	// 9. Init Manager.
 	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
+	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount)
+	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
 
 	// Session image tags come from the chart's values.yaml session.*
 	// keys, bumped per-commit to fingerprinted tags by the
@@ -91,13 +93,14 @@ func main() {
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
 			SessionsNamespace:        namespace,
-			SessionServiceAccount:    envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount),
+			SessionServiceAccount:    sessionServiceAccount,
 			SessionConfigMap:         envDefault("SESSION_CONFIGMAP", compat.SessionConfigMap),
 			ArgoCDTrackingApp:        envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
 			SessionImage:             sessionImage,
 			CodexSessionImage:        codexSessionImage,
 			PiSessionImage:           piSessionImage,
 			SessionScope:             sessionScope,
+			TankOperatorInternalURL:  tankOperatorInternalURL,
 			GitHubAppSecret:          envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
 			SessionAzureConfigSecret: envDefault("SESSION_AZURE_CONFIG_SECRET", compat.DefaultSessionAzureConfigSecret),
 			// Pass the orchestrator's Cosmos config through to the pod's
@@ -131,7 +134,7 @@ func main() {
 	// 12. Parse internal allowed subjects.
 	// Accepts both "ns/name=email" and plain "ns/name" entries.
 	internalSubjects := parseInternalSubjects(
-		envDefault("INTERNAL_API_ALLOWED_SUBJECTS", "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"),
+		envDefault("INTERNAL_API_ALLOWED_SUBJECTS", "mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"),
 	)
 
 	// 13. Register all routes.
@@ -148,6 +151,8 @@ func main() {
 		verifier:                verifier,
 		minter:                  minter,
 		namespace:               namespace,
+		sessionScope:            sessionScope,
+		sessionServiceAccount:   sessionServiceAccount,
 		internalAllowedSubjects: internalSubjects,
 	}
 	srv.registerRoutes(mux)

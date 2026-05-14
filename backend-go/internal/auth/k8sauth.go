@@ -15,10 +15,21 @@ import (
 type K8sSubject struct {
 	Namespace string
 	Name      string
+	Extra     map[string][]string
 }
 
 func (s K8sSubject) Qualified() string {
 	return s.Namespace + "/" + s.Name
+}
+
+func (s K8sSubject) ExtraValue(keys ...string) string {
+	for _, key := range keys {
+		values := s.Extra[key]
+		if len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
 }
 
 // ValidateSAToken validates a Kubernetes ServiceAccount bearer token via
@@ -43,7 +54,11 @@ func ValidateSAToken(ctx context.Context, k8s kubernetes.Interface, token string
 	if len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" {
 		return K8sSubject{}, errHTTP{status: http.StatusUnauthorized, message: "unexpected token subject: " + username}
 	}
-	return K8sSubject{Namespace: parts[2], Name: parts[3]}, nil
+	extra := make(map[string][]string, len(result.Status.User.Extra))
+	for key, values := range result.Status.User.Extra {
+		extra[key] = append([]string(nil), values...)
+	}
+	return K8sSubject{Namespace: parts[2], Name: parts[3], Extra: extra}, nil
 }
 
 // ParseSAToken extracts Bearer token from Authorization header.
