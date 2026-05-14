@@ -2,7 +2,7 @@ image:
   repository: romainecr.azurecr.io/tank-operator
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
-  # exact image CI just produced — no implicit `:latest` drift.
+  # exact image CI just produced â€” no implicit `:latest` drift.
   tag: "app-b58ef61d9ec16edb28ae4b7eb7a33c2d91ef9d1d67860ec7ba978520964d2678"
   pullPolicy: IfNotPresent
 
@@ -36,7 +36,7 @@ namespaces:
 
 orchestrator:
   # Renamed from `infra-shared` to make explicit that this SA is *not* part of the
-  # cluster's shared workload-identity pool — the orchestrator only needs in-cluster
+  # cluster's shared workload-identity pool â€” the orchestrator only needs in-cluster
   # K8s API auth (projected SA token + RoleBinding).
   serviceAccount: tank-operator
   replicas: 2
@@ -57,7 +57,7 @@ session:
   registryScope: default
   # Idle reaper: a session with no open WebSocket connections for this many
   # seconds is deleted by the orchestrator's background sweep. 7 days is
-  # effectively "manual close only" — the in-app close button is the
+  # effectively "manual close only" â€” the in-app close button is the
   # primary teardown path; this only reaps truly abandoned sessions left
   # running over a long weekend.
   idleTimeoutSeconds: 604800
@@ -101,7 +101,7 @@ apiProxy:
     repository: romainecr.azurecr.io/api-proxy
     # SHA-pinned. The api-proxy build workflow rewrites this line on every
     # push to main via a `[skip ci]` follow-up commit. The 4-space indent
-    # is load-bearing — the bump-tag sed in .github/workflows/api-proxy-build.yml
+    # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
     tag: "api-proxy-176138ce2c87da39ab75cf10bf8c03c9daa999fe7579a2c9bec3da45c68b2c92"
@@ -110,7 +110,7 @@ apiProxy:
   serviceAccount: claude-api-proxy
   serviceHost: claude-api-proxy.tank-operator.svc.cluster.local
   configSecret: claude-api-proxy-config
-  # Published to KV by infra/api_proxy.tf — separate UAMI from the
+  # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
 
@@ -123,10 +123,10 @@ codexApiProxy:
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
 # token, observes upstream 401s, calls platform.claude.com with the current
-# refresh token to rotate, writes the new blob back to KV. ESO mirrors KV →
+# refresh token to rotate, writes the new blob back to KV. ESO mirrors KV â†’
 # the proxy's mounted Secret on a 1m interval.
 #
-# This values block is named `credentialRefresher` for historical reasons —
+# This values block is named `credentialRefresher` for historical reasons â€”
 # the original design used a CronJob that's since been retired. The block
 # stayed because two consumers still authenticate to KV via the same UAMI:
 #   - api-proxy ext_proc sidecar: KV write of rotated blobs.
@@ -143,7 +143,7 @@ credentialRefresher:
   kvClientIdKey: claude-credentials-refresher-mi-client-id
   kvTenantIdKey: mcp-tenant-id
 
-# Cosmos DB — per-user profile store for multi-user (#57). Provisioned by
+# Cosmos DB â€” per-user profile store for multi-user (#57). Provisioned by
 # infra/cosmos.tf; same workload-identity auth path as the KV writer above
 # (the `claude-credentials-refresher-identity` UAMI carries both roles).
 # Account name is a tofu variable defaulting to `tank-operator-romaine`;
@@ -164,27 +164,21 @@ cosmos:
 github:
   appSlug: tank-operator-romaine-life
 
-# Cluster operator email — the user whose romaine-life-app installation is
-# the "host" fallback when a non-host session pod touches a host-owned repo
-# via mcp-github (#57 stage 3). Empty means no host: every caller goes
-# through the user-facing tank-operator-romaine-life App. Must match the
-# tank-operator/owner-email annotation that session pods carry, which the
-# orchestrator stamps from the signed-in user's email.
+# Tank session owner treated as the host by GitHub MCP attestations. Must match
+# the tank-operator/owner-email annotation that session pods carry.
 host:
   email: nelson@romaine.life
 
 # Comma-separated emails that receive super-admin behavior in MCP servers.
-# Empty means the orchestrator falls back to `host.email`, preserving the
-# single-operator default while making the role first-class configurable.
+# Empty means HOST_EMAIL is used.
 superAdmins:
   emails: nelson@romaine.life
 
 # Comma-separated "namespace/serviceaccount" pairs that may call the
-# /api/internal/* endpoints. The default covers mcp-github and mcp-tank-operator;
-# extend here when adding future in-cluster MCP servers that need the
-# resolve-caller or internal-session APIs.
+# general /api/internal/session endpoints. mcp-github receives Tank session
+# attestations instead of calling these endpoints directly.
 internalApi:
-  allowedSubjects: "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"
+  allowedSubjects: "mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"
   # Public hostname used to build session URLs returned by internal session endpoints.
   tankUiHost: "https://tank.romaine.life"
 
@@ -203,8 +197,7 @@ externalSecret:
   # the App credentials moved to the mcp-github Deployment's own ExternalSecret
   # in the standalone mcp-github chart. Session pods never read
   # the App credentials directly; mcp-github mints installation tokens itself
-  # and authenticates session-pod → mcp-github via the projected SA token.
-  # Names retained to avoid a multi-step migration; rename when convenient.
+  # and authenticates session-pod to mcp-github via Tank session attestations.
   githubApp:
     secretName: github-app-creds
     keys:
@@ -213,7 +206,7 @@ externalSecret:
   # Claude Code subscription credentials. Lives ONLY in the orchestrator
   # namespace; session pods cannot read this Secret. KV is the source of
   # truth: the orchestrator's in-process rotation writes to KV, ESO
-  # mirrors KV → this Secret on a 1m interval, and the orchestrator pod
+  # mirrors KV â†’ this Secret on a 1m interval, and the orchestrator pod
   # mounts the Secret as a file. Re-seed via the in-app "+ config sub"
   # flow, or out-of-band by uploading a fresh credentials.json to the
   # KV secret named below.
@@ -236,11 +229,11 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
-  # Auth secrets for the orchestrator's MSAL → backend JWT flow. ENTRA_CLIENT_ID
+  # Auth secrets for the orchestrator's MSAL â†’ backend JWT flow. ENTRA_CLIENT_ID
   # is the audience for verifying Entra ID tokens; ALLOWED_EMAILS
   # (comma-separated) gates which signed-in users can use the app. The session
   # JWT signing key lives in Key Vault as a Key (see jwt.kvVault/kvKeyName below)
-  # — orchestrator pods sign via the KV API per mint, so there is no JWT_SECRET
+  # â€” orchestrator pods sign via the KV API per mint, so there is no JWT_SECRET
   # to mirror into env.
   auth:
     secretName: tank-operator-auth

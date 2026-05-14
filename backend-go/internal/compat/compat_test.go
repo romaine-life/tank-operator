@@ -99,6 +99,9 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := labels["tank-operator/mode"], CodexGUIMode; got != want {
 		t.Fatalf("mode label = %v, want %q", got, want)
 	}
+	if got, want := labels["tank-operator/session-scope"], "default"; got != want {
+		t.Fatalf("session scope label = %v, want %q", got, want)
+	}
 	annotations := metadata["annotations"].(map[string]any)
 	if got, want := annotations["tank-operator/owner-email"], "nelson@romaine.life"; got != want {
 		t.Fatalf("owner annotation = %v, want %q", got, want)
@@ -114,6 +117,15 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := containers[0].(map[string]any)["name"], "mcp-auth-proxy"; got != want {
 		t.Fatalf("sidecar container name = %v, want %q", got, want)
 	}
+	mcpProxy := containers[0].(map[string]any)
+	proxyEnv := containerEnv(mcpProxy)
+	if got, want := proxyEnv["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.tank-operator.svc.cluster.local"; got != want {
+		t.Fatalf("proxy TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+	}
+	if got, want := proxyEnv["TANK_SESSION_ATTESTATION_TOKEN_PATH"], "/var/run/secrets/tank-operator/token"; got != want {
+		t.Fatalf("proxy TANK_SESSION_ATTESTATION_TOKEN_PATH = %v, want %q", got, want)
+	}
+	assertVolumeMount(t, mcpProxy, "tank-operator-sa-token")
 	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "claude"; got != want {
 		t.Fatalf("main container name = %v, want %q", got, want)
@@ -133,12 +145,13 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
 	}
 	volumes := spec["volumes"].([]any)
-	// codex_gui adds session-config + workspace emptyDir (shared between
-	// the claude container and the codex-runner sidecar). Codex auth is
-	// proxy-owned, so the real codex-credentials Secret is not mounted.
-	if got, want := len(volumes), 2; got != want {
+	// codex_gui adds session-config + Tank attestation token + workspace
+	// emptyDir. Codex auth is proxy-owned, so the real codex-credentials
+	// Secret is not mounted.
+	if got, want := len(volumes), 3; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
+	assertVolume(t, volumes, "tank-operator-sa-token")
 }
 
 func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {

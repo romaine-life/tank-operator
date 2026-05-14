@@ -14,7 +14,7 @@ RUN npx tsc
 RUN npm prune --omit=dev
 
 # Stage 1b: build the codex-runner from codex-runner/. Sibling of
-# agent-runner — drives @openai/codex-sdk for codex_gui sessions instead
+# agent-runner â€” drives @openai/codex-sdk for codex_gui sessions instead
 # of @anthropic-ai/claude-agent-sdk. Baked into all three session images
 # (claude/codex/pi) for build symmetry; only the codex pod spec runs it.
 FROM node:20-alpine AS codex-runner-build
@@ -29,8 +29,8 @@ RUN npm prune --omit=dev
 
 # Stage 2: runtime image. azure-mcp + github-mcp + k8s-mcp run as in-cluster
 # HTTP MCP servers. The container reaches them via the mcp-auth-proxy sidecar
-# on 127.0.0.1, which reads the projected SA token fresh per request and
-# forwards as a Bearer token. No co-located MCP binaries — keep it minimal.
+# on 127.0.0.1, which injects fresh bearer auth per request; GitHub receives a
+# Tank session attestation. No co-located MCP binaries: keep it minimal.
 FROM node:20-alpine
 
 ARG TARGETARCH=amd64
@@ -82,7 +82,7 @@ RUN curl -fsSL "https://github.com/opentofu/opentofu/releases/download/v${TOFU_V
     && chmod +x /usr/local/bin/tofu \
     && rm /tmp/tofu.zip
 
-# helm — every consumed repo ships a chart; without it `helm template` /
+# helm â€” every consumed repo ships a chart; without it `helm template` /
 # `helm get manifest` debugging is missing.
 RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
         | tar -xz -C /tmp \
@@ -90,12 +90,12 @@ RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar
     && rm -rf "/tmp/linux-${TARGETARCH}" \
     && chmod +x /usr/local/bin/helm
 
-# yq — pairs with jq for the YAML half of k8s/helm work.
+# yq â€” pairs with jq for the YAML half of k8s/helm work.
 RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH}" \
         -o /usr/local/bin/yq \
     && chmod +x /usr/local/bin/yq
 
-# uv — fast pip replacement for Python projects. Hardcoded musl x86_64 path because
+# uv â€” fast pip replacement for Python projects. Hardcoded musl x86_64 path because
 # astral-sh/uv release artifacts aren't named with docker's TARGETARCH
 # convention; the image is alpine + amd64 today.
 RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-musl.tar.gz" \
@@ -129,7 +129,7 @@ RUN pip install --no-cache-dir --break-system-packages \
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session
 # pod (same image, command "mcp-auth-proxy"). See server.py for the
-# full rationale — TL;DR fixes the 1h SA-token expiry that froze the
+# full rationale â€” TL;DR fixes the 1h SA-token expiry that froze the
 # bearer in env vars.
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy

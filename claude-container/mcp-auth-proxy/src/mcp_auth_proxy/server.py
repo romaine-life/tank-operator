@@ -1,16 +1,16 @@
-"""Localhost reverse proxy that injects fresh SA-token bearer auth.
+"""Localhost reverse proxy that injects fresh bearer auth.
 
 Sidecar to the claude-container in each session pod. Listens on per-MCP
 localhost ports; .mcp.json points claude at these instead of at the
-in-cluster MCP Services directly. Every request reads the projected
-ServiceAccount token from disk and forwards upstream with
-Authorization: Bearer <fresh>.
+in-cluster MCP Services directly. Most MCPs still receive the projected
+ServiceAccount token. GitHub MCP receives a short-lived Tank session
+attestation minted from a separate audience-scoped pod token.
 
 The bug this exists to fix: kubelet rotates the SA token file in-place
 (eager renewal at ~50 min, well inside the default 1h TTL), but env
 vars set from that file at pod start go stale. The previous wiring
 exported MCP_*_BEARER in the session startup scripts, then substituted
-them into .mcp.json's Authorization headers at harness startup — so any
+them into .mcp.json's Authorization headers at harness startup â€” so any
 MCP call past the 1h boundary 401'd until the session was recreated.
 This proxy reads the file fresh on every request, so token rotation is
 invisible to claude.
@@ -18,7 +18,7 @@ invisible to claude.
 Same shape as api-proxy (the in-cluster header-injecting proxy for
 api.anthropic.com), just localized to the pod because the SA token is
 per-pod identity. Hardcoded LISTENERS map mirrors the entries in
-k8s/session-config/mcp.json — keep them in sync; both sides describe the
+k8s/session-config/mcp.json â€” keep them in sync; both sides describe the
 same set of MCPs from opposite ends.
 
 OAuth discovery short-circuit: Claude CLI's MCP SDK probes several
@@ -27,8 +27,8 @@ well-known paths to discover whether the server speaks OAuth:
 `/.well-known/oauth-protected-resource` (RFC 9728),
 `/.well-known/openid-configuration` (OIDC discovery), and
 `POST /register` (RFC 7591 Dynamic Client Registration).
-Our MCP servers don't speak OAuth — the upstream returns kube-rbac-
-proxy's plain-text "Not Found", which crashes the SDK's JSON parser
+Our MCP servers don't speak OAuth. A plain-text upstream 404 crashes
+the SDK's JSON parser
 ("Unexpected identifier 'Not'") and leaves the connection unrecoverable
 across upstream pod rotations. We answer all of those paths locally
 with a JSON-shaped 404 so the SDK falls through cleanly to the bearer-
@@ -36,25 +36,37 @@ auth POST that this proxy already injects.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import time
+from datetime import datetime
 from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, web
 
 log = logging.getLogger(__name__)
 
-TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+TANK_ATTESTATION_TOKEN_PATH = Path(
+    os.environ.get(
+        "TANK_SESSION_ATTESTATION_TOKEN_PATH",
+        "/var/run/secrets/tank-operator/token",
+    )
+)
+TANK_OPERATOR_INTERNAL_URL = os.environ.get("TANK_OPERATOR_INTERNAL_URL", "").rstrip("/")
+GITHUB_MCP_PORT = 9992
 
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
 # Port allocation (next free: 9997):
-#   9991 — mcp-azure-personal
-#   9992 — mcp-github
-#   9993 — mcp-k8s
-#   9994 — mcp-argocd
-#   9995 — mcp-glimmung
-#   9996 — mcp-tank-operator
+#   9991 â€” mcp-azure-personal
+#   9992 â€” mcp-github
+#   9993 â€” mcp-k8s
+#   9994 â€” mcp-argocd
+#   9995 â€” mcp-glimmung
+#   9996 â€” mcp-tank-operator
 LISTENERS: list[tuple[int, str]] = [
     (9991, "http://mcp-azure-personal.mcp-azure.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
@@ -70,19 +82,89 @@ LISTENERS: list[tuple[int, str]] = [
 _STRIP_REQUEST_HEADERS = frozenset(
     {"host", "authorization", "content-length", "connection", "transfer-encoding"}
 )
-# Same idea on the way back — let aiohttp set framing headers on the
+# Same idea on the way back â€” let aiohttp set framing headers on the
 # response we stream to the client.
 _STRIP_RESPONSE_HEADERS = frozenset(
     {"transfer-encoding", "content-encoding", "connection", "content-length"}
 )
 
 
-def _read_token() -> str:
-    return TOKEN_PATH.read_text().strip()
+def _read_token(path: Path) -> str:
+    return path.read_text().strip()
+
+
+class ServiceAccountTokenProvider:
+    def __init__(self, token_path: Path = SA_TOKEN_PATH) -> None:
+        self._token_path = token_path
+
+    async def token(self) -> str:
+        return _read_token(self._token_path)
+
+
+class TankGitHubAttestationProvider:
+    def __init__(
+        self,
+        http: ClientSession,
+        *,
+        operator_url: str = TANK_OPERATOR_INTERNAL_URL,
+        token_path: Path = TANK_ATTESTATION_TOKEN_PATH,
+        refresh_skew_seconds: float = 30.0,
+    ) -> None:
+        self._http = http
+        self._operator_url = operator_url.rstrip("/")
+        self._token_path = token_path
+        self._refresh_skew_seconds = refresh_skew_seconds
+        self._cached_token = ""
+        self._expires_at = 0.0
+        self._lock = asyncio.Lock()
+
+    async def token(self) -> str:
+        now = time.time()
+        if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+            return self._cached_token
+        async with self._lock:
+            now = time.time()
+            if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+                return self._cached_token
+            if not self._operator_url:
+                raise RuntimeError("TANK_OPERATOR_INTERNAL_URL is required for GitHub MCP auth")
+            pod_token = _read_token(self._token_path)
+            async with self._http.post(
+                f"{self._operator_url}/api/internal/github/attestation",
+                headers={"Authorization": f"Bearer {pod_token}"},
+                json={},
+            ) as response:
+                if response.status != 200:
+                    detail = (await response.text())[:300]
+                    raise RuntimeError(
+                        f"Tank GitHub MCP attestation request returned {response.status}: {detail}"
+                    )
+                body = await response.json()
+            token = str(body.get("token") or "")
+            expires_at = _parse_expires_at(body.get("expires_at"))
+            if not token or expires_at <= time.time():
+                raise RuntimeError("Tank GitHub MCP attestation response was invalid")
+            self._cached_token = token
+            self._expires_at = expires_at
+            return token
+
+
+def _parse_expires_at(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str) or not value:
+        return 0.0
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return 0.0
 
 
 # OAuth discovery paths the MCP SDK probes. RFC 8414 (auth server),
-# RFC 9728 (protected resource), and OIDC discovery — the SDK tries
+# RFC 9728 (protected resource), and OIDC discovery â€” the SDK tries
 # all of these before/after a transport failure to decide whether OAuth
 # is available. Answering locally with a JSON-shaped 404 keeps the
 # SDK's parser from crashing on upstream's plain-text "Not Found" body.
@@ -98,7 +180,7 @@ async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
         {
             "error": "not_found",
             "error_description": (
-                "OAuth not configured on this MCP server; bearer SA-token "
+                "OAuth not configured on this MCP server; bearer "
                 "auth is injected by the mcp-auth-proxy sidecar."
             ),
         },
@@ -106,15 +188,15 @@ async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
     )
 
 
-def _make_handler(upstream: str, http: ClientSession):
+def _make_handler(upstream: str, http: ClientSession, token_provider):
     upstream = upstream.rstrip("/")
 
     async def handler(request: web.Request) -> web.StreamResponse:
         try:
-            token = _read_token()
-        except OSError:
-            log.exception("could not read SA token at %s", TOKEN_PATH)
-            return web.Response(status=503, text="SA token unavailable")
+            token = await token_provider.token()
+        except Exception:
+            log.exception("could not load bearer token for %s", upstream)
+            return web.Response(status=503, text="bearer token unavailable")
 
         forwarded_headers = {
             k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS
@@ -156,7 +238,7 @@ async def run() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    # Long total timeout — MCP tool calls can be minutes. Connect timeout
+    # Long total timeout â€” MCP tool calls can be minutes. Connect timeout
     # short so a dead upstream Service surfaces fast instead of hanging
     # the user-visible MCP call.
     http = ClientSession(timeout=ClientTimeout(total=600, sock_connect=5))
@@ -166,19 +248,25 @@ async def run() -> None:
             app = web.Application()
             for discovery_path in _OAUTH_DISCOVERY_PATHS:
                 app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
-            # RFC 7591 Dynamic Client Registration — also intercepted so the
-            # SDK gets a JSON 404 rather than kube-rbac-proxy's plain-text one.
+            # RFC 7591 Dynamic Client Registration â€” also intercepted so the
+            # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
-            app.router.add_route("*", "/{tail:.*}", _make_handler(upstream, http))
+            if port == GITHUB_MCP_PORT:
+                token_provider = TankGitHubAttestationProvider(http)
+            else:
+                token_provider = ServiceAccountTokenProvider()
+            app.router.add_route(
+                "*",
+                "/{tail:.*}",
+                _make_handler(upstream, http, token_provider),
+            )
             runner = web.AppRunner(app)
             await runner.setup()
             site = web.TCPSite(runner, "127.0.0.1", port)
             await site.start()
-            log.info("listening on 127.0.0.1:%d → %s", port, upstream)
+            log.info("listening on 127.0.0.1:%d â†’ %s", port, upstream)
             runners.append(runner)
         # Park forever; container lifecycle owns us.
-        import asyncio
-
         await asyncio.Event().wait()
     finally:
         for runner in runners:

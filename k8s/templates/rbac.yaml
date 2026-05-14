@@ -32,9 +32,8 @@ roleRef:
   kind: Role
   name: tank-operator-sessions-mgr
 ---
-# Orchestrator SA needs auth-delegator so the /api/internal/resolve-caller
-# endpoint can call TokenReview to validate inbound mcp-github SA tokens
-# (#57 stage 3).
+# Orchestrator SA needs auth-delegator so internal endpoints can call
+# TokenReview for audience-scoped service-account tokens.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

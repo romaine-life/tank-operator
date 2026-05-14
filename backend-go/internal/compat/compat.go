@@ -87,15 +87,16 @@ var noClaudeHijackModes = map[string]bool{
 }
 
 type ManifestOptions struct {
-	SessionImage          string
-	CodexSessionImage     string
-	PiSessionImage        string
-	SessionsNamespace     string
-	SessionScope          string
-	SessionServiceAccount string
-	SessionConfigMap      string
-	ArgoCDTrackingApp     string
-	SandboxAgentPort      int
+	SessionImage            string
+	CodexSessionImage       string
+	PiSessionImage          string
+	SessionsNamespace       string
+	SessionScope            string
+	SessionServiceAccount   string
+	SessionConfigMap        string
+	ArgoCDTrackingApp       string
+	SandboxAgentPort        int
+	TankOperatorInternalURL string
 	// Optional: in-cluster Service IPs for host alias injection.
 	OAuthGatewayIP  string
 	APIProxyIP      string
@@ -227,6 +228,20 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	claudeVolumeMounts := append([]any{}, configMounts...)
 	volumes := []any{
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
+		map[string]any{
+			"name": "tank-operator-sa-token",
+			"projected": map[string]any{
+				"sources": []any{
+					map[string]any{
+						"serviceAccountToken": map[string]any{
+							"audience":          "tank-operator",
+							"expirationSeconds": 3600,
+							"path":              "token",
+						},
+					},
+				},
+			},
+		},
 	}
 
 	// Shared /workspace across the user-facing container and the
@@ -332,13 +347,24 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		claudeContainer["envFrom"] = envFrom
 	}
 
+	mcpProxyVolumeMounts := append([]any{}, configMounts...)
+	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
+		"name":      "tank-operator-sa-token",
+		"mountPath": "/var/run/secrets/tank-operator",
+		"readOnly":  true,
+	})
+
 	containers := []any{
 		map[string]any{
 			"name":            "mcp-auth-proxy",
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
 			"command":         []any{"mcp-auth-proxy"},
-			"volumeMounts":    configMounts,
+			"env": []any{
+				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+				map[string]any{"name": "TANK_SESSION_ATTESTATION_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
+			},
+			"volumeMounts": mcpProxyVolumeMounts,
 		},
 		claudeContainer,
 	}
@@ -514,6 +540,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"app.kubernetes.io/instance":   opts.ArgoCDTrackingApp,
 				"tank-operator/owner":          OwnerLabel(owner),
 				"tank-operator/session-id":     sessionID,
+				"tank-operator/session-scope":  opts.SessionScope,
 				"tank-operator/mode":           mode,
 				"azure.workload.identity/use":  "true",
 			},
@@ -579,6 +606,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.SandboxAgentPort == 0 {
 		opts.SandboxAgentPort = SandboxAgentPort
+	}
+	if opts.TankOperatorInternalURL == "" {
+		opts.TankOperatorInternalURL = "http://tank-operator.tank-operator.svc.cluster.local"
 	}
 	if opts.OAuthGatewayCAConfigMap == "" {
 		opts.OAuthGatewayCAConfigMap = DefaultOAuthGatewayCA

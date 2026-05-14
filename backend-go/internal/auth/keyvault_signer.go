@@ -4,12 +4,10 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +117,18 @@ func (j *KeyVaultJWT) PublicKey(ctx context.Context, kid string) (*rsa.PublicKey
 	return pub, nil
 }
 
+func (j *KeyVaultJWT) CurrentJWK(ctx context.Context) (JWK, error) {
+	kid, err := j.currentKIDCached(ctx)
+	if err != nil {
+		return JWK{}, err
+	}
+	pub, err := j.PublicKey(ctx, kid)
+	if err != nil {
+		return JWK{}, err
+	}
+	return rsaPublicJWK(kid, pub), nil
+}
+
 func (j *KeyVaultJWT) currentKIDCached(ctx context.Context) (string, error) {
 	j.currentMu.Lock()
 	defer j.currentMu.Unlock()
@@ -170,8 +180,4 @@ func jwkToRSAPublic(jwk *azkeys.JSONWebKey) (*rsa.PublicKey, error) {
 		return nil, fmt.Errorf("JWK exponent is zero")
 	}
 	return &rsa.PublicKey{N: n, E: e}, nil
-}
-
-func b64URL(b []byte) string {
-	return strings.TrimRight(base64.URLEncoding.EncodeToString(b), "=")
 }
