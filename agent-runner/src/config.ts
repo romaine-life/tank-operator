@@ -1,6 +1,7 @@
 // Runtime config sourced from env vars. SESSION_ID + POD_OWNER_EMAIL come
 // from the downward API on the pod spec (label tank-operator/session-id,
-// annotation tank-operator/owner-email). COSMOS_* mirror the orchestrator's
+// annotation tank-operator/owner-email). TANK_SESSION_STORAGE_KEY is the
+// scoped Cosmos partition key. COSMOS_* mirror the orchestrator's
 // env. Azure workload-identity envs (AZURE_CLIENT_ID + AZURE_TENANT_ID +
 // AZURE_FEDERATED_TOKEN_FILE) are injected by the WI webhook because the
 // pod carries azure.workload.identity/use=true and the SA's federated
@@ -10,6 +11,7 @@
 
 export interface Config {
   sessionId: string;
+  sessionStorageKey: string;
   ownerEmail: string;
   cosmosEndpoint: string;
   cosmosDatabase: string;
@@ -34,6 +36,7 @@ export function loadConfig(): Config {
   }
   return {
     sessionId,
+    sessionStorageKey: process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
     ownerEmail: (process.env.POD_OWNER_EMAIL ?? "").trim().toLowerCase(),
     cosmosEndpoint,
     cosmosDatabase: process.env.COSMOS_DATABASE?.trim() || "tank-operator",

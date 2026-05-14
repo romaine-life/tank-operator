@@ -43,6 +43,9 @@ func TestTurnDocShape(t *testing.T) {
 	if got, want := doc["session_id"], "61"; got != want {
 		t.Fatalf("session_id = %q (must match container partition key /session_id)", got)
 	}
+	if got, want := doc["tank_public_session_id"], "61"; got != want {
+		t.Fatalf("tank_public_session_id = %q, want %q", got, want)
+	}
 	if got, want := doc["status"], "pending"; got != want {
 		t.Fatalf("status = %q, want %q", got, want)
 	}
@@ -81,6 +84,24 @@ func TestTurnDocShape(t *testing.T) {
 	}
 	if doc["completed_at"] != (*string)(nil) {
 		t.Fatalf("completed_at = %v, want nil", doc["completed_at"])
+	}
+}
+
+func TestTurnDocUsesScopedStorageKeyForPartition(t *testing.T) {
+	rec := TurnRecord{
+		TurnID:    "abc123",
+		SessionID: "61",
+		Email:     "nelson@romaine.life",
+		Provider:  "claude",
+		Prompt:    "hello",
+		Status:    TurnPending,
+	}
+	doc := turnDocForStorageKey(rec, "slot-a:61")
+	if got, want := doc["session_id"], "slot-a:61"; got != want {
+		t.Fatalf("session_id = %q, want scoped storage key %q", got, want)
+	}
+	if got, want := doc["tank_public_session_id"], "61"; got != want {
+		t.Fatalf("tank_public_session_id = %q, want public id %q", got, want)
 	}
 }
 

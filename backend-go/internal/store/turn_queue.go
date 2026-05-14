@@ -11,6 +11,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 )
 
 // TurnQueueStatus is the lifecycle status of a queued turn.
@@ -54,8 +56,8 @@ type TurnRecord struct {
 
 // TurnQueueStore persists per-session turn descriptors. The orchestrator
 // is the only producer today; the pod-side SDK runners are the consumers.
-// Containers partition on session_id so a session's turn history is
-// one-partition reads.
+// Containers partition on the scoped storage key in session_id so a session's
+// turn history is one-partition reads without cross-slot collisions.
 type TurnQueueStore interface {
 	Enqueue(ctx context.Context, rec TurnRecord) error
 	NextPending(ctx context.Context, sessionID string) (*TurnRecord, error)
@@ -66,9 +68,14 @@ type TurnQueueStore interface {
 
 type cosmosTurnQueueStore struct {
 	container *azcosmos.ContainerClient
+	scope     string
 }
 
-func NewCosmosTurnQueueStore(endpoint, database, container string, cred azcore.TokenCredential) (TurnQueueStore, error) {
+func NewCosmosTurnQueueStore(endpoint, database, container, scope string, cred azcore.TokenCredential) (TurnQueueStore, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "default"
+	}
 	client, err := azcosmos.NewClient(endpoint, cred, nil)
 	if err != nil {
 		return nil, err
@@ -77,7 +84,7 @@ func NewCosmosTurnQueueStore(endpoint, database, container string, cred azcore.T
 	if err != nil {
 		return nil, err
 	}
-	return &cosmosTurnQueueStore{container: c}, nil
+	return &cosmosTurnQueueStore{container: c, scope: scope}, nil
 }
 
 func (s *cosmosTurnQueueStore) Enqueue(ctx context.Context, rec TurnRecord) error {
@@ -91,12 +98,13 @@ func (s *cosmosTurnQueueStore) Enqueue(ctx context.Context, rec TurnRecord) erro
 		rec.CreatedAt = nowISO()
 	}
 	rec.Email = strings.ToLower(strings.TrimSpace(rec.Email))
-	doc := turnDoc(rec)
+	storageKey := s.storageKey(rec.SessionID)
+	doc := turnDocForStorageKey(rec, storageKey)
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	pk := azcosmos.NewPartitionKeyString(rec.SessionID)
+	pk := azcosmos.NewPartitionKeyString(storageKey)
 	// CreateItem so a re-dispatch with the same turn_id surfaces (409) rather
 	// than silently overwriting an in-flight turn. Re-dispatches should not
 	// happen in normal operation — each user message generates a fresh
@@ -115,12 +123,13 @@ func (s *cosmosTurnQueueStore) Enqueue(ctx context.Context, rec TurnRecord) erro
 }
 
 func (s *cosmosTurnQueueStore) NextPending(ctx context.Context, sessionID string) (*TurnRecord, error) {
+	storageKey := s.storageKey(sessionID)
 	query := "SELECT TOP 1 * FROM c WHERE c.session_id = @session_id AND c.status = @status ORDER BY c.created_at ASC"
 	params := []azcosmos.QueryParameter{
-		{Name: "@session_id", Value: sessionID},
+		{Name: "@session_id", Value: storageKey},
 		{Name: "@status", Value: string(TurnPending)},
 	}
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(sessionID), &azcosmos.QueryOptions{QueryParameters: params})
+	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
@@ -153,7 +162,8 @@ func (s *cosmosTurnQueueStore) MarkFailed(ctx context.Context, sessionID, turnID
 }
 
 func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, turnID string, status TurnQueueStatus, claimedAt, completedAt *string) error {
-	pk := azcosmos.NewPartitionKeyString(sessionID)
+	storageKey := s.storageKey(sessionID)
+	pk := azcosmos.NewPartitionKeyString(storageKey)
 	resp, err := s.container.ReadItem(ctx, pk, "turn:"+turnID, nil)
 	if err != nil {
 		var re *azcore.ResponseError
@@ -173,7 +183,7 @@ func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, turnI
 	if completedAt != nil {
 		rec.CompletedAt = completedAt
 	}
-	raw, err := json.Marshal(turnDoc(rec))
+	raw, err := json.Marshal(turnDocForStorageKey(rec, storageKey))
 	if err != nil {
 		return err
 	}
@@ -181,67 +191,80 @@ func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, turnI
 	return err
 }
 
-// turnDoc shapes the wire JSON. Doc id is `turn:<turn_id>` so the partition
-// (session_id) can hold sibling kinds of docs later without collision.
 func turnDoc(r TurnRecord) map[string]any {
+	return turnDocForStorageKey(r, r.SessionID)
+}
+
+// turnDocForStorageKey shapes the wire JSON. Doc id is `turn:<turn_id>` so the
+// partition (session_id) can hold sibling kinds of docs later without collision.
+func turnDocForStorageKey(r TurnRecord, storageKey string) map[string]any {
+	if storageKey == "" {
+		storageKey = r.SessionID
+	}
 	doc := map[string]any{
-		"id":               "turn:" + r.TurnID,
-		"type":             "turn",
-		"turn_id":          r.TurnID,
-		"session_id":       r.SessionID,
-		"email":            r.Email,
-		"provider":         r.Provider,
-		"source":           r.Source,
-		"client_nonce":     r.ClientNonce,
-		"prompt":           r.Prompt,
-		"follow_up":        r.FollowUp,
-		"status":           string(r.Status),
-		"created_at":       r.CreatedAt,
-		"claimed_at":       r.ClaimedAt,
-		"claim_id":         r.ClaimID,
-		"claimed_by":       r.ClaimedBy,
-		"claim_expires_at": r.ClaimExpiresAt,
-		"attempt_count":    r.AttemptCount,
-		"available_at":     r.AvailableAt,
-		"completed_at":     r.CompletedAt,
-		"last_error":       r.LastError,
-		"model":            r.Model,
-		"permission_mode":  r.PermissionMode,
-		"skill_name":       r.SkillName,
+		"id":                     "turn:" + r.TurnID,
+		"type":                   "turn",
+		"turn_id":                r.TurnID,
+		"session_id":             storageKey,
+		"tank_public_session_id": r.SessionID,
+		"email":                  r.Email,
+		"provider":               r.Provider,
+		"source":                 r.Source,
+		"client_nonce":           r.ClientNonce,
+		"prompt":                 r.Prompt,
+		"follow_up":              r.FollowUp,
+		"status":                 string(r.Status),
+		"created_at":             r.CreatedAt,
+		"claimed_at":             r.ClaimedAt,
+		"claim_id":               r.ClaimID,
+		"claimed_by":             r.ClaimedBy,
+		"claim_expires_at":       r.ClaimExpiresAt,
+		"attempt_count":          r.AttemptCount,
+		"available_at":           r.AvailableAt,
+		"completed_at":           r.CompletedAt,
+		"last_error":             r.LastError,
+		"model":                  r.Model,
+		"permission_mode":        r.PermissionMode,
+		"skill_name":             r.SkillName,
 	}
 	return doc
 }
 
 func turnFromDoc(data []byte) (TurnRecord, error) {
 	var d struct {
-		TurnID         string  `json:"turn_id"`
-		SessionID      string  `json:"session_id"`
-		Email          string  `json:"email"`
-		Provider       string  `json:"provider"`
-		Source         string  `json:"source"`
-		ClientNonce    string  `json:"client_nonce"`
-		Prompt         string  `json:"prompt"`
-		Model          string  `json:"model"`
-		PermissionMode string  `json:"permission_mode"`
-		SkillName      string  `json:"skill_name"`
-		FollowUp       bool    `json:"follow_up"`
-		Status         string  `json:"status"`
-		CreatedAt      string  `json:"created_at"`
-		ClaimedAt      *string `json:"claimed_at"`
-		ClaimID        *string `json:"claim_id"`
-		ClaimedBy      *string `json:"claimed_by"`
-		ClaimExpiresAt *string `json:"claim_expires_at"`
-		AttemptCount   int     `json:"attempt_count"`
-		AvailableAt    *string `json:"available_at"`
-		CompletedAt    *string `json:"completed_at"`
-		LastError      string  `json:"last_error"`
+		TurnID          string  `json:"turn_id"`
+		SessionID       string  `json:"session_id"`
+		PublicSessionID string  `json:"tank_public_session_id"`
+		Email           string  `json:"email"`
+		Provider        string  `json:"provider"`
+		Source          string  `json:"source"`
+		ClientNonce     string  `json:"client_nonce"`
+		Prompt          string  `json:"prompt"`
+		Model           string  `json:"model"`
+		PermissionMode  string  `json:"permission_mode"`
+		SkillName       string  `json:"skill_name"`
+		FollowUp        bool    `json:"follow_up"`
+		Status          string  `json:"status"`
+		CreatedAt       string  `json:"created_at"`
+		ClaimedAt       *string `json:"claimed_at"`
+		ClaimID         *string `json:"claim_id"`
+		ClaimedBy       *string `json:"claimed_by"`
+		ClaimExpiresAt  *string `json:"claim_expires_at"`
+		AttemptCount    int     `json:"attempt_count"`
+		AvailableAt     *string `json:"available_at"`
+		CompletedAt     *string `json:"completed_at"`
+		LastError       string  `json:"last_error"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
 		return TurnRecord{}, err
 	}
+	sessionID := d.PublicSessionID
+	if sessionID == "" {
+		sessionID = d.SessionID
+	}
 	return TurnRecord{
 		TurnID:         d.TurnID,
-		SessionID:      d.SessionID,
+		SessionID:      sessionID,
 		Email:          d.Email,
 		Provider:       d.Provider,
 		Source:         d.Source,
@@ -269,12 +292,13 @@ func (s *cosmosTurnQueueStore) ListBySession(ctx context.Context, sessionID stri
 	if limit <= 0 {
 		limit = 50
 	}
+	storageKey := s.storageKey(sessionID)
 	query := "SELECT * FROM c WHERE c.session_id = @session_id ORDER BY c.created_at ASC OFFSET 0 LIMIT @limit"
 	params := []azcosmos.QueryParameter{
-		{Name: "@session_id", Value: sessionID},
+		{Name: "@session_id", Value: storageKey},
 		{Name: "@limit", Value: limit},
 	}
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(sessionID), &azcosmos.QueryOptions{QueryParameters: params})
+	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
 	var out []TurnRecord
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
@@ -291,6 +315,10 @@ func (s *cosmosTurnQueueStore) ListBySession(ctx context.Context, sessionID stri
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
 	return out, nil
+}
+
+func (s *cosmosTurnQueueStore) storageKey(sessionID string) string {
+	return compat.SessionStorageKey(s.scope, sessionID)
 }
 
 // StubTurnQueueStore satisfies the interface when Cosmos is unavailable

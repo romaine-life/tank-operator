@@ -18,6 +18,7 @@ type CosmosStore struct {
 }
 
 func NewCosmosStore(endpoint, database, container, scope string, credential azcore.TokenCredential) (*CosmosStore, error) {
+	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "default"
 	}
@@ -103,6 +104,9 @@ func sessionFromDoc(data []byte) (compat.SessionRecord, error) {
 	sessionID := doc.SessionID
 	if sessionID == "" {
 		sessionID = strings.TrimPrefix(doc.ID, "session:")
+		if scope != "default" {
+			sessionID = strings.TrimPrefix(sessionID, scope+":")
+		}
 	}
 	return compat.SessionRecord{
 		ID:          sessionID,

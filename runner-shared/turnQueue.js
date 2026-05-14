@@ -8,6 +8,7 @@ export class SharedTurnQueue {
     client;
     container;
     runnerID;
+    sessionStorageKey;
     constructor(cfg, provider, deps) {
         this.cfg = cfg;
         this.provider = provider;
@@ -18,7 +19,8 @@ export class SharedTurnQueue {
         this.container = this.client
             .database(cfg.cosmosDatabase)
             .container(cfg.turnQueueContainer);
-        this.runnerID = `${provider}-runner:${cfg.sessionId}:${randomUUID()}`;
+        this.sessionStorageKey = cfg.sessionStorageKey || cfg.sessionId;
+        this.runnerID = `${provider}-runner:${this.sessionStorageKey}:${randomUUID()}`;
     }
     async claimNext() {
         const now = new Date();
@@ -26,7 +28,7 @@ export class SharedTurnQueue {
         const iterator = this.container.items.query({
             query: "SELECT TOP 10 * FROM c WHERE c.session_id = @session_id AND c.provider = @provider AND (c.source = @source_sdk OR c.source = @source_wakeup) AND (c.status = @status_pending OR (c.status = @status_claimed AND IS_DEFINED(c.claim_expires_at) AND c.claim_expires_at <= @now)) AND (NOT IS_DEFINED(c.available_at) OR IS_NULL(c.available_at) OR c.available_at <= @now) ORDER BY c.created_at ASC",
             parameters: [
-                { name: "@session_id", value: this.cfg.sessionId },
+                { name: "@session_id", value: this.sessionStorageKey },
                 { name: "@provider", value: this.provider },
                 { name: "@source_sdk", value: "sdk" },
                 { name: "@source_wakeup", value: "schedule-wakeup" },
@@ -34,7 +36,7 @@ export class SharedTurnQueue {
                 { name: "@status_claimed", value: "claimed" },
                 { name: "@now", value: nowISO },
             ],
-        }, { partitionKey: this.cfg.sessionId });
+        }, { partitionKey: this.sessionStorageKey });
         const page = await iterator.fetchNext();
         for (const record of page.resources) {
             const claimed = await this.claim(record, now);
@@ -46,6 +48,7 @@ export class SharedTurnQueue {
     async enqueueDelayed(args) {
         const record = buildDelayedTurnRecord({
             sessionID: this.cfg.sessionId,
+            sessionStorageKey: this.sessionStorageKey,
             email: this.cfg.ownerEmail,
             provider: this.provider,
             prompt: args.prompt,
@@ -169,7 +172,8 @@ export function buildDelayedTurnRecord(args) {
     return {
         id: `turn:${args.clientNonce}`,
         turn_id: args.clientNonce,
-        session_id: args.sessionID,
+        session_id: args.sessionStorageKey || args.sessionID,
+        tank_public_session_id: args.sessionID,
         email: args.email,
         provider: args.provider,
         source: "schedule-wakeup",

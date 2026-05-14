@@ -48,17 +48,19 @@ func main() {
 	// 3. Init profile store.
 	profileStore := buildProfileStore(azCred)
 
+	sessionScope := envDefault("SESSION_REGISTRY_SCOPE", "default")
+
 	// 4. Init session registry.
-	sessionReg := buildSessionRegistry(azCred)
+	sessionReg := buildSessionRegistry(azCred, sessionScope)
 
 	// 5. Init turn queue store for durable SDK submissions.
-	turnQueueStore := buildTurnQueueStore(azCred)
+	turnQueueStore := buildTurnQueueStore(azCred, sessionScope)
 
 	// 6. Init session events store for the SDK runners' canonical stream.
-	sessionEventsStore := buildSessionEventStore(azCred)
+	sessionEventsStore := buildSessionEventStore(azCred, sessionScope)
 
 	// 7. Init per-user SDK conversation read-state store.
-	readStateStore := buildConversationReadStateStore(azCred)
+	readStateStore := buildConversationReadStateStore(azCred, sessionScope)
 
 	// 8. Init event bus.
 	eventBus := sessions.NewEventBus()
@@ -95,6 +97,7 @@ func main() {
 			SessionImage:             sessionImage,
 			CodexSessionImage:        codexSessionImage,
 			PiSessionImage:           piSessionImage,
+			SessionScope:             sessionScope,
 			GitHubAppSecret:          envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
 			SessionAzureConfigSecret: envDefault("SESSION_AZURE_CONFIG_SECRET", compat.DefaultSessionAzureConfigSecret),
 			// Pass the orchestrator's Cosmos config through to the pod's
@@ -211,12 +214,11 @@ func buildProfileStore(azCred *azidentity.DefaultAzureCredential) profilesStore 
 	return store
 }
 
-func buildSessionRegistry(azCred *azidentity.DefaultAzureCredential) sessions.SessionRegistry {
+func buildSessionRegistry(azCred *azidentity.DefaultAzureCredential, scope string) sessions.SessionRegistry {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
 		return &stubSessionRegistry{}
 	}
-	scope := envDefault("SESSION_REGISTRY_SCOPE", "default")
 	s, err := sessionregistry.NewCosmosStore(
 		endpoint,
 		envDefault("COSMOS_DATABASE", "tank-operator"),
@@ -231,7 +233,7 @@ func buildSessionRegistry(azCred *azidentity.DefaultAzureCredential) sessions.Se
 	return &cosmosSessionRegistryAdapter{s}
 }
 
-func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.SessionEventStore {
+func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential, scope string) store.SessionEventStore {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
 		return store.StubSessionEventStore{}
@@ -240,6 +242,7 @@ func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.Ses
 		endpoint,
 		envDefault("COSMOS_DATABASE", "tank-operator"),
 		envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
+		scope,
 		azCred,
 	)
 	if err != nil {
@@ -249,7 +252,7 @@ func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.Ses
 	return s
 }
 
-func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential) store.ConversationReadStateStore {
+func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential, scope string) store.ConversationReadStateStore {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
 		return store.NewStubConversationReadStateStore()
@@ -258,6 +261,7 @@ func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential) 
 		endpoint,
 		envDefault("COSMOS_DATABASE", "tank-operator"),
 		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
+		scope,
 		azCred,
 	)
 	if err != nil {
@@ -267,7 +271,7 @@ func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential) 
 	return s
 }
 
-func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential) store.TurnQueueStore {
+func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential, scope string) store.TurnQueueStore {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
 		return store.StubTurnQueueStore{}
@@ -276,6 +280,7 @@ func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential) store.TurnQu
 		endpoint,
 		envDefault("COSMOS_DATABASE", "tank-operator"),
 		envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
+		scope,
 		azCred,
 	)
 	if err != nil {

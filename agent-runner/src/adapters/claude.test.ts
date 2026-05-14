@@ -25,6 +25,7 @@ function turn(fields: Partial<ClaudeTurnContext> = {}): ClaudeTurnContext {
 function cfg(): Config {
   return {
     sessionId: "63",
+    sessionStorageKey: "63",
     ownerEmail: "user@example.com",
     cosmosEndpoint: "https://example.invalid",
     cosmosDatabase: "tank-operator",

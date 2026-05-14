@@ -11,6 +11,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 )
 
 // ConversationReadStateStore persists the per-user render cursor for a Tank
@@ -30,9 +32,14 @@ type ConversationReadStateRecord struct {
 
 type cosmosConversationReadStateStore struct {
 	container *azcosmos.ContainerClient
+	scope     string
 }
 
-func NewCosmosConversationReadStateStore(endpoint, database, container string, cred azcore.TokenCredential) (ConversationReadStateStore, error) {
+func NewCosmosConversationReadStateStore(endpoint, database, container, scope string, cred azcore.TokenCredential) (ConversationReadStateStore, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "default"
+	}
 	client, err := azcosmos.NewClient(endpoint, cred, nil)
 	if err != nil {
 		return nil, err
@@ -41,7 +48,7 @@ func NewCosmosConversationReadStateStore(endpoint, database, container string, c
 	if err != nil {
 		return nil, err
 	}
-	return &cosmosConversationReadStateStore{container: c}, nil
+	return &cosmosConversationReadStateStore{container: c, scope: scope}, nil
 }
 
 func (s *cosmosConversationReadStateStore) Get(ctx context.Context, email, sessionID string) (*ConversationReadStateRecord, error) {
@@ -50,7 +57,7 @@ func (s *cosmosConversationReadStateStore) Get(ctx context.Context, email, sessi
 	if normalized == "" || sessionID == "" {
 		return nil, nil
 	}
-	resp, err := s.container.ReadItem(ctx, azcosmos.NewPartitionKeyString(normalized), readStateDocID(sessionID), nil)
+	resp, err := s.container.ReadItem(ctx, azcosmos.NewPartitionKeyString(normalized), readStateDocID(s.scope, sessionID), nil)
 	if err != nil {
 		if isCosmosNotFound(err) {
 			return nil, nil
@@ -78,7 +85,7 @@ func (s *cosmosConversationReadStateStore) Set(ctx context.Context, email, sessi
 		return ConversationReadStateRecord{}, nil
 	}
 
-	docID := readStateDocID(sessionID)
+	docID := readStateDocID(s.scope, sessionID)
 	pk := azcosmos.NewPartitionKeyString(normalized)
 	for attempt := 0; attempt < 20; attempt++ {
 		resp, readErr := s.container.ReadItem(ctx, pk, docID, nil)
@@ -110,7 +117,7 @@ func (s *cosmosConversationReadStateStore) Set(ctx context.Context, email, sessi
 		if existing != nil && existing.UpdatedAt != "" && existing.LastReadOrderKey == lastReadOrderKey {
 			rec.UpdatedAt = existing.UpdatedAt
 		}
-		raw, err := json.Marshal(readStateDoc(rec))
+		raw, err := json.Marshal(readStateDoc(s.scope, rec))
 		if err != nil {
 			return ConversationReadStateRecord{}, err
 		}
@@ -192,16 +199,23 @@ func readStateMemoryKey(email, sessionID string) (string, string, string) {
 	return normalized + "\x1f" + trimmedSessionID, normalized, trimmedSessionID
 }
 
-func readStateDocID(sessionID string) string {
-	return "read-state:" + strings.TrimSpace(sessionID)
+func readStateDocID(scope, sessionID string) string {
+	return "read-state:" + compat.SessionStorageKey(scope, sessionID)
 }
 
-func readStateDoc(rec ConversationReadStateRecord) map[string]any {
+func readStateDoc(scope string, rec ConversationReadStateRecord) map[string]any {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "default"
+	}
+	storageKey := compat.SessionStorageKey(scope, rec.SessionID)
 	return map[string]any{
-		"id":                  readStateDocID(rec.SessionID),
+		"id":                  readStateDocID(scope, rec.SessionID),
 		"type":                "conversation_read_state",
 		"email":               normalizeReadStateEmail(rec.Email),
 		"session_id":          strings.TrimSpace(rec.SessionID),
+		"session_scope":       strings.TrimSpace(scope),
+		"session_storage_key": storageKey,
 		"last_read_order_key": strings.TrimSpace(rec.LastReadOrderKey),
 		"updated_at":          rec.UpdatedAt,
 	}

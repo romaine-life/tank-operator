@@ -84,12 +84,11 @@ export class CosmosSink {
   }
 
   // Write a canonical event to Cosmos. Doc id is the SDK's uuid (v7,
-  // monotonic — naturally sorts by emit order). Partition is the
-  // orchestrator's session_id (the integer "63") not the SDK's internal
-  // session_id — the SPA queries on the integer (it knows the pod-level
-  // id), and runner-process restart may yield a new SDK session within the
-  // same still-live tank-operator session. The SDK's session_id rides along
-  // as a field.
+  // monotonic, so it naturally sorts by emit order). Partition is Tank's
+  // scoped session storage key, not the SDK's internal session_id. The SPA
+  // still addresses sessions by public pod-level id, while runner-process
+  // restarts may yield a new SDK session within the same still-live Tank
+  // session. The SDK's session_id rides along as a field.
   async upsert(message: RunnerEvent & { uuid: string }): Promise<void> {
     const doc = this.docFromMessage(message);
     await this.container.items.upsert(doc);
@@ -112,14 +111,14 @@ export class CosmosSink {
         query:
           "SELECT TOP 1 * FROM c WHERE c.tank_session_id = @session_id AND c.turn_id = @turn_id AND (c.type = @completed OR c.type = @failed OR c.type = @interrupted)",
         parameters: [
-          { name: "@session_id", value: this.cfg.sessionId },
+          { name: "@session_id", value: this.cfg.sessionStorageKey },
           { name: "@turn_id", value: turnID },
           { name: "@completed", value: "turn.completed" },
           { name: "@failed", value: "turn.failed" },
           { name: "@interrupted", value: "turn.interrupted" },
         ],
       },
-      { partitionKey: this.cfg.sessionId },
+      { partitionKey: this.cfg.sessionStorageKey },
     );
     const page = await iterator.fetchNext();
     return page.resources[0] ?? null;
@@ -129,7 +128,8 @@ export class CosmosSink {
     return {
       ...message,
       id: message.uuid,
-      tank_session_id: this.cfg.sessionId,
+      tank_session_id: this.cfg.sessionStorageKey,
+      tank_public_session_id: this.cfg.sessionId,
       email: this.cfg.ownerEmail,
       runtime: "claude",
       written_at:

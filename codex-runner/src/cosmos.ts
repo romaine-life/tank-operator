@@ -137,9 +137,9 @@ export class CosmosSink {
   }
 
   // Write a canonical event. Doc id is the runner-stamped uuid; partition
-  // is the orchestrator's session_id. Matches the shape agent-runner uses,
-  // so the orchestrator's read endpoint and the SPA's chat pane consume
-  // both claude- and codex-runner events out of the same container.
+  // is Tank's scoped session storage key. Matches the shape agent-runner
+  // uses, so the orchestrator's read endpoint and the SPA's chat pane
+  // consume both claude- and codex-runner events out of the same container.
   async upsert(event: CodexEvent & { uuid: string }): Promise<void> {
     const doc = this.docFromEvent(event);
     await this.container.items.upsert(doc);
@@ -162,14 +162,14 @@ export class CosmosSink {
         query:
           "SELECT TOP 1 * FROM c WHERE c.tank_session_id = @session_id AND c.turn_id = @turn_id AND (c.type = @completed OR c.type = @failed OR c.type = @interrupted)",
         parameters: [
-          { name: "@session_id", value: this.cfg.sessionId },
+          { name: "@session_id", value: this.cfg.sessionStorageKey },
           { name: "@turn_id", value: turnID },
           { name: "@completed", value: "turn.completed" },
           { name: "@failed", value: "turn.failed" },
           { name: "@interrupted", value: "turn.interrupted" },
         ],
       },
-      { partitionKey: this.cfg.sessionId },
+      { partitionKey: this.cfg.sessionStorageKey },
     );
     const page = await iterator.fetchNext();
     return page.resources[0] ?? null;
@@ -179,7 +179,8 @@ export class CosmosSink {
     return {
       ...event,
       id: event.uuid,
-      tank_session_id: this.cfg.sessionId,
+      tank_session_id: this.cfg.sessionStorageKey,
+      tank_public_session_id: this.cfg.sessionId,
       email: this.cfg.ownerEmail,
       runtime: "codex",
       written_at:

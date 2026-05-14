@@ -51,6 +51,12 @@ func TestDocumentIDsAndShapes(t *testing.T) {
 	if got, want := SessionDocID("slot-a", "12"), "session:slot-a:12"; got != want {
 		t.Fatalf("SessionDocID(slot) = %q, want %q", got, want)
 	}
+	if got, want := SessionStorageKey("default", "12"), "12"; got != want {
+		t.Fatalf("SessionStorageKey(default) = %q, want %q", got, want)
+	}
+	if got, want := SessionStorageKey("slot-a", "12"), "slot-a:12"; got != want {
+		t.Fatalf("SessionStorageKey(slot) = %q, want %q", got, want)
+	}
 	if got, want := SessionCounterDocID("default"), "session-counter"; got != want {
 		t.Fatalf("SessionCounterDocID(default) = %q, want %q", got, want)
 	}
@@ -172,6 +178,7 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
 				SessionImage:                 "claude-image",
 				CodexSessionImage:            "codex-image",
+				SessionScope:                 "slot-a",
 				CosmosEndpoint:               "https://cosmos.example",
 				CosmosDatabase:               "tank-db",
 				CosmosSessionEventsContainer: "events",
@@ -191,6 +198,9 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 			}
 			if got, want := env["COSMOS_TURN_QUEUE_CONTAINER"], "turns"; got != want {
 				t.Fatalf("COSMOS_TURN_QUEUE_CONTAINER = %v, want %q", got, want)
+			}
+			if got, want := env["TANK_SESSION_STORAGE_KEY"], "slot-a:12"; got != want {
+				t.Fatalf("TANK_SESSION_STORAGE_KEY = %v, want %q", got, want)
 			}
 		})
 	}
