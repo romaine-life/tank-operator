@@ -68,6 +68,153 @@ const RADIUS_SAMPLES = [
   ["pill", "--radius-pill", "9999px"],
 ] as const;
 
+type InspectBox = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  label: string;
+};
+
+type DesignSelection = {
+  url: string;
+  path: string;
+  selected_at: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  element: {
+    tag: string;
+    role: string | null;
+    name: string | null;
+    text: string;
+    id: string | null;
+    class_name: string | null;
+    test_id: string | null;
+    design_component: string | null;
+    design_state: string | null;
+    design_source: string | null;
+  };
+  specimen: {
+    heading: string | null;
+  };
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  selectors: {
+    test_id: string | null;
+    role: string | null;
+    css_hint: string;
+  };
+  styles: {
+    display: string;
+    position: string;
+    color: string;
+    background_color: string;
+    font_size: string;
+  };
+};
+
+function readableElementName(el: HTMLElement) {
+  const labelledBy = el.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const label = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent?.trim())
+      .filter(Boolean)
+      .join(" ");
+    if (label) return label;
+  }
+  return (
+    el.getAttribute("aria-label") ||
+    el.getAttribute("title") ||
+    el.textContent?.replace(/\s+/g, " ").trim() ||
+    null
+  );
+}
+
+function cssHint(el: HTMLElement) {
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const testId = el.dataset.testid;
+  if (testId) return `[data-testid="${testId}"]`;
+  const component = el.dataset.designComponent;
+  if (component) return `[data-design-component="${component}"]`;
+  const className = Array.from(el.classList).slice(0, 2).map((name) => `.${CSS.escape(name)}`).join("");
+  return `${el.tagName.toLowerCase()}${className}`;
+}
+
+function nearestSpecimenHeading(el: HTMLElement, root: HTMLElement) {
+  const section = el.closest("section");
+  if (!section || !root.contains(section)) return null;
+  return section.querySelector("h2")?.textContent?.replace(/\s+/g, " ").trim() || null;
+}
+
+function inspectBoxFor(el: HTMLElement): InspectBox {
+  const rect = el.getBoundingClientRect();
+  return {
+    top: rect.top,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height,
+    label: el.dataset.designComponent || el.getAttribute("aria-label") || el.tagName.toLowerCase(),
+  };
+}
+
+function selectionForElement(el: HTMLElement, root: HTMLElement): DesignSelection {
+  const rect = el.getBoundingClientRect();
+  const styles = window.getComputedStyle(el);
+  const name = readableElementName(el);
+  const role = el.getAttribute("role") || (el instanceof HTMLButtonElement ? "button" : null);
+  const testId = el.dataset.testid || null;
+
+  return {
+    url: window.location.href,
+    path: window.location.pathname,
+    selected_at: new Date().toISOString(),
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    },
+    element: {
+      tag: el.tagName.toLowerCase(),
+      role,
+      name,
+      text: el.textContent?.replace(/\s+/g, " ").trim().slice(0, 160) || "",
+      id: el.id || null,
+      class_name: el.className || null,
+      test_id: testId,
+      design_component: el.dataset.designComponent || null,
+      design_state: el.dataset.designState || null,
+      design_source: el.dataset.designSource || null,
+    },
+    specimen: {
+      heading: nearestSpecimenHeading(el, root),
+    },
+    rect: {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    },
+    selectors: {
+      test_id: testId ? `[data-testid="${testId}"]` : null,
+      role: role && name ? `getByRole('${role}', { name: ${JSON.stringify(name)} })` : null,
+      css_hint: cssHint(el),
+    },
+    styles: {
+      display: styles.display,
+      position: styles.position,
+      color: styles.color,
+      background_color: styles.backgroundColor,
+      font_size: styles.fontSize,
+    },
+  };
+}
+
 function TankIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -364,9 +511,55 @@ function IconChevronDown({ className }: { className?: string }) {
 
 export function StyleguideView() {
   const [dropdownOpen, setDropdownOpen] = useState(true);
+  const [inspectMode, setInspectMode] = useState(false);
+  const [hoverBox, setHoverBox] = useState<InspectBox | null>(null);
+  const [selectedBox, setSelectedBox] = useState<InspectBox | null>(null);
+  const [selection, setSelection] = useState<DesignSelection | null>(null);
+  const [selectionStatus, setSelectionStatus] = useState("no selection yet");
+
+  function handleInspectMove(event: React.MouseEvent<HTMLDivElement>) {
+    if (!inspectMode || !(event.target instanceof HTMLElement)) return;
+    const target = event.target.closest<HTMLElement>("[data-inspectable], button, a, [role], code, pre, li, section");
+    if (!target || target.closest("[data-inspector-control]")) {
+      setHoverBox(null);
+      return;
+    }
+    setHoverBox(inspectBoxFor(target));
+  }
+
+  function handleInspectClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (!inspectMode || !(event.target instanceof HTMLElement)) return;
+    if (event.target.closest("[data-inspector-control]")) return;
+
+    const target = event.target.closest<HTMLElement>("[data-inspectable], button, a, [role], code, pre, li, section");
+    if (!target) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const nextSelection = selectionForElement(target, event.currentTarget);
+    setSelection(nextSelection);
+    setSelectedBox(inspectBoxFor(target));
+    setSelectionStatus("posting selection...");
+
+    void fetch("/api/design/selection", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextSelection),
+    })
+      .then((res) => {
+        setSelectionStatus(res.ok ? "selection posted" : `post failed: ${res.status}`);
+      })
+      .catch((error: unknown) => {
+        setSelectionStatus(error instanceof Error ? `post failed: ${error.message}` : "post failed");
+      });
+  }
 
   return (
     <div
+      onMouseMove={handleInspectMove}
+      onMouseLeave={() => setHoverBox(null)}
+      onClickCapture={handleInspectClick}
       style={{
         minHeight: "100vh",
         background: "var(--bg-app)",
@@ -394,6 +587,68 @@ export function StyleguideView() {
           a component changes. See <code>docs/styleguide-contract.md</code> in
           the glimmung repo for the contract.
         </p>
+
+        <section
+          data-inspector-control
+          style={{
+            ...sectionStyle,
+            position: "sticky",
+            top: 0,
+            zIndex: 30,
+            background: "rgba(23,23,23,0.94)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <h2 style={headStyle}>select element</h2>
+          <p style={captionStyle}>
+            Toggle inspection, hover to confirm the target, then click a UI
+            element. The styleguide posts a structured selection packet to
+            <code> /api/design/selection</code>; agents can read it from
+            <code> /api/design/selection/latest</code>.
+          </p>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={rowStyle}>
+              <button
+                className={inspectMode ? "btn-primary" : "btn-secondary"}
+                type="button"
+                onClick={() => {
+                  setInspectMode((value) => !value);
+                  setHoverBox(null);
+                }}
+              >
+                {inspectMode ? "selecting..." : "Select element"}
+              </button>
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => {
+                  setSelection(null);
+                  setSelectedBox(null);
+                  setSelectionStatus("no selection yet");
+                }}
+              >
+                Clear
+              </button>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+                {selectionStatus}
+              </span>
+            </div>
+            {selection && (
+              <pre
+                className="error"
+                style={{
+                  margin: 0,
+                  maxHeight: 220,
+                  overflow: "auto",
+                  background: "var(--bg-base)",
+                  color: "var(--text-body)",
+                }}
+              >
+                {JSON.stringify(selection, null, 2)}
+              </pre>
+            )}
+          </div>
+        </section>
 
         {/* === foundations: colors === */}
         <section style={sectionStyle}>
@@ -616,11 +871,27 @@ export function StyleguideView() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
-                    <button className="run-tab" type="button" aria-pressed={false}>
+                    <button
+                      className="run-tab"
+                      type="button"
+                      aria-pressed={false}
+                      data-testid="styleguide-run-tab-files"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="rest"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
-                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-settings-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="active"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <SettingsIcon className="run-tab-icon" aria-hidden="true" />
                       <span>Settings</span>
                     </button>
@@ -641,11 +912,26 @@ export function StyleguideView() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
-                    <button className="run-tab run-tab-back" type="button">
+                    <button
+                      className="run-tab run-tab-back"
+                      type="button"
+                      data-testid="styleguide-run-tab-back"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="side-pane-back"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
-                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-files-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="side-pane-open"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
@@ -670,11 +956,26 @@ export function StyleguideView() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
-                    <button className="run-tab run-tab-back" type="button">
+                    <button
+                      className="run-tab run-tab-back"
+                      type="button"
+                      data-testid="styleguide-run-tab-back-narrow"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="narrow-side-pane-back"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
-                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-files-narrow-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="narrow-side-pane-open"
+                      data-design-source="frontend/src/App.tsx"
+                    >
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
@@ -908,6 +1209,56 @@ export function StyleguideView() {
           </div>
         </section>
       </div>
+      {inspectMode && hoverBox && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            top: hoverBox.top,
+            left: hoverBox.left,
+            width: hoverBox.width,
+            height: hoverBox.height,
+            border: "1px solid var(--cyan)",
+            boxShadow: "0 0 0 1px rgba(103,232,249,0.24)",
+            pointerEvents: "none",
+            zIndex: 1000,
+          }}
+        >
+          <span
+            style={{
+              position: "absolute",
+              left: 0,
+              top: -22,
+              maxWidth: 240,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--cyan)",
+              color: "#082f36",
+              fontSize: "var(--text-xs)",
+              padding: "2px 6px",
+            }}
+          >
+            {hoverBox.label}
+          </span>
+        </div>
+      )}
+      {selectedBox && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            top: selectedBox.top,
+            left: selectedBox.left,
+            width: selectedBox.width,
+            height: selectedBox.height,
+            border: "2px solid var(--status-online)",
+            pointerEvents: "none",
+            zIndex: 999,
+          }}
+        />
+      )}
     </div>
   );
 }

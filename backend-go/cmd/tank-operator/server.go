@@ -1,11 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -13,6 +19,8 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
+
+const designSelectionConfigMapName = "tank-design-selection"
 
 // appServer holds shared application state for all handlers.
 type appServer struct {
@@ -32,6 +40,9 @@ type appServer struct {
 
 	sessionServiceAccount string
 
+	designSelectionMu     sync.Mutex
+	latestDesignSelection map[string]any
+
 	// internalAllowedSubjects maps "namespace/serviceaccount" → email for internal SA auth.
 	internalAllowedSubjects map[string]string
 }
@@ -40,6 +51,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Health / config.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/config", s.handleConfig)
+	mux.HandleFunc("GET /api/design/selection/latest", s.handleGetLatestDesignSelection)
+	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)
 
 	// Auth.
 	mux.HandleFunc("POST /api/auth/microsoft/login", s.handleMicrosoftLogin)
@@ -162,6 +175,99 @@ func readOptionalFile(path string, fallback string) string {
 		return fallback
 	}
 	return string(body)
+}
+
+func (s *appServer) handlePostDesignSelection(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+
+	var payload map[string]any
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := decoder.Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid selection payload"})
+		return
+	}
+	payload["received_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+
+	if err := s.saveLatestDesignSelection(r, payload); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to store selection"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *appServer) handleGetLatestDesignSelection(w http.ResponseWriter, r *http.Request) {
+	selection, ok, err := s.loadLatestDesignSelection(r)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load selection"})
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"selection": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"selection": selection})
+}
+
+func (s *appServer) saveLatestDesignSelection(r *http.Request, payload map[string]any) error {
+	s.designSelectionMu.Lock()
+	s.latestDesignSelection = payload
+	s.designSelectionMu.Unlock()
+
+	if s.k8s == nil || s.namespace == "" {
+		return nil
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	cms := s.k8s.CoreV1().ConfigMaps(s.namespace)
+	cm, err := cms.Get(r.Context(), designSelectionConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = cms.Create(r.Context(), &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: designSelectionConfigMapName},
+			Data:       map[string]string{"selection.json": string(encoded)},
+		}, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
+	}
+	cm.Data["selection.json"] = string(encoded)
+	_, err = cms.Update(r.Context(), cm, metav1.UpdateOptions{})
+	return err
+}
+
+func (s *appServer) loadLatestDesignSelection(r *http.Request) (map[string]any, bool, error) {
+	if s.k8s != nil && s.namespace != "" {
+		cm, err := s.k8s.CoreV1().ConfigMaps(s.namespace).Get(r.Context(), designSelectionConfigMapName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		raw := cm.Data["selection.json"]
+		if raw == "" {
+			return nil, false, nil
+		}
+		var selection map[string]any
+		if err := json.Unmarshal([]byte(raw), &selection); err != nil {
+			return nil, false, err
+		}
+		return selection, true, nil
+	}
+
+	s.designSelectionMu.Lock()
+	selection := s.latestDesignSelection
+	s.designSelectionMu.Unlock()
+	return selection, selection != nil, nil
 }
 
 type tankStaticRootSet struct {
