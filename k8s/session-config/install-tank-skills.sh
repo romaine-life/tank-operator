@@ -13,8 +13,8 @@ install_tank_skills() {
   [ -d "$config_dir" ] || return 0
   mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills"
 
-  shopt -s nullglob
   for bundled_file in "$config_dir"/skills__*; do
+    [ -e "$bundled_file" ] || continue
     base="$(basename "$bundled_file")"
     rest="${base#skills__}"
     scope="${rest%%__*}"
@@ -35,5 +35,10 @@ install_tank_skills() {
       cp "$bundled_file" "$dest_path"
     done
   done
-  shopt -u nullglob
 }
+
+# Legacy scripts source this file and call install_tank_skills themselves.
+# SDK runner launch scripts execute it directly during pod boot.
+if [ "$(basename "$0")" = "install-tank-skills.sh" ]; then
+  install_tank_skills "$@"
+fi

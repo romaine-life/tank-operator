@@ -142,10 +142,9 @@ func (s *CosmosStore) Upsert(ctx context.Context, record compat.SessionRecord) e
 // SetName updates the display name for a session.
 func (s *CosmosStore) SetName(ctx context.Context, email, sessionID string, name *string) error {
 	normalized := strings.ToLower(email)
-	docID := compat.SessionDocID(s.scope, sessionID)
 	pk := azcosmos.NewPartitionKeyString(normalized)
 
-	resp, err := s.container.ReadItem(ctx, pk, docID, nil)
+	resp, docID, err := s.readSessionDoc(ctx, pk, sessionID)
 	if err != nil {
 		return nil // not found → no-op
 	}
@@ -170,10 +169,9 @@ func (s *CosmosStore) SetName(ctx context.Context, email, sessionID string, name
 // MarkDeleted sets visible=false on the session registry record.
 func (s *CosmosStore) MarkDeleted(ctx context.Context, email, sessionID string) error {
 	normalized := strings.ToLower(email)
-	docID := compat.SessionDocID(s.scope, sessionID)
 	pk := azcosmos.NewPartitionKeyString(normalized)
 
-	resp, err := s.container.ReadItem(ctx, pk, docID, nil)
+	resp, docID, err := s.readSessionDoc(ctx, pk, sessionID)
 	if err != nil {
 		return nil // not found → no-op
 	}
@@ -189,4 +187,26 @@ func (s *CosmosStore) MarkDeleted(ctx context.Context, email, sessionID string) 
 	}
 	_, err = s.container.ReplaceItem(ctx, pk, docID, raw, nil)
 	return err
+}
+
+func (s *CosmosStore) readSessionDoc(ctx context.Context, pk azcosmos.PartitionKey, sessionID string) (azcosmos.ItemResponse, string, error) {
+	for _, docID := range sessionDocIDs(s.scope, sessionID) {
+		resp, err := s.container.ReadItem(ctx, pk, docID, nil)
+		if err == nil {
+			return resp, docID, nil
+		}
+		if !isNotFound(err) {
+			return azcosmos.ItemResponse{}, "", err
+		}
+	}
+	return azcosmos.ItemResponse{}, "", fmt.Errorf("session not found")
+}
+
+func sessionDocIDs(scope, sessionID string) []string {
+	primary := compat.SessionDocID(scope, sessionID)
+	legacy := "session:" + sessionID
+	if primary == legacy {
+		return []string{primary}
+	}
+	return []string{primary, legacy}
 }

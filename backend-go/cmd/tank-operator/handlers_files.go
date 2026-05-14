@@ -26,6 +26,17 @@ type mcpServerEntry struct {
 	Enabled   bool   `json:"enabled"`
 }
 
+type mcpToolEntry struct {
+	Server      string `json:"server"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type mcpToolListResponse struct {
+	Entries []mcpToolEntry      `json:"entries"`
+	Errors  []map[string]string `json:"errors"`
+}
+
 type fileEntryResponse struct {
 	Name      string  `json:"name"`
 	Type      string  `json:"type"`
@@ -44,6 +55,18 @@ type selectedFileResponse struct {
 	Truncated bool   `json:"truncated"`
 	Text      string `json:"text"`
 	Binary    bool   `json:"binary"`
+}
+
+type skillEntryResponse struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Source      string `json:"source"`
+	Description string `json:"description"`
+	BodyPreview string `json:"body_preview"`
+}
+
+type skillListResponse struct {
+	Entries []skillEntryResponse `json:"entries"`
 }
 
 // handleListFiles lists the directory contents at the given path query param.
@@ -390,23 +413,93 @@ func (s *appServer) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
-		[]string{"bash", "-lc", "find /workspace -name 'SKILL.md' 2>/dev/null | sort"})
+		[]string{"bash", "-lc", `python3 - <<'PY'
+import json
+import os
+
+def parse_skill(path, source):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read(8192)
+    except OSError:
+        return None
+
+    name = os.path.basename(os.path.dirname(path)) or "skill"
+    description = ""
+    body = text
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            frontmatter = text[4:end].splitlines()
+            body = text[end + 5:]
+            for line in frontmatter:
+                key, sep, value = line.partition(":")
+                if not sep:
+                    continue
+                key = key.strip()
+                value = value.strip().strip("\"'")
+                if key == "name" and value:
+                    name = value
+                elif key == "description":
+                    description = value
+
+    preview = " ".join(body.strip().split())[:240]
+    return {
+        "name": name,
+        "path": path,
+        "source": source,
+        "description": description,
+        "body_preview": preview,
+    }
+
+entries = []
+seen = set()
+
+config_dir = "/opt/tank/session-config"
+if os.path.isdir(config_dir):
+    for filename in sorted(os.listdir(config_dir)):
+        if not filename.startswith("skills__") or not filename.endswith("__SKILL.md"):
+            continue
+        entry = parse_skill(os.path.join(config_dir, filename), "bundled")
+        if entry and entry["name"] not in seen:
+            seen.add(entry["name"])
+            entries.append(entry)
+
+roots = [
+    ("/home/node/.codex/skills", "codex"),
+    ("/home/node/.claude/skills", "claude"),
+    ("/workspace", "workspace"),
+]
+for root, source in roots:
+    if not os.path.isdir(root):
+        continue
+    for current, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in {".git", "node_modules"}]
+        if "SKILL.md" not in files:
+            continue
+        path = os.path.join(current, "SKILL.md")
+        entry = parse_skill(path, source)
+        dedupe_key = entry["name"] if entry else ""
+        if entry and dedupe_key not in seen:
+            seen.add(dedupe_key)
+            entries.append(entry)
+
+print(json.dumps({"entries": entries}))
+PY`})
 	if err != nil {
-		writeJSON(w, http.StatusOK, []string{})
+		writeJSON(w, http.StatusOK, skillListResponse{Entries: []skillEntryResponse{}})
 		return
 	}
 
-	var skills []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			skills = append(skills, line)
-		}
+	var body skillListResponse
+	if err := json.Unmarshal(out, &body); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse skills: "+err.Error())
+		return
 	}
-	if skills == nil {
-		skills = []string{}
+	if body.Entries == nil {
+		body.Entries = []skillEntryResponse{}
 	}
-	writeJSON(w, http.StatusOK, skills)
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleListMCPServers lists MCP server entries from the session config.
@@ -472,6 +565,110 @@ func parseMCPServerEntries(config map[string]any, source string) []mcpServerEntr
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries
+}
+
+// handleListMCPTools lists concrete MCP tools exposed inside the session pod.
+func (s *appServer) handleListMCPTools(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := r.PathValue("session_id")
+	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	if herr != nil {
+		writeError(w, herr.status, herr.msg)
+		return
+	}
+
+	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
+		[]string{"bash", "-lc", `python3 - <<'PY'
+import json
+import urllib.error
+import urllib.request
+
+try:
+    with open("/workspace/.mcp.json", "r", encoding="utf-8") as fh:
+        config = json.load(fh)
+except Exception:
+    config = {}
+
+def sse_json(body):
+    text = body.decode("utf-8", "replace")
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            try:
+                return json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+
+entries = []
+errors = []
+for server, raw in sorted((config.get("mcpServers") or {}).items()):
+    if not isinstance(raw, dict):
+        continue
+    url = str(raw.get("url") or "").strip()
+    if not url:
+        continue
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {},
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            msg = sse_json(resp.read())
+    except Exception as exc:
+        errors.append({"server": server, "error": str(exc)})
+        continue
+    tools = (((msg.get("result") or {}).get("tools")) or [])
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name") or "").strip()
+        if not name:
+            continue
+        entries.append({
+            "server": server,
+            "name": name,
+            "description": str(tool.get("description") or "").strip(),
+        })
+
+print(json.dumps({"entries": entries, "errors": errors}))
+PY`})
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"entries": []mcpToolEntry{}, "errors": []map[string]string{}})
+		return
+	}
+
+	var body struct {
+		Entries []mcpToolEntry      `json:"entries"`
+		Errors  []map[string]string `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		writeError(w, http.StatusInternalServerError, "parse MCP tools: "+err.Error())
+		return
+	}
+	if body.Entries == nil {
+		body.Entries = []mcpToolEntry{}
+	}
+	if body.Errors == nil {
+		body.Errors = []map[string]string{}
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func stringValue(value any) string {

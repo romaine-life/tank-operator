@@ -1555,6 +1555,16 @@ function skillActionText(name: string): string {
   return `${name.charAt(0).toUpperCase()}${name.slice(1)} skill`;
 }
 
+function skillTrigger(providerIsClaude: boolean, name: string): string {
+  return `${providerIsClaude ? "/" : "$"}${name}`;
+}
+
+function stripSkillTrigger(name: string, text: string): string {
+  const trimmed = text.trim();
+  const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
+  return trimmed.replace(triggerPattern, "").trim();
+}
+
 function appendSkillInvocation(
   entries: TranscriptEntry[],
   name: string,
@@ -4716,14 +4726,17 @@ function ChatPane({
 
   function submitSkillInvocation(skillName: string, promptText = "") {
     const displayText = skillInvocationTitle(skillName);
+    const trigger = skillTrigger(isClaude, skillName);
+    const trimmedPrompt = promptText.trim();
+    const skillPrompt = trimmedPrompt ? `${trigger}\n\n${trimmedPrompt}` : trigger;
     if (running) {
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: promptText, displayText, skillName },
+        { id: nextQueuedMessageId(), text: skillPrompt, displayText, skillName },
       ]);
       return;
     }
-    startRun(promptText, displayText, skillName);
+    startRun(skillPrompt, displayText, skillName);
   }
 
   async function enqueueSdkTurn(run: NonNullable<typeof currentRunRef.current>): Promise<void> {
@@ -4836,7 +4849,7 @@ function ChatPane({
     if (skillName) {
       appendSdkRealtimeEntries(
         markLocalEntries(
-          appendSkillInvocation([], skillName, trimmed, optimisticTime),
+          appendSkillInvocation([], skillName, stripSkillTrigger(skillName, trimmed), optimisticTime),
           run.id,
         ),
       );
@@ -6011,14 +6024,7 @@ function ChatPane({
                         setQueuedMessages((prev) =>
                           prev.filter((item) => item.id !== message.id),
                         );
-                        const skillTrigger = `${isClaude ? "/" : "$"}${message.skillName}`;
-                        setComposerValue(
-                          message.skillName
-                            ? message.text.trim()
-                              ? `${skillTrigger}\n\n${message.text}`
-                              : skillTrigger
-                            : message.text,
-                        );
+                        setComposerValue(message.text);
                       }}
                     >
                       <SquarePenIcon size={13} aria-hidden="true" />
