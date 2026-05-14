@@ -24,21 +24,21 @@ const designSelectionConfigMapName = "tank-design-selection"
 
 // appServer holds shared application state for all handlers.
 type appServer struct {
-	k8s           kubernetes.Interface
-	restCfg       *rest.Config
-	mgr           *sessions.Manager
-	profiles      profilesStore
-	turnQueue     store.TurnQueueStore
-	sessionEvents store.SessionEventStore
-	eventBroker   *sessionEventBroker
-	readStates    store.ConversationReadStateStore
-	eventBus      *sessions.EventBus
-	verifier      *auth.Verifier
-	minter        *auth.Minter
-	namespace     string
-	sessionScope  string
-
-	sessionServiceAccount string
+	k8s                      kubernetes.Interface
+	restCfg                  *rest.Config
+	mgr                      *sessions.Manager
+	profiles                 profilesStore
+	turnQueue                store.TurnQueueStore
+	sessionEvents            store.SessionEventStore
+	eventBroker              *sessionEventBroker
+	readStates               store.ConversationReadStateStore
+	eventBus                 *sessions.EventBus
+	verifier                 *auth.Verifier
+	minter                   *auth.Minter
+	namespace                string
+	sessionScope             string
+	sessionServiceAccount    string
+	designSelectionNamespace string
 
 	designSelectionMu     sync.Mutex
 	latestDesignSelection map[string]any
@@ -214,7 +214,7 @@ func (s *appServer) saveLatestDesignSelection(r *http.Request, payload map[strin
 	s.latestDesignSelection = payload
 	s.designSelectionMu.Unlock()
 
-	if s.k8s == nil || s.namespace == "" {
+	if s.k8s == nil || s.designSelectionNamespace == "" {
 		return nil
 	}
 
@@ -223,7 +223,7 @@ func (s *appServer) saveLatestDesignSelection(r *http.Request, payload map[strin
 		return err
 	}
 
-	cms := s.k8s.CoreV1().ConfigMaps(s.namespace)
+	cms := s.k8s.CoreV1().ConfigMaps(s.designSelectionNamespace)
 	cm, err := cms.Get(r.Context(), designSelectionConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		_, err = cms.Create(r.Context(), &corev1.ConfigMap{
@@ -245,8 +245,8 @@ func (s *appServer) saveLatestDesignSelection(r *http.Request, payload map[strin
 }
 
 func (s *appServer) loadLatestDesignSelection(r *http.Request) (map[string]any, bool, error) {
-	if s.k8s != nil && s.namespace != "" {
-		cm, err := s.k8s.CoreV1().ConfigMaps(s.namespace).Get(r.Context(), designSelectionConfigMapName, metav1.GetOptions{})
+	if s.k8s != nil && s.designSelectionNamespace != "" {
+		cm, err := s.k8s.CoreV1().ConfigMaps(s.designSelectionNamespace).Get(r.Context(), designSelectionConfigMapName, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			return nil, false, nil
 		}
