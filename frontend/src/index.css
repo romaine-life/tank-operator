@@ -4626,7 +4626,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message {
   display: grid;
-  grid-template-columns: 1.7rem minmax(0, 1fr) 1.7rem;
+  grid-template-columns: 1.7rem minmax(0, 1fr);
   column-gap: 0.55rem;
   row-gap: 0.2rem;
   align-items: start;
@@ -4658,7 +4658,7 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-msg-avatar {
-  grid-column: 3;
+  grid-column: 1;
   grid-row: 1;
   width: 1.7rem;
   height: 1.7rem;
@@ -4722,7 +4722,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
-  justify-self: end;
+  justify-self: start;
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.085),
