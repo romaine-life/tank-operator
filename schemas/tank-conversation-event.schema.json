@@ -95,7 +95,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["tank", "claude", "codex", "legacy-run"]
+      "enum": ["tank", "claude", "codex"]
     },
     "type": {
       "type": "string",

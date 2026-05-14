@@ -12,7 +12,7 @@ func TestSessionFromDocMatchesPythonShape(t *testing.T) {
 		"email": "USER@example.COM",
 		"session_scope": "default",
 		"session_id": "12",
-		"mode": "codex_headless",
+		"mode": "codex_gui",
 		"pod_name": "session-12",
 		"name": "Workbench",
 		"visible": true,
@@ -23,7 +23,7 @@ func TestSessionFromDocMatchesPythonShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.ID != "12" || record.Email != "USER@example.COM" || record.Mode != "codex_headless" {
+	if record.ID != "12" || record.Email != "USER@example.COM" || record.Mode != "codex_gui" {
 		t.Fatalf("record identity = %#v", record)
 	}
 	if record.Name == nil || *record.Name != name {
@@ -37,7 +37,7 @@ func TestSessionFromDocMatchesPythonShape(t *testing.T) {
 	}
 }
 
-func TestSessionFromDocFallsBackForLegacyShape(t *testing.T) {
+func TestSessionFromDocFallsBackForMinimalShape(t *testing.T) {
 	record, err := sessionFromDoc([]byte(`{
 		"id": "session:slot-a:12",
 		"email": "user@example.com",
@@ -52,8 +52,8 @@ func TestSessionFromDocFallsBackForLegacyShape(t *testing.T) {
 	if record.Scope != "slot-a" {
 		t.Fatalf("scope = %q, want slot-a", record.Scope)
 	}
-	if record.Mode != "claude_cli" {
-		t.Fatalf("mode = %q, want claude_cli", record.Mode)
+	if record.Mode != "claude_gui" {
+		t.Fatalf("mode = %q, want claude_gui", record.Mode)
 	}
 }
 

@@ -1,8 +1,8 @@
 # tank-operator
 
 Web frontend over a thin K8s orchestrator that spawns ephemeral agent pods on
-demand. The launcher creates GUI/headless agent sessions backed by Kubernetes
-pods.
+demand. The launcher creates GUI chat and terminal agent sessions backed by
+Kubernetes pods.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
 in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy`). `platform-mcp` is
@@ -30,12 +30,31 @@ ACR, the Key Vault) also lives in
 [infra-bootstrap](https://github.com/nelsong6/infra-bootstrap) and is
 referenced here as data sources.
 
+## Messaging durability scope
+
+For messaging docs, "session pod" means the Kubernetes pod backing one user
+session, including its workspace `emptyDir` and the pod-side Claude/Codex
+runner containers.
+
+SDK GUI turns are durable across browser disconnects, frontend reloads,
+orchestrator rollouts, and runner-process restarts inside the same still-live
+session pod. The browser submits turns through
+`POST /api/sessions/{session_id}/turns`, runners claim `turn-queue` rows, and
+the UI replays durable conversation events from `/timeline` before attaching to
+live `/agent-ws` frames.
+
+Session-pod deletion or death is intentionally outside the messaging
+durability goal. A dead session pod means the session and its `emptyDir`
+workspace are gone; Tank does not try to resurrect that pod or preserve
+in-flight agent work after it. Do not treat that as a product gap unless the
+session lifecycle goal changes.
+
 ## Repo layout
 
 ```
 backend-go/                   Go orchestrator (Cosmos + KV + k8s exec)
 frontend/                     Vite + React UI
-api-proxy/                    Envoy ext_proc (Python): injects Anthropic OAuth, refreshes on 401
+api-proxy/                    Envoy ext_proc (Python): injects provider OAuth, refreshes on 401
 agent-container/              Long-lived pod-side runner (Go) — in progress, see CLAUDE.md
 claude-container/             Claude session image bootstrap + Dockerfile
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret
@@ -106,6 +125,37 @@ notifications, tray/menu/global shortcuts, or deeper clipboard integration.
 
 ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 `romainecr.azurecr.io/tank-operator:<sha>` (and `:latest`) by `.github/workflows/build.yml`.
+
+## Glimmung Test-Slot Hot Swap
+
+Tank validation slots run the orchestrator through `/app/tank-supervisor` when
+`testEnv.enabled=true`. The chart mounts `/var/run/tank-operator-hot` for
+backend artifacts and `/var/run/tank-operator-static-override` for frontend
+assets. Production keeps the normal `/app/tank-operator-go` command and image
+rollout path.
+
+Project metadata for Glimmung:
+
+```json
+{
+  "test_slot_hot_swap": {
+    "enabled": true,
+    "static": {
+      "enabled": true,
+      "source": "frontend/dist",
+      "target": "/var/run/tank-operator-static-override"
+    },
+    "backend": {
+      "enabled": true,
+      "strategy": "supervisor",
+      "build_command": "cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator",
+      "artifact": "/tmp/tank-operator-go",
+      "target": "/var/run/tank-operator-hot/tank-operator-go",
+      "health_path": "/healthz"
+    }
+  }
+}
+```
 
 Auth: the SPA uses MSAL.js to obtain an Entra ID token, POSTs it to
 `/api/auth/microsoft/login`, and the orchestrator mints an RS256 session

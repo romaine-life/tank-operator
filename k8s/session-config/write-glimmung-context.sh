@@ -1,9 +1,8 @@
 #!/bin/bash
 # Idempotently materialize attended-pickup context inside a session pod.
 #
-# This runs at pod start so automation can verify context before the browser
-# terminal opens. The interactive bootstrap also calls it for older pods whose
-# container command predates this script.
+# Session runners call this before launching the agent so automation can verify
+# context before work starts.
 
 if [ -z "${TANK_GLIMMUNG_CONTEXT_JSON:-}" ]; then
   exit 0

@@ -2,6 +2,19 @@
 
 Status: draft ADR for issue #402.
 
+## Durability Boundary
+
+For this document, "session pod" means the Kubernetes pod backing one Tank
+session, including its workspace `emptyDir` and the pod-side Claude/Codex
+runner containers.
+
+Tank's messaging durability target is the live-session case: browser
+disconnects, frontend reloads, orchestrator restarts/rollouts, and
+runner-process restarts while that same session pod is still alive. Session-pod
+deletion or death is a terminal session lifecycle event and is intentionally
+not a messaging durability target. The protocol must not promise session-pod
+resurrection or preservation of in-flight agent work after the pod is gone.
+
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
 producers, Cosmos and the backend are the source of truth, and React renders a
@@ -19,15 +32,14 @@ The current implementation already has useful pieces, but they are implicit:
   shaped rather than Tank shaped.
 - `backend-go/internal/store/session_events.go` reads `session-events` by
   session and sorts by `tank_order_key`, then timestamps, then ids. Its public
-  API still paginates by `after` document id, so the requested cursor does not
-  yet match render order in every legacy case.
-- `frontend/src/App.tsx` has provider-specific projection helpers for Claude,
-  Codex, and legacy run events. It also owns status decisions such as stopped
-  vs error, active tool state, and reconnect behavior directly in the pane.
-- The legacy run path persists `active-runs` and `run-events`; the SDK path
-  persists `session-events`. A future provider would still need to touch
-  frontend sidebar and chat state logic unless the provider output is first
-  mapped into a stable Tank protocol.
+  API paginates by durable render order.
+- `frontend/src/App.tsx` renders Claude and Codex SDK events through the Tank
+  conversation reducer/projection. It also owns status decisions such as
+  stopped vs error, active tool state, and reconnect behavior directly in the
+  pane.
+- The GUI chat path persists `session-events` and queues work in
+  `turn-queue`. A future provider should map provider output into the stable
+  Tank protocol before touching frontend sidebar and chat state logic.
 
 This ADR makes the missing contract explicit before the next implementation
 step rewires producers, backend APIs, and UI projection.
@@ -89,7 +101,7 @@ Required fields:
 - `session_id`: Tank session id.
 - `turn_id`: required for turn and item events.
 - `actor`: `user`, `assistant`, `system`, `tool`, or `runner`.
-- `source`: `tank`, `claude`, `codex`, or `legacy-run`.
+- `source`: `tank`, `claude`, or `codex`.
 - `type`: stable Tank event type.
 - `created_at`: producer timestamp in RFC3339 format.
 - `visibility`: `durable`, `live-only`, or `audit-only`.
@@ -200,18 +212,6 @@ Codex SDK adapter:
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |
 
-Legacy run adapter:
-
-| Legacy event | Tank event | Notes |
-| --- | --- | --- |
-| `run.message.created` user | `user_message.created` | Use run id as `turn_id` until the turn queue owns ids. |
-| `run.output.started` | `turn.started` | Synthetic start marker. |
-| `run.tool.started` | `item.started` | Tool item with `item_id=tool_use_id`. |
-| `run.tool.completed` | `item.completed` or `item.failed` | Failure when `is_error=true`. |
-| `run.message.created` assistant | `item.completed` | Assistant message item. |
-| `run.completed` | `turn.completed` | |
-| `run.failed` or `run.stale` | `turn.failed` | Stale is a distinct reason in payload. |
-
 ## Backend API Sketch
 
 History read:
@@ -258,7 +258,7 @@ Body:
 
 ```json
 {
-  "client_nonce": "run_abc123",
+  "client_nonce": "turn_abc123",
   "prompt": "Implement the change",
   "model": "claude-sonnet-4-6",
   "permission_mode": "bypassPermissions",
@@ -280,8 +280,8 @@ against `/timeline` instead of resending the prompt.
 Durability scope: queued SDK turns are intended to survive browser disconnects,
 orchestrator restarts/rollouts, and runner-process restarts while the session
 pod itself is still live. Session-pod deletion or death is terminal for the
-session and its `emptyDir` workspace; recovering a dead session pod is not part
-of this protocol.
+session and its `emptyDir` workspace; recovering a dead session pod is an
+explicit non-goal for this protocol.
 
 Activity summary:
 

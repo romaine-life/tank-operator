@@ -81,19 +81,6 @@ resource "azurerm_cosmosdb_sql_container" "profiles" {
   }
 }
 
-resource "azurerm_cosmosdb_sql_container" "active_runs" {
-  name                = "active-runs"
-  resource_group_name = data.azurerm_resource_group.main.name
-  account_name        = azurerm_cosmosdb_account.tank_operator.name
-  database_name       = azurerm_cosmosdb_sql_database.tank_operator.name
-  partition_key_paths = ["/session_id"]
-
-  indexing_policy {
-    indexing_mode = "consistent"
-    included_path { path = "/*" }
-  }
-}
-
 resource "azurerm_cosmosdb_sql_container" "session_events" {
   name                = "session-events"
   resource_group_name = data.azurerm_resource_group.main.name
@@ -130,7 +117,6 @@ resource "azurerm_cosmosdb_sql_container" "turn_queue" {
   # 7d — turn rows have a lifecycle of seconds to minutes; the TTL is a
   # safety net for any row a runner failed to mark completed (orchestrator
   # restart mid-write, runner crash before the status flip, etc.). The
-  # active-runs row is the live "is this run done" pointer; turn-queue
   # rows past the runner's claim time are just history.
   default_ttl = 604800
 
@@ -138,21 +124,6 @@ resource "azurerm_cosmosdb_sql_container" "turn_queue" {
     indexing_mode = "consistent"
     included_path { path = "/*" }
     excluded_path { path = "/prompt/*" }
-  }
-}
-
-resource "azurerm_cosmosdb_sql_container" "run_events" {
-  name                = "run-events"
-  resource_group_name = data.azurerm_resource_group.main.name
-  account_name        = azurerm_cosmosdb_account.tank_operator.name
-  database_name       = azurerm_cosmosdb_sql_database.tank_operator.name
-  partition_key_paths = ["/run_id"]
-  default_ttl         = 2592000
-
-  indexing_policy {
-    indexing_mode = "consistent"
-    included_path { path = "/*" }
-    excluded_path { path = "/payload/*" }
   }
 }
 

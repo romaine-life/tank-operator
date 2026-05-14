@@ -23,11 +23,20 @@ spec:
     spec:
       serviceAccountName: {{ include "tank-operator.orchestratorServiceAccount" . }}
       terminationGracePeriodSeconds: {{ .Values.orchestrator.terminationGracePeriodSeconds }}
+      {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      {{- end }}
       containers:
         - name: tank-operator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
+          command: ["/app/tank-supervisor"]
+          {{- else }}
           command: ["/app/tank-operator-go"]
+          {{- end }}
           terminationMessagePolicy: FallbackToLogsOnError
           ports:
             - name: http
@@ -51,8 +60,10 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
-            - name: CODEX_CREDS_SECRET
+            - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
+            - name: SESSION_AZURE_CONFIG_SECRET
+              value: {{ include "tank-operator.sessionAzureConfigSecret" . | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -63,12 +74,22 @@ spec:
             - name: TANK_OPERATOR_STATIC_OVERRIDE_DIR
               value: {{ .Values.staticOverride.mountPath | quote }}
             {{- end }}
+            {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
+            - name: GLIMMUNG_SUPERVISOR_CHILD
+              value: {{ .Values.hotSwapBackend.childCommand | quote }}
+            - name: GLIMMUNG_SUPERVISOR_HOT_ARTIFACT
+              value: {{ .Values.hotSwapBackend.target | quote }}
+            - name: GLIMMUNG_SUPERVISOR_RESTART_ENABLED
+              value: "true"
+            {{- end }}
             - name: CLAUDE_CREDENTIALS_FILE
               value: /etc/claude-credentials/{{ .Values.externalSecret.claudeCredentials.secretKey }}
             - name: CLAUDE_OAUTH_GATEWAY_HOST
               value: {{ include "tank-operator.oauthGatewayHost" . | quote }}
             - name: CLAUDE_API_PROXY_HOST
               value: {{ include "tank-operator.apiProxyHost" . | quote }}
+            - name: CODEX_API_PROXY_HOST
+              value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
@@ -100,10 +121,6 @@ spec:
               value: {{ .Values.cosmos.database | quote }}
             - name: COSMOS_PROFILES_CONTAINER
               value: {{ .Values.cosmos.profilesContainer | quote }}
-            - name: COSMOS_ACTIVE_RUNS_CONTAINER
-              value: {{ .Values.cosmos.activeRunsContainer | quote }}
-            - name: COSMOS_RUN_EVENTS_CONTAINER
-              value: {{ .Values.cosmos.runEventsContainer | quote }}
             - name: COSMOS_SESSION_EVENTS_CONTAINER
               value: {{ .Values.cosmos.sessionEventsContainer | quote }}
             - name: COSMOS_TURN_QUEUE_CONTAINER
@@ -120,6 +137,12 @@ spec:
             # host-owned repos when a non-host caller touches them.
             - name: HOST_EMAIL
               value: {{ .Values.host.email | quote }}
+            # Comma-separated emails that receive explicit super-admin
+            # behavior in MCP servers. Empty falls back to HOST_EMAIL in
+            # the orchestrator for compatibility with single-operator
+            # deployments.
+            - name: SUPER_ADMIN_EMAILS
+              value: {{ .Values.superAdmins.emails | quote }}
             # Comma-separated "namespace/serviceaccount" pairs allowed to call
             # /api/internal/*. Widened here to include mcp-tank-operator in
             # addition to mcp-github. Override in per-slot value overlays when
@@ -149,6 +172,10 @@ spec:
             - name: claude-credentials
               mountPath: /etc/claude-credentials
               readOnly: true
+            {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
+            - name: hot-backend
+              mountPath: {{ .Values.hotSwapBackend.mountPath | quote }}
+            {{- end }}
             {{- if and .Values.testEnv.enabled .Values.staticOverride.enabled }}
             - name: static-override
               mountPath: {{ .Values.staticOverride.mountPath | quote }}
@@ -202,6 +229,10 @@ spec:
             optional: true
         {{- if and .Values.testEnv.enabled .Values.staticOverride.enabled }}
         - name: static-override
+          emptyDir: {}
+        {{- end }}
+        {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
+        - name: hot-backend
           emptyDir: {}
         {{- end }}
 ---

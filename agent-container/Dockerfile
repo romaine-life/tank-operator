@@ -15,7 +15,7 @@ ARG VITE_VERSION=5.4.21
 # Must match the base image tag above. The base image bundles its
 # matching chromium under /ms-playwright; an unpinned `npm install
 # playwright` would otherwise pull a newer release whose chromium
-# revision (e.g. headless_shell-1217) is not on disk and break in-pod
+# revision expected by Chromium is not on disk and break in-pod
 # screenshot capture.
 ARG PLAYWRIGHT_VERSION=1.49.1
 

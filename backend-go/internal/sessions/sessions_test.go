@@ -61,7 +61,7 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 
 func TestGetFallsBackToSessionIDLabel(t *testing.T) {
 	pod := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
-	pod.Name = "session-legacy-abc"
+	pod.Name = "session-hash-abc"
 	client := fake.NewSimpleClientset(pod)
 	reader := NewReader(client, compat.SessionsNamespace)
 
@@ -69,7 +69,7 @@ func TestGetFallsBackToSessionIDLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PodName == nil || *got.PodName != "session-legacy-abc" {
+	if got.PodName == nil || *got.PodName != "session-hash-abc" {
 		t.Fatalf("pod name = %#v, want fallback pod", got.PodName)
 	}
 }
@@ -94,7 +94,7 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 		{
 			ID:          "12",
 			Email:       "nelson@romaine.life",
-			Mode:        "codex_headless",
+			Mode:        compat.CodexGUIMode,
 			PodName:     "session-12",
 			Name:        &recordedName,
 			RequestedAt: "2026-05-11T00:00:00+00:00",
@@ -104,7 +104,7 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 		{
 			ID:          "15",
 			Email:       "nelson@romaine.life",
-			Mode:        "subscription",
+			Mode:        compat.ClaudeCLIMode,
 			PodName:     "session-15",
 			RequestedAt: "2026-05-10T00:00:00+00:00",
 			CreatedAt:   "2026-05-10T00:00:01+00:00",
@@ -140,46 +140,6 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 	}
 	if got[2].ID != "16" || got[2].Status != "Active" {
 		t.Fatalf("pod-only session = %#v", got[2])
-	}
-}
-
-// runtimeFromPod drives the SPA's choice between SDK pods with a runner
-// container and the legacy HeadlessRun renderer. The contract is observable
-// as a JSON field on /api/sessions; keep it pinned so we don't silently route
-// legacy pods to the SDK pane (or vice versa) when refactoring container detection.
-func TestRuntimeFromPodDetectsAgentRunner(t *testing.T) {
-	withRunner := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
-	withRunner.Spec.Containers = append(withRunner.Spec.Containers, corev1.Container{Name: "agent-runner"})
-	if got := runtimeFromPod(withRunner); got != "sdk" {
-		t.Fatalf("runtime with agent-runner = %q, want sdk", got)
-	}
-
-	withoutRunner := sessionPod("13", "nelson@romaine.life", corev1.PodRunning, true)
-	if got := runtimeFromPod(withoutRunner); got != "legacy" {
-		t.Fatalf("runtime without agent-runner = %q, want legacy", got)
-	}
-}
-
-func TestRuntimeFromPodDetectsCodexRunner(t *testing.T) {
-	// codex_gui pods get codex-runner instead of agent-runner. The SPA
-	// treats either as "sdk" runtime — same data source, different
-	// SDK underneath. A regression here would route the wrong path.
-	withCodexRunner := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
-	withCodexRunner.Spec.Containers = append(
-		withCodexRunner.Spec.Containers,
-		corev1.Container{Name: "codex-runner"},
-	)
-	if got := runtimeFromPod(withCodexRunner); got != "sdk" {
-		t.Fatalf("runtime with codex-runner = %q, want sdk", got)
-	}
-}
-
-func TestInfoFromPodSurfacesRuntime(t *testing.T) {
-	pod := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
-	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "agent-runner"})
-	info := infoFromPod("nelson@romaine.life", pod)
-	if info.Runtime != "sdk" {
-		t.Fatalf("Info.Runtime = %q, want sdk", info.Runtime)
 	}
 }
 
@@ -223,7 +183,7 @@ func sessionPod(id, owner string, phase corev1.PodPhase, sandboxAgent bool) *cor
 			Labels: map[string]string{
 				"tank-operator/owner":      compat.OwnerLabel(owner),
 				"tank-operator/session-id": id,
-				"tank-operator/mode":       "codex_headless",
+				"tank-operator/mode":       compat.CodexGUIMode,
 			},
 			Annotations: map[string]string{
 				nameAnnotation:         "Workbench",

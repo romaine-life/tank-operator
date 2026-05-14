@@ -1,7 +1,7 @@
 [project]
 name = "tank-api-proxy"
 version = "0.1.0"
-description = "Envoy ext_proc auth injector for the Anthropic API. Replaces the per-pod credential lifecycle with a single in-cluster proxy that owns refresh."
+description = "Envoy ext_proc auth injector for provider APIs. Replaces per-pod credential lifecycles with in-cluster proxies that own refresh."
 requires-python = ">=3.12"
 dependencies = [
     "grpcio>=1.66",

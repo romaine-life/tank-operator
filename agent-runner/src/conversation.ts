@@ -4,7 +4,7 @@ export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"] as 
 
 export type TankActor = (typeof TANK_ACTORS)[number];
 
-export const TANK_EVENT_SOURCES = ["tank", "claude", "codex", "legacy-run"] as const;
+export const TANK_EVENT_SOURCES = ["tank", "claude", "codex"] as const;
 
 export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 

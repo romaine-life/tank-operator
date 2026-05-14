@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
@@ -34,67 +32,6 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusCreated, info)
-}
-
-// handleCreateAndRunSession creates a session and immediately dispatches a headless run.
-// Returns 202 Accepted.
-func (s *appServer) handleCreateAndRunSession(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	var body struct {
-		Prompt         string `json:"prompt"`
-		Mode           string `json:"mode"`
-		Name           string `json:"name"`
-		Model          string `json:"model"`
-		PermissionMode string `json:"permission_mode"`
-		SkillName      string `json:"skill_name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "missing prompt")
-		return
-	}
-
-	model := validateHeadlessArg(body.Model)
-	permMode := validateHeadlessArg(body.PermissionMode)
-	skillName := validateSkillName(body.SkillName)
-
-	requestedAt := time.Now().UTC().Format("2006-01-02T15:04:05.999999+00:00")
-	info, err := s.mgr.Create(r.Context(), user.Email, body.Mode, nil, requestedAt)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create session: "+err.Error())
-		return
-	}
-
-	if body.Name != "" {
-		normalized := compat.NormalizeName(&body.Name)
-		if _, err := s.mgr.SetName(r.Context(), user.Email, info.ID, normalized); err != nil {
-			slog.Warn("set name failed", "session", info.ID, "error", err)
-		}
-	}
-
-	go func() {
-		ctx := context.Background()
-		err := s.mgr.DispatchHeadless(ctx, sessions.DispatchParams{
-			Namespace:      s.namespace,
-			Email:          user.Email,
-			SessionID:      info.ID,
-			Prompt:         body.Prompt,
-			FollowUp:       false,
-			Model:          model,
-			PermissionMode: permMode,
-			SkillName:      skillName,
-			ActiveRuns:     s.activeRuns,
-			TurnQueue:      s.turnQueue,
-			Events:         s.eventBus,
-		})
-		if err != nil {
-			slog.Warn("dispatch headless failed", "session", info.ID, "error", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, info)
 }
 
 // handleListSessions lists sessions owned by the authenticated user.
@@ -354,7 +291,7 @@ func (s *appServer) handlePasteImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"path": destPath})
 }
 
-// handleSendMessage sends a fire-and-forget follow-up message to a session.
+// handleSendMessage enqueues a fire-and-forget follow-up turn to a chat-capable session.
 func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -373,31 +310,18 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	model := validateHeadlessArg(body.Model)
-	permMode := validateHeadlessArg(body.PermissionMode)
-	skillName := validateSkillName(body.SkillName)
-
-	go func() {
-		ctx := context.Background()
-		err := s.mgr.DispatchHeadless(ctx, sessions.DispatchParams{
-			Namespace:      s.namespace,
-			Email:          user.Email,
-			SessionID:      sessionID,
-			Prompt:         body.Prompt,
-			FollowUp:       true,
-			Model:          model,
-			PermissionMode: permMode,
-			SkillName:      skillName,
-			ActiveRuns:     s.activeRuns,
-			TurnQueue:      s.turnQueue,
-			Events:         s.eventBus,
-		})
-		if err != nil {
-			slog.Warn("send message dispatch failed", "session", sessionID, "error", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
+		Prompt:         body.Prompt,
+		Model:          body.Model,
+		PermissionMode: body.PermissionMode,
+		SkillName:      body.SkillName,
+		FollowUp:       true,
+	})
+	if detail != "" {
+		writeError(w, status, detail)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 // handleCreateSessionWithContext creates a session with glimmung context.
@@ -407,12 +331,12 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		return
 	}
 	var body struct {
-		GlimmungRunRef       string `json:"glimmung_run_ref"`
-		GlimmungIssueRef     string `json:"glimmung_issue_ref"`
+		GlimmungRunRef        string `json:"glimmung_run_ref"`
+		GlimmungIssueRef      string `json:"glimmung_issue_ref"`
 		GlimmungTouchpointRef string `json:"glimmung_touchpoint_ref"`
-		ValidationURL        string `json:"validation_url"`
-		CallerEmail          string `json:"caller_email"`
-		Mode                 string `json:"mode"`
+		ValidationURL         string `json:"validation_url"`
+		CallerEmail           string `json:"caller_email"`
+		Mode                  string `json:"mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -445,4 +369,3 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 	}
 	writeJSON(w, http.StatusCreated, info)
 }
-

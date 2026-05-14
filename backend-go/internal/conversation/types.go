@@ -16,10 +16,9 @@ const (
 type Source string
 
 const (
-	SourceTank      Source = "tank"
-	SourceClaude    Source = "claude"
-	SourceCodex     Source = "codex"
-	SourceLegacyRun Source = "legacy-run"
+	SourceTank   Source = "tank"
+	SourceClaude Source = "claude"
+	SourceCodex  Source = "codex"
 )
 
 type Visibility string

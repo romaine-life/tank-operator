@@ -42,7 +42,7 @@ func (*recordingTurnQueue) MarkFailed(context.Context, string, string) error    
 func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
-	body := `{"client_nonce":"run-abc_123","prompt":"  hello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
+	body := `{"client_nonce":"turn-abc_123","prompt":"  hello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
 
@@ -55,8 +55,8 @@ func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
 	}
 	got := queue.records[0]
-	if got.RunID != "run-abc_123" || got.ClientNonce != "run-abc_123" {
-		t.Fatalf("run/client nonce = %q/%q", got.RunID, got.ClientNonce)
+	if got.TurnID != "turn-abc_123" || got.ClientNonce != "turn-abc_123" {
+		t.Fatalf("turn/client nonce = %q/%q", got.TurnID, got.ClientNonce)
 	}
 	if got.Source != "sdk" || got.Provider != "claude" || got.SessionID != "63" || got.Email != "user@example.com" {
 		t.Fatalf("record routing fields = %#v", got)
@@ -69,7 +69,7 @@ func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
-	req := authedTurnRequest(t, "64", `{"client_nonce":"run-codex","prompt":"hello"}`)
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
@@ -82,10 +82,10 @@ func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	}
 }
 
-func TestEnqueueSessionTurnRejectsLegacyRuntime(t *testing.T) {
+func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
-	req := authedTurnRequest(t, "65", `{"client_nonce":"run-legacy","prompt":"hello"}`)
+	req := authedTurnRequest(t, "65", `{"client_nonce":"turn-no-runner","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
@@ -94,7 +94,7 @@ func TestEnqueueSessionTurnRejectsLegacyRuntime(t *testing.T) {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
 	if len(queue.records) != 0 {
-		t.Fatalf("enqueued legacy runtime record: %#v", queue.records)
+		t.Fatalf("enqueued turn for pod without SDK runner: %#v", queue.records)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 func TestEnqueueSessionTurnSurfacesQueueFailure(t *testing.T) {
 	queue := &recordingTurnQueue{err: errors.New("cosmos down")}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-67", "67", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
-	req := authedTurnRequest(t, "67", `{"client_nonce":"run-fail","prompt":"hello"}`)
+	req := authedTurnRequest(t, "67", `{"client_nonce":"turn-fail","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)

@@ -1,6 +1,6 @@
-"""Envoy ext_proc service that injects Anthropic OAuth into outbound requests.
+"""Envoy ext_proc service that injects managed OAuth into outbound requests.
 
-The Envoy listener in front of api.anthropic.com calls this service via the
+The Envoy listener in front of the provider API calls this service via the
 ``ExternalProcessor.Process`` bidirectional stream once per HTTP transaction.
 We act on two messages per stream:
 
@@ -61,13 +61,26 @@ synthetic curls succeed, the gate has moved and claude-code needs a bump.
 The beta string above is hardcoded in claude-code's bundled JS as of
 April 2026 — Anthropic rotating it would silently break direct callers
 but not claude-code, which ships the matching value.
+
+Codex uses the same proxy primitive with a different token authority and a
+different pod-side auth shape. Session pods write a synthetic
+``~/.codex/auth.json`` with ``auth_mode=chatgptAuthTokens`` and
+``access_token=managed-by-tank-operator``. In current Codex, that mode does
+not proactively refresh from auth.json; it simply emits the bearer in API
+headers. This proxy swaps the placeholder for the real ChatGPT access token,
+overwrites ``ChatGPT-Account-ID`` from the centrally mounted auth.json, and
+single-flight-refreshes against auth.openai.com on upstream 401.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 import os
+import time
 from typing import Any, AsyncIterator
 
 import grpc
@@ -83,7 +96,7 @@ from envoy.type.v3 import http_status_pb2
 log = logging.getLogger(__name__)
 
 # Hardcoded into Claude Code's bundled JS. Two distinct client_ids ship in
-# the bundle: 22422756-... is paired with the legacy console.anthropic.com
+# the bundle: 22422756-... is paired with the older console.anthropic.com
 # endpoint, 9d1c250a-... with platform.claude.com (our token URL). Tied
 # here by the MANUAL_REDIRECT_URL/TOKEN_URL pairing in cli.js. The token
 # URL is intentionally NOT routed through the proxy itself — the proxy
@@ -91,16 +104,56 @@ log = logging.getLogger(__name__)
 ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 
-# The placeholder claude-container/tank-bootstrap.sh writes into
+# Codex ChatGPT OAuth constants from openai/codex's login crate:
+# codex-rs/login/src/auth/manager.rs.
+CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
+
+# The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
 # Bearer injection" — anything else (worker_jwt, missing, future
 # unknowns) passes through with its Authorization untouched.
 PLACEHOLDER_BEARER = "Bearer managed-by-tank-operator"
 
-CREDENTIALS_FILE = os.environ.get(
-    "CLAUDE_CREDENTIALS_FILE", "/etc/claude-credentials/credentials.json"
-)
+@dataclass(frozen=True)
+class ProxyConfig:
+    provider: str
+    credentials_file: str
+    token_url: str
+    client_id: str
+    kv_secret_name: str
+    account_header: str | None = None
+    fedramp_header: str | None = None
+    patch_last_refresh: bool = False
+
+
+def _config_from_env() -> ProxyConfig:
+    provider = os.environ.get("PROXY_PROVIDER", "claude").strip().lower()
+    if provider == "codex":
+        return ProxyConfig(
+            provider="codex",
+            credentials_file=os.environ.get(
+                "CODEX_CREDENTIALS_FILE", "/etc/codex-credentials/auth.json"
+            ),
+            token_url=os.environ.get("CODEX_TOKEN_URL", CODEX_TOKEN_URL),
+            client_id=os.environ.get("CODEX_CLIENT_ID", CODEX_CLIENT_ID),
+            kv_secret_name=os.environ.get("CODEX_CREDENTIALS_KV_KEY", "codex-credentials"),
+            account_header="ChatGPT-Account-ID",
+            fedramp_header="X-OpenAI-Fedramp",
+            patch_last_refresh=True,
+        )
+    if provider not in ("", "claude"):
+        log.warning("unknown PROXY_PROVIDER=%r; falling back to claude", provider)
+    return ProxyConfig(
+        provider="claude",
+        credentials_file=os.environ.get(
+            "CLAUDE_CREDENTIALS_FILE", "/etc/claude-credentials/credentials.json"
+        ),
+        token_url=os.environ.get("CLAUDE_TOKEN_URL", ANTHROPIC_TOKEN_URL),
+        client_id=os.environ.get("CLAUDE_CLIENT_ID", ANTHROPIC_CLIENT_ID),
+        kv_secret_name=os.environ.get("CLAUDE_CREDENTIALS_KV_KEY", "claude-code-credentials"),
+    )
 
 
 def _walk_for(blob: Any, names: tuple[str, ...]) -> str | None:
@@ -116,10 +169,17 @@ def _walk_for(blob: Any, names: tuple[str, ...]) -> str | None:
     return None
 
 
-def _patch_blob(blob: dict[str, Any], new_access: str, new_refresh: str, expires_in: int) -> dict[str, Any]:
-    import time
-
+def _patch_blob(
+    blob: dict[str, Any],
+    new_access: str,
+    new_refresh: str,
+    expires_in: int,
+    *,
+    new_id: str | None = None,
+    patch_last_refresh: bool = False,
+) -> dict[str, Any]:
     expires_at_ms = int((time.time() + expires_in) * 1000)
+    last_refresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     out = json.loads(json.dumps(blob))
 
     def walk(node: Any) -> None:
@@ -130,19 +190,65 @@ def _patch_blob(blob: dict[str, Any], new_access: str, new_refresh: str, expires
                 node[key] = new_access
             elif key in ("refreshToken", "refresh_token"):
                 node[key] = new_refresh
+            elif new_id is not None and key in ("idToken", "id_token"):
+                node[key] = new_id
             elif key in ("expiresAt", "expires_at"):
                 node[key] = expires_at_ms
+            elif patch_last_refresh and key == "last_refresh":
+                node[key] = last_refresh
             elif isinstance(node[key], dict):
                 walk(node[key])
 
     walk(out)
+    if patch_last_refresh:
+        out["last_refresh"] = last_refresh
     return out
 
 
+def _jwt_exp_ms(token: str | None) -> int | None:
+    claims = _jwt_payload(token)
+    exp = claims.get("exp")
+    if isinstance(exp, (int, float)):
+        return int(exp * 1000)
+    return None
+
+
+def _jwt_payload(token: str | None) -> dict[str, Any]:
+    if not token:
+        return {}
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    padding = "=" * (-len(payload) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((payload + padding).encode())
+        claims = json.loads(decoded)
+    except Exception:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def _iso_ms(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
 class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
-    def __init__(self) -> None:
+    def __init__(self, config: ProxyConfig | None = None) -> None:
+        self._config = config or _config_from_env()
         self._cached_access: str | None = None
         self._cached_refresh: str | None = None
+        self._cached_account_id: str | None = None
+        self._cached_fedramp: bool = False
         self._cached_blob: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         # Set when an upstream 401 is observed for the current cached
@@ -160,8 +266,11 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # of five+ successful rotations in two seconds.
         self._refresh_task: asyncio.Task[None] | None = None
         self._kv_url = os.environ.get("AZURE_KEYVAULT_URL", "")
-        self._kv_secret_name = os.environ.get(
-            "CLAUDE_CREDENTIALS_KV_KEY", "claude-code-credentials"
+        log.info(
+            "starting %s auth injector (credentials=%s, kv_secret=%s)",
+            self._config.provider,
+            self._config.credentials_file,
+            self._config.kv_secret_name,
         )
 
     async def Process(
@@ -207,16 +316,40 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 False,
             )
         token = await self._get_access_token()
-        mutation = base_pb2.HeaderValueOption(
-            header=base_pb2.HeaderValue(key="authorization", raw_value=f"Bearer {token}".encode()),
-            append_action=base_pb2.HeaderValueOption.OVERWRITE_IF_EXISTS_OR_ADD,
-        )
+        set_headers = [
+            base_pb2.HeaderValueOption(
+                header=base_pb2.HeaderValue(
+                    key="authorization", raw_value=f"Bearer {token}".encode()
+                ),
+                append_action=base_pb2.HeaderValueOption.OVERWRITE_IF_EXISTS_OR_ADD,
+            )
+        ]
+        if self._config.account_header and self._cached_account_id:
+            set_headers.append(
+                base_pb2.HeaderValueOption(
+                    header=base_pb2.HeaderValue(
+                        key=self._config.account_header,
+                        raw_value=self._cached_account_id.encode(),
+                    ),
+                    append_action=base_pb2.HeaderValueOption.OVERWRITE_IF_EXISTS_OR_ADD,
+                )
+            )
+        if self._config.fedramp_header and self._cached_fedramp:
+            set_headers.append(
+                base_pb2.HeaderValueOption(
+                    header=base_pb2.HeaderValue(
+                        key=self._config.fedramp_header,
+                        raw_value=b"true",
+                    ),
+                    append_action=base_pb2.HeaderValueOption.OVERWRITE_IF_EXISTS_OR_ADD,
+                )
+            )
         headers_resp = ext_proc_pb2.HeadersResponse(
             response=ext_proc_pb2.CommonResponse(
                 header_mutation=ext_proc_pb2.HeaderMutation(
-                    set_headers=[mutation],
+                    set_headers=set_headers,
                     # Whatever the pod sent for x-api-key would conflict
-                    # with our Bearer auth and make Anthropic 401. Strip.
+                    # with our Bearer auth and make the provider 401. Strip.
                     remove_headers=["x-api-key"],
                 ),
             ),
@@ -270,23 +403,73 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # the retry path will trigger a refresh.
         return self._cached_access or "missing"
 
-    def _file_expires_at(self, blob: dict[str, Any]) -> int | None:
-        """Pull expiresAt (ms) out of a blob; ms-precision matters because
-        Anthropic stamps both rotated tokens with the same minute-aligned
-        value, so we use it as a freshness comparator."""
+    def _blob_freshness_ms(self, blob: dict[str, Any]) -> int | None:
+        """Return the best available freshness marker for a credential blob.
+
+        Claude stores expiresAt milliseconds. Codex stores last_refresh in
+        newer auth.json files and the access token itself is a JWT with exp.
+        We use the greatest comparable marker so a newly re-seeded file can
+        replace memory, while an old ESO mount cannot clobber a just-rotated
+        in-memory refresh chain.
+        """
         if not isinstance(blob, dict):
             return None
+        candidates: list[int] = []
+
+        def walk(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            for k, v in node.items():
+                if k in ("expiresAt", "expires_at") and isinstance(v, int):
+                    candidates.append(v)
+                elif k == "last_refresh" and isinstance(v, str):
+                    parsed = _iso_ms(v)
+                    if parsed is not None:
+                        candidates.append(parsed)
+                elif k in ("accessToken", "access_token") and isinstance(v, str):
+                    parsed = _jwt_exp_ms(v)
+                    if parsed is not None:
+                        candidates.append(parsed)
+                elif isinstance(v, dict):
+                    walk(v)
+
+        walk(blob)
+        return max(candidates) if candidates else None
+
+    def _blob_fedramp(self, blob: dict[str, Any]) -> bool:
         for k, v in blob.items():
-            if k in ("expiresAt", "expires_at") and isinstance(v, int):
+            if k == "chatgpt_account_is_fedramp" and isinstance(v, bool):
                 return v
             if isinstance(v, dict):
-                found = self._file_expires_at(v)
+                if self._blob_fedramp(v):
+                    return True
+            elif k in ("idToken", "id_token") and isinstance(v, str):
+                payload = _jwt_payload(v)
+                auth = payload.get("https://api.openai.com/auth")
+                if isinstance(auth, dict) and auth.get("chatgpt_account_is_fedramp") is True:
+                    return True
+        return False
+
+    def _blob_account_id(self, blob: dict[str, Any]) -> str | None:
+        found = _walk_for(blob, ("account_id", "chatgpt_account_id"))
+        if found:
+            return found
+        for k, v in blob.items():
+            if isinstance(v, dict):
+                found = self._blob_account_id(v)
                 if found:
                     return found
+            elif k in ("idToken", "id_token") and isinstance(v, str):
+                payload = _jwt_payload(v)
+                auth = payload.get("https://api.openai.com/auth")
+                if isinstance(auth, dict):
+                    account_id = auth.get("chatgpt_account_id")
+                    if isinstance(account_id, str) and account_id:
+                        return account_id
         return None
 
-    def _cached_expires_at(self) -> int | None:
-        return self._file_expires_at(self._cached_blob) if self._cached_blob else None
+    def _cached_freshness_ms(self) -> int | None:
+        return self._blob_freshness_ms(self._cached_blob) if self._cached_blob else None
 
     def _reload_from_file(self) -> None:
         """Pull the on-disk blob into the in-memory cache, but only if the
@@ -299,45 +482,63 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         would make the next refresh 400 invalid_grant.
         """
         try:
-            with open(CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+            with open(self._config.credentials_file, "r", encoding="utf-8") as f:
                 blob = json.load(f)
         except FileNotFoundError:
-            log.error("credentials file %s not found; serving placeholder", CREDENTIALS_FILE)
+            log.error("credentials file %s not found; serving placeholder", self._config.credentials_file)
             return
         except Exception:
-            log.exception("could not read credentials file %s", CREDENTIALS_FILE)
+            log.exception("could not read credentials file %s", self._config.credentials_file)
             return
         file_access = _walk_for(blob, ("accessToken", "access_token"))
         file_refresh = _walk_for(blob, ("refreshToken", "refresh_token"))
-        file_exp = self._file_expires_at(blob)
-        cached_exp = self._cached_expires_at()
-        if cached_exp is not None and file_exp is not None and file_exp <= cached_exp:
+        file_account_id = self._blob_account_id(blob)
+        file_freshness = self._blob_freshness_ms(blob)
+        cached_freshness = self._cached_freshness_ms()
+        if (
+            cached_freshness is not None
+            and file_freshness is not None
+            and file_freshness <= cached_freshness
+        ):
             return  # memory is at least as fresh
         if self._cached_access is not None and file_access == self._cached_access:
             return  # tokens match; nothing to do
+        if self._cached_access is not None and file_freshness is None:
+            log.warning(
+                "skipping %s credential reload with no freshness marker; keeping memory",
+                self._config.provider,
+            )
+            return
         self._cached_blob = blob
         self._cached_access = file_access
         self._cached_refresh = file_refresh
-        log.info("loaded credentials from file (access prefix=%s)", (file_access or "")[:12])
+        self._cached_account_id = file_account_id
+        self._cached_fedramp = self._blob_fedramp(blob)
+        log.info(
+            "loaded %s credentials from file (access prefix=%s, account=%s)",
+            self._config.provider,
+            (file_access or "")[:12],
+            file_account_id or "none",
+        )
 
     async def _refresh(self) -> None:
         async with self._lock:
             # Re-read the file under the lock: ESO may have mirrored a
             # newer KV value (e.g. someone re-seeded via "+ config sub")
-            # and we should prefer that over calling Anthropic ourselves.
+            # and we should prefer that over rotating against the provider.
             self._reload_from_file()
             if self._cached_refresh is None:
                 log.error("no refresh token available; cannot rotate")
                 return
-            log.info("calling %s to rotate", ANTHROPIC_TOKEN_URL)
+            log.info("calling %s to rotate %s token", self._config.token_url, self._config.provider)
             try:
                 async with httpx.AsyncClient(timeout=30.0) as http:
                     resp = await http.post(
-                        ANTHROPIC_TOKEN_URL,
+                        self._config.token_url,
                         json={
                             "grant_type": "refresh_token",
                             "refresh_token": self._cached_refresh,
-                            "client_id": ANTHROPIC_CLIENT_ID,
+                            "client_id": self._config.client_id,
                         },
                         headers={"Content-Type": "application/json"},
                     )
@@ -350,22 +551,37 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             data = resp.json()
             new_access = data["access_token"]
             new_refresh = data.get("refresh_token") or self._cached_refresh
+            new_id = data.get("id_token")
             expires_in = int(data.get("expires_in", 3600))
             # Update in-memory state FIRST so concurrent waiters see the
             # fresh access token without depending on KV+ESO+kubelet.
             self._cached_access = new_access
             self._cached_refresh = new_refresh
             if self._cached_blob is not None:
-                self._cached_blob = _patch_blob(self._cached_blob, new_access, new_refresh, expires_in)
+                self._cached_blob = _patch_blob(
+                    self._cached_blob,
+                    new_access,
+                    new_refresh,
+                    expires_in,
+                    new_id=new_id,
+                    patch_last_refresh=self._config.patch_last_refresh,
+                )
+                self._cached_account_id = self._blob_account_id(self._cached_blob)
+                self._cached_fedramp = self._blob_fedramp(self._cached_blob)
             self._access_invalidated = False
-            log.info("rotated successfully (access prefix=%s, expires in %ds)", new_access[:12], expires_in)
+            log.info(
+                "rotated %s successfully (access prefix=%s, expires in %ds)",
+                self._config.provider,
+                new_access[:12],
+                expires_in,
+            )
             await self._persist_to_kv(expires_in)
 
     async def _persist_to_kv(self, expires_in: int) -> None:
         """Best-effort write of the rotated blob back to KV.
 
-        Failure mode (KV write errors after a successful Anthropic refresh)
-        used to be a chain-killer in the cron design — Anthropic had
+        Failure mode (KV write errors after a successful provider refresh)
+        used to be a chain-killer in the cron design — the provider had
         already invalidated the old refresh token, but KV still held it.
         Here it's tolerable: in-memory state already serves the fresh
         access token to ongoing requests, and a future restart (rare,
@@ -380,8 +596,13 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             cred = DefaultAzureCredential()
             try:
                 async with SecretClient(vault_url=self._kv_url, credential=cred) as kv:
-                    await kv.set_secret(self._kv_secret_name, json.dumps(self._cached_blob))
-                log.info("wrote rotated blob to %s/%s (expires in %ds)", self._kv_url, self._kv_secret_name, expires_in)
+                    await kv.set_secret(self._config.kv_secret_name, json.dumps(self._cached_blob))
+                log.info(
+                    "wrote rotated blob to %s/%s (expires in %ds)",
+                    self._kv_url,
+                    self._config.kv_secret_name,
+                    expires_in,
+                )
             finally:
                 await cred.close()
         except Exception:
@@ -409,11 +630,12 @@ def _peek_status(msg: ext_proc_pb2.HttpHeaders) -> int | None:
 
 
 async def serve(port: int) -> grpc.aio.Server:
+    config = _config_from_env()
     server = grpc.aio.server()
-    ext_proc_grpc.add_ExternalProcessorServicer_to_server(AuthInjector(), server)
+    ext_proc_grpc.add_ExternalProcessorServicer_to_server(AuthInjector(config), server)
     server.add_insecure_port(f"0.0.0.0:{port}")
     await server.start()
-    log.info("ext_proc listening on 0.0.0.0:%d", port)
+    log.info("%s ext_proc listening on 0.0.0.0:%d", config.provider, port)
     return server
 
 

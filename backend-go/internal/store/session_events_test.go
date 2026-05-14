@@ -97,7 +97,7 @@ func TestPaginateSessionEventsUsesRenderOrderCursor(t *testing.T) {
 	}
 }
 
-func TestPaginateSessionEventsAcceptsLegacyDocumentIDCursor(t *testing.T) {
+func TestPaginateSessionEventsAcceptsDocumentIDCursor(t *testing.T) {
 	events := []map[string]any{
 		{"id": "b", "written_at": "2026-05-12T01:00:01Z", "type": "first"},
 		{"id": "a", "written_at": "2026-05-12T01:00:02Z", "type": "second"},

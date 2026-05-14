@@ -63,6 +63,13 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestParseEmailSetNormalizesAndSkipsEmptyEntries(t *testing.T) {
+	got := parseEmailSet(" Alice@Example.test, ,BOB@example.test ")
+	if !got["alice@example.test"] || !got["bob@example.test"] || len(got) != 2 {
+		t.Fatalf("parseEmailSet = %#v", got)
+	}
+}
+
 func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{listOut: []sessions.Info{{ID: "1", Owner: "user@example.com"}}}
 	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
@@ -271,7 +278,7 @@ func testJWT(t *testing.T) *auth.InMemoryJWT {
 	return j
 }
 
-func signedMainToken(t *testing.T, _ /*legacy secret arg*/, email string) string {
+func signedMainToken(t *testing.T, _ /*unused secret arg*/, email string) string {
 	t.Helper()
 	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "sub-1",

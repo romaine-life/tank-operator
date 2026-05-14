@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -24,7 +22,10 @@ func requireInternalCaller(k8s kubernetes.Interface, allowedSubjects map[string]
 				writeError(w, auth.ErrorStatus(err), err.Error())
 				return
 			}
-			subject, err := auth.ValidateSAToken(r.Context(), k8s, token, []string{"tank-operator"})
+			// The internal API is already narrowed by exact service-account
+			// allowlist. Accept the caller's normal Kubernetes API token so
+			// MCP servers do not need a second projected token just for Tank.
+			subject, err := auth.ValidateSAToken(r.Context(), k8s, token, nil)
 			if err != nil {
 				writeError(w, auth.ErrorStatus(err), err.Error())
 				return
@@ -58,6 +59,7 @@ func (s *appServer) doInternalResolveCaller(w http.ResponseWriter, r *http.Reque
 	}
 
 	hostEmail := os.Getenv("HOST_EMAIL")
+	superAdmins := parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostEmail))
 	var installationID *int64
 
 	if s.profiles != nil {
@@ -74,6 +76,7 @@ func (s *appServer) doInternalResolveCaller(w http.ResponseWriter, r *http.Reque
 		"email":           email,
 		"installation_id": installationID,
 		"is_host":         strings.EqualFold(email, hostEmail),
+		"is_super_admin":  superAdmins[strings.ToLower(strings.TrimSpace(email))],
 		"host_email":      hostEmail,
 		"pod_name":        podName,
 	})
@@ -249,7 +252,7 @@ func (s *appServer) doInternalSetRolloutState(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleInternalSendMessage dispatches a headless message to a session.
+// handleInternalSendMessage enqueues a follow-up turn to a chat-capable session.
 func (s *appServer) handleInternalSendMessage(w http.ResponseWriter, r *http.Request) {
 	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
 	protect(s.doInternalSendMessage)(w, r)
@@ -273,87 +276,18 @@ func (s *appServer) doInternalSendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	model := validateHeadlessArg(body.Model)
-	permMode := validateHeadlessArg(body.PermissionMode)
-	skillName := validateSkillName(body.SkillName)
-
-	go func() {
-		ctx := context.Background()
-		if err := s.mgr.DispatchHeadless(ctx, sessions.DispatchParams{
-			Namespace:      s.namespace,
-			Email:          email,
-			SessionID:      sessionID,
-			Prompt:         body.Prompt,
-			FollowUp:       true,
-			Model:          model,
-			PermissionMode: permMode,
-			SkillName:      skillName,
-			ActiveRuns:     s.activeRuns,
-			TurnQueue:      s.turnQueue,
-			Events:         s.eventBus,
-		}); err != nil {
-			slog.Warn("internal send message dispatch failed", "session", sessionID, "err", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
-}
-
-// handleInternalRunSession creates a session and dispatches a run.
-func (s *appServer) handleInternalRunSession(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalRunSession)(w, r)
-}
-
-func (s *appServer) doInternalRunSession(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), email, sessionID, sdkTurnRequest{
+		Prompt:         body.Prompt,
+		Model:          body.Model,
+		PermissionMode: body.PermissionMode,
+		SkillName:      body.SkillName,
+		FollowUp:       true,
+	})
+	if detail != "" {
+		writeError(w, status, detail)
 		return
 	}
-	var body struct {
-		Prompt         string `json:"prompt"`
-		Mode           string `json:"mode"`
-		Name           string `json:"name"`
-		Model          string `json:"model"`
-		PermissionMode string `json:"permission_mode"`
-		SkillName      string `json:"skill_name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Prompt == "" {
-		writeError(w, http.StatusBadRequest, "missing prompt")
-		return
-	}
-
-	model := validateHeadlessArg(body.Model)
-	permMode := validateHeadlessArg(body.PermissionMode)
-	skillName := validateSkillName(body.SkillName)
-
-	info, err := s.mgr.Create(r.Context(), email, body.Mode, nil, "")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create session: "+err.Error())
-		return
-	}
-
-	go func() {
-		ctx := context.Background()
-		if err := s.mgr.DispatchHeadless(ctx, sessions.DispatchParams{
-			Namespace:      s.namespace,
-			Email:          email,
-			SessionID:      info.ID,
-			Prompt:         body.Prompt,
-			FollowUp:       false,
-			Model:          model,
-			PermissionMode: permMode,
-			SkillName:      skillName,
-			ActiveRuns:     s.activeRuns,
-			TurnQueue:      s.turnQueue,
-			Events:         s.eventBus,
-		}); err != nil {
-			slog.Warn("internal run session dispatch failed", "session", info.ID, "err", err)
-		}
-	}()
-
-	writeJSON(w, http.StatusAccepted, info)
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 // resolveCallerEmail resolves the caller's email from caller_pod_ip query param.

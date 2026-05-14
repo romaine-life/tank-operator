@@ -90,13 +90,6 @@ import {
   type ConversationViewEntry,
 } from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
-import {
-  applyLegacyProviderEvent,
-  isProviderAbortMessage,
-  parseLegacyProviderRunHistory,
-  legacyProviderFrameEffects,
-  type ToolKind,
-} from "./providerEventAdapters";
 import { ProviderIcon } from "./providerIcons";
 import {
   normalizeSessionActivity,
@@ -132,6 +125,7 @@ type DefaultSessionMode = Extract<
 >;
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
+type ToolKind = "mcp" | "shell";
 type TranscriptEntry = SandboxTranscriptEntry & {
   toolKind?: ToolKind;
   toolServer?: string;
@@ -173,12 +167,6 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
-  // Which data-ingestion path the chat pane should use for this session.
-  // "sdk" → pod has the agent-runner sidecar; chat pane opens /agent-ws
-  // + /timeline. "legacy" → no agent-runner; chat pane uses /run +
-  // /runs/latest/events.json + /run/history through the legacy provider
-  // adapter. Absent on older pods — treated as "legacy".
-  runtime?: "sdk" | "legacy";
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
@@ -268,11 +256,11 @@ const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
 
 const MODE_HINTS: Record<SessionMode, string> = {
   claude_cli: "Uses claude.ai login",
-  claude_gui: "GUI run pane for claude -p output",
+  claude_gui: "GUI chat pane for claude -p output",
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
-  codex_gui: "GUI run pane for codex exec output",
+  codex_gui: "GUI chat pane for codex exec output",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
@@ -545,20 +533,7 @@ const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
 const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 
 function normalizeSessionMode(value: string | null): string | null {
-  switch (value) {
-    case "subscription":
-      return "claude_cli";
-    case "subscription_headless":
-      return "claude_gui";
-    case "codex_subscription":
-      return "codex_cli";
-    case "codex_headless":
-      return "codex_gui";
-    case "pi_subscription":
-      return "pi_cli";
-    default:
-      return value;
-  }
+  return value;
 }
 
 function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
@@ -593,12 +568,11 @@ function readDefaultInteraction(): SessionInteraction {
   try {
     const stored = localStorage.getItem(DEFAULT_INTERACTION_KEY);
     if (stored === "gui" || stored === "cli") return stored;
-    if (stored === "run") return "gui";
-    if (stored === "newterm" || stored === "terminal") return "cli";
+    if (stored === "terminal") return "cli";
   } catch {}
-  // Back-compat: derive from stored session mode.
+  // Derive from stored session mode when the interaction preference is absent.
   const mode = readDefaultSessionMode();
-  return HEADLESS_MODES.has(mode) ? "gui" : "cli";
+  return CHAT_MODES.has(mode) ? "gui" : "cli";
 }
 
 function writeDefaultInteraction(interaction: SessionInteraction): void {
@@ -681,7 +655,7 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const HEADLESS_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
 const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
@@ -705,7 +679,7 @@ function sessionStatusDotClass(
 ): string {
   return `status-dot status-${sessionActivityDotStatus(
     session.status,
-    HEADLESS_MODES.has(session.mode),
+    CHAT_MODES.has(session.mode),
     activity,
   )}`;
 }
@@ -714,7 +688,7 @@ function sessionStatusLabel(
   session: Session,
   activity?: SessionActivitySummary,
 ): string {
-  return sessionActivityStatusLabel(session.status, HEADLESS_MODES.has(session.mode), activity);
+  return sessionActivityStatusLabel(session.status, CHAT_MODES.has(session.mode), activity);
 }
 
 function errorMessage(error: unknown): string {
@@ -1113,7 +1087,7 @@ function IconGithub() {
 function sessionInteractionForSession(session: Session): SessionInteraction | null {
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
-  if (HEADLESS_MODES.has(session.mode)) return "gui";
+  if (CHAT_MODES.has(session.mode)) return "gui";
   return session.mode === "claude_cli" || session.mode === "codex_cli" || session.mode === "pi_cli"
     ? "cli"
     : null;
@@ -1509,88 +1483,10 @@ function DemoLanding() {
   );
 }
 
-type RunEvent = {
-  stream?: "stdout" | "stderr";
-  data?: string;
-  status?: "attached" | "done" | "error";
-  run_id?: string;
-  detail?: string;
-};
-
-type RunLifecycleEvent = {
-  run_id: string;
-  session_id: string;
-  event_id: number;
-  type:
-    | "run.started"
-    | "run.completed"
-    | "run.failed"
-    | "run.stale"
-    | "run.output.started"
-    | "run.tool.started"
-    | "run.tool.completed"
-    | "run.message.created";
-  payload?: JsonObject;
-  created_at: string;
-};
-
-type RunReplayResponse = {
-  session_id: string;
-  run_id: string;
-  events?: unknown[];
-};
-
 type JsonObject = Record<string, unknown>;
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseRunLifecycleEvent(data: string): RunLifecycleEvent | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(data);
-  } catch {
-    return null;
-  }
-  if (!isJsonObject(parsed)) return null;
-  const type = parsed.type;
-  if (
-    type !== "run.started" &&
-    type !== "run.completed" &&
-    type !== "run.failed" &&
-    type !== "run.stale" &&
-    type !== "run.output.started" &&
-    type !== "run.tool.started" &&
-    type !== "run.tool.completed" &&
-    type !== "run.message.created"
-  ) {
-    return null;
-  }
-  if (
-    typeof parsed.run_id !== "string" ||
-    typeof parsed.session_id !== "string" ||
-    typeof parsed.event_id !== "number" ||
-    typeof parsed.created_at !== "string"
-  ) {
-    return null;
-  }
-  return {
-    run_id: parsed.run_id,
-    session_id: parsed.session_id,
-    event_id: parsed.event_id,
-    type,
-    payload: isJsonObject(parsed.payload) ? parsed.payload : undefined,
-    created_at: parsed.created_at,
-  };
-}
-
-function isRunTerminalEvent(event: RunLifecycleEvent): boolean {
-  return (
-    event.type === "run.completed" ||
-    event.type === "run.failed" ||
-    event.type === "run.stale"
-  );
 }
 
 function shortJson(value: unknown): string {
@@ -1630,85 +1526,6 @@ function stableStringHash(value: string): string {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
-}
-
-function upsertEntry(entries: TranscriptEntry[], entry: TranscriptEntry): TranscriptEntry[] {
-  const index = entries.findIndex((candidate) => candidate.id === entry.id);
-  if (index === -1) return [...entries, entry];
-  const next = [...entries];
-  next[index] = { ...next[index], ...entry };
-  return next;
-}
-
-function applyRunMessageEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
-  const payload = event.payload;
-  const role = payload?.role;
-  const text = typeof payload?.text === "string" ? payload.text.trim() : "";
-  if ((role !== "user" && role !== "assistant") || !text) return entries;
-  const messageId =
-    typeof payload?.message_id === "string" && payload.message_id
-      ? payload.message_id
-      : `run-message-${event.event_id}`;
-  const duplicate = entries.some(
-    (entry) =>
-      entry.kind === "message" &&
-      entry.role === role &&
-      (entry.id === messageId || entry.text === text),
-  );
-  if (duplicate) return entries;
-  const id = entries.some((entry) => entry.id === messageId)
-    ? `run-message-${messageId}`
-    : messageId;
-  const payloadTime = normalizeIsoTimestamp(payload?.time);
-  const eventCreatedAt = normalizeIsoTimestamp(event.created_at);
-  const entry: Record<string, unknown> = {
-    id,
-    kind: "message",
-    role,
-    text,
-    time: payloadTime ?? eventCreatedAt ?? nowIso(),
-  };
-  // Preserve skill-action metadata stored by the backend at run start so the
-  // event replay reconstructs the correct bubble without needing the JSONL.
-  if (typeof payload?.messageKind === "string") entry.messageKind = payload.messageKind;
-  if (typeof payload?.skillName === "string") entry.skillName = payload.skillName;
-  if (typeof payload?.skillSupplementalText === "string") entry.skillSupplementalText = payload.skillSupplementalText;
-  return upsertEntry(entries, entry as TranscriptEntry);
-}
-
-function applyRunToolStartedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
-  const payload = event.payload;
-  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
-  const toolName = typeof payload?.name === "string" && payload.name ? payload.name : "tool";
-  if (!toolUseId) return entries;
-  const existing = entries.find((entry) => entry.id === toolUseId);
-  const terminal = existing?.toolStatus === "completed" || existing?.toolStatus === "failed";
-  return upsertEntry(entries, {
-    id: toolUseId,
-    kind: "tool",
-    toolName: existing?.toolName ?? toolName,
-    toolInput: existing?.toolInput,
-    toolOutput: existing?.toolOutput,
-    toolStatus: terminal ? existing?.toolStatus : "started",
-    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
-  });
-}
-
-function applyRunToolCompletedEvent(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
-  const payload = event.payload;
-  const toolUseId = typeof payload?.tool_use_id === "string" ? payload.tool_use_id : "";
-  if (!toolUseId) return entries;
-  const existing = entries.find((entry) => entry.id === toolUseId);
-  const output = typeof payload?.output === "string" ? payload.output : existing?.toolOutput;
-  return upsertEntry(entries, {
-    id: toolUseId,
-    kind: "tool",
-    toolName: existing?.toolName ?? "tool result",
-    toolInput: existing?.toolInput,
-    toolOutput: output,
-    toolStatus: payload?.is_error === true ? "failed" : "completed",
-    time: existing?.time ?? normalizeIsoTimestamp(event.created_at) ?? nowIso(),
-  });
 }
 
 function appendMeta(
@@ -1842,6 +1659,10 @@ function isSdkTimelineEvent(event: unknown): event is TankConversationEvent {
 
 function isScheduleWakeupToolName(name: string | undefined): boolean {
   return (name ?? "").toLowerCase() === "schedulewakeup";
+}
+
+function isProviderAbortMessage(message: unknown): boolean {
+  return typeof message === "string" && /operation was aborted/i.test(message);
 }
 
 function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
@@ -2446,9 +2267,8 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
 }
 
 // transcriptComparable returns a stable JSON of the transcript's load-bearing
-// fields, used to short-circuit no-op replay updates. SDK sessions rebuild
-// from canonical /timeline events; legacy sessions rebuild from
-// /runs/latest/events.json or /run/history. There is no client-side cache.
+// fields, used to short-circuit no-op replay updates. Chat sessions rebuild
+// from canonical /timeline events; there is no client-side cache.
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
@@ -2603,6 +2423,10 @@ function mergeSdkTranscript(
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
+function countTranscriptMessages(entries: TranscriptEntry[]): number {
+  return entries.filter((entry) => entry.kind === "message").length;
+}
+
 function orderedConversationEvents(events: TankConversationEvent[]): TankConversationEvent[] {
   return events
     .map((event, index) => ({ event, index }))
@@ -2628,18 +2452,6 @@ function conversationEntriesToTranscript(
   entries: ConversationViewEntry[],
 ): TranscriptEntry[] {
   return entries.map((entry) => entry as TranscriptEntry);
-}
-
-type ActiveRunData = {
-  run_id: string;
-  stream_offset: number;
-  started_at?: string | null;
-};
-
-function activeRunStartedAtMs(data: ActiveRunData): number {
-  if (!data.started_at) return Date.now();
-  const parsed = Date.parse(data.started_at);
-  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 // ---------------------------------------------------------------------------
@@ -3594,7 +3406,7 @@ function RunMessages({
   );
 }
 
-function HeadlessRun({
+function ChatPane({
   session,
   visible,
   onRename,
@@ -3626,7 +3438,6 @@ function HeadlessRun({
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
   const activeToolUseIdRef = useRef<string | null>(null);
@@ -3646,9 +3457,7 @@ function HeadlessRun({
   // interval while running so the bar updates without a per-element timer.
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
-  // Context tokens used in the most recent assistant turn. Legacy streams
-  // update this from provider stdout; SDK sessions update it from the
-  // canonical conversation projection.
+  // Context tokens used in the most recent assistant turn.
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
@@ -3726,8 +3535,7 @@ function HeadlessRun({
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const runEventsRef = useRef<EventSource | null>(null);
-  const historyRefreshRef = useRef<Promise<void> | null>(null);
+  const historyRefreshRef = useRef<Promise<boolean> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
@@ -3735,10 +3543,8 @@ function HeadlessRun({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
-  const runLifecycleFinishTimerRef = useRef<number | null>(null);
   const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
   const runPrefsRef = useRef(runPrefs);
-  const stdoutBufferRef = useRef("");
   const [sdkConnectionState, setSdkConnectionState] =
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
@@ -3750,7 +3556,6 @@ function HeadlessRun({
     permissionMode: string;
     turnStart: number;
     reconnects: number;
-    offset: number;
     cancelled: boolean;
     submitted?: boolean;
   } | null>(null);
@@ -3850,7 +3655,6 @@ function HeadlessRun({
     }
 
     setRunning(false);
-    setActiveRunId(null);
     if (projection.runStatus === "error") {
       setRunStatus("error");
       setLastStatusText("Error");
@@ -3872,6 +3676,34 @@ function HeadlessRun({
     }
     syncSdkRenderedEntries();
   }
+  function canClearSdkRealtime(
+    serverEvents: TankConversationEvent[],
+    expectedCursor: string | null,
+  ): boolean {
+    // Cosmos writes happen before live WS frames, but the replay query can
+    // still arrive behind the tab's live cursor. Keep realtime entries until
+    // replay can replace them without reducing the visible message transcript.
+    const serverCursor = serverEvents.reduce<string | null>(
+      (cursor, event) =>
+        advanceTimelineCursor(
+          cursor,
+          eventTimelineCursor(event as unknown as JsonObject),
+        ),
+      null,
+    );
+    if (expectedCursor && (!serverCursor || serverCursor < expectedCursor)) {
+      return false;
+    }
+    const serverProjection = projectConversationState(
+      reduceConversationEvents(orderedConversationEvents(serverEvents)),
+    );
+    const serverEntries = conversationEntriesToTranscript(serverProjection.entries);
+    const currentEntries = mergeSdkTranscript(
+      sdkServerEntriesRef.current,
+      sdkRealtimeEntriesRef.current,
+    );
+    return countTranscriptMessages(serverEntries) >= countTranscriptMessages(currentEntries);
+  }
   function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
@@ -3889,7 +3721,7 @@ function HeadlessRun({
     );
   }
   function scheduleSdkReadStateUpdate(): void {
-    if (session.runtime !== "sdk" || !visibleRef.current) return;
+    if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
@@ -3904,7 +3736,7 @@ function HeadlessRun({
     }, 400);
   }
   async function flushSdkReadStateUpdate(): Promise<void> {
-    if (session.runtime !== "sdk" || !visibleRef.current) return;
+    if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
@@ -4013,12 +3845,6 @@ function HeadlessRun({
     return () => {
       wsRef.current?.close();
       wsRef.current = null;
-      runEventsRef.current?.close();
-      runEventsRef.current = null;
-      if (runLifecycleFinishTimerRef.current !== null) {
-        window.clearTimeout(runLifecycleFinishTimerRef.current);
-        runLifecycleFinishTimerRef.current = null;
-      }
       if (sdkReadStateTimerRef.current !== null) {
         window.clearTimeout(sdkReadStateTimerRef.current);
         sdkReadStateTimerRef.current = null;
@@ -4056,43 +3882,6 @@ function HeadlessRun({
     const id = window.setInterval(() => setNow(Date.now()), 250);
     return () => window.clearInterval(id);
   }, [running]);
-
-  useEffect(() => {
-    if (!activeRunId || session.status !== "Active") return;
-    if (session.runtime === "sdk") return;
-    const source = new EventSource(
-      `/api/sessions/${encodeURIComponent(session.id)}/runs/${encodeURIComponent(activeRunId)}/events`,
-      { withCredentials: true },
-    );
-    runEventsRef.current = source;
-    const onLifecycleEvent = (event: MessageEvent<string>) => {
-      const lifecycleEvent = parseRunLifecycleEvent(event.data);
-      if (lifecycleEvent) handleRunLifecycleEvent(lifecycleEvent);
-    };
-    source.addEventListener("run.started", onLifecycleEvent);
-    source.addEventListener("run.completed", onLifecycleEvent);
-    source.addEventListener("run.failed", onLifecycleEvent);
-    source.addEventListener("run.stale", onLifecycleEvent);
-    source.addEventListener("run.output.started", onLifecycleEvent);
-    source.addEventListener("run.tool.started", onLifecycleEvent);
-    source.addEventListener("run.tool.completed", onLifecycleEvent);
-    source.addEventListener("run.message.created", onLifecycleEvent);
-    return () => {
-      source.removeEventListener("run.started", onLifecycleEvent);
-      source.removeEventListener("run.completed", onLifecycleEvent);
-      source.removeEventListener("run.failed", onLifecycleEvent);
-      source.removeEventListener("run.stale", onLifecycleEvent);
-      source.removeEventListener("run.output.started", onLifecycleEvent);
-      source.removeEventListener("run.tool.started", onLifecycleEvent);
-      source.removeEventListener("run.tool.completed", onLifecycleEvent);
-      source.removeEventListener("run.message.created", onLifecycleEvent);
-      source.close();
-      if (runEventsRef.current === source) runEventsRef.current = null;
-    };
-  // handleRunLifecycleEvent is intentionally omitted; it closes over current
-  // run refs and state setters, while activeRunId controls subscription scope.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRunId, session.id, session.runtime, session.status]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -4132,26 +3921,16 @@ function HeadlessRun({
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
   const [historyAttempted, setHistoryAttempted] = useState(false);
-  const [activeRunChecked, setActiveRunChecked] = useState(false);
-  // Toggled briefly when entries are restored (from localStorage OR backend
-  // history) so we can show a "Continuing previous conversation" hint.
+  // Toggled briefly when entries are restored from backend history so we can
+  // show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
   function refreshRunHistory(showHint: boolean) {
     if (session.status !== "Active" || running) return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
-    // SDK pods render only the canonical session-events timeline. Legacy path
-    // tries structured run events first and then the provider JSONL adapter.
-    const initial =
-      session.runtime === "sdk"
-        ? refreshSdkRunHistory(showHint)
-        : refreshRunHistoryFromLatestEvents(showHint);
-    const refresh = initial
-      .then((replayed) => {
-        if (sessionIdRef.current !== refreshSessionId) return;
-        if (!replayed && session.runtime !== "sdk") refreshRunHistoryFromBackend(showHint);
-      })
+    const refresh = refreshSdkRunHistory(showHint)
       .finally(() => {
+        if (sessionIdRef.current !== refreshSessionId) return;
         if (historyRefreshRef.current === refresh) {
           historyRefreshRef.current = null;
         }
@@ -4159,50 +3938,9 @@ function HeadlessRun({
     historyRefreshRef.current = refresh;
   }
 
-  function applyReplayEventToEntries(entries: TranscriptEntry[], event: RunLifecycleEvent): TranscriptEntry[] {
-    if (event.type === "run.message.created") return applyRunMessageEvent(entries, event);
-    if (event.type === "run.tool.started") return applyRunToolStartedEvent(entries, event);
-    if (event.type === "run.tool.completed") return applyRunToolCompletedEvent(entries, event);
-    return entries;
-  }
-
-  function applyRunReplay(events: RunLifecycleEvent[], showHint: boolean): boolean {
-    const replayEntries = events.reduce<TranscriptEntry[]>(
-      (acc, event) => applyReplayEventToEntries(acc, event),
-      [],
-    );
-    const replayedContent = replayEntries.length > 0;
-    for (const event of events) {
-      if (!isRunTerminalEvent(event)) continue;
-      if (event.type === "run.completed") {
-        setLastStatusText("Done");
-        setRunStatus("done");
-      } else {
-        setLastStatusText("Error");
-        setRunStatus("error");
-      }
-      setActiveTool(null);
-      setRunning(false);
-      setActiveRunId(null);
-    }
-    if (replayedContent) {
-      setEntries((prev) =>
-        transcriptComparable(prev) === transcriptComparable(replayEntries)
-          ? prev
-          : replayEntries,
-      );
-      if (showHint) {
-        setContinueHintVisible(true);
-        window.setTimeout(() => setContinueHintVisible(false), 3000);
-      }
-    }
-    return replayedContent;
-  }
-
-  // SDK-runtime history replay. Hits the canonical event log written by the
-  // pod-side runner (Cosmos session-events container, exposed via
-  // /api/sessions/{id}/timeline), then renders through the same reducer and
-  // projection path used for live SDK frames.
+  // History replay hits the canonical event log written by the pod-side
+  // runner, then renders through the same reducer/projection path used for
+  // live SDK frames.
   function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
     return refreshSdkRunHistoryResult(showHint, clearRealtime).then(
       (result) => result.replayed,
@@ -4215,6 +3953,7 @@ function HeadlessRun({
     clientNonce?: string,
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
+    const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
     const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       let afterOrderKey = "";
@@ -4266,7 +4005,10 @@ function HeadlessRun({
         ? sdkHistoryTerminalForRun(events, clientNonce)
         : undefined;
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
-      replaceSdkServerEvents(canonicalEvents, clearRealtime);
+      replaceSdkServerEvents(
+        canonicalEvents,
+        clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
+      );
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -4276,70 +4018,6 @@ function HeadlessRun({
     return load().catch(() => ({ replayed: false }));
   }
 
-  function refreshRunHistoryFromLatestEvents(showHint: boolean): Promise<boolean> {
-    const refreshSessionId = session.id;
-    return authedFetch(
-      `/api/sessions/${encodeURIComponent(refreshSessionId)}/runs/latest/events.json`,
-    )
-      .then(async (res) => {
-        if (!res.ok) return false;
-        const replay = (await res.json()) as RunReplayResponse;
-        if (sessionIdRef.current !== refreshSessionId) return false;
-        if (replay.session_id !== refreshSessionId || !Array.isArray(replay.events)) {
-          return false;
-        }
-        const events = replay.events
-          .map((event) => parseRunLifecycleEvent(JSON.stringify(event)))
-          .filter((event): event is RunLifecycleEvent => event !== null);
-        if (events.length === 0) return false;
-        return applyRunReplay(events, showHint);
-      })
-      .catch(() => false);
-  }
-
-  function refreshRunHistoryFromBackend(showHint: boolean) {
-    const refreshSessionId = session.id;
-    void authedFetch(
-      `/api/sessions/${refreshSessionId}/run/history?source=latest-events-fallback`,
-    )
-      .then(async (res) => {
-        if (!res.ok) return "";
-        return await res.text();
-      })
-      .then((text) => {
-        if (sessionIdRef.current !== refreshSessionId) return;
-        if (!text) return;
-        const acc = parseLegacyProviderRunHistory(text, session.mode) as TranscriptEntry[];
-        if (acc.length > 0) {
-          let behind = false;
-          setEntries((prev) => {
-            if (transcriptComparable(prev) === transcriptComparable(acc)) return prev;
-            // If the JSONL has fewer conversation messages than the current
-            // state, the pod-side run is still in progress and the assistant
-            // turn hasn't been written to the JSONL yet. Replacing would
-            // regress the visible transcript — keep prev and retry shortly so
-            // we pick up the completed response once the pod finishes.
-            const prevMsgs = prev.filter((e) => e.kind === "message").length;
-            const accMsgs = acc.filter((e) => e.kind === "message").length;
-            if (accMsgs < prevMsgs) {
-              behind = true;
-              return prev;
-            }
-            return acc;
-          });
-          if (behind) {
-            window.setTimeout(() => refreshRunHistory(false), 3000);
-          }
-          if (showHint) {
-            setContinueHintVisible(true);
-            window.setTimeout(() => setContinueHintVisible(false), 3000);
-          }
-        }
-      })
-      .catch(() => {
-        /* no history is fine */
-      });
-  }
   useEffect(() => {
     if (historyAttempted) return;
     if (entries.length > 0) {
@@ -4372,24 +4050,6 @@ function HeadlessRun({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, session.id, session.status, running]);
 
-  // Detect in-progress runs after history loads — covers the case where the
-  // user refreshes the tab while an agent is actively running. The pid file
-  // on the pod exists for the lifetime of the run, so we use it as the
-  // liveness signal and reattach to the live stream.
-  useEffect(() => {
-    if (!historyAttempted || activeRunChecked || session.status !== "Active" || running) return;
-    setActiveRunChecked(true);
-    void authedFetch(`/api/sessions/${session.id}/run/active`)
-      .then(async (res) => {
-        if (!res.ok) return;
-        const data = (await res.json()) as ActiveRunData | null;
-        attachActiveRun(data);
-      })
-      .catch(() => undefined);
-  // openRunSocket is defined in the same render scope and intentionally omitted.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyAttempted, activeRunChecked, session.id, session.status, running]);
-
   useEffect(() => {
     if (!visible || session.status !== "Active" || running || lastStatusText !== "Wakeup scheduled") return;
     let cancelled = false;
@@ -4397,18 +4057,6 @@ function HeadlessRun({
     let attempts = 0;
     const check = async () => {
       attempts += 1;
-      try {
-        const res = await authedFetch(`/api/sessions/${session.id}/run/active`);
-        if (res.ok) {
-          const data = (await res.json()) as ActiveRunData | null;
-          if (!cancelled && attachActiveRun(data)) {
-            if (timer !== null) window.clearInterval(timer);
-            return;
-          }
-        }
-      } catch {
-        /* retry until the watch window expires */
-      }
       if (!cancelled) refreshRunHistory(false);
       if (attempts >= 120 && timer !== null) {
         window.clearInterval(timer);
@@ -4420,8 +4068,8 @@ function HeadlessRun({
       cancelled = true;
       if (timer !== null) window.clearInterval(timer);
     };
-  // refreshRunHistory/openRunSocket are intentionally omitted; both close over
-  // current session state and the polling gate above controls when this runs.
+  // refreshRunHistory is intentionally omitted; it closes over current session
+  // state and the polling gate above controls when this runs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, session.id, session.status, running, lastStatusText]);
 
@@ -4694,7 +4342,6 @@ function HeadlessRun({
     setQueuedMessages([]);
     historyRefreshRef.current = null;
     setHistoryAttempted(false);
-    setActiveRunChecked(false);
     setContinueHintVisible(false);
     setSdkConnectionState("idle");
   }, [session.id]);
@@ -4981,23 +4628,12 @@ function HeadlessRun({
   }
 
   function setActiveTool(toolName: string | null, toolUseId: string | null = null) {
+    if (isScheduleWakeupToolName(toolName ?? undefined)) {
+      scheduledWakeupRef.current = true;
+    }
     activeToolNameRef.current = toolName;
     activeToolUseIdRef.current = toolName ? toolUseId : null;
     setActiveToolName(toolName);
-  }
-
-  function completeActiveTool(toolUseId: string | null = null) {
-    if (
-      toolUseId &&
-      activeToolUseIdRef.current &&
-      activeToolUseIdRef.current !== toolUseId
-    ) {
-      return;
-    }
-    if (isScheduleWakeupToolName(activeToolNameRef.current ?? undefined)) {
-      scheduledWakeupRef.current = true;
-    }
-    setActiveTool(null);
   }
 
   function openSlashCommandMenu() {
@@ -5016,232 +4652,17 @@ function HeadlessRun({
     ta?.focus();
   }
 
-  function applyStdoutLine(line: string) {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    if (trimmed.startsWith("__TANK_RUN_EXIT__:")) return;
-    let providerEvent: unknown;
-    try {
-      providerEvent = JSON.parse(trimmed);
-    } catch {
-      // Non-JSON line. The legacy stream path tails a file that's supposed
-      // to contain JSON events, but codex CLI in some failure modes emits
-      // plain text to the same stream (e.g. "ERROR: You've hit your usage
-      // limit..." on quota). Previously we silently dropped these lines and
-      // the user saw a generic kubeexec timeout in the SPA. Render the line
-      // as a meta entry so the underlying agent error is at least visible.
-      setEntries((prev) =>
-        appendMeta(prev, nextEntryId("stdout-text"), "agent output", trimmed, "info"),
-      );
-      return;
-    }
-    if (!isJsonObject(providerEvent)) return;
-    const effects = legacyProviderFrameEffects(providerEvent);
-    const total = totalContextTokens(effects.usage as ClaudeUsage | undefined);
-    if (total > 0) setTokensUsed(total);
-    if (effects.activeTool) {
-      setActiveTool(effects.activeTool.name, effects.activeTool.id ?? null);
-    }
-    if ("completedToolUseId" in effects) {
-      completeActiveTool(effects.completedToolUseId ?? null);
-    }
-    setEntries((prev) => applyLegacyProviderEvent(prev, session.mode, providerEvent));
-  }
-
-  function applyStdoutChunk(chunk: string) {
-    stdoutBufferRef.current += chunk;
-    const lines = stdoutBufferRef.current.split(/\r?\n/);
-    stdoutBufferRef.current = lines.pop() ?? "";
-    for (const line of lines) applyStdoutLine(line);
-  }
-
-  function flushStdoutBuffer() {
-    const pending = stdoutBufferRef.current;
-    stdoutBufferRef.current = "";
-    if (pending.trim()) applyStdoutLine(pending);
-  }
-
   function newRunId() {
     const cryptoObj = window.crypto;
     if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
   }
 
-  function lifecycleStartedAtMs(event: RunLifecycleEvent): number | null {
-    const startedAt = event.payload?.started_at;
-    if (typeof startedAt !== "string") return null;
-    const parsed = Date.parse(startedAt);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  function clearLifecycleFinishTimer() {
-    if (runLifecycleFinishTimerRef.current !== null) {
-      window.clearTimeout(runLifecycleFinishTimerRef.current);
-      runLifecycleFinishTimerRef.current = null;
-    }
-  }
-
-  function finalizeRunFromLifecycle(
-    runId: string,
-    status: "done" | "error",
-    detail?: string,
-  ) {
-    clearLifecycleFinishTimer();
-    const run = currentRunRef.current;
-    if (!run || run.id !== runId || run.cancelled) return;
-    flushStdoutBuffer();
-    currentRunRef.current = null;
-    const durationMs = Date.now() - run.turnStart;
-    if (status === "done") {
-      setEntries((prev) => {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i].kind === "message" && prev[i].role === "assistant") {
-            const updated = [...prev];
-            updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
-            return updated;
-          }
-        }
-        return prev;
-      });
-      setLastStatusText(
-        scheduledWakeupRef.current
-          ? "Wakeup scheduled"
-          : activeToolNameRef.current
-            ? `Used ${formatToolLabel(activeToolNameRef.current)}`
-            : "Done",
-      );
-      setRunStatus("done");
-      playTurnCompleteSound();
-    } else {
-      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
-      setRunStatus("error");
-      setEntries((prev) =>
-        appendMeta(
-          prev,
-          nextEntryId("run-lifecycle-error"),
-          "run failed",
-          detail || "Run ended before the live stream reported completion.",
-          "error",
-        ),
-      );
-    }
-    scheduledWakeupRef.current = false;
-    setActiveTool(null);
-    setRunning(false);
-    setActiveRunId(null);
-    if (session.runtime === "sdk") setSdkConnectionState("idle");
-    wsRef.current?.close();
-    wsRef.current = null;
-    if (session.runtime === "sdk") {
-      void refreshSdkRunHistory(false, true);
-    } else {
-      window.setTimeout(() => refreshRunHistoryFromBackend(false), 250);
-    }
-  }
-
-  function scheduleLifecycleFinish(
-    runId: string,
-    status: "done" | "error",
-    detail?: string,
-  ) {
-    clearLifecycleFinishTimer();
-    const delay = status === "done" ? 1500 : 500;
-    runLifecycleFinishTimerRef.current = window.setTimeout(() => {
-      runLifecycleFinishTimerRef.current = null;
-      finalizeRunFromLifecycle(runId, status, detail);
-    }, delay);
-  }
-
-  function handleRunLifecycleEvent(event: RunLifecycleEvent) {
-    if (event.session_id !== session.id || event.run_id !== activeRunId) return;
-    if (event.type === "run.started") {
-      const startedAt = lifecycleStartedAtMs(event);
-      if (startedAt !== null && currentRunRef.current?.id === event.run_id) {
-        currentRunRef.current.turnStart = startedAt;
-        setRunStartedAt(startedAt);
-        setNow(Date.now());
-      }
-      setRunStatus("running");
-      setRunning(true);
-      return;
-    }
-    if (event.type === "run.output.started") {
-      setRunStatus("running");
-      setRunning(true);
-      return;
-    }
-    if (event.type === "run.tool.started") {
-      const toolName = event.payload?.name;
-      if (typeof toolName === "string" && toolName) {
-        const toolUseId = event.payload?.tool_use_id;
-        setActiveTool(toolName, typeof toolUseId === "string" ? toolUseId : null);
-      }
-      setEntries((prev) => applyRunToolStartedEvent(prev, event));
-      return;
-    }
-    if (event.type === "run.tool.completed") {
-      const toolUseId = event.payload?.tool_use_id;
-      completeActiveTool(typeof toolUseId === "string" ? toolUseId : null);
-      setEntries((prev) => applyRunToolCompletedEvent(prev, event));
-      return;
-    }
-    if (event.type === "run.message.created") {
-      setEntries((prev) => applyRunMessageEvent(prev, event));
-      return;
-    }
-    if (event.type === "run.completed") {
-      scheduleLifecycleFinish(event.run_id, "done");
-      return;
-    }
-    const detail =
-      typeof event.payload?.detail === "string"
-        ? event.payload.detail
-        : event.type === "run.stale"
-          ? "Run is no longer active."
-          : undefined;
-    scheduleLifecycleFinish(event.run_id, "error", detail);
-  }
-
-  function attachActiveRun(data: ActiveRunData | null): boolean {
-    if (!data || currentRunRef.current) return false;
-    const startedAt = activeRunStartedAtMs(data);
-    const run = {
-      id: data.run_id,
-      prompt: "",
-      followUp: false,
-      model: "",
-      permissionMode: "",
-      turnStart: startedAt,
-      reconnects: 0,
-      offset: data.stream_offset,
-      cancelled: false,
-    };
-    currentRunRef.current = run;
-    setRunStatus("running");
-    setRunning(true);
-    setActiveRunId(run.id);
-    setRunStartedAt(startedAt);
-    setNow(Date.now());
-    if (session.runtime === "sdk") {
-      openSdkRunSocket(run, true);
-    } else {
-      openRunSocket(run, true);
-    }
-    return true;
-  }
-
   function cancelRun() {
     const ws = wsRef.current;
     if (currentRunRef.current) currentRunRef.current.cancelled = true;
     if (ws?.readyState === WebSocket.OPEN) {
-      // SDK and legacy speak different cancel frames. Agent-runner expects
-      // {type:"interrupt"} per agent-runner/src/ws.ts; legacy run handler
-      // expects {cancel:true}.
-      const cancelFrame =
-        session.runtime === "sdk"
-          ? { type: "interrupt" }
-          : { cancel: true };
-      ws.send(JSON.stringify(cancelFrame));
+      ws.send(JSON.stringify({ type: "interrupt" }));
     }
     ws?.close();
     wsRef.current = null;
@@ -5249,8 +4670,7 @@ function HeadlessRun({
     scheduledWakeupRef.current = false;
     setActiveTool(null);
     setRunning(false);
-    if (session.runtime === "sdk") setSdkConnectionState("idle");
-    setActiveRunId(null);
+    setSdkConnectionState("idle");
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
   }
 
@@ -5397,7 +4817,6 @@ function HeadlessRun({
 
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
     wsRef.current?.close();
-    stdoutBufferRef.current = "";
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
@@ -5410,24 +4829,18 @@ function HeadlessRun({
       permissionMode: composerMode,
       turnStart,
       reconnects: 0,
-      offset: 0,
       cancelled: false,
       submitted: false,
     };
     currentRunRef.current = run;
-    setActiveRunId(run.id);
     const optimisticTime = nowIso();
     if (skillName) {
-      if (session.runtime === "sdk") {
-        appendSdkRealtimeEntries(
-          markLocalEntries(
-            appendSkillInvocation([], skillName, trimmed, optimisticTime),
-            run.id,
-          ),
-        );
-      } else {
-        setEntries((prev) => appendSkillInvocation(prev, skillName, trimmed, optimisticTime));
-      }
+      appendSdkRealtimeEntries(
+        markLocalEntries(
+          appendSkillInvocation([], skillName, trimmed, optimisticTime),
+          run.id,
+        ),
+      );
     } else {
       const userEntry = {
           id: nextEntryId("user"),
@@ -5436,11 +4849,7 @@ function HeadlessRun({
           text: displayText,
           time: optimisticTime,
         } as TranscriptEntry;
-      if (session.runtime === "sdk") {
-        appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
-      } else {
-        setEntries((prev) => [...prev, userEntry]);
-      }
+      appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
     setRunStatus("running");
     setRunning(true);
@@ -5452,35 +4861,30 @@ function HeadlessRun({
     // always fire an input event in time, so my mirror lingers and the
     // X-clear button stays visible. Force the mirror clean.
     setComposerText("");
-    if (session.runtime === "sdk") {
-      void enqueueSdkTurn(run)
-        .then(() => {
-          if (currentRunRef.current?.id === run.id && !run.cancelled) {
-            openSdkRunSocket(run);
-          }
-        })
-        .catch((err) => {
-          if (currentRunRef.current?.id !== run.id || run.cancelled) return;
-          currentRunRef.current = null;
-          setRunning(false);
-          setActiveRunId(null);
-          setRunStatus("error");
-          setSdkConnectionState("idle");
-          setLastStatusText("Error");
-          const id = nextEntryId("sdk-submit-error");
-          appendSdkRealtimeEntries(
-            markLocalEntries(
-              appendMeta([], id, "Submit failed", err instanceof Error ? err.message : String(err), "error"),
-              id,
-            ),
-          );
-        });
-    } else {
-      openRunSocket(run, false);
-    }
+    void enqueueSdkTurn(run)
+      .then(() => {
+        if (currentRunRef.current?.id === run.id && !run.cancelled) {
+          openSdkRunSocket(run);
+        }
+      })
+      .catch((err) => {
+        if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+        currentRunRef.current = null;
+        setRunning(false);
+        setRunStatus("error");
+        setSdkConnectionState("idle");
+        setLastStatusText("Error");
+        const id = nextEntryId("sdk-submit-error");
+        appendSdkRealtimeEntries(
+          markLocalEntries(
+            appendMeta([], id, "Submit failed", err instanceof Error ? err.message : String(err), "error"),
+            id,
+          ),
+        );
+      });
   }
 
-  // SDK-runtime socket lifecycle. The canonical event log is the source of
+  // Chat socket lifecycle. The canonical event log is the source of
   // truth; WebSocket frames are only the live transport. A dropped transport
   // reconnects without re-sending the user prompt and catches up from
   // history, so transient closes do not become chat-visible errors.
@@ -5517,7 +4921,6 @@ function HeadlessRun({
     scheduledWakeupRef.current = false;
     setActiveTool(null);
     setRunning(false);
-    setActiveRunId(null);
     setSdkConnectionState("idle");
     if (options.closeSocket) {
       if (wsRef.current === options.closeSocket) wsRef.current = null;
@@ -5534,7 +4937,6 @@ function HeadlessRun({
   ): void {
     if (currentRunRef.current?.id !== run.id || run.cancelled) return;
     currentRunRef.current = null;
-    setActiveRunId(null);
     setLastStatusText("Connection lost");
     scheduledWakeupRef.current = false;
     setActiveTool(null);
@@ -5733,140 +5135,6 @@ function HeadlessRun({
     };
   }
 
-  function openRunSocket(run: NonNullable<typeof currentRunRef.current>, resume: boolean) {
-    const wsUrl =
-      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
-      `/api/sessions/${session.id}/run`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          run_id: run.id,
-          resume,
-          prompt: resume ? "" : run.prompt,
-          skill_name: resume ? undefined : run.skillName,
-          offset: resume ? run.offset : 0,
-          follow_up: run.followUp,
-          model: run.model,
-          permission_mode: run.permissionMode,
-        }),
-      );
-    };
-    ws.onmessage = (event) => {
-      let msg: RunEvent;
-      try {
-        msg = JSON.parse(String(event.data));
-      } catch {
-        setEntries((prev) =>
-          appendMeta(prev, nextEntryId("websocket-message"), "websocket message", String(event.data)),
-        );
-        return;
-      }
-      if (msg.stream === "stdout" && msg.data) {
-        run.offset += msg.data.length;
-        applyStdoutChunk(msg.data);
-      } else if (msg.stream === "stderr" && msg.data) {
-        run.offset += msg.data.length;
-        setEntries((prev) =>
-          appendMeta(prev, nextEntryId("stderr"), "stderr", msg.data, "error"),
-        );
-      } else if (msg.status === "done") {
-        clearLifecycleFinishTimer();
-        flushStdoutBuffer();
-        currentRunRef.current = null;
-        const durationMs = Date.now() - run.turnStart;
-        setEntries((prev) => {
-          for (let i = prev.length - 1; i >= 0; i--) {
-            if (prev[i].kind === "message" && prev[i].role === "assistant") {
-              const updated = [...prev];
-              updated[i] = { ...updated[i], durationMs } as TranscriptEntry;
-              return updated;
-            }
-          }
-          return prev;
-        });
-        setLastStatusText(
-          scheduledWakeupRef.current
-            ? "Wakeup scheduled"
-            : activeToolNameRef.current
-              ? `Used ${formatToolLabel(activeToolNameRef.current)}`
-              : "Done",
-        );
-        scheduledWakeupRef.current = false;
-        setActiveTool(null);
-        setRunStatus("done");
-        setRunning(false);
-        setActiveRunId(null);
-        playTurnCompleteSound();
-        ws.close();
-      } else if (msg.status === "attached") {
-        // Sync run_id from server in case it sanitised the client-provided value.
-        if (msg.run_id && msg.run_id !== run.id) {
-          run.id = msg.run_id;
-          setActiveRunId(msg.run_id);
-        }
-      } else if (msg.status === "error") {
-        clearLifecycleFinishTimer();
-        flushStdoutBuffer();
-        currentRunRef.current = null;
-        setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
-        scheduledWakeupRef.current = false;
-        setActiveTool(null);
-        setRunStatus("error");
-        setRunning(false);
-        setActiveRunId(null);
-        setEntries((prev) =>
-          appendMeta(prev, nextEntryId("run-error"), "run failed", msg.detail, "error"),
-        );
-        ws.close();
-      }
-    };
-    ws.onerror = () => {
-      if (!run.cancelled) {
-        setLastStatusText("Reconnecting");
-      }
-    };
-    ws.onclose = (event) => {
-      flushStdoutBuffer();
-      if (currentRunRef.current?.id !== run.id || run.cancelled) {
-        return;
-      }
-      // If the backend closes before a done/error frame, assume transport loss
-      // and reattach to the pod-local run stream. Normal done/cancel paths clear
-      // currentRunRef before this handler runs.
-      if (run.reconnects < 8) {
-        run.reconnects += 1;
-        const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
-        setLastStatusText("Reconnecting");
-        window.setTimeout(() => {
-          if (currentRunRef.current?.id === run.id && !run.cancelled) {
-            openRunSocket(run, true);
-          }
-        }, delay);
-        return;
-      }
-      currentRunRef.current = null;
-      setActiveRunId(null);
-      setLastStatusText("Connection lost");
-      scheduledWakeupRef.current = false;
-      setActiveTool(null);
-      setRunning(false);
-      setEntries((entries) =>
-        appendMeta(
-          entries,
-          nextEntryId("ws-close"),
-          "Connection lost",
-          `WebSocket closed with code ${event.code}${
-            event.reason ? ` — ${event.reason}` : ""
-          }. Resend to continue.`,
-          "error",
-        ),
-      );
-      setRunStatus("error");
-    };
-  }
-
   const submitStatus =
     runStatus === "running"
       ? "streaming"
@@ -5916,8 +5184,7 @@ function HeadlessRun({
   const verb = activeToolName
     ? `Using ${formatToolLabel(activeToolName)}`
     : STREAM_VERBS[verbIndex];
-  const connectionLabel =
-    session.runtime === "sdk" ? sdkConnectionLabel(sdkConnectionState) : null;
+  const connectionLabel = sdkConnectionLabel(sdkConnectionState);
 
   const sendStdin = (text: string) => {
     wsRef.current?.send(JSON.stringify({ stdin: text }));
@@ -6798,8 +6065,8 @@ function HeadlessRun({
                     modes. Backend wire-through: `acceptEdits`/`auto`/
                     `bypassPermissions` map to `claude -p
                     --dangerously-skip-permissions`; `plan` is rendered
-                    as a prompt prefix (Claude's headless mode doesn't
-                    have a CLI flag for plan today); `default` is the
+                    as a prompt prefix because Claude does not expose a
+                    dedicated plan flag today; `default` is the
                     no-flag baseline. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -7338,7 +6605,7 @@ export function App() {
 
   useEffect(() => {
     if (!user) return;
-    if (!sessions.some((s) => HEADLESS_MODES.has(s.mode))) return;
+    if (!sessions.some((s) => CHAT_MODES.has(s.mode))) return;
     const t = setInterval(refreshSessionActivity, POLL_INTERVAL_MS);
     return () => clearInterval(t);
   }, [sessions, user]);
@@ -7522,7 +6789,7 @@ export function App() {
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = normalizeSession(await res.json());
-      if (HEADLESS_MODES.has(mode)) {
+      if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
       await refresh();
@@ -8132,13 +7399,13 @@ export function App() {
             {sessions
               .filter((s) => mounted.has(s.id))
               .map((s) =>
-                HEADLESS_MODES.has(s.mode) ? (
+                CHAT_MODES.has(s.mode) ? (
                   <div
                     key={s.id}
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <HeadlessRun
+                    <ChatPane
                       session={s}
                       visible={active === s.id}
                       onRename={renameSession}

@@ -5,7 +5,7 @@
 # We use ANTHROPIC_API_KEY rather than the OAuth subscription path
 # (CLAUDE_CODE_OAUTH_TOKEN) because the env-var token is "inference-only"
 # and the full OAuth flow assumes a browser on the same machine — neither
-# fits a headless container.
+# fits a noninteractive container.
 #
 # Run on rotation. The script force-syncs the ExternalSecret so new session
 # pods pick up the value immediately (no waiting on the 1h ESO poll).

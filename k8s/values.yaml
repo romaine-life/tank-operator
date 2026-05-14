@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced — no implicit `:latest` drift.
-  tag: "app-34095d8773233605d9a661cd55e6425a4cbb8e2ad0ed02f32f0bdedc2d313c72"
+  tag: "app-9a0f1b194eca51ab6c3b2695a354d655739fe956aed4ce13e2d8aa0ac94af621"
   pullPolicy: IfNotPresent
 
 testEnv:
@@ -24,6 +24,12 @@ staticOverride:
   writerImage: alpine:3.20
   writerImagePullPolicy: IfNotPresent
 
+hotSwapBackend:
+  enabled: true
+  mountPath: /var/run/tank-operator-hot
+  target: /var/run/tank-operator-hot/tank-operator-go
+  childCommand: /app/tank-operator-go
+
 namespaces:
   orchestrator: tank-operator
   sessions: tank-operator-sessions
@@ -43,9 +49,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-89aad945041f1900a4f1b348a8555c172c1f4a98082ccb69c2419c73cd52a23e
-  codexImage: romainecr.azurecr.io/codex-container:codex-a3eeac274eb04b7edfc4eafb2dc19ec32b6357ea538d97c3bdcf7e5b23822c80
-  piImage: romainecr.azurecr.io/pi-container:pi-37416b7e33d3b1dbcdef3fb9aca446653940cd79bba9ef84eeeadb18334d1ded
+  image: romainecr.azurecr.io/claude-container:claude-f25111a7617910afc556bdf040c8a7476f20a9e3061143abc87d66c45e9f1c69
+  codexImage: romainecr.azurecr.io/codex-container:codex-b6b6ff7e65eeb1535232d4761a92d3acf19edfe6e43f230b65ef954dc8038aa6
+  piImage: romainecr.azurecr.io/pi-container:pi-cbcb7cea815bb3472b67442c3309024821facc94016178f0dd133c5ef0c6df71
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -98,7 +104,7 @@ apiProxy:
     # is load-bearing — the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-10d26ba67ce7e9efdc8990cc3c280d14f50e1ba118afa837cdb1ddb145904ab9"
+    tag: "api-proxy-176138ce2c87da39ab75cf10bf8c03c9daa999fe7579a2c9bec3da45c68b2c92"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
@@ -108,18 +114,24 @@ apiProxy:
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
 
+# Codex API proxy: a second Envoy + ext_proc deployment using the same image
+# and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and owns the
+# real ChatGPT OAuth refresh chain for Codex sessions.
+codexApiProxy:
+  serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
+
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
 # token, observes upstream 401s, calls platform.claude.com with the current
 # refresh token to rotate, writes the new blob back to KV. ESO mirrors KV →
 # the proxy's mounted Secret on a 1m interval.
 #
-# This values block is named `credentialRefresher` for legacy reasons —
+# This values block is named `credentialRefresher` for historical reasons —
 # the original design used a CronJob that's since been retired. The block
 # stayed because two consumers still authenticate to KV via the same UAMI:
 #   - api-proxy ext_proc sidecar: KV write of rotated blobs.
 #   - orchestrator save-credentials: KV write on "+ config sub" harvest.
-# The UAMI itself (infra/credential_refresher.tf) keeps the legacy name
+# The UAMI itself (infra/credential_refresher.tf) keeps the historical name
 # for the same TF-state-stability reason; the ExternalSecret below syncs
 # its AZURE_CLIENT_ID + AZURE_TENANT_ID into a Secret both consumers
 # envFrom-pull, so DefaultAzureCredential mints a federated KV token
@@ -141,8 +153,6 @@ cosmos:
   endpoint: https://tank-operator-romaine.documents.azure.com:443/
   database: tank-operator
   profilesContainer: profiles
-  activeRunsContainer: active-runs
-  runEventsContainer: run-events
   sessionEventsContainer: session-events
   turnQueueContainer: turn-queue
 
@@ -163,6 +173,12 @@ github:
 host:
   email: nelson@romaine.life
 
+# Comma-separated emails that receive super-admin behavior in MCP servers.
+# Empty means the orchestrator falls back to `host.email`, preserving the
+# single-operator default while making the role first-class configurable.
+superAdmins:
+  emails: nelson@romaine.life
+
 # Comma-separated "namespace/serviceaccount" pairs that may call the
 # /api/internal/* endpoints. The default covers mcp-github and mcp-tank-operator;
 # extend here when adding future in-cluster MCP servers that need the
@@ -182,18 +198,8 @@ externalSecret:
   # credentials from KV via per-server
   # ExternalSecrets, NOT from this Secret.
   #
-  # Both auth paths are bundled in every pod; the orchestrator stamps
-  # TANK_SESSION_MODE on each Pod to pick which one the bootstrap uses:
-  #   - api_key:      ANTHROPIC_API_KEY → console.anthropic.com billing.
-  #                   Populate via scripts/setup-anthropic-key.ps1 (or .sh).
-  #   - subscription: CLAUDE_CODE_CREDENTIALS_JSON → snapshot of an
-  #                   already-logged-in machine's ~/.claude/.credentials.json,
-  #                   bootstrap writes it back to that path so the TUI treats
-  #                   the pod as a logged-in subscriber. Populate via
-  #                   scripts/setup-claude-credentials.ps1 (or .sh).
-  #
   # The block is named `githubApp` and the K8s Secret is `github-app-creds`
-  # for legacy reasons — it used to carry the GitHub App private key, until
+  # from an earlier chart shape that carried the GitHub App private key, until
   # the App credentials moved to the mcp-github Deployment's own ExternalSecret
   # in the standalone mcp-github chart. Session pods never read
   # the App credentials directly; mcp-github mints installation tokens itself
@@ -219,21 +225,15 @@ externalSecret:
     # `<orchestrator-namespace>-claude-code-credentials`, so each test env
     # gets its own refresh-token chain.
     kvKey: ""
-  # OpenAI codex subscription credentials. Unlike claudeCredentials,
-  # this Secret lives in the SESSIONS namespace — codex_subscription
-  # pods mount it directly (no api-proxy in front today). The
-  # ExternalSecret is templated by externalsecret-codex.yaml.
-  #
-  # The orchestrator's harvest path (codex_config save-credentials) is
-  # the only writer; ESO mirrors KV → this Secret. A future rotation-
-  # write-back from the pod side (or a codex proxy that owns rotation
-  # centrally) is deferred — see the codex paths in
-  # backend-go/internal/sessions/dispatch.go for the current shape.
+  # OpenAI Codex subscription credentials. The primary Secret lives in the
+  # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
+  # session launchers write a placeholder chatgptAuthTokens auth.json and
+  # route chatgpt.com through the proxy, which injects/rotates the real
+  # tokens and writes back to KV.
   codexCredentials:
     secretName: codex-credentials
-    # Key inside the K8s Secret. The bootstrap reads
-    # /etc/codex-creds/auth.json — Secret-volume keys mount as filenames,
-    # so this name has to be `auth.json`.
+    # Key inside the K8s Secret. The proxy mounts this as
+    # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
   # Auth secrets for the orchestrator's MSAL → backend JWT flow. ENTRA_CLIENT_ID

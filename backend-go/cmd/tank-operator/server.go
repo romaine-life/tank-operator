@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -18,8 +20,6 @@ type appServer struct {
 	restCfg       *rest.Config
 	mgr           *sessions.Manager
 	profiles      profilesStore
-	activeRuns    store.ActiveRunStore
-	runEvents     store.RunEventStore
 	turnQueue     store.TurnQueueStore
 	sessionEvents store.SessionEventStore
 	readStates    store.ConversationReadStateStore
@@ -50,7 +50,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
-	mux.HandleFunc("POST /api/sessions/run", s.handleCreateAndRunSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/activity", s.handleSessionActivity)
 	mux.HandleFunc("GET /api/sessions/events", s.handleSessionsEvents)
@@ -75,21 +74,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
 
-	// Legacy run endpoints - used by sessions whose pod has no SDK runner
-	// sidecar (claude_cli, codex_cli, pi, and older GUI pods). The SPA's
-	// chat pane uses these for the legacy data-ingestion path. They are not
-	// being deleted: CLI/config modes still dispatch short-lived runs through
-	// this stream-json surface.
-	mux.HandleFunc("GET /api/sessions/{session_id}/run/active", s.handleGetActiveRun)
-	mux.HandleFunc("GET /api/sessions/{session_id}/run/history", s.handleRunHistory)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events", s.handleLatestRunEvents)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events.json", s.handleLatestRunEventsJSON)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/{run_id}/events", s.handleRunEvents)
-	mux.HandleFunc("GET /api/sessions/{session_id}/run", s.handleRunWebSocket)
-
-	// SDK runtime surface. The same chat pane consumes /agent-ws (live)
-	// and /timeline (history) when session.runtime is "sdk" — the data
-	// source differs from the legacy path, but the renderer is the same.
+	// App-managed chat surface.
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
@@ -109,25 +94,21 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)
-	mux.HandleFunc("POST /api/internal/sessions/run", s.handleInternalRunSession)
 
 	// Static files.
-	staticDir := os.Getenv("TANK_OPERATOR_STATIC_DIR")
-	if staticDir != "" {
-		if _, err := os.Stat(staticDir); err == nil {
-			fs := http.FileServer(http.Dir(staticDir))
-			mux.Handle("GET /assets/", fs)
-			mux.Handle("GET /fonts/", fs)
-			mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/manifest.webmanifest")
-			})
-			mux.HandleFunc("GET /_styleguide", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/index.html")
-			})
-			mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, staticDir+"/index.html")
-			})
-		}
+	staticRoots := tankStaticRoots()
+	if staticRoots.enabled() {
+		mux.HandleFunc("GET /assets/", s.serveStaticAsset(staticRoots, "assets"))
+		mux.HandleFunc("GET /fonts/", s.serveStaticAsset(staticRoots, "fonts"))
+		mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "manifest.webmanifest")
+		})
+		mux.HandleFunc("GET /_styleguide", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "index.html")
+		})
+		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+			serveTankStaticFile(w, r, staticRoots, "index.html")
+		})
 	}
 }
 
@@ -140,4 +121,84 @@ func (s *appServer) handleConfig(w http.ResponseWriter, _ *http.Request) {
 		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
 		"entra_authority": "https://login.microsoftonline.com/common",
 	})
+}
+
+type tankStaticRootSet struct {
+	override string
+	base     string
+}
+
+func tankStaticRoots() tankStaticRootSet {
+	return tankStaticRootSet{
+		override: os.Getenv("TANK_OPERATOR_STATIC_OVERRIDE_DIR"),
+		base:     os.Getenv("TANK_OPERATOR_STATIC_DIR"),
+	}
+}
+
+func (r tankStaticRootSet) enabled() bool {
+	for _, root := range []string{r.override, r.base} {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *appServer) serveStaticAsset(roots tankStaticRootSet, prefix string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/"+prefix+"/")
+		serveTankStaticFile(w, r, roots, prefix, filepath.FromSlash(rel))
+	}
+}
+
+func serveTankStaticFile(w http.ResponseWriter, r *http.Request, roots tankStaticRootSet, parts ...string) {
+	found, ok := tankStaticFile(roots, parts...)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, found)
+}
+
+func tankStaticFile(roots tankStaticRootSet, parts ...string) (string, bool) {
+	for _, root := range []string{roots.override, roots.base} {
+		if root == "" {
+			continue
+		}
+		if found, ok := tankStaticFileInRoot(root, parts...); ok {
+			return found, true
+		}
+	}
+	return "", false
+}
+
+func tankStaticFileInRoot(root string, parts ...string) (string, bool) {
+	for _, part := range parts {
+		if part == "" || filepath.IsAbs(part) {
+			return "", false
+		}
+		for _, segment := range strings.Split(filepath.Clean(part), string(filepath.Separator)) {
+			if segment == ".." {
+				return "", false
+			}
+		}
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	candidate := filepath.Join(append([]string{rootAbs}, parts...)...)
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, candidateAbs)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return "", false
+	}
+	info, err := os.Stat(candidateAbs)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return candidateAbs, true
 }

@@ -107,7 +107,7 @@ func sessionFromDoc(data []byte) (compat.SessionRecord, error) {
 	return compat.SessionRecord{
 		ID:          sessionID,
 		Email:       doc.Email,
-		Mode:        defaultString(doc.Mode, compat.ClaudeCLIMode),
+		Mode:        defaultString(doc.Mode, compat.DefaultSessionMode),
 		Scope:       scope,
 		PodName:     doc.PodName,
 		Name:        doc.Name,

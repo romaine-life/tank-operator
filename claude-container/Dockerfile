@@ -8,6 +8,7 @@ COPY agent-runner/package.json agent-runner/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY agent-runner/tsconfig.json ./
 COPY agent-runner/src ./src
+COPY runner-shared /src/runner-shared
 RUN npx tsc
 # Prune dev deps for a smaller runtime payload.
 RUN npm prune --omit=dev
@@ -22,6 +23,7 @@ COPY codex-runner/package.json codex-runner/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY codex-runner/tsconfig.json ./
 COPY codex-runner/src ./src
+COPY runner-shared /src/runner-shared
 RUN npx tsc
 RUN npm prune --omit=dev
 
@@ -139,6 +141,8 @@ COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
 COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
 COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
 
+COPY runner-shared /opt/runner-shared
+
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
 # Baked into all three session images so the build is symmetric; only
 # the codex pod spec invokes it as a sidecar. The same WS port + Cosmos
@@ -148,8 +152,8 @@ COPY --from=codex-runner-build /src/codex-runner/dist /opt/codex-runner/dist
 COPY --from=codex-runner-build /src/codex-runner/node_modules /opt/codex-runner/node_modules
 COPY --from=codex-runner-build /src/codex-runner/package.json /opt/codex-runner/package.json
 
-# Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and the
-# bootstrap script are mounted from the chart-managed tank-session-config
+# Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and
+# launcher scripts are mounted from the chart-managed tank-session-config
 # ConfigMap. Keep the parent directories in the image so the orchestrator can
 # mount individual files with subPath without rebuilding the image for
 # docs/config/script changes.

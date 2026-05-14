@@ -43,7 +43,7 @@ test("session activity drives sidebar labels and dots", () => {
   );
 });
 
-test("non-headless sessions keep pod lifecycle status", () => {
+test("non-chat sessions keep pod lifecycle status", () => {
   const activity = normalizeSessionActivity({
     session_id: "12",
     status: "streaming",

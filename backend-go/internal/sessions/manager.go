@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"regexp"
 	"sync"
 	"time"
 
@@ -20,30 +19,13 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 const (
 	defaultIdleTimeout    = 5 * time.Minute
 	defaultReaperInterval = 60 * time.Second
 	podReadyTimeout       = 90 * time.Second
-
-	headlessRunExitMarker   = "__TANK_RUN_EXIT__:"
-	maxHeadlessPromptBytes  = 256 * 1024
-	headlessArgPattern      = `^[A-Za-z0-9._-]{1,64}$`
-	runIDPattern            = `^[A-Za-z0-9._-]{1,80}$`
 )
-
-var (
-	headlessArgRe = regexp.MustCompile(headlessArgPattern)
-	runIDRe       = regexp.MustCompile(runIDPattern)
-)
-
-// headless mode values mirror Python HEADLESS_MODES.
-var headlessModes = map[string]bool{
-	compat.ClaudeGUIMode: true,
-	compat.CodexGUIMode:  true,
-}
 
 // SessionRegistry is a write-capable registry interface.
 type SessionRegistry interface {
@@ -101,9 +83,6 @@ type Manager struct {
 
 	manifestOpts compat.ManifestOptions
 
-	activeRuns store.ActiveRunStore
-	runEvents  store.RunEventStore
-
 	// In-memory activity tracking for reaper (single replica only).
 	mu           sync.Mutex
 	wsCount      map[string]int
@@ -113,8 +92,9 @@ type Manager struct {
 	reaperInterval time.Duration
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP string
-	apiProxyIP     string
+	oauthGatewayIP  string
+	apiProxyIP      string
+	codexAPIProxyIP string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -122,13 +102,12 @@ type Manager struct {
 
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
-	ManifestOpts     compat.ManifestOptions
-	IdleTimeout      time.Duration
-	ReaperInterval   time.Duration
-	OAuthGatewayHost string
-	APIProxyHost     string
-	ActiveRuns       store.ActiveRunStore
-	RunEvents        store.RunEventStore
+	ManifestOpts      compat.ManifestOptions
+	IdleTimeout       time.Duration
+	ReaperInterval    time.Duration
+	OAuthGatewayHost  string
+	APIProxyHost      string
+	CodexAPIProxyHost string
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, events *EventBus, opts ManagerOptions) *Manager {
@@ -145,6 +124,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	if opts.ReaperInterval == 0 {
 		opts.ReaperInterval = defaultReaperInterval
 	}
+	if opts.ManifestOpts.SessionsNamespace == "" {
+		opts.ManifestOpts.SessionsNamespace = namespace
+	}
 	m := &Manager{
 		client:         client,
 		restCfg:        restCfg,
@@ -152,8 +134,6 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		registry:       registry,
 		events:         events,
 		manifestOpts:   opts.ManifestOpts,
-		activeRuns:     opts.ActiveRuns,
-		runEvents:      opts.RunEvents,
 		wsCount:        map[string]int{},
 		lastActivity:   map[string]time.Time{},
 		idleTimeout:    opts.IdleTimeout,
@@ -164,6 +144,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.APIProxyHost != "" {
 		m.apiProxyIP = resolveIP(opts.APIProxyHost)
+	}
+	if opts.CodexAPIProxyHost != "" {
+		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
 	}
 	return m
 }
@@ -285,6 +268,9 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	if m.apiProxyIP == "" {
 		m.apiProxyIP = resolveIP(os.Getenv("CLAUDE_API_PROXY_HOST"))
 	}
+	if m.codexAPIProxyIP == "" {
+		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -300,6 +286,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	opts := m.manifestOpts
 	opts.OAuthGatewayIP = m.oauthGatewayIP
 	opts.APIProxyIP = m.apiProxyIP
+	opts.CodexAPIProxyIP = m.codexAPIProxyIP
 	opts.GlimmungContextJSON = contextJSON
 
 	manifest := compat.PodManifest(sessionID, owner, mode, opts)
@@ -523,7 +510,7 @@ func (m *Manager) GetTerminalEndpoint(ctx context.Context, owner, sessionID stri
 }
 
 // findPodBySessionID resolves the session pod by label (preferred — handles
-// both the current "session-<id>" naming and legacy hash-suffixed names like
+// both the current "session-<id>" naming and hash-suffixed names like
 // "session-189268a4e4" from earlier orchestrator versions). Falls back to a
 // by-name Get for the brief race between pod Create and the label cache
 // catching up. Returns ErrNotOwned if the pod exists but belongs to someone
@@ -601,14 +588,6 @@ type registryAdapter struct{ r SessionRegistry }
 func (a *registryAdapter) List(ctx context.Context, owner string) ([]compat.SessionRecord, error) {
 	return a.r.List(ctx, owner)
 }
-
-// IsHeadlessMode returns true for modes that support headless runs.
-func IsHeadlessMode(mode string) bool {
-	return headlessModes[compat.NormalizeSessionMode(mode)]
-}
-
-// HeadlessRunExitMarker is the sentinel written at the end of a stream file.
-const HeadlessRunExitMarker = headlessRunExitMarker
 
 func nowISO() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.999999+00:00")
