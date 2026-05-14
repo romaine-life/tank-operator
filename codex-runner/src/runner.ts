@@ -155,6 +155,31 @@ export type AcceptedTurn = CodexAdapterTurn & {
   stopLeaseRenewal?: () => void;
 };
 
+export function interruptTargetMatchesTurn(
+  targetTurnID: string,
+  turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
+): boolean {
+  return (
+    !targetTurnID ||
+    targetTurnID === turn.turnID ||
+    targetTurnID === turn.clientNonce
+  );
+}
+
+export function takePendingInterruptForTurn(
+  pendingInterrupts: Array<Pick<TurnRecord, "target_turn_id" | "client_nonce">>,
+  turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
+): Pick<TurnRecord, "target_turn_id" | "client_nonce"> | null {
+  const index = pendingInterrupts.findIndex((record) =>
+    interruptTargetMatchesTurn(
+      record.target_turn_id || record.client_nonce || "",
+      turn,
+    ),
+  );
+  if (index < 0) return null;
+  return pendingInterrupts.splice(index, 1)[0] ?? null;
+}
+
 export class Runner {
   private readonly sink: CosmosSink;
   private readonly turnQueue: TurnQueue;
@@ -169,6 +194,8 @@ export class Runner {
   private currentAbort: AbortController | null = null;
   private currentTurn: AcceptedTurn | null = null;
   private interruptRequested = false;
+  private readonly pendingInterrupts: TurnRecord[] = [];
+  private readonly pendingQueuedTurnTargets = new Set<string>();
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
@@ -217,6 +244,7 @@ export class Runner {
             clientNonce,
           ))
         ) {
+          this.clearQueuedTurnTarget(clientNonce);
           continue;
         }
         if (queueRecord && this.turnQueue.attemptsExceeded(queueRecord)) {
@@ -229,6 +257,7 @@ export class Runner {
               `turn queue exceeded ${queueRecord.attempt_count ?? "unknown"} claim attempts`,
             ),
           );
+          this.clearQueuedTurnTarget(clientNonce);
           continue;
         }
         const turn = await this.recordUserSubmission(
@@ -243,6 +272,7 @@ export class Runner {
               queueRecord,
               new Error("queued turn was not accepted"),
             );
+          this.clearQueuedTurnTarget(clientNonce);
           continue;
         }
         if (queueRecord) {
@@ -262,6 +292,16 @@ export class Runner {
 
         this.currentAbort = new AbortController();
         this.currentTurn = turn;
+        this.clearQueuedTurnTarget(turn.clientNonce);
+        const pendingInterrupt = takePendingInterruptForTurn(
+          this.pendingInterrupts,
+          turn,
+        );
+        if (pendingInterrupt) {
+          this.interruptRequested = true;
+          this.currentAbort.abort();
+          await this.turnQueue.markCompleted(pendingInterrupt as TurnRecord);
+        }
         // If the outer signal aborts mid-turn, also abort the in-flight
         // codex subprocess. AbortSignal.any-style propagation done manually
         // since Node 20's AbortSignal.any is stage 3.
@@ -351,6 +391,7 @@ export class Runner {
           turn.stopLeaseRenewal = undefined;
           this.currentAbort = null;
           this.currentTurn = null;
+          await this.completeStalePendingInterrupts(turn);
           this.interruptRequested = false;
         }
       }
@@ -375,9 +416,11 @@ export class Runner {
               await this.acceptInterrupt(record);
               continue;
             }
+            const clientNonce = turnClientNonce(record);
+            this.trackQueuedTurnTarget(clientNonce);
             this.userQueue.push({
               text: record.prompt,
-              clientNonce: turnClientNonce(record),
+              clientNonce,
               queueRecord: record,
             });
             continue;
@@ -395,14 +438,51 @@ export class Runner {
     const targetTurnID = record.target_turn_id || record.client_nonce || "";
     if (
       this.currentTurn &&
-      (!targetTurnID ||
-        targetTurnID === this.currentTurn.turnID ||
-        targetTurnID === this.currentTurn.clientNonce)
+      interruptTargetMatchesTurn(targetTurnID, this.currentTurn)
     ) {
       this.interruptRequested = true;
       this.currentAbort?.abort();
+      await this.turnQueue.markCompleted(record);
+      return;
+    }
+    if (targetTurnID && this.pendingQueuedTurnTargets.has(targetTurnID)) {
+      this.addPendingInterrupt(record);
+      return;
     }
     await this.turnQueue.markCompleted(record);
+  }
+
+  private trackQueuedTurnTarget(clientNonce: string | undefined): void {
+    const normalized = normalizeClientNonce(clientNonce);
+    if (!normalized) return;
+    this.pendingQueuedTurnTargets.add(normalized);
+    this.pendingQueuedTurnTargets.add(turnIDForClientNonce(normalized));
+  }
+
+  private clearQueuedTurnTarget(clientNonce: string | undefined): void {
+    const normalized = normalizeClientNonce(clientNonce);
+    if (!normalized) return;
+    this.pendingQueuedTurnTargets.delete(normalized);
+    this.pendingQueuedTurnTargets.delete(turnIDForClientNonce(normalized));
+  }
+
+  private addPendingInterrupt(record: TurnRecord): void {
+    if (!this.pendingInterrupts.some((candidate) => candidate.id === record.id)) {
+      this.pendingInterrupts.push(record);
+    }
+  }
+
+  private async completeStalePendingInterrupts(
+    turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
+  ): Promise<void> {
+    while (true) {
+      const pendingInterrupt = takePendingInterruptForTurn(
+        this.pendingInterrupts,
+        turn,
+      );
+      if (!pendingInterrupt) return;
+      await this.turnQueue.markCompleted(pendingInterrupt as TurnRecord);
+    }
   }
 
   private async recordUserSubmission(

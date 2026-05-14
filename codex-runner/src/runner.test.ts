@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch, dispatchCreate } from "./runner.js";
+import {
+  dispatch,
+  dispatchCreate,
+  interruptTargetMatchesTurn,
+  takePendingInterruptForTurn,
+} from "./runner.js";
 import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
 import {
   isTankConversationEvent,
@@ -175,4 +180,35 @@ test("generated event ids sort by production order", () => {
   const second = nextSortableEventID(1000);
   const third = nextSortableEventID(1001);
   assert.deepEqual([third, first, second].sort(), [first, second, third]);
+});
+
+test("pending interrupt targets match either turn id or client nonce", () => {
+  const turn = {
+    turnID: "turn_client-123",
+    clientNonce: "client-123",
+  };
+
+  assert.equal(interruptTargetMatchesTurn("turn_client-123", turn), true);
+  assert.equal(interruptTargetMatchesTurn("client-123", turn), true);
+  assert.equal(interruptTargetMatchesTurn("other-turn", turn), false);
+});
+
+test("queued Codex interrupts are consumed when their turn becomes current", () => {
+  const pendingInterrupts = [
+    { target_turn_id: "client-123", client_nonce: "client-123" },
+    { target_turn_id: "client-other", client_nonce: "client-other" },
+  ];
+  const turn = {
+    turnID: "turn_client-123",
+    clientNonce: "client-123",
+  };
+
+  assert.deepEqual(takePendingInterruptForTurn(pendingInterrupts, turn), {
+    target_turn_id: "client-123",
+    client_nonce: "client-123",
+  });
+  assert.deepEqual(pendingInterrupts, [
+    { target_turn_id: "client-other", client_nonce: "client-other" },
+  ]);
+  assert.equal(takePendingInterruptForTurn(pendingInterrupts, turn), null);
 });
