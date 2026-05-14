@@ -104,7 +104,7 @@ apiProxy:
     # is load-bearing — the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-af958a341ede8ffd448ee867b313cd1b184b2adf6d2ba11ebffe07eff9d73dc6"
+    tag: "api-proxy-176138ce2c87da39ab75cf10bf8c03c9daa999fe7579a2c9bec3da45c68b2c92"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
