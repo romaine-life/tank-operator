@@ -46,6 +46,10 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-session-config" .Release.Name }}{{- else -}}{{ .Values.session.configMap }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.appConfigMap" -}}
+{{- if .Values.testEnv.enabled -}}{{ printf "%s-app-config" .Release.Name }}{{- else -}}{{ .Values.appConfig.configMap }}{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.sessionRegistryScope" -}}
 {{- if .Values.testEnv.enabled -}}{{ .Release.Name }}{{- else -}}{{ .Values.session.registryScope }}{{- end -}}
 {{- end -}}

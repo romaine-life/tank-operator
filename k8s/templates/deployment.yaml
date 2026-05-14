@@ -72,6 +72,8 @@ spec:
               value: {{ .Values.session.reaperIntervalSeconds | quote }}
             - name: TANK_OPERATOR_STATIC_DIR
               value: /app/static
+            - name: TANK_FORK_SESSION_PROMPT_FILE
+              value: /etc/tank-operator/app-config/fork-session.md
             {{- if and .Values.testEnv.enabled .Values.staticOverride.enabled }}
             - name: TANK_OPERATOR_STATIC_OVERRIDE_DIR
               value: {{ .Values.staticOverride.mountPath | quote }}
@@ -168,6 +170,9 @@ spec:
             - name: claude-credentials
               mountPath: /etc/claude-credentials
               readOnly: true
+            - name: app-config
+              mountPath: /etc/tank-operator/app-config
+              readOnly: true
             {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
             - name: hot-backend
               mountPath: {{ .Values.hotSwapBackend.mountPath | quote }}
@@ -223,6 +228,9 @@ spec:
             # synced (or before "+ config sub" has seeded credentials).
             secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
             optional: true
+        - name: app-config
+          configMap:
+            name: {{ include "tank-operator.appConfigMap" . }}
         {{- if and .Values.testEnv.enabled .Values.staticOverride.enabled }}
         - name: static-override
           emptyDir: {}

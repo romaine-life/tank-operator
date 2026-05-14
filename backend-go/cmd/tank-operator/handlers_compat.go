@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
@@ -22,10 +21,7 @@ type sessionReader interface {
 // config returns the public configuration (entra client ID, authority).
 // Standalone version for tests.
 func config(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
-		"entra_authority": "https://login.microsoftonline.com/common",
-	})
+	writeJSON(w, http.StatusOK, publicConfig())
 }
 
 // authenticatedListSessions returns a handler that lists sessions for the
