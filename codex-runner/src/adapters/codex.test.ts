@@ -19,6 +19,8 @@ function cfg(): Config {
     cosmosDatabase: "tank-operator",
     sessionEventsContainer: "session-events",
     turnQueueContainer: "turn-queue",
+    operatorInternalURL: "",
+    operatorTokenPath: "",
     turnQueuePollMs: 1000,
     workspace: "/workspace",
   };

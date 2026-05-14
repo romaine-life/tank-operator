@@ -15,26 +15,29 @@ func TestTurnDocShape(t *testing.T) {
 	claimExpiresAt := "2026-05-11T17:02:00Z"
 	availableAt := "2026-05-11T16:59:59Z"
 	rec := TurnRecord{
-		TurnID:         "abc123",
-		SessionID:      "61",
-		Email:          "nelson@romaine.life",
-		Provider:       "claude",
-		Source:         "sdk",
-		ClientNonce:    "client-abc123",
-		TargetTurnID:   "client-abc123",
-		Prompt:         "hello",
-		Model:          "claude-sonnet-4-6",
-		PermissionMode: "bypassPermissions",
-		SkillName:      "init",
-		FollowUp:       false,
-		Status:         TurnPending,
-		CreatedAt:      "2026-05-11T16:59:59Z",
-		ClaimedAt:      &claimed,
-		ClaimID:        &claimID,
-		ClaimedBy:      &claimedBy,
-		ClaimExpiresAt: &claimExpiresAt,
-		AttemptCount:   2,
-		AvailableAt:    &availableAt,
+		TurnID:               "abc123",
+		SessionID:            "61",
+		Email:                "nelson@romaine.life",
+		Provider:             "claude",
+		Source:               "sdk",
+		ClientNonce:          "client-abc123",
+		TargetTurnID:         "client-abc123",
+		TargetItemID:         "turn-abc:item:toolu-123",
+		TargetProviderItemID: "toolu-123",
+		InputReply:           "yes",
+		Prompt:               "hello",
+		Model:                "claude-sonnet-4-6",
+		PermissionMode:       "bypassPermissions",
+		SkillName:            "init",
+		FollowUp:             false,
+		Status:               TurnPending,
+		CreatedAt:            "2026-05-11T16:59:59Z",
+		ClaimedAt:            &claimed,
+		ClaimID:              &claimID,
+		ClaimedBy:            &claimedBy,
+		ClaimExpiresAt:       &claimExpiresAt,
+		AttemptCount:         2,
+		AvailableAt:          &availableAt,
 	}
 	doc := turnDoc(rec)
 
@@ -58,6 +61,15 @@ func TestTurnDocShape(t *testing.T) {
 	}
 	if got, want := doc["target_turn_id"], "client-abc123"; got != want {
 		t.Fatalf("target_turn_id = %q, want %q", got, want)
+	}
+	if got, want := doc["target_item_id"], "turn-abc:item:toolu-123"; got != want {
+		t.Fatalf("target_item_id = %q, want %q", got, want)
+	}
+	if got, want := doc["target_provider_item_id"], "toolu-123"; got != want {
+		t.Fatalf("target_provider_item_id = %q, want %q", got, want)
+	}
+	if got, want := doc["input_reply"], "yes"; got != want {
+		t.Fatalf("input_reply = %q, want %q", got, want)
 	}
 	if got, want := doc["prompt"], "hello"; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
@@ -113,27 +125,30 @@ func TestTurnDocUsesScopedStorageKeyForPartition(t *testing.T) {
 // wrote without information loss on any field.
 func TestTurnDocRoundtrip(t *testing.T) {
 	orig := TurnRecord{
-		TurnID:         "abc",
-		SessionID:      "61",
-		Email:          "nelson@romaine.life",
-		Provider:       "claude",
-		Source:         "sdk",
-		ClientNonce:    "client-abc",
-		TargetTurnID:   "client-abc",
-		Prompt:         "say hi",
-		Model:          "claude-sonnet-4-6",
-		PermissionMode: "bypassPermissions",
-		SkillName:      "",
-		FollowUp:       true,
-		Status:         TurnClaimed,
-		CreatedAt:      "2026-05-11T16:00:00Z",
-		ClaimedAt:      strptr("2026-05-11T16:00:01Z"),
-		ClaimID:        strptr("claim-abc"),
-		ClaimedBy:      strptr("claude-runner:61:runner-1"),
-		ClaimExpiresAt: strptr("2026-05-11T16:02:01Z"),
-		AttemptCount:   1,
-		AvailableAt:    strptr("2026-05-11T16:00:00Z"),
-		CompletedAt:    nil,
+		TurnID:               "abc",
+		SessionID:            "61",
+		Email:                "nelson@romaine.life",
+		Provider:             "claude",
+		Source:               "sdk",
+		ClientNonce:          "client-abc",
+		TargetTurnID:         "client-abc",
+		TargetItemID:         "turn-abc:item:toolu-abc",
+		TargetProviderItemID: "toolu-abc",
+		InputReply:           "answer",
+		Prompt:               "say hi",
+		Model:                "claude-sonnet-4-6",
+		PermissionMode:       "bypassPermissions",
+		SkillName:            "",
+		FollowUp:             true,
+		Status:               TurnClaimed,
+		CreatedAt:            "2026-05-11T16:00:00Z",
+		ClaimedAt:            strptr("2026-05-11T16:00:01Z"),
+		ClaimID:              strptr("claim-abc"),
+		ClaimedBy:            strptr("claude-runner:61:runner-1"),
+		ClaimExpiresAt:       strptr("2026-05-11T16:02:01Z"),
+		AttemptCount:         1,
+		AvailableAt:          strptr("2026-05-11T16:00:00Z"),
+		CompletedAt:          nil,
 	}
 	raw, err := json.Marshal(turnDoc(orig))
 	if err != nil {
@@ -147,6 +162,9 @@ func TestTurnDocRoundtrip(t *testing.T) {
 		got.Provider != orig.Provider || got.Prompt != orig.Prompt ||
 		got.Source != orig.Source || got.ClientNonce != orig.ClientNonce ||
 		got.TargetTurnID != orig.TargetTurnID ||
+		got.TargetItemID != orig.TargetItemID ||
+		got.TargetProviderItemID != orig.TargetProviderItemID ||
+		got.InputReply != orig.InputReply ||
 		got.Model != orig.Model || got.FollowUp != orig.FollowUp ||
 		got.AttemptCount != orig.AttemptCount {
 		t.Fatalf("roundtrip mismatch:\ngot  = %#v\nwant = %#v", got, orig)

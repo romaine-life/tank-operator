@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { dispatch, dispatchCreate } from "./runner.js";
+import {
+  buildInputReplyMessage,
+  dispatch,
+  dispatchCreate,
+  inputReplyTargetProviderItemID,
+  inputReplyText,
+} from "./runner.js";
 import { isCanonical } from "./cosmos.js";
 import {
   isTankConversationEvent,
@@ -170,4 +176,30 @@ test("system without subtype is not canonical", async () => {
   };
   await dispatch(sink, { type: "system" } as any);
   assert.equal(cosmosCalled, false);
+});
+
+test("input reply records map to Claude tool_result messages", () => {
+  const message = buildInputReplyMessage("toolu_ask", "Continue");
+
+  assert.equal((message as any).type, "user");
+  assert.equal((message as any).parent_tool_use_id, "toolu_ask");
+  assert.deepEqual((message as any).message.content, [
+    {
+      type: "tool_result",
+      tool_use_id: "toolu_ask",
+      content: "Continue",
+    },
+  ]);
+});
+
+test("input reply record helpers trim durable control fields", () => {
+  const record = {
+    target_provider_item_id: " toolu_ask ",
+    input_reply: " Continue ",
+    prompt: "fallback",
+  } as any;
+
+  assert.equal(inputReplyTargetProviderItemID(record), "toolu_ask");
+  assert.equal(inputReplyText(record), "Continue");
+  assert.equal(inputReplyText({ ...record, input_reply: "" } as any), "");
 });

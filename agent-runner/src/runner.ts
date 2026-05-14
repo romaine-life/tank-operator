@@ -37,6 +37,7 @@ import {
 } from "./conversation.js";
 import {
   TurnQueue,
+  isInputReplyRecord,
   isInterruptRecord,
   turnClientNonce,
   type TurnRecord,
@@ -145,6 +146,37 @@ export interface PendingTurn {
   stopLeaseRenewal?: () => void;
 }
 
+interface PendingInputReply {
+  record: TurnRecord;
+  stopLeaseRenewal?: () => void;
+}
+
+export function inputReplyTargetProviderItemID(record: TurnRecord): string {
+  return String(record.target_provider_item_id ?? "").trim();
+}
+
+export function inputReplyText(record: TurnRecord): string {
+  return String(record.input_reply ?? "").trim();
+}
+
+export function buildInputReplyMessage(providerItemID: string, text: string): SDKUserMessage {
+  return {
+    type: "user",
+    session_id: "",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: providerItemID,
+          content: text,
+        },
+      ],
+    },
+    parent_tool_use_id: providerItemID,
+  } as unknown as SDKUserMessage;
+}
+
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
 // pushed item exactly once. The SDK consumes this as the prompt source.
 class AsyncQueue<T> {
@@ -186,6 +218,7 @@ export class Runner {
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   private readonly needsInputProviderItemIDs = new Set<string>();
+  private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
 
@@ -258,6 +291,9 @@ export class Runner {
           await this.markQueuedTurnTerminal(activeTurn, event.type);
         }
       }
+      if (dispatched && event.type === "tool.approval_resolved" && event.provider_item_id) {
+        await this.markInputReplyCompleted(event.provider_item_id);
+      }
     }
     if (runnerEvent.type === "result" && this.activeTurn === activeTurn) {
       this.activeTurn = null;
@@ -280,6 +316,10 @@ export class Runner {
         try {
           const record = await this.turnQueue.claimNext();
           if (record) {
+            if (isInputReplyRecord(record)) {
+              await this.acceptInputReply(record);
+              continue;
+            }
             if (isInterruptRecord(record)) {
               await this.acceptInterrupt(record);
               continue;
@@ -333,6 +373,34 @@ export class Runner {
       this.sdkQuery?.interrupt();
     }
     await this.turnQueue.markCompleted(record);
+  }
+
+  private async acceptInputReply(record: TurnRecord): Promise<void> {
+    const targetProviderItemID = inputReplyTargetProviderItemID(record);
+    const text = inputReplyText(record);
+    if (!targetProviderItemID || !text) {
+      await this.turnQueue.markFailed(record, new Error("input reply missing target or text"));
+      return;
+    }
+    if (!this.activeTurn || !this.turnMatchesTarget(this.activeTurn, record.target_turn_id || record.client_nonce)) {
+      await this.turnQueue.markFailed(record, new Error("input reply target turn is not active"));
+      return;
+    }
+    if (!this.needsInputProviderItemIDs.has(targetProviderItemID)) {
+      await this.turnQueue.markFailed(record, new Error("input reply target is not waiting for input"));
+      return;
+    }
+    if (this.pendingInputReplies.has(targetProviderItemID)) {
+      await this.turnQueue.markFailed(record, new Error("input reply already pending for target"));
+      return;
+    }
+
+    const pending: PendingInputReply = {
+      record,
+      stopLeaseRenewal: this.turnQueue.startLeaseRenewal(record),
+    };
+    this.pendingInputReplies.set(targetProviderItemID, pending);
+    this.userQueue.push(buildInputReplyMessage(targetProviderItemID, text));
   }
 
   private async recordUserSubmission(
@@ -396,7 +464,7 @@ export class Runner {
   private async interruptActiveTurn(reason: "client_interrupt" | "runner_shutdown", targetTurnID = ""): Promise<boolean> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
     if (!turn || turn.terminalEmitted) return false;
-    if (targetTurnID && targetTurnID !== turn.turnID && targetTurnID !== turn.clientNonce) {
+    if (!this.turnMatchesTarget(turn, targetTurnID)) {
       return false;
     }
     turn.interrupted = true;
@@ -418,10 +486,15 @@ export class Runner {
     return dispatched;
   }
 
+  private turnMatchesTarget(turn: Pick<PendingTurn, "turnID" | "clientNonce">, targetTurnID = ""): boolean {
+    return !targetTurnID || targetTurnID === turn.turnID || targetTurnID === turn.clientNonce;
+  }
+
   private async markQueuedTurnTerminal(
     turn: PendingTurn,
     type: "turn.completed" | "turn.failed" | "turn.interrupted",
   ): Promise<void> {
+    await this.failPendingInputRepliesForTurn(turn, new Error(type));
     if (!turn.queueRecord) return;
     const record = turn.queueRecord;
     turn.stopLeaseRenewal?.();
@@ -435,6 +508,36 @@ export class Runner {
       }
     } catch (err) {
       console.error("turn queue terminal mark failed:", err);
+    }
+  }
+
+  private async markInputReplyCompleted(providerItemID: string): Promise<void> {
+    const pending = this.pendingInputReplies.get(providerItemID);
+    if (!pending) return;
+    this.pendingInputReplies.delete(providerItemID);
+    pending.stopLeaseRenewal?.();
+    try {
+      await this.turnQueue.markCompleted(pending.record);
+    } catch (err) {
+      console.error("input reply terminal mark failed:", err);
+    }
+  }
+
+  private async failPendingInputRepliesForTurn(
+    turn: Pick<PendingTurn, "turnID" | "clientNonce">,
+    err: unknown,
+  ): Promise<void> {
+    for (const [providerItemID, pending] of [...this.pendingInputReplies.entries()]) {
+      if (!this.turnMatchesTarget(turn, pending.record.target_turn_id || pending.record.client_nonce)) {
+        continue;
+      }
+      this.pendingInputReplies.delete(providerItemID);
+      pending.stopLeaseRenewal?.();
+      try {
+        await this.turnQueue.markFailed(pending.record, err);
+      } catch (markErr) {
+        console.error("input reply failure mark failed:", markErr);
+      }
     }
   }
 

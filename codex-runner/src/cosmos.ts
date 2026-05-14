@@ -33,6 +33,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Config } from "./config.js";
 import { isDurableTankConversationEvent } from "./conversation.js";
+import { SessionEventNotifier } from "../../runner-shared/sessionNotify.js";
 
 const CANONICAL_TYPES = new Set<string>([
   "thread.started",
@@ -121,6 +122,7 @@ function hasTankEventEnvelope(event: CodexEvent): boolean {
 export class CosmosSink {
   private readonly client: CosmosClient;
   private readonly container;
+  private readonly notifier: SessionEventNotifier;
 
   constructor(private readonly cfg: Config) {
     this.client = new CosmosClient({
@@ -130,6 +132,7 @@ export class CosmosSink {
     this.container = this.client
       .database(cfg.cosmosDatabase)
       .container(cfg.sessionEventsContainer);
+    this.notifier = new SessionEventNotifier(cfg);
   }
 
   // Write a canonical event. Doc id is the runner-stamped uuid; partition
@@ -139,12 +142,14 @@ export class CosmosSink {
   async upsert(event: CodexEvent & { uuid: string }): Promise<void> {
     const doc = this.docFromEvent(event);
     await this.container.items.upsert(doc);
+    await this.notify(doc);
   }
 
   async create(event: CodexEvent & { uuid: string }): Promise<"created" | "exists"> {
     const doc = this.docFromEvent(event);
     try {
       await this.container.items.create(doc);
+      await this.notify(doc);
       return "created";
     } catch (err) {
       if (isConflict(err)) return "exists";
@@ -184,6 +189,14 @@ export class CosmosSink {
           ? event.written_at
           : new Date().toISOString(),
     };
+  }
+
+  private async notify(doc: Record<string, unknown>): Promise<void> {
+    try {
+      await this.notifier.notify(doc);
+    } catch (err) {
+      console.warn("session event notify failed:", err);
+    }
   }
 }
 

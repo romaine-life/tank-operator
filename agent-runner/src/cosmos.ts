@@ -17,6 +17,7 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import type { Config } from "./config.js";
 import { isDurableTankConversationEvent } from "./conversation.js";
+import { SessionEventNotifier } from "../../runner-shared/sessionNotify.js";
 
 export interface RunnerEvent {
   type: string;
@@ -68,6 +69,7 @@ export function isCanonical(message: RunnerEvent | SDKMessage): boolean {
 export class CosmosSink {
   private readonly client: CosmosClient;
   private readonly container;
+  private readonly notifier: SessionEventNotifier;
 
   constructor(private readonly cfg: Config) {
     this.client = new CosmosClient({
@@ -77,6 +79,7 @@ export class CosmosSink {
     this.container = this.client
       .database(cfg.cosmosDatabase)
       .container(cfg.sessionEventsContainer);
+    this.notifier = new SessionEventNotifier(cfg);
   }
 
   // Write a canonical event to Cosmos. Doc id is the SDK's uuid (v7,
@@ -88,12 +91,14 @@ export class CosmosSink {
   async upsert(message: RunnerEvent & { uuid: string }): Promise<void> {
     const doc = this.docFromMessage(message);
     await this.container.items.upsert(doc);
+    await this.notify(doc);
   }
 
   async create(message: RunnerEvent & { uuid: string }): Promise<"created" | "exists"> {
     const doc = this.docFromMessage(message);
     try {
       await this.container.items.create(doc);
+      await this.notify(doc);
       return "created";
     } catch (err) {
       if (isConflict(err)) return "exists";
@@ -133,6 +138,14 @@ export class CosmosSink {
           ? message.written_at
           : new Date().toISOString(),
     };
+  }
+
+  private async notify(doc: Record<string, unknown>): Promise<void> {
+    try {
+      await this.notifier.notify(doc);
+    } catch (err) {
+      console.warn("session event notify failed:", err);
+    }
   }
 }
 

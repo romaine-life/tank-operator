@@ -377,6 +377,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"name":      "workspace",
 			"mountPath": "/workspace",
 		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "tank-operator-sa-token",
+			"mountPath": "/var/run/secrets/tank-operator",
+			"readOnly":  true,
+		})
 		runnerEnv := []any{
 			map[string]any{
 				"name": "SESSION_ID",
@@ -399,6 +404,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
 			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
 			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
 		}
@@ -441,6 +448,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"name":      "workspace",
 			"mountPath": "/workspace",
 		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "tank-operator-sa-token",
+			"mountPath": "/var/run/secrets/tank-operator",
+			"readOnly":  true,
+		})
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 				"name":      "oauth-gateway-ca",
@@ -470,6 +482,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
 			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
 			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {

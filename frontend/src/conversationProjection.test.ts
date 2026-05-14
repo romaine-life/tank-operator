@@ -240,3 +240,31 @@ test("projects durable skill invocation display metadata", () => {
     });
   }
 });
+
+test("projects durable AskUserQuestion reply targets", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
+      ev("2", "tool.approval_requested", {
+        actor: "tool",
+        source: "claude",
+        turn_id: "turn-active",
+        timeline_id: "turn-active:item:toolu_ask",
+        provider_item_id: "toolu_ask",
+        payload: {
+          kind: "needs_input",
+          name: "AskUserQuestion",
+          input: { question: "Proceed?" },
+        },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.entries.length, 1);
+  assert.equal(projection.entries[0]?.kind, "tool");
+  if (projection.entries[0]?.kind === "tool") {
+    assert.equal(projection.entries[0].turnId, "turn-active");
+    assert.equal(projection.entries[0].providerItemId, "toolu_ask");
+    assert.equal(projection.entries[0].id, "turn-active:item:toolu_ask");
+  }
+});

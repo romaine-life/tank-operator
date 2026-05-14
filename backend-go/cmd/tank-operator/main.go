@@ -146,6 +146,7 @@ func main() {
 		profiles:                profileStore,
 		turnQueue:               turnQueueStore,
 		sessionEvents:           sessionEventsStore,
+		eventBroker:             newSessionEventBroker(),
 		readStates:              readStateStore,
 		eventBus:                eventBus,
 		verifier:                verifier,

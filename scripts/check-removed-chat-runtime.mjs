@@ -30,6 +30,8 @@ const ignoredFiles = new Set([
 
 const ignoredRelativePaths = new Set([
   "scripts/check-removed-chat-runtime.mjs",
+  "backend-go/cmd/tank-operator/server_static_test.go",
+  "frontend/src/migrationPolicy.test.ts",
 ]);
 
 const blocked = [
@@ -55,6 +57,14 @@ const blocked = [
   { name: "old pi subscription alias", pattern: /\bpi_subscription\b/ },
   { name: "direct Codex credential mirror", pattern: /\bCodexCredsSecret\b/ },
   { name: "default direct Codex credential mirror", pattern: /\bDefaultCodexCredsSecret\b/ },
+  { name: "retired agent runner websocket route", pattern: /\/agent-ws\b/ },
+  { name: "retired agent runner websocket port", pattern: /\bAGENT_RUNNER_WS_PORT\b/ },
+  { name: "retired websocket fanout", pattern: /\bWSFanout\b/ },
+  { name: "retired websocket frame type", pattern: /\bClientFrame\b/ },
+  { name: "retired Tank order key storage name", pattern: /\btank_order_key\b/ },
+  { name: "retired Tank event sequence storage name", pattern: /\btank_event_seq\b/ },
+  { name: "retired frontend activity poll interval", pattern: /\bPOLL_INTERVAL_MS\b/ },
+  { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
 ];
 
 const failures = [];

@@ -153,6 +153,61 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 	}
 }
 
+func TestInputReplySessionTurnWritesQueueControlRecord(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"  Continue  "}`)
+	resp := httptest.NewRecorder()
+
+	app.handleInputReplySessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 1 {
+		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
+	}
+	got := queue.records[0]
+	if got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
+		t.Fatalf("input reply routing fields = %#v", got)
+	}
+	if got.TargetProviderItemID != "toolu_123" || got.TargetItemID != "turn-active_123:item:toolu_123" || got.InputReply != "Continue" || got.Prompt != "Continue" {
+		t.Fatalf("input reply payload fields = %#v", got)
+	}
+}
+
+func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	req := authedInputReplyRequest(t, "64", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleInputReplySessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 0 {
+		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	}
+}
+
+func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleInputReplySessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 0 {
+		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	}
+}
+
 func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
@@ -248,5 +303,15 @@ func authedInterruptRequest(t *testing.T, sessionID, turnID string) *http.Reques
 	req.SetPathValue("session_id", sessionID)
 	req.SetPathValue("turn_id", turnID)
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	return req
+}
+
+func authedInputReplyRequest(t *testing.T, sessionID, turnID, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/turns/"+turnID+"/input-reply", strings.NewReader(body))
+	req.SetPathValue("session_id", sessionID)
+	req.SetPathValue("turn_id", turnID)
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
 	return req
 }

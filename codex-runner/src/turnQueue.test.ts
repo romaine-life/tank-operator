@@ -5,6 +5,8 @@ import {
   buildClaimedRecord,
   buildDelayedTurnRecord,
   claimAttemptsExceeded,
+  isInputReplyRecord,
+  isInterruptRecord,
   type TurnRecord,
 } from "./turnQueue.js";
 
@@ -61,4 +63,10 @@ test("schedule wakeups use the same delayed row contract", () => {
   assert.equal(record.status, "pending");
   assert.equal(record.available_at, "2026-05-12T10:05:00.000Z");
   assert.equal(record.attempt_count, 0);
+});
+
+test("control row classifiers are shared across runners", () => {
+  assert.equal(isInterruptRecord(baseRecord({ source: "interrupt" })), true);
+  assert.equal(isInputReplyRecord(baseRecord({ source: "input-reply" })), true);
+  assert.equal(isInputReplyRecord(baseRecord({ source: "sdk" })), false);
 });
