@@ -40,7 +40,8 @@ export interface TankConversationEvent {
   conversation_id?: string;
   session_id: string;
   turn_id?: string;
-  item_id?: string;
+  timeline_id?: string;
+  provider_item_id?: string;
   parent_id?: string;
   client_nonce?: string;
   actor: TankActor;
@@ -100,8 +101,12 @@ export function turnIDForClientNonce(clientNonce: string): string {
   return `turn_${stableIDPart(clientNonce)}`;
 }
 
-export function userItemID(turnID: string): string {
+export function userTimelineID(turnID: string): string {
   return `${turnID}:user`;
+}
+
+export function itemTimelineID(turnID: string, providerItemID: string): string {
+  return `${turnID}:item:${stableIDPart(providerItemID)}`;
 }
 
 export function userSubmissionEvents(args: {
@@ -126,7 +131,7 @@ export function userSubmissionEvents(args: {
       conversation_id: args.sessionID,
       session_id: args.sessionID,
       turn_id: turnID,
-      item_id: userItemID(turnID),
+      timeline_id: userTimelineID(turnID),
       client_nonce: clientNonce,
       actor: "user",
       source: "tank",
@@ -205,7 +210,7 @@ export function itemEvent(args: {
     | "item.failed"
     | "tool.approval_requested"
     | "tool.approval_resolved";
-  itemID: string;
+  providerItemID: string;
   parentID?: string;
   actor: TankActor;
   visibility?: TankVisibility;
@@ -213,11 +218,12 @@ export function itemEvent(args: {
   payload?: Record<string, unknown>;
 }): TankConversationEvent {
   return {
-    event_id: `${args.turnID}:${args.type}:${stableIDPart(args.itemID)}:${args.providerEventID ?? "runner"}`,
+    event_id: `${args.turnID}:${args.type}:${stableIDPart(args.providerItemID)}:${args.providerEventID ?? "runner"}`,
     conversation_id: args.sessionID,
     session_id: args.sessionID,
     turn_id: args.turnID,
-    item_id: args.itemID,
+    timeline_id: itemTimelineID(args.turnID, args.providerItemID),
+    provider_item_id: args.providerItemID,
     parent_id: args.parentID ?? args.turnID,
     actor: args.actor,
     source: args.source,
@@ -248,7 +254,7 @@ function stableIDPart(value: string): string {
 function isValidEventByType(event: { [key: string]: unknown }): boolean {
   switch (event.type) {
     case "user_message.created":
-      return hasStrings(event, ["turn_id", "item_id", "client_nonce"]) && isUserMessagePayload(event.payload);
+      return hasStrings(event, ["turn_id", "timeline_id", "client_nonce"]) && isUserMessagePayload(event.payload);
     case "turn.submitted":
       return event.actor === "runner" && event.source === "tank" && hasStrings(event, ["turn_id", "client_nonce"]) && isStringPayload(event.payload, "status");
     case "turn.started":
@@ -260,10 +266,10 @@ function isValidEventByType(event: { [key: string]: unknown }): boolean {
     case "item.delta":
     case "item.completed":
     case "item.failed":
-      return hasStrings(event, ["turn_id", "item_id"]) && isStringPayload(event.payload, "kind");
+      return hasStrings(event, ["turn_id", "timeline_id"]) && isStringPayload(event.payload, "kind");
     case "tool.approval_requested":
     case "tool.approval_resolved":
-      return event.actor === "tool" && hasStrings(event, ["turn_id", "item_id"]) && isStringPayload(event.payload, "kind");
+      return event.actor === "tool" && hasStrings(event, ["turn_id", "timeline_id"]) && isStringPayload(event.payload, "kind");
     case "session.activity_updated":
       return isStringPayload(event.payload, "status");
     case "read_state.updated":

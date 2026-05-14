@@ -307,7 +307,7 @@ func unreadMarkerAfterRead(marker unreadOutputMarker, readOrderKey string) bool 
 }
 
 func unreadOutputID(event map[string]any) string {
-	for _, field := range []string{"item_id", "turn_id", "event_id", "id", "uuid"} {
+	for _, field := range []string{"timeline_id", "turn_id", "event_id", "id", "uuid"} {
 		if value, _ := event[field].(string); value != "" {
 			return value
 		}

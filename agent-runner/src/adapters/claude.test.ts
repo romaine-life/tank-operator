@@ -66,11 +66,13 @@ test("adapter maps Claude assistant text and tool_use blocks to Tank items", () 
   ]);
   for (const event of events) assertTankEventFixture(event);
   assert.equal(events[0]?.actor, "assistant");
-  assert.equal(events[0]?.item_id, "turn-run-123:assistant:claude-msg-1:text:0");
+  assert.equal(events[0]?.timeline_id, "turn-run-123:item:assistant:claude-msg-1:text:0");
+  assert.equal(events[0]?.provider_item_id, "assistant:claude-msg-1:text:0");
   assert.equal(events[0]?.payload?.kind, "message");
   assert.equal(events[0]?.payload?.text, "I will inspect the workspace.");
   assert.equal(events[1]?.actor, "tool");
-  assert.equal(events[1]?.item_id, "toolu_read");
+  assert.equal(events[1]?.timeline_id, "turn-run-123:item:toolu_read");
+  assert.equal(events[1]?.provider_item_id, "toolu_read");
   assert.equal(events[1]?.payload?.title, "Read");
 });
 
@@ -95,15 +97,15 @@ test("adapter gives each text block in one Claude message a unique canonical id"
     "First paragraph.",
     "Second paragraph.",
   ]);
-  assert.equal(new Set(events.map((event) => event.item_id)).size, 2);
+  assert.equal(new Set(events.map((event) => event.timeline_id)).size, 2);
   assert.equal(new Set(events.map((event) => event.event_id)).size, 2);
-  assert.equal(events[0]?.item_id, "turn-run-123:assistant:claude-msg-multi-text:text:0");
-  assert.equal(events[1]?.item_id, "turn-run-123:assistant:claude-msg-multi-text:text:1");
+  assert.equal(events[0]?.timeline_id, "turn-run-123:item:assistant:claude-msg-multi-text:text:0");
+  assert.equal(events[1]?.timeline_id, "turn-run-123:item:assistant:claude-msg-multi-text:text:1");
   for (const event of events) assertTankEventFixture(event);
 });
 
 test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
-  const needsInputItemIDs = new Set<string>();
+  const needsInputProviderItemIDs = new Set<string>();
   const requested = canonicalEventsForClaudeMessage(
     cfg(),
     turn(),
@@ -121,7 +123,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
         ],
       },
     },
-    needsInputItemIDs,
+    needsInputProviderItemIDs,
   );
 
   assert.deepEqual(requested.map((event) => event.type), [
@@ -129,7 +131,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
     "tool.approval_requested",
   ]);
   for (const event of requested) assertTankEventFixture(event);
-  assert.equal(needsInputItemIDs.has("toolu_ask"), true);
+  assert.equal(needsInputProviderItemIDs.has("toolu_ask"), true);
 
   const resolved = canonicalEventsForClaudeMessage(
     cfg(),
@@ -148,7 +150,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
         ],
       },
     },
-    needsInputItemIDs,
+    needsInputProviderItemIDs,
   );
 
   assert.deepEqual(resolved.map((event) => event.type), [
@@ -156,7 +158,7 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
     "tool.approval_resolved",
   ]);
   for (const event of resolved) assertTankEventFixture(event);
-  assert.equal(needsInputItemIDs.has("toolu_ask"), false);
+  assert.equal(needsInputProviderItemIDs.has("toolu_ask"), false);
 });
 
 test("adapter maps Claude result failures and interrupts to terminal turn events", () => {

@@ -77,7 +77,13 @@
       "type": "string",
       "minLength": 1
     },
-    "item_id": {
+    "timeline_id": {
+      "description": "Tank-owned durable identity for a renderable timeline entry. Provider IDs must not be used as UI identity.",
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_item_id": {
+      "description": "Raw provider-scoped item id, preserved as metadata only.",
       "type": "string",
       "minLength": 1
     },
@@ -246,7 +252,7 @@
     {
       "if": { "properties": { "type": { "const": "user_message.created" } }, "required": ["type"] },
       "then": {
-        "required": ["turn_id", "item_id", "client_nonce", "payload"],
+        "required": ["turn_id", "timeline_id", "client_nonce", "payload"],
         "properties": {
           "actor": { "const": "user" },
           "source": { "const": "tank" },
@@ -291,7 +297,7 @@
         "required": ["type"]
       },
       "then": {
-        "required": ["turn_id", "item_id", "payload"],
+        "required": ["turn_id", "timeline_id", "payload"],
         "properties": {
           "payload": { "$ref": "#/$defs/itemPayload" }
         }
@@ -307,7 +313,7 @@
         "required": ["type"]
       },
       "then": {
-        "required": ["turn_id", "item_id", "payload"],
+        "required": ["turn_id", "timeline_id", "payload"],
         "properties": {
           "actor": { "const": "tool" },
           "payload": { "$ref": "#/$defs/itemPayload" }

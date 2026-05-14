@@ -204,9 +204,9 @@ function applyUserMessage(
     return state;
   }
   const text = stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
-  if (!event.item_id || !event.turn_id || !event.client_nonce || !text) return state;
+  if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text) return state;
   const message: ConversationMessage = {
-    id: event.item_id,
+    id: event.timeline_id,
     role: "user",
     text,
     turnId: event.turn_id,
@@ -231,8 +231,8 @@ function upsertItem(
   status: ConversationItemStatus,
   appendDelta = false,
 ): ConversationReducerState {
-  if (!event.item_id || !event.turn_id) return state;
-  const id = event.item_id;
+  if (!event.timeline_id || !event.turn_id) return state;
+  const id = event.timeline_id;
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, appendDelta ? "delta" : "text");
   const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
@@ -292,7 +292,7 @@ function matchingActiveItem(
   state: ConversationReducerState,
   event: TankConversationEvent,
 ): boolean {
-  return Boolean(event.item_id && state.activeItemId === event.item_id);
+  return Boolean(event.timeline_id && state.activeItemId === event.timeline_id);
 }
 
 function defaultItemKind(event: TankConversationEvent): string {

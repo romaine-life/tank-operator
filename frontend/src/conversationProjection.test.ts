@@ -13,7 +13,7 @@ function ev(
   const defaults: Partial<TankConversationEvent> = {};
   if (type === "user_message.created") {
     defaults.actor = "user";
-    defaults.item_id = "turn-1:user";
+    defaults.timeline_id = "turn-1:user";
     defaults.client_nonce = "client-1";
   }
   if (type === "turn.submitted") {
@@ -46,7 +46,7 @@ test("projects canonical user and assistant events into chat messages", () => {
     ev("3", "item.completed", {
       actor: "assistant",
       source: "claude",
-      item_id: "assistant-1",
+      timeline_id: "assistant-1",
       payload: { kind: "message", text: "world" },
     }),
     ev("4", "turn.completed", { source: "claude" }),
@@ -66,6 +66,55 @@ test("projects canonical user and assistant events into chat messages", () => {
   assert.equal(projection.runStatus, "ready");
 });
 
+test("keys assistant messages by Tank timeline id, not provider item id", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        turn_id: "turn-1",
+        timeline_id: "turn-1:user",
+        client_nonce: "run-1",
+        payload: { text: "first prompt" },
+      }),
+      ev("2", "item.completed", {
+        actor: "assistant",
+        source: "codex",
+        turn_id: "turn-1",
+        timeline_id: "turn-1:item:item_0",
+        provider_item_id: "item_0",
+        payload: { kind: "message", text: "first answer" },
+      }),
+      ev("3", "user_message.created", {
+        actor: "user",
+        turn_id: "turn-2",
+        timeline_id: "turn-2:user",
+        client_nonce: "run-2",
+        payload: { text: "second prompt" },
+      }),
+      ev("4", "item.completed", {
+        actor: "assistant",
+        source: "codex",
+        turn_id: "turn-2",
+        timeline_id: "turn-2:item:item_0",
+        provider_item_id: "item_0",
+        payload: { kind: "message", text: "second answer" },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(
+    projection.entries.map((entry) =>
+      entry.kind === "message" ? [entry.role, entry.text] : [entry.kind],
+    ),
+    [
+      ["user", "first prompt"],
+      ["assistant", "first answer"],
+      ["user", "second prompt"],
+      ["assistant", "second answer"],
+    ],
+  );
+});
+
 test("projects canonical tool lifecycle and active tool state", () => {
   const running = projectConversationState(
     reduceConversationEvents([
@@ -73,7 +122,7 @@ test("projects canonical tool lifecycle and active tool state", () => {
       ev("2", "item.started", {
         actor: "tool",
         source: "claude",
-        item_id: "toolu-read",
+        timeline_id: "toolu-read",
         payload: {
           kind: "tool",
           title: "Read",
@@ -96,13 +145,13 @@ test("projects canonical tool lifecycle and active tool state", () => {
       ev("2", "item.started", {
         actor: "tool",
         source: "claude",
-        item_id: "toolu-read",
+        timeline_id: "toolu-read",
         payload: { kind: "tool", title: "Read" },
       }),
       ev("3", "item.completed", {
         actor: "tool",
         source: "claude",
-        item_id: "toolu-read",
+        timeline_id: "toolu-read",
         payload: { kind: "tool_result", output: "README contents" },
       }),
     ]),
@@ -144,7 +193,7 @@ test("projects durable skill invocation display metadata", () => {
     reduceConversationEvents([
       ev("1", "user_message.created", {
         actor: "user",
-        item_id: "turn-1:user",
+        timeline_id: "turn-1:user",
         client_nonce: "client-1",
         payload: {
           text: "/test\n\nplease verify",

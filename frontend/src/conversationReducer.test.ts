@@ -15,7 +15,7 @@ function ev(
   const defaults: Partial<TankConversationEvent> = {};
   if (type === "user_message.created") {
     defaults.actor = "user";
-    defaults.item_id = "turn-1:user";
+    defaults.timeline_id = "turn-1:user";
     defaults.client_nonce = "client-1";
   }
   if (type === "turn.submitted") {
@@ -70,7 +70,7 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
     ev("4", "item.completed", {
       actor: "assistant",
       source: "claude",
-      item_id: "msg-1",
+      timeline_id: "msg-1",
       payload: { kind: "message", text: "summary" },
     }),
     ev("5", "turn.completed", { source: "claude" }),
@@ -91,13 +91,13 @@ test("Tool lifecycle replays to a completed tool item", () => {
     ev("2", "item.started", {
       actor: "tool",
       source: "claude",
-      item_id: "toolu-read",
+      timeline_id: "toolu-read",
       payload: { kind: "tool", title: "Read", text: "{\"file_path\":\"README.md\"}" },
     }),
     ev("3", "item.completed", {
       actor: "tool",
       source: "claude",
-      item_id: "toolu-read",
+      timeline_id: "toolu-read",
       payload: { kind: "tool", title: "Read", text: "README contents" },
     }),
     ev("4", "turn.completed"),
@@ -115,13 +115,13 @@ test("Item deltas append delta payload text", () => {
     ev("1", "item.started", {
       actor: "assistant",
       source: "codex",
-      item_id: "msg-1",
+      timeline_id: "msg-1",
       payload: { kind: "agent_message", text: "Hel" },
     }),
     ev("2", "item.delta", {
       actor: "assistant",
       source: "codex",
-      item_id: "msg-1",
+      timeline_id: "msg-1",
       payload: { delta: "lo" },
     }),
   ]);
@@ -154,13 +154,13 @@ test("Approval pause is explicit needs-input state and resumes streaming", () =>
     ev("1", "turn.started", { turn_id: "turn-approval" }),
     ev("2", "tool.approval_requested", {
       turn_id: "turn-approval",
-      item_id: "approval-1",
+      timeline_id: "approval-1",
       actor: "tool",
       payload: { kind: "approval", title: "Run tests" },
     }),
     ev("3", "tool.approval_resolved", {
       turn_id: "turn-approval",
-      item_id: "approval-1",
+      timeline_id: "approval-1",
       actor: "tool",
       payload: { decision: "allow" },
     }),
@@ -175,7 +175,7 @@ test("Provider error becomes terminal error state without needs-input", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "claude" }),
     ev("2", "tool.approval_requested", {
-      item_id: "approval-1",
+      timeline_id: "approval-1",
       actor: "tool",
       payload: { kind: "approval", title: "Run command" },
     }),
@@ -223,7 +223,7 @@ test("Replay and live delivery converge through event id dedupe", () => {
     ev("2", "turn.started"),
     ev("3", "item.completed", {
       actor: "assistant",
-      item_id: "msg-1",
+      timeline_id: "msg-1",
       payload: { kind: "message", text: "world" },
     }),
     ev("4", "turn.completed"),
@@ -238,7 +238,7 @@ test("Replay and live delivery converge through event id dedupe", () => {
 test("contract guard rejects malformed per-type events", () => {
   assert.equal(isTankConversationEvent(ev("10", "user_message.created", {
     actor: "user",
-    item_id: "turn-1:user",
+    timeline_id: "turn-1:user",
     client_nonce: "client-1",
     payload: { text: "hello", display: { kind: "plain" } },
   })), true);

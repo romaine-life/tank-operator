@@ -14,7 +14,7 @@ function ev(
   const defaults: Partial<TankConversationEvent> = {};
   if (type === "user_message.created") {
     defaults.actor = "user";
-    defaults.item_id = "turn-414:user";
+    defaults.timeline_id = "turn-414:user";
     defaults.client_nonce = "client-run-414";
   }
   if (type === "turn.submitted") {
@@ -61,7 +61,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     ev(4, "item.started", {
       actor: "tool",
       source: "claude",
-      item_id: "tool-github-issue",
+      timeline_id: "tool-github-issue",
       payload: {
         kind: "mcp_tool_call",
         server: "github",
@@ -72,7 +72,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     ev(5, "item.completed", {
       actor: "tool",
       source: "claude",
-      item_id: "tool-github-issue",
+      timeline_id: "tool-github-issue",
       payload: {
         kind: "mcp_tool_call",
         server: "github",
@@ -83,7 +83,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     ev(6, "item.completed", {
       actor: "assistant",
       source: "claude",
-      item_id: "assistant-final",
+      timeline_id: "assistant-final",
       payload: {
         kind: "message",
         text: "Replay and live delivery now converge.",

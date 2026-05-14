@@ -198,7 +198,7 @@ export class Runner {
   private readonly turnQueue: TurnQueue;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
-  private readonly needsInputItemIDs = new Set<string>();
+  private readonly needsInputProviderItemIDs = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
   private userFrameChain: Promise<void> = Promise.resolve();
@@ -279,7 +279,7 @@ export class Runner {
       this.cfg,
       activeTurn,
       runnerEvent,
-      this.needsInputItemIDs,
+      this.needsInputProviderItemIDs,
     )) {
       const dispatched = await dispatch(this.sink, this.ws, event);
       if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
