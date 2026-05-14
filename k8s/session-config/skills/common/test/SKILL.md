@@ -5,9 +5,9 @@ description: Reserve and use a Glimmung test environment for validating the curr
 
 # /test
 
-This skill is invoked when you have finished writing code, and it is time to test it. Usually the user wants to utilize nelsong6/glimmung for this, but some features need to be done ad-hoc.
+This skill is invoked when you have finished writing code, and it is time to test it.
 
-The invocation may include extra text after `/test` or `$test`. Treat that text as the user's immediate test request or issue context, and carry it into the environment setup plan.
+The invocation may include extra text after `/test` or `$test`. Treat that text as the user's immediate test request or issue context, and carry it into the environment setup plan. It is possible the start of the entire conversation is an invocation of the test skill and an issue statement.
 
 Reserve a test slot with the Glimmung MCP `checkout_test_slot` tool:
 
@@ -23,5 +23,7 @@ When the environment is up, hot-swap code into the test environment. We want to 
 If the user reviews the test site and has suggestions/improvements, be sure to continue collaborating with the user by implementing their changes and hot-swapping into the test env as default behavior. The user is counting on you to make this a collaboration, and making your code changes feel alive by making them accessible in the test environment is how we accomplish that.
 
 As you hot swap, push commits to the remote branch as well. That's a backup in case the pod goes down.
+
+Open a draft PR from the branch immediately. This kicks off builds, and makes it so as we iterate and hot swap code while simultaneously pushing code remotely, github CI will create builds from the code. These builds are able to be used when the PR completes for prod, so having them ready early means the PR is much faster to deploy. You should be checking if PR needs to have merge conflicts resolved. If they're unresolvable, that's cause to stop and get input, because the proposed fix needs to be adapted to main.
 
 When testing is complete or the user no longer needs the environment, call the Glimmung MCP `return_test_slot` tool with the project and slot index or slot name. Include `tank_session_id` so Tank clears the GUI test pill.
