@@ -2571,7 +2571,6 @@ function buildForkSessionPrompt(request: ForkSessionRequest): string {
     source_session_id: request.sourceSession.id,
     source_session_name: sourceName,
     source_session_mode: request.sourceSession.mode,
-    source_session_runtime: request.sourceSession.runtime ?? "legacy",
     forked_message_id: request.forkedEntry.id,
     forked_message_time: request.forkedEntry.time,
     forked_message_order_key: request.forkedEntry.orderKey ?? null,
@@ -6832,7 +6831,7 @@ export function App() {
         throw new Error(detail);
       }
       const created: Session = normalizeSession(await res.json());
-      if (HEADLESS_MODES.has(created.mode)) {
+      if (CHAT_MODES.has(created.mode)) {
         writeSessionInteraction(created.id, "gui");
       }
       await refresh();
