@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,15 @@ func TestTankStaticFileRejectsTraversal(t *testing.T) {
 	}
 	if _, ok := tankStaticFile(tankStaticRootSet{base: root}, "..", filepath.Base(outside)); ok {
 		t.Fatal("expected traversal to be rejected")
+	}
+}
+
+func TestRetiredAgentWSRouteIsNotRegistered(t *testing.T) {
+	body, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "agent-ws") {
+		t.Fatal("server.go must not register the retired agent-ws chat route")
 	}
 }

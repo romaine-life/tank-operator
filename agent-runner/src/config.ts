@@ -20,7 +20,6 @@ export interface Config {
   turnQueuePollMs: number;
   workspace: string;
   mcpConfig: string;
-  wsPort: number;
 }
 
 export function loadConfig(): Config {
@@ -47,6 +46,5 @@ export function loadConfig(): Config {
     turnQueuePollMs: parseInt(process.env.TURN_QUEUE_POLL_MS?.trim() || "1000", 10),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     mcpConfig: process.env.MCP_CONFIG?.trim() || "/workspace/.mcp.json",
-    wsPort: parseInt(process.env.AGENT_RUNNER_WS_PORT?.trim() || "8090", 10),
   };
 }

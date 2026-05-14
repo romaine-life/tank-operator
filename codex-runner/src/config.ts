@@ -16,7 +16,6 @@ export interface Config {
   turnQueueContainer: string;
   turnQueuePollMs: number;
   workspace: string;
-  wsPort: number;
 }
 
 export function loadConfig(): Config {
@@ -45,8 +44,5 @@ export function loadConfig(): Config {
       10,
     ),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
-    // The orchestrator reverse-proxies the SPA's /agent-ws onto this port.
-    // Same port as agent-runner: only one runner per pod, no collision risk.
-    wsPort: parseInt(process.env.AGENT_RUNNER_WS_PORT?.trim() || "8090", 10),
   };
 }

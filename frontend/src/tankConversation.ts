@@ -131,9 +131,7 @@ function isValidEventByType(event: Record<string, unknown>): boolean {
 }
 
 function hasOrderCursor(event: Record<string, unknown>): boolean {
-  return typeof event.order_key === "string" && event.order_key
-    ? true
-    : typeof event.sequence === "number" && Number.isInteger(event.sequence) && event.sequence >= 0;
+  return typeof event.order_key === "string" && event.order_key.length > 0;
 }
 
 function hasStrings(event: Record<string, unknown>, keys: string[]): boolean {

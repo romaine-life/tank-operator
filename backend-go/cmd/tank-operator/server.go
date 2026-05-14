@@ -80,9 +80,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-tools", s.handleListMCPTools)
 
 	// App-managed chat surface.
-	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
-	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
+	mux.HandleFunc("POST /api/sessions/{session_id}/turns/{turn_id}/interrupt", s.handleInterruptSessionTurn)
+	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
 

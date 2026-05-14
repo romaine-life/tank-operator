@@ -142,8 +142,7 @@ type SdkConnectionState =
   | "connecting"
   | "connected"
   | "connection_lost"
-  | "reconnecting"
-  | "resumed";
+  | "resyncing";
 type SdkTerminalResult = {
   status: SdkTerminalStatus;
   detail?: string;
@@ -911,7 +910,7 @@ function clearGlimmungLaunchContext(): void {
   window.history.replaceState({}, "", url.toString());
 }
 
-const POLL_INTERVAL_MS = 1500;
+const PENDING_SESSION_REFRESH_INTERVAL_MS = 1500;
 const SESSION_RUNTIME_TICK_MS = 30_000;
 
 function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
@@ -1503,31 +1502,6 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function normalizeIsoTimestamp(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
-}
-
-function eventTime(event: JsonObject): string {
-  return (
-    normalizeIsoTimestamp(event.written_at) ??
-    normalizeIsoTimestamp(event.timestamp) ??
-    normalizeIsoTimestamp(event.time) ??
-    normalizeIsoTimestamp(event.created_at) ??
-    nowIso()
-  );
-}
-
-function stableStringHash(value: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
-}
-
 function appendMeta(
   entries: TranscriptEntry[],
   id: string,
@@ -1593,47 +1567,8 @@ function appendSkillInvocation(
   );
 }
 
-function eventID(event: JsonObject, fallbackPrefix: string): string {
-  if (typeof event.uuid === "string" && event.uuid) return event.uuid;
-  if (typeof event.id === "string" && event.id) return event.id;
-  if (typeof event.event_id === "string" && event.event_id) return event.event_id;
-  if (typeof event.order_key === "string" && event.order_key) {
-    return event.order_key;
-  }
-  if (typeof event.tank_order_key === "string" && event.tank_order_key) {
-    return event.tank_order_key;
-  }
-  return `${fallbackPrefix}-${eventTime(event)}-${stableStringHash(shortJson(event))}`;
-}
-
-function eventSequenceCursor(event: JsonObject): string {
-  const sequence = event.sequence ?? event.tank_event_seq;
-  if (typeof sequence === "number" && Number.isFinite(sequence)) {
-    return String(sequence);
-  }
-  if (typeof sequence === "string" && sequence) return sequence;
-  return "";
-}
-
-function eventTimelineTime(event: JsonObject): string {
-  for (const field of ["written_at", "timestamp", "time", "created_at"]) {
-    const value = event[field];
-    if (typeof value === "string" && value) return value;
-  }
-  return "";
-}
-
 function eventTimelineCursor(event: JsonObject): string | null {
-  const order = typeof event.order_key === "string" && event.order_key
-    ? event.order_key
-    : typeof event.tank_order_key === "string" && event.tank_order_key
-      ? event.tank_order_key
-      : "";
-  const time = eventTimelineTime(event);
-  const sequence = eventSequenceCursor(event);
-  const id = eventID(event, "event");
-  if (!order && !time && !sequence && !id) return null;
-  return [order, time, sequence, id].join("\u001f");
+  return typeof event.order_key === "string" && event.order_key ? event.order_key : null;
 }
 
 function advanceTimelineCursor(current: string | null, next: string | null): string | null {
@@ -1648,23 +1583,16 @@ function sdkConnectionLabel(state: SdkConnectionState): string | null {
       return "Connecting";
     case "connection_lost":
       return "Connection lost";
-    case "reconnecting":
-      return "Reconnecting";
-    case "resumed":
-      return "Resumed";
+    case "resyncing":
+      return "Resyncing";
     case "idle":
     case "connected":
       return null;
   }
 }
 
-function sdkHeartbeatInterval(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return 15_000;
-  return Math.min(60_000, Math.max(5_000, value));
-}
-
 function isSdkTimelineEvent(event: unknown): event is TankConversationEvent {
-  return isDurableTankConversationEvent(event);
+  return isDurableTankConversationEvent(event) && typeof event.order_key === "string" && event.order_key.length > 0;
 }
 
 function isScheduleWakeupToolName(name: string | undefined): boolean {
@@ -3438,7 +3366,6 @@ function ChatPane({
   visible,
   onRename,
   onSessionPatch,
-  onSessionActivityChanged,
   onForkMessage,
   runPrefs,
   setRunPref,
@@ -3448,7 +3375,6 @@ function ChatPane({
   visible: boolean;
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
-  onSessionActivityChanged: () => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
@@ -3561,7 +3487,7 @@ function ChatPane({
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<boolean> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
@@ -3582,10 +3508,9 @@ function ChatPane({
     model: string;
     permissionMode: string;
     turnStart: number;
-    reconnects: number;
     cancelled: boolean;
-    submitted?: boolean;
   } | null>(null);
+  const activeInterruptTargetRef = useRef<string | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3659,6 +3584,9 @@ function ChatPane({
       projection.runStatus === "submitted" ||
       projection.runStatus === "streaming" ||
       projection.runStatus === "needs_input";
+    activeInterruptTargetRef.current = sdkActive
+      ? projection.activeClientNonce ?? projection.activeTurnId
+      : null;
     if (projection.activeToolName) {
       setActiveTool(projection.activeToolName, projection.activeItemId);
     } else if (!sdkActive) {
@@ -3707,9 +3635,9 @@ function ChatPane({
     serverEvents: TankConversationEvent[],
     expectedCursor: string | null,
   ): boolean {
-    // Cosmos writes happen before live WS frames, but the replay query can
-    // still arrive behind the tab's live cursor. Keep realtime entries until
-    // replay can replace them without reducing the visible message transcript.
+    // Cosmos writes are the durable source, but a replay query can still
+    // return behind the tab's SSE cursor. Keep local entries until replay can
+    // replace them without reducing the visible message transcript.
     const serverCursor = serverEvents.reduce<string | null>(
       (cursor, event) =>
         advanceTimelineCursor(
@@ -3791,7 +3719,6 @@ function ChatPane({
         sdkLastReadSentRef.current,
         serverCursor,
       );
-      onSessionActivityChanged();
     } catch {
       // Replay/live updates can retry from the latest cursor; backend writes
       // are monotonic.
@@ -3808,13 +3735,23 @@ function ChatPane({
       }
     }
   }
-  function applySdkRealtimeEvent(event: JsonObject): void {
+  function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    if (!sdkRealtimeEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
-      sdkRealtimeEventsRef.current = [...sdkRealtimeEventsRef.current, event].slice(-1000);
+    if (event.visibility === "live-only") return;
+    if (!sdkServerEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
+      sdkServerEventsRef.current = orderedConversationEvents([
+        ...sdkServerEventsRef.current,
+        event,
+      ]);
     }
     syncSdkRenderedEntries();
+
+    const run = currentRunRef.current;
+    const terminal = sdkTerminalResult(event);
+    if (run && terminal && event.client_nonce === run.id) {
+      finalizeSdkRun(run, terminal, { refreshHistory: false });
+    }
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -3870,8 +3807,8 @@ function ChatPane({
 
   useEffect(() => {
     return () => {
-      wsRef.current?.close();
-      wsRef.current = null;
+      sdkEventSourceRef.current?.close();
+      sdkEventSourceRef.current = null;
       if (sdkReadStateTimerRef.current !== null) {
         window.clearTimeout(sdkReadStateTimerRef.current);
         sdkReadStateTimerRef.current = null;
@@ -3952,7 +3889,7 @@ function ChatPane({
   // show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
   function refreshRunHistory(showHint: boolean) {
-    if (session.status !== "Active" || running) return;
+    if (session.status !== "Active") return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
     const refresh = refreshSdkRunHistory(showHint)
@@ -4059,46 +3996,6 @@ function ChatPane({
   // session state and should only run for the gates above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, session.status, historyAttempted, entries.length]);
-
-  useEffect(() => {
-    if (!visible || session.status !== "Active" || running) return;
-    refreshRunHistory(false);
-    const onFocus = () => refreshRunHistory(false);
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshRunHistory(false);
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  // refreshRunHistory is intentionally omitted for the same reason as above.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, session.id, session.status, running]);
-
-  useEffect(() => {
-    if (!visible || session.status !== "Active" || running || lastStatusText !== "Wakeup scheduled") return;
-    let cancelled = false;
-    let timer: number | null = null;
-    let attempts = 0;
-    const check = async () => {
-      attempts += 1;
-      if (!cancelled) refreshRunHistory(false);
-      if (attempts >= 120 && timer !== null) {
-        window.clearInterval(timer);
-      }
-    };
-    void check();
-    timer = window.setInterval(check, 5000);
-    return () => {
-      cancelled = true;
-      if (timer !== null) window.clearInterval(timer);
-    };
-  // refreshRunHistory is intentionally omitted; it closes over current session
-  // state and the polling gate above controls when this runs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, session.id, session.status, running, lastStatusText]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -4686,19 +4583,44 @@ function ChatPane({
   }
 
   function cancelRun() {
-    const ws = wsRef.current;
-    if (currentRunRef.current) currentRunRef.current.cancelled = true;
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "interrupt" }));
+    const run = currentRunRef.current;
+    const interruptTarget = run?.id ?? activeInterruptTargetRef.current;
+    if (!interruptTarget) {
+      const id = nextEntryId("sdk-interrupt-error");
+      appendSdkRealtimeEntries(
+        markLocalEntries(
+          appendMeta([], id, "Stop failed", "No active turn is available to stop.", "error"),
+          id,
+        ),
+      );
+      return;
     }
-    ws?.close();
-    wsRef.current = null;
+    if (run) {
+      run.cancelled = true;
+    }
+    void interruptSdkTurn(interruptTarget);
+    currentRunRef.current = null;
     setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
     scheduledWakeupRef.current = false;
     setActiveTool(null);
     setRunning(false);
     setSdkConnectionState("idle");
     setRunStatus((prev) => (prev === "running" ? "done" : prev));
+  }
+
+  async function interruptSdkTurn(turnID: string): Promise<void> {
+    await authedFetch(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/interrupt`,
+      { method: "POST" },
+    ).catch((err) => {
+      const id = nextEntryId("sdk-interrupt-error");
+      appendSdkRealtimeEntries(
+        markLocalEntries(
+          appendMeta([], id, "Stop failed", err instanceof Error ? err.message : String(err), "error"),
+          id,
+        ),
+      );
+    });
   }
 
   function handleSubmit(message: PromptInputMessage) {
@@ -4780,7 +4702,6 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    run.submitted = true;
   }
 
   async function markTestState(state: TestState) {
@@ -4846,7 +4767,6 @@ function ChatPane({
   }
 
   function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
-    wsRef.current?.close();
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
@@ -4858,9 +4778,7 @@ function ChatPane({
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
       permissionMode: composerMode,
       turnStart,
-      reconnects: 0,
       cancelled: false,
-      submitted: false,
     };
     currentRunRef.current = run;
     const optimisticTime = nowIso();
@@ -4893,9 +4811,7 @@ function ChatPane({
     setComposerText("");
     void enqueueSdkTurn(run)
       .then(() => {
-        if (currentRunRef.current?.id === run.id && !run.cancelled) {
-          openSdkRunSocket(run);
-        }
+        if (currentRunRef.current?.id === run.id && !run.cancelled) setSdkConnectionState("connected");
       })
       .catch((err) => {
         if (currentRunRef.current?.id !== run.id || run.cancelled) return;
@@ -4914,15 +4830,12 @@ function ChatPane({
       });
   }
 
-  // Chat socket lifecycle. The canonical event log is the source of
-  // truth; WebSocket frames are only the live transport. A dropped transport
-  // reconnects without re-sending the user prompt and catches up from
-  // history, so transient closes do not become chat-visible errors.
+  // The canonical event log is the transcript transport. Terminal events close
+  // the local run state only after they arrive from the durable SSE stream.
   function finalizeSdkRun(
     run: NonNullable<typeof currentRunRef.current>,
     terminal: SdkTerminalResult,
     options: {
-      closeSocket?: WebSocket;
       refreshHistory?: boolean;
       clearRealtime?: boolean;
     } = {},
@@ -4952,218 +4865,65 @@ function ChatPane({
     setActiveTool(null);
     setRunning(false);
     setSdkConnectionState("idle");
-    if (options.closeSocket) {
-      if (wsRef.current === options.closeSocket) wsRef.current = null;
-      options.closeSocket.close();
-    }
-    if (options.refreshHistory ?? true) {
+    if (options.refreshHistory ?? false) {
       void refreshSdkRunHistory(false, options.clearRealtime ?? false);
     }
   }
 
-  function failSdkRunAfterSocketClose(
-    run: NonNullable<typeof currentRunRef.current>,
-    event: CloseEvent,
-  ): void {
-    if (currentRunRef.current?.id !== run.id || run.cancelled) return;
-    currentRunRef.current = null;
-    setLastStatusText("Connection lost");
-    scheduledWakeupRef.current = false;
-    setActiveTool(null);
-    setRunning(false);
-    setSdkConnectionState("connection_lost");
-    const id = nextEntryId("ws-close");
-    appendSdkRealtimeEntries(
-      markLocalEntries(
-        appendMeta(
-          [],
-          id,
-          "Connection lost",
-          `WebSocket closed with code ${event.code}${
-            event.reason ? ` - ${event.reason}` : ""
-          }. Reconnect and history recovery failed.`,
-          "error",
-        ),
-        id,
-      ),
-    );
-    setRunStatus("error");
-    void refreshSdkRunHistory(false);
-  }
-
-  function reconnectSdkRunSocket(
-    run: NonNullable<typeof currentRunRef.current>,
-    event: CloseEvent,
-    ws: WebSocket,
-  ): void {
-    if (wsRef.current === ws) wsRef.current = null;
-    if (run.reconnects >= 8) {
-      void refreshSdkRunHistoryResult(false, false, run.id).then((result) => {
-        if (currentRunRef.current?.id !== run.id || run.cancelled) return;
-        if (result.terminal) {
-          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
-          return;
-        }
-        failSdkRunAfterSocketClose(run, event);
-      });
-      return;
-    }
-
-    run.reconnects += 1;
-    const delay = Math.min(5000, 250 * 2 ** (run.reconnects - 1));
-    setSdkConnectionState("reconnecting");
-    setLastStatusText("Reconnecting");
-    void refreshSdkRunHistoryResult(false, false, run.id).then((result) => {
-      if (currentRunRef.current?.id !== run.id || run.cancelled) return;
-      if (result.terminal) {
-        finalizeSdkRun(run, result.terminal, { refreshHistory: false });
-        return;
-      }
-      window.setTimeout(() => {
-        if (currentRunRef.current?.id === run.id && !run.cancelled) {
-          openSdkRunSocket(run, run.submitted === true);
-        }
-      }, delay);
-    });
-  }
-
-  function openSdkRunSocket(
-    run: NonNullable<typeof currentRunRef.current>,
-    resume = false,
-  ) {
-    setSdkConnectionState(resume ? "reconnecting" : "connecting");
+  function openSdkEventStream(): EventSource {
+    setSdkConnectionState("connecting");
     const params = new URLSearchParams();
     if (sdkTimelineCursorRef.current) {
       params.set("last_order_key", sdkTimelineCursorRef.current);
     }
     const query = params.toString();
-    const wsUrl =
-      `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}` +
-      `/api/sessions/${session.id}/agent-ws${query ? `?${query}` : ""}`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    let heartbeatTimer: number | null = null;
-    let heartbeatTimeout: number | null = null;
-    const clearHeartbeat = () => {
-      if (heartbeatTimer !== null) {
-        window.clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
-      if (heartbeatTimeout !== null) {
-        window.clearTimeout(heartbeatTimeout);
-        heartbeatTimeout = null;
-      }
-    };
-    const sendUserFrame = () => {
-      if (resume && run.submitted) return;
-      if (!run.prompt && resume) return;
-      ws.send(
-        JSON.stringify({
-          type: "user",
-          message: { role: "user", content: run.prompt },
-          client_nonce: run.id,
-        }),
-      );
-      run.submitted = true;
-    };
-    const startHeartbeat = (intervalMs: number) => {
-      clearHeartbeat();
-      const sendHeartbeat = () => {
-        if (ws.readyState !== WebSocket.OPEN) return;
-        ws.send(
-          JSON.stringify({
-            type: "heartbeat",
-            sent_at: Date.now(),
-            last_order_key: sdkTimelineCursorRef.current ?? undefined,
-          }),
-        );
-        if (heartbeatTimeout !== null) window.clearTimeout(heartbeatTimeout);
-        heartbeatTimeout = window.setTimeout(() => {
-          if (currentRunRef.current?.id !== run.id || run.cancelled) return;
-          setSdkConnectionState("connection_lost");
-          ws.close(4000, "heartbeat timeout");
-        }, intervalMs * 2);
-      };
-      heartbeatTimer = window.setInterval(sendHeartbeat, intervalMs);
-      sendHeartbeat();
-    };
-    ws.onopen = () => {
-      setSdkConnectionState(resume ? "reconnecting" : "connecting");
-    };
-    ws.onmessage = (event) => {
+    const source = new EventSource(
+      `/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`,
+      { withCredentials: true },
+    );
+    sdkEventSourceRef.current = source;
+    source.addEventListener("ready", () => {
+      setSdkConnectionState("connected");
+    });
+    source.addEventListener("tank-event", (event) => {
+      const message = event as MessageEvent;
       let parsed: unknown;
       try {
-        parsed = JSON.parse(String(event.data));
+        parsed = JSON.parse(String(message.data));
       } catch {
-        const id = nextEntryId("agent-ws-message");
-        appendSdkRealtimeEntries(
-          markLocalEntries(
-            appendMeta([], id, "agent-ws message", String(event.data)),
-            id,
-          ),
-        );
         return;
       }
       if (!isJsonObject(parsed)) return;
-      if (parsed.type === "tank.transport.subscribed") {
-        const lastOrderKey = parsed.last_order_key;
-        if (typeof lastOrderKey === "string" && lastOrderKey) {
-          sdkTimelineCursorRef.current = advanceTimelineCursor(
-            sdkTimelineCursorRef.current,
-            lastOrderKey,
-          );
-        }
-        setSdkConnectionState(resume ? "resumed" : "connected");
-        run.reconnects = 0;
-        startHeartbeat(sdkHeartbeatInterval(parsed.heartbeat_interval_ms));
-        if (!resume && !run.submitted) sendUserFrame();
-        return;
-      }
-      if (parsed.type === "heartbeat_ack" || parsed.type === "pong") {
-        if (heartbeatTimeout !== null) {
-          window.clearTimeout(heartbeatTimeout);
-          heartbeatTimeout = null;
-        }
-        setSdkConnectionState((prev) =>
-          prev === "connection_lost" || prev === "reconnecting" ? "connected" : prev,
-        );
-        return;
-      }
-      if (parsed.type === "tank.transport.error") {
-        setSdkConnectionState("connection_lost");
-        return;
-      }
-
-      // SDK chat state is derived only from TankConversationEvent frames.
-      // Raw provider frames may still fan out for audit/debug, but they do
-      // not mutate the chat transcript.
-      applySdkRealtimeEvent(parsed);
-
-      const terminal = sdkTerminalResult(parsed);
-      if (terminal) {
-        finalizeSdkRun(run, terminal, {
-          closeSocket: ws,
-          refreshHistory: true,
-          clearRealtime: true,
-        });
-      }
-    };
-    ws.onerror = () => {
-      if (!run.cancelled) {
-        setSdkConnectionState("connection_lost");
-        setLastStatusText("Reconnecting");
-      }
-    };
-    ws.onclose = (event) => {
-      clearHeartbeat();
-      if (currentRunRef.current?.id !== run.id || run.cancelled) {
-        if (wsRef.current === ws) wsRef.current = null;
-        return;
-      }
+      applySdkDurableEvent(parsed);
+    });
+    source.addEventListener("resync_required", () => {
+      source.close();
+      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
+      setSdkConnectionState("resyncing");
+      sdkTimelineCursorRef.current = null;
+      void refreshSdkRunHistoryResult(false, true).finally(() => {
+        if (sessionIdRef.current !== session.id) return;
+        sdkEventSourceRef.current?.close();
+        sdkEventSourceRef.current = openSdkEventStream();
+      });
+    });
+    source.onerror = () => {
       setSdkConnectionState("connection_lost");
-      reconnectSdkRunSocket(run, event, ws);
     };
+    return source;
   }
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active") return;
+    sdkEventSourceRef.current?.close();
+    sdkEventSourceRef.current = openSdkEventStream();
+    return () => {
+      sdkEventSourceRef.current?.close();
+      sdkEventSourceRef.current = null;
+    };
+  // openSdkEventStream closes over the current session cursor and reducer state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, session.id, session.status]);
 
   const submitStatus =
     runStatus === "running"
@@ -5216,9 +4976,7 @@ function ChatPane({
     : STREAM_VERBS[verbIndex];
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
 
-  const sendStdin = (text: string) => {
-    wsRef.current?.send(JSON.stringify({ stdin: text }));
-  };
+  const sendStdin = (_text: string) => {};
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
@@ -6622,16 +6380,9 @@ export function App() {
     if (!user) return;
     const hasPending = sessions.some((s) => s.status !== "Active") || closingIds.size > 0;
     if (!hasPending) return;
-    const t = setInterval(refresh, POLL_INTERVAL_MS);
+    const t = setInterval(refresh, PENDING_SESSION_REFRESH_INTERVAL_MS);
     return () => clearInterval(t);
   }, [sessions, user, closingIds]);
-
-  useEffect(() => {
-    if (!user) return;
-    if (!sessions.some((s) => CHAT_MODES.has(s.mode))) return;
-    const t = setInterval(refreshSessionActivity, POLL_INTERVAL_MS);
-    return () => clearInterval(t);
-  }, [sessions, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -7474,7 +7225,6 @@ export function App() {
                       visible={active === s.id}
                       onRename={renameSession}
                       onSessionPatch={patchSession}
-                      onSessionActivityChanged={() => void refreshSessionActivity()}
                       onForkMessage={forkSessionFromMessage}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}

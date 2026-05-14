@@ -26,12 +26,13 @@ export class SharedTurnQueue {
         const now = new Date();
         const nowISO = now.toISOString();
         const iterator = this.container.items.query({
-            query: "SELECT TOP 10 * FROM c WHERE c.session_id = @session_id AND c.provider = @provider AND (c.source = @source_sdk OR c.source = @source_wakeup) AND (c.status = @status_pending OR (c.status = @status_claimed AND IS_DEFINED(c.claim_expires_at) AND c.claim_expires_at <= @now)) AND (NOT IS_DEFINED(c.available_at) OR IS_NULL(c.available_at) OR c.available_at <= @now) ORDER BY c.created_at ASC",
+            query: "SELECT TOP 10 * FROM c WHERE c.session_id = @session_id AND c.provider = @provider AND (c.source = @source_sdk OR c.source = @source_wakeup OR c.source = @source_interrupt) AND (c.status = @status_pending OR (c.status = @status_claimed AND IS_DEFINED(c.claim_expires_at) AND c.claim_expires_at <= @now)) AND (NOT IS_DEFINED(c.available_at) OR IS_NULL(c.available_at) OR c.available_at <= @now) ORDER BY c.created_at ASC",
             parameters: [
                 { name: "@session_id", value: this.sessionStorageKey },
                 { name: "@provider", value: this.provider },
                 { name: "@source_sdk", value: "sdk" },
                 { name: "@source_wakeup", value: "schedule-wakeup" },
+                { name: "@source_interrupt", value: "interrupt" },
                 { name: "@status_pending", value: "pending" },
                 { name: "@status_claimed", value: "claimed" },
                 { name: "@now", value: nowISO },
@@ -192,6 +193,9 @@ export function buildDelayedTurnRecord(args) {
 }
 export function claimAttemptsExceeded(record, maxAttempts = TURN_QUEUE_MAX_ATTEMPTS) {
     return attemptCount(record) > maxAttempts;
+}
+export function isInterruptRecord(record) {
+    return record?.source === "interrupt";
 }
 function etagOptions(record) {
     return record._etag

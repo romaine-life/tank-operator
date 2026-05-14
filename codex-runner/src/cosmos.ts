@@ -1,21 +1,17 @@
-// Cosmos sink for canonical codex SDK events. Same producer contract as
-// agent-runner/src/cosmos.ts:
-//   - One serialization at the producer (the runner)
-//   - Same bytes go to Cosmos and to the WS broadcast
-//   - DB write happens BEFORE the WS push (read-your-writes ordering)
-//   - Idempotent receivers — dedupe by event id (stamped here)
+// Cosmos sink for canonical codex SDK events. The runner is the producer and
+// the durable session-events container is the transcript source of truth.
 //
 // Difference from claude: the codex SDK's `ThreadEvent` union has no
 // per-event `uuid` field — only contained `ThreadItem`s carry ids, and
 // only some events have items. We stamp our own sortable id as the doc id
 // at production time. The producer is the only writer, so the id is unique
 // by construction. The id is lexicographically sortable and
-// every dispatched event also carries a Tank order key so history replay
-// and live delivery can be reconciled without depending on render timing.
+// every dispatched event also carries a Tank order key so replay and SSE
+// delivery can be reconciled without depending on render timing.
 //
 // "Canonical" = events the SPA's history-replay path should see:
 //   thread.started     — session boot marker (analog of claude system/init)
-//   tank.user_message  — user's prompt as submitted through Tank's WS bridge
+//   tank.user_message  - user prompt submitted through Tank's turn queue
 //   turn.completed     — turn-end marker with usage
 //   turn.failed        — turn-level error
 //   turn.interrupted   — Tank interrupt/cancel marker
@@ -90,8 +86,6 @@ export function stampEventID(
   event: CodexEvent,
 ): CodexEvent & {
   uuid: string;
-  tank_event_seq: number;
-  tank_order_key: string;
   written_at: string;
 } {
   const now = Date.now();
@@ -108,8 +102,6 @@ export function stampEventID(
     ...event,
     uuid,
     ...(eventID ? { event_id: eventID } : {}),
-    tank_event_seq: seq,
-    tank_order_key: tankOrderKey,
     written_at: writtenAt,
     ...(hasTankEventEnvelope(event)
       ? {

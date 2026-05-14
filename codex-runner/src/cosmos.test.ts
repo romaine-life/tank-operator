@@ -98,8 +98,6 @@ test("stampEventID attaches a sortable uuid and order metadata without mutating 
     after.uuid,
     /^\d{13}-\d{6}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
-  assert.equal(typeof after.tank_event_seq, "number");
-  assert.equal(typeof after.tank_order_key, "string");
   assert.equal(typeof after.written_at, "string");
   // Input untouched: pins purity at this boundary so retries don't
   // double-stamp.

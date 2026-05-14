@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
@@ -321,60 +320,14 @@ func activityEventType(event map[string]any) string {
 }
 
 func activityEventOrderKey(event map[string]any) string {
-	for _, field := range []string{"order_key", "tank_order_key"} {
-		if value, _ := event[field].(string); value != "" {
-			return value
-		}
+	if value, _ := event["order_key"].(string); value != "" {
+		return value
 	}
 	return ""
 }
 
 func activityEventCursor(event map[string]any) string {
-	parts := []string{
-		activityEventOrderKey(event),
-		activityEventOrderTime(event),
-		activityEventSequence(event),
-		activityEventDocumentID(event),
-	}
-	return strings.Join(parts, "\x1f")
-}
-
-func activityEventSequence(event map[string]any) string {
-	for _, field := range []string{"sequence", "tank_event_seq"} {
-		switch value := event[field].(type) {
-		case int:
-			return strconv.Itoa(value)
-		case int64:
-			return strconv.FormatInt(value, 10)
-		case float64:
-			if value == float64(int64(value)) {
-				return strconv.FormatInt(int64(value), 10)
-			}
-		case string:
-			if value != "" {
-				return value
-			}
-		}
-	}
-	return ""
-}
-
-func activityEventDocumentID(event map[string]any) string {
-	for _, field := range []string{"id", "uuid", "event_id"} {
-		if value, _ := event[field].(string); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func activityEventOrderTime(event map[string]any) string {
-	for _, field := range []string{"written_at", "timestamp", "time", "created_at"} {
-		if value, _ := event[field].(string); value != "" {
-			return value
-		}
-	}
-	return ""
+	return activityEventOrderKey(event)
 }
 
 func activityEventTime(event map[string]any) string {

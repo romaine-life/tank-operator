@@ -21,6 +21,7 @@ func TestTurnDocShape(t *testing.T) {
 		Provider:       "claude",
 		Source:         "sdk",
 		ClientNonce:    "client-abc123",
+		TargetTurnID:   "client-abc123",
 		Prompt:         "hello",
 		Model:          "claude-sonnet-4-6",
 		PermissionMode: "bypassPermissions",
@@ -54,6 +55,9 @@ func TestTurnDocShape(t *testing.T) {
 	}
 	if got, want := doc["client_nonce"], "client-abc123"; got != want {
 		t.Fatalf("client_nonce = %q, want %q", got, want)
+	}
+	if got, want := doc["target_turn_id"], "client-abc123"; got != want {
+		t.Fatalf("target_turn_id = %q, want %q", got, want)
 	}
 	if got, want := doc["prompt"], "hello"; got != want {
 		t.Fatalf("prompt = %q, want %q", got, want)
@@ -115,6 +119,7 @@ func TestTurnDocRoundtrip(t *testing.T) {
 		Provider:       "claude",
 		Source:         "sdk",
 		ClientNonce:    "client-abc",
+		TargetTurnID:   "client-abc",
 		Prompt:         "say hi",
 		Model:          "claude-sonnet-4-6",
 		PermissionMode: "bypassPermissions",
@@ -141,6 +146,7 @@ func TestTurnDocRoundtrip(t *testing.T) {
 	if got.TurnID != orig.TurnID || got.SessionID != orig.SessionID ||
 		got.Provider != orig.Provider || got.Prompt != orig.Prompt ||
 		got.Source != orig.Source || got.ClientNonce != orig.ClientNonce ||
+		got.TargetTurnID != orig.TargetTurnID ||
 		got.Model != orig.Model || got.FollowUp != orig.FollowUp ||
 		got.AttemptCount != orig.AttemptCount {
 		t.Fatalf("roundtrip mismatch:\ngot  = %#v\nwant = %#v", got, orig)

@@ -1,10 +1,6 @@
-// tank-codex-runner — pod-side process that drives @openai/codex-sdk
-// for one session pod's lifetime. Fans events to (a) Cosmos
-// `session-events` for durable history, and (b) a local WebSocket for
-// the SPA's live view (proxied through the orchestrator).
-//
-// Mirrors agent-runner/src/index.ts. Same entrypoint shape; different
-// SDK underneath. See ./runner.ts.
+// tank-codex-runner is the pod-side process that drives @openai/codex-sdk
+// for one session pod's lifetime and writes canonical transcript events to
+// Cosmos. Mirrors agent-runner/src/index.ts with a different SDK underneath.
 
 import { loadConfig } from "./config.js";
 import { Runner } from "./runner.js";
@@ -20,7 +16,6 @@ async function main(): Promise<void> {
       cosmos_db: cfg.cosmosDatabase,
       cosmos_container: cfg.sessionEventsContainer,
       workspace: cfg.workspace,
-      ws_port: cfg.wsPort,
     }),
   );
 

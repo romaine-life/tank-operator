@@ -5,6 +5,7 @@ import {
   buildClaimedRecord,
   buildDelayedTurnRecord,
   claimAttemptsExceeded,
+  isInterruptRecord,
   type TurnRecord,
 } from "./turnQueue.js";
 
@@ -61,4 +62,9 @@ test("schedule wakeups are durable delayed queue rows", () => {
   assert.equal(record.status, "pending");
   assert.equal(record.available_at, "2026-05-12T10:05:00.000Z");
   assert.equal(record.attempt_count, 0);
+});
+
+test("interrupt rows are explicit control records", () => {
+  assert.equal(isInterruptRecord(baseRecord({ source: "interrupt", target_turn_id: "client-1" })), true);
+  assert.equal(isInterruptRecord(baseRecord({ source: "sdk" })), false);
 });

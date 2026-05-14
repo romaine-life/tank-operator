@@ -15,9 +15,8 @@
 // runner-process restarts inside the same live session pod; session pod death
 // is terminal and out of scope.
 //
-// Output fan-out per the producer contract:
-//   1. For every event, stamp a uuid + write to Cosmos FIRST (if canonical)
-//   2. Then broadcast the same bytes to WS clients
+// Output contract:
+//   1. For every canonical event, stamp a uuid and write to Cosmos
 // On error: log and keep accepting new user messages. Single-turn
 // failures shouldn't kill the runner.
 
@@ -41,11 +40,15 @@ import {
   turnIDForClientNonce,
   userSubmissionEvents,
 } from "./conversation.js";
-import { TurnQueue, turnClientNonce, type TurnRecord } from "./turnQueue.js";
-import { WSFanout, type ClientFrame } from "./ws.js";
+import {
+  TurnQueue,
+  isInterruptRecord,
+  turnClientNonce,
+  type TurnRecord,
+} from "./turnQueue.js";
 
-// AsyncQueue — one writer, one consumer. WS frames push; the run loop
-// awaits the next value. Same shape as agent-runner's queue.
+// AsyncQueue — one writer, one consumer. Claimed turn-queue rows push; the
+// run loop awaits the next value. Same shape as agent-runner's queue.
 class AsyncQueue<T> {
   private readonly items: T[] = [];
   private waiters: ((v: IteratorResult<T>) => void)[] = [];
@@ -76,22 +79,17 @@ class AsyncQueue<T> {
   }
 }
 
-// Pull the per-event dual-sink dispatch out as a free function so the
-// ordering invariant (cosmos before ws) is testable without spinning up
-// a Runner. Mirrors agent-runner/src/runner.ts dispatch().
+// Pull the per-event dispatch out as a free function so the Cosmos write
+// contract is testable without spinning up a Runner.
 //
 // Returns true on a successful end-to-end dispatch; false when the
-// canonical write failed and the broadcast was intentionally skipped.
+// canonical write failed.
 interface DispatchSink {
   upsert(event: CodexEvent & { uuid: string }): Promise<void>;
   create?(event: CodexEvent & { uuid: string }): Promise<"created" | "exists">;
 }
-interface DispatchWS {
-  broadcastEvent(event: unknown): void;
-}
 export async function dispatch(
   sink: DispatchSink,
-  ws: DispatchWS,
   event: CodexEvent,
 ): Promise<boolean> {
   const stamped = stampEventID(event);
@@ -109,13 +107,11 @@ export async function dispatch(
       return false;
     }
   }
-  ws.broadcastEvent(stamped);
   return true;
 }
 
 export async function dispatchCreate(
   sink: DispatchSink,
-  ws: DispatchWS,
   event: CodexEvent,
 ): Promise<"created" | "exists" | "failed"> {
   const stamped = stampEventID(event);
@@ -123,10 +119,7 @@ export async function dispatchCreate(
     console.error("invalid Tank conversation event:", stamped);
     return "failed";
   }
-  if (!isCanonical(stamped)) {
-    ws.broadcastEvent(stamped);
-    return "created";
-  }
+  if (!isCanonical(stamped)) return "created";
   try {
     const result = sink.create
       ? await sink.create(stamped)
@@ -136,7 +129,6 @@ export async function dispatchCreate(
     console.error("cosmos create failed:", err);
     return "failed";
   }
-  ws.broadcastEvent(stamped);
   return "created";
 }
 
@@ -165,7 +157,6 @@ export type AcceptedTurn = CodexAdapterTurn & {
 
 export class Runner {
   private readonly sink: CosmosSink;
-  private readonly ws: WSFanout;
   private readonly turnQueue: TurnQueue;
   private readonly userQueue = new AsyncQueue<{
     text: string;
@@ -176,14 +167,13 @@ export class Runner {
   private readonly codexAdapter: CodexTankEventAdapter;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
+  private currentTurn: AcceptedTurn | null = null;
   private interruptRequested = false;
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
-    this.ws = new WSFanout(cfg.wsPort);
     this.turnQueue = new TurnQueue(cfg, "codex");
-    this.ws.onMessage((frame) => this.handleClientFrame(frame));
 
     // Codex SDK spawns the codex CLI subprocess; the CLI reads
     // ~/.codex/auth.json. The launcher writes placeholder subscription
@@ -261,7 +251,6 @@ export class Runner {
 
         await dispatch(
           this.sink,
-          this.ws,
           turnEvent({
             sessionID: this.cfg.sessionId,
             turnID: turn.turnID,
@@ -272,6 +261,7 @@ export class Runner {
         );
 
         this.currentAbort = new AbortController();
+        this.currentTurn = turn;
         // If the outer signal aborts mid-turn, also abort the in-flight
         // codex subprocess. AbortSignal.any-style propagation done manually
         // since Node 20's AbortSignal.any is stage 3.
@@ -288,14 +278,13 @@ export class Runner {
               ...(event as CodexEvent),
               tank_turn_seq: turnSeq,
             };
-            await dispatch(this.sink, this.ws, codexEvent);
+            await dispatch(this.sink, codexEvent);
             for (const canonicalEvent of this.codexAdapter.canonicalEventsForCodexEvent(
               turn,
               codexEvent,
             )) {
               const dispatched = await dispatch(
                 this.sink,
-                this.ws,
                 canonicalEvent,
               );
               if (
@@ -312,7 +301,7 @@ export class Runner {
           const interrupted =
             this.currentAbort.signal.aborted && isAbortError(err);
           if (interrupted) {
-            const dispatched = await dispatch(this.sink, this.ws, {
+            const dispatched = await dispatch(this.sink, {
               ...turnEvent({
                 sessionID: this.cfg.sessionId,
                 turnID: turn.turnID,
@@ -337,7 +326,6 @@ export class Runner {
           const errMessage = err instanceof Error ? err.message : String(err);
           const dispatched = await dispatch(
             this.sink,
-            this.ws,
             turnEvent({
               sessionID: this.cfg.sessionId,
               turnID: turn.turnID,
@@ -351,7 +339,7 @@ export class Runner {
           if (dispatched) {
             await this.markQueuedTurnTerminal(turn, "turn.failed");
           }
-          await dispatch(this.sink, this.ws, {
+          await dispatch(this.sink, {
             type: "error",
             message: errMessage,
             tank_turn_seq: turnSeq,
@@ -362,6 +350,7 @@ export class Runner {
           turn.stopLeaseRenewal?.();
           turn.stopLeaseRenewal = undefined;
           this.currentAbort = null;
+          this.currentTurn = null;
           this.interruptRequested = false;
         }
       }
@@ -369,7 +358,6 @@ export class Runner {
       signal.removeEventListener("abort", onAbort);
       stopPolling();
       this.userQueue.close();
-      this.ws.close();
     }
   }
 
@@ -383,6 +371,10 @@ export class Runner {
         try {
           const record = await this.turnQueue.claimNext();
           if (record) {
+            if (isInterruptRecord(record)) {
+              await this.acceptInterrupt(record);
+              continue;
+            }
             this.userQueue.push({
               text: record.prompt,
               clientNonce: turnClientNonce(record),
@@ -399,32 +391,18 @@ export class Runner {
     return stop;
   }
 
-  private handleClientFrame(frame: ClientFrame): void {
-    if (frame.type === "user") {
-      // Codex SDK takes the user input as a plain string for v1. The
-      // chat pane sends `{message: {role: "user", content: string}}` for
-      // wire-compat with the claude path; we unwrap. Future: support
-      // structured content (images, etc.) when codex SDK does.
-      const content = frame.message?.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content
-                .map((c: unknown) =>
-                  typeof c === "object" && c !== null && "text" in c
-                    ? String((c as { text?: unknown }).text ?? "")
-                    : "",
-                )
-                .join("\n")
-            : String(content ?? "");
-      if (text.trim()) {
-        this.userQueue.push({ text, clientNonce: frame.client_nonce });
-      }
-    } else if (frame.type === "interrupt") {
+  private async acceptInterrupt(record: TurnRecord): Promise<void> {
+    const targetTurnID = record.target_turn_id || record.client_nonce || "";
+    if (
+      this.currentTurn &&
+      (!targetTurnID ||
+        targetTurnID === this.currentTurn.turnID ||
+        targetTurnID === this.currentTurn.clientNonce)
+    ) {
       this.interruptRequested = true;
       this.currentAbort?.abort();
     }
+    await this.turnQueue.markCompleted(record);
   }
 
   private async recordUserSubmission(
@@ -435,7 +413,7 @@ export class Runner {
   ): Promise<AcceptedTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
-      await dispatch(this.sink, this.ws, {
+      await dispatch(this.sink, {
         type: "error",
         message: "client_nonce is required for user submissions",
         tank_turn_seq: turnSeq,
@@ -450,12 +428,12 @@ export class Runner {
       runtime: "codex",
       skillName: queueRecord?.skill_name,
     });
-    const userResult = await dispatchCreate(this.sink, this.ws, {
+    const userResult = await dispatchCreate(this.sink, {
       ...userMessage,
       tank_turn_seq: turnSeq,
     });
     if (userResult === "failed") return null;
-    const submittedResult = await dispatchCreate(this.sink, this.ws, {
+    const submittedResult = await dispatchCreate(this.sink, {
       ...turnSubmitted,
       tank_turn_seq: turnSeq,
     });
@@ -525,7 +503,6 @@ export class Runner {
     turn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(queueRecord);
     const dispatched = await dispatch(
       this.sink,
-      this.ws,
       turnEvent({
         sessionID: this.cfg.sessionId,
         turnID: turn.turnID,

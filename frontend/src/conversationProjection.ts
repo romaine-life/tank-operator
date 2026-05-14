@@ -54,6 +54,7 @@ export interface ConversationProjection {
   entries: ConversationViewEntry[];
   runStatus: ConversationRunStatus;
   activeTurnId: string | null;
+  activeClientNonce: string | null;
   activeItemId: string | null;
   activeToolName: string | null;
   needsInput: boolean;
@@ -108,6 +109,7 @@ export function projectConversationState(
     entries,
     runStatus: state.runStatus,
     activeTurnId: state.activeTurnId,
+    activeClientNonce: activeClientNonceForTurn(state, state.activeTurnId),
     activeItemId: activeItem?.id ?? state.activeItemId,
     activeToolName: activeItem ? toolDisplay(activeItem).toolName : null,
     needsInput: state.needsInput,
@@ -118,6 +120,20 @@ export function projectConversationState(
     lastOrderKey: state.lastOrderKey,
     unreadCount: state.unreadCount,
   };
+}
+
+function activeClientNonceForTurn(
+  state: ConversationReducerState,
+  turnId: string | null,
+): string | null {
+  if (!turnId) return null;
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const message = state.messages[index];
+    if (message.turnId === turnId && message.clientNonce) {
+      return message.clientNonce;
+    }
+  }
+  return null;
 }
 
 function projectItem(item: ConversationItem): ConversationViewEntry | null {

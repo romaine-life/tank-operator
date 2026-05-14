@@ -40,8 +40,8 @@ SDK GUI turns are durable across browser disconnects, frontend reloads,
 orchestrator rollouts, and runner-process restarts inside the same still-live
 session pod. The browser submits turns through
 `POST /api/sessions/{session_id}/turns`, runners claim `turn-queue` rows, and
-the UI replays durable conversation events from `/timeline` before attaching to
-live `/agent-ws` frames.
+the UI renders durable conversation events from `/timeline` and the
+`/api/sessions/{session_id}/events` SSE stream.
 
 Session-pod deletion or death is intentionally outside the messaging
 durability goal. A dead session pod means the session and its `emptyDir`

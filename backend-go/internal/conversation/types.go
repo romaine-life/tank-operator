@@ -97,8 +97,8 @@ func ValidateEventMap(event map[string]any) error {
 			return fmt.Errorf("%s is required", field)
 		}
 	}
-	if stringField(event, "order_key") == "" && !numberField(event, "sequence") {
-		return fmt.Errorf("order_key or sequence is required")
+	if stringField(event, "order_key") == "" {
+		return fmt.Errorf("order_key is required")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, stringField(event, "created_at")); err != nil {
 		return fmt.Errorf("created_at must be RFC3339: %w", err)
@@ -225,19 +225,6 @@ func requirePayload(event map[string]any) (map[string]any, error) {
 func stringField(event map[string]any, field string) string {
 	value, _ := event[field].(string)
 	return value
-}
-
-func numberField(event map[string]any, field string) bool {
-	switch value := event[field].(type) {
-	case int:
-		return value >= 0
-	case int64:
-		return value >= 0
-	case float64:
-		return value >= 0 && value == float64(int64(value))
-	default:
-		return false
-	}
 }
 
 func validActor(actor Actor) bool {

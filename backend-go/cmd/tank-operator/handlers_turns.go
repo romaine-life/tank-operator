@@ -15,8 +15,8 @@ import (
 const maxSDKTurnPromptBytes = 256 * 1024
 
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime
-// sessions. /agent-ws remains the live transport; this handler records the
-// work item before any browser-to-runner socket is involved.
+// sessions. The browser writes work here and reads transcript events from the
+// durable SSE stream; runner-local transports are not part of the UI contract.
 func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -55,6 +55,52 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusAccepted, resp)
+}
+
+func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	targetTurnID := strings.TrimSpace(r.PathValue("turn_id"))
+	if sessionID == "" || targetTurnID == "" || !turnIDPattern.MatchString(targetTurnID) {
+		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
+		return
+	}
+
+	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session mode does not support app chat turns")
+		return
+	}
+	if s.turnQueue == nil {
+		writeError(w, http.StatusServiceUnavailable, "turn queue unavailable")
+		return
+	}
+
+	if err := s.turnQueue.Enqueue(r.Context(), store.TurnRecord{
+		TurnID:       "interrupt_" + auth.RandomHex(12),
+		SessionID:    sessionID,
+		Email:        user.Email,
+		Provider:     provider,
+		Source:       "interrupt",
+		ClientNonce:  targetTurnID,
+		TargetTurnID: targetTurnID,
+		Status:       store.TurnPending,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "enqueue interrupt: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":         "queued",
+		"target_turn_id": targetTurnID,
+	})
 }
 
 type sdkTurnRequest struct {

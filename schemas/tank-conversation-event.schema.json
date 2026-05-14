@@ -11,11 +11,8 @@
     "source",
     "type",
     "created_at",
+    "order_key",
     "visibility"
-  ],
-  "anyOf": [
-    { "required": ["order_key"] },
-    { "required": ["sequence"] }
   ],
   "properties": {
     "event_id": {
@@ -36,19 +33,9 @@
       "type": "string",
       "minLength": 1
     },
-    "tank_order_key": {
-      "description": "Runner-stamped render-order cursor used before/alongside canonical order_key.",
-      "type": "string",
-      "minLength": 1
-    },
     "sequence": {
       "type": "integer",
       "minimum": 0
-    },
-    "tank_event_seq": {
-      "description": "Runner-local event sequence stamped before Cosmos/live fanout.",
-      "type": "integer",
-      "minimum": 1
     },
     "tank_turn_seq": {
       "description": "Codex-runner local turn sequence stamped on some events for turn correlation.",
@@ -129,7 +116,7 @@
       "format": "date-time"
     },
     "written_at": {
-      "description": "Runner/storage write timestamp stamped before Cosmos/live fanout.",
+      "description": "Runner/storage write timestamp stamped before the Cosmos write.",
       "type": "string",
       "format": "date-time"
     },
