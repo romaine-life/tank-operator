@@ -3936,6 +3936,15 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-primary);
 }
 
+.run-msg-action:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.run-msg-fork {
+  color: var(--cyan);
+}
+
 /* Reasoning accordion — collapsible thinking block. */
 .run-reasoning {
   grid-column: 2;
@@ -5215,4 +5224,3 @@ textarea.run-files-viewer-editor:focus {
     @apply font-sans;
   }
 }
-

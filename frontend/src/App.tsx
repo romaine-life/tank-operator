@@ -154,6 +154,13 @@ type SdkHistoryRefreshResult = {
 };
 type SkillStateName = "test" | "rollout";
 
+type ForkSessionRequest = {
+  sourceSession: Session;
+  forkedEntry: TranscriptEntry;
+  model: string;
+  permissionMode: string;
+};
+
 interface Session {
   id: string;
   pod_name: string | null;
@@ -2558,6 +2565,32 @@ function quoteMessageText(text: string, style: QuoteStyle): string {
   return `${fence}\n${text}\n${fence}`;
 }
 
+function buildForkSessionPrompt(request: ForkSessionRequest): string {
+  const sourceName = sessionDisplayName(request.sourceSession);
+  const payload = {
+    source_session_id: request.sourceSession.id,
+    source_session_name: sourceName,
+    source_session_mode: request.sourceSession.mode,
+    forked_message_id: request.forkedEntry.id,
+    forked_message_time: request.forkedEntry.time,
+    forked_message_order_key: request.forkedEntry.orderKey ?? null,
+    forked_message_source_event_id: request.forkedEntry.sourceEventId ?? null,
+  };
+  return [
+    "The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.",
+    "",
+    "Use the forked assistant message as the immediate starting point. The previous session data is identified below; read that session's transcript from Tank Operator data if it would help, but do not assume you need the entire prior conversation before making progress.",
+    "",
+    "Forked assistant message:",
+    quoteMessageText(request.forkedEntry.text ?? "", "fence"),
+    "",
+    "Source session pointer:",
+    "```json",
+    JSON.stringify(payload, null, 2),
+    "```",
+  ].join("\n");
+}
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -2581,6 +2614,41 @@ function CopyButton({ text }: { text: string }) {
         <CheckIcon size={12} aria-hidden="true" />
       ) : (
         <CopyIcon size={12} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
+function ForkButton({
+  entry,
+  onFork,
+}: {
+  entry: TranscriptEntry;
+  onFork: (entry: TranscriptEntry) => Promise<void>;
+}) {
+  const [forking, setForking] = useState(false);
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-fork"
+      title={forking ? "Forking" : "Fork session"}
+      aria-label={forking ? "Forking session" : "Fork session from this message"}
+      disabled={forking}
+      onClick={async (e) => {
+        e.stopPropagation();
+        if (forking) return;
+        setForking(true);
+        try {
+          await onFork(entry);
+        } finally {
+          setForking(false);
+        }
+      }}
+    >
+      {forking ? (
+        <Loader2Icon size={12} className="run-spin" aria-hidden="true" />
+      ) : (
+        <GitBranchIcon size={12} aria-hidden="true" />
       )}
     </button>
   );
@@ -2727,12 +2795,14 @@ function RunMessageBubble({
   showTimestamps,
   showDuration,
   onQuote,
+  onFork,
 }: {
   entry: TranscriptEntry;
   provider: Provider;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
+  onFork?: (entry: TranscriptEntry) => Promise<void>;
 }) {
   const variant = entry.role === "user" ? "user" : "assistant";
   const { user } = useContext(RunContext);
@@ -2806,6 +2876,9 @@ function RunMessageBubble({
               </span>
             )}
           </div>
+          {variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
           <QuoteButton text={text} style="fence" onQuote={onQuote} />
           <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
           <CopyButton text={text} />
@@ -3280,6 +3353,7 @@ function RunMessages({
   showTimestamps,
   showDuration,
   onQuote,
+  onFork,
 }: {
   entries: TranscriptEntry[];
   provider: Provider;
@@ -3288,6 +3362,7 @@ function RunMessages({
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
+  onFork?: (entry: TranscriptEntry) => Promise<void>;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   return (
@@ -3322,6 +3397,7 @@ function RunMessages({
             showTimestamps={showTimestamps}
             showDuration={showDuration}
             onQuote={onQuote}
+            onFork={onFork}
           />
         );
       })}
@@ -3335,6 +3411,7 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onSessionActivityChanged,
+  onForkMessage,
   runPrefs,
   setRunPref,
   user,
@@ -3344,6 +3421,7 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onSessionActivityChanged: () => void;
+  onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
@@ -5647,6 +5725,17 @@ function ChatPane({
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
               onQuote={appendQuotedMessage}
+              onFork={(forkedEntry) =>
+                onForkMessage({
+                  sourceSession: session,
+                  forkedEntry,
+                  model:
+                    selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
+                      ? ""
+                      : selectedModelId,
+                  permissionMode: composerMode,
+                })
+              }
             />
           </>
         )}
@@ -6713,6 +6802,89 @@ export function App() {
     }
   }
 
+  async function forkSessionFromMessage(request: ForkSessionRequest) {
+    const mode = request.sourceSession.mode;
+    const prompt = buildForkSessionPrompt(request);
+    const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(0, 80);
+    setBusy(true);
+    setSidebarCollapsed(false);
+    setError(null);
+    try {
+      const res = await authedFetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      if (!res.ok) {
+        let detail = `fork failed: ${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // Keep the status-only detail when the response is not JSON.
+        }
+        throw new Error(detail);
+      }
+      const created: Session = normalizeSession(await res.json());
+      void authedFetch(`/api/sessions/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }).catch(() => undefined);
+      if (CHAT_MODES.has(created.mode)) {
+        writeSessionInteraction(created.id, "gui");
+      }
+      await refresh();
+      await refreshSessionActivity();
+      activate(created.id);
+      await waitForSessionReady(created.id);
+      const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_nonce: newForkTurnId(),
+          prompt,
+          model: request.model,
+          permission_mode: request.permissionMode,
+          follow_up: false,
+        }),
+      });
+      if (!turnRes.ok) {
+        let detail = `fork turn failed: ${turnRes.status}`;
+        try {
+          const body = await turnRes.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // Keep the status-only detail when the response is not JSON.
+        }
+        throw new Error(detail);
+      }
+      await refreshSessionActivity();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function newForkTurnId(): string {
+    const cryptoObj = window.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return `fork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  async function waitForSessionReady(id: string): Promise<Session> {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const res = await authedFetch(`/api/sessions/${id}`);
+      if (res.ok) {
+        const session: Session = normalizeSession(await res.json());
+        if (session.status === "Active") return session;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    throw new Error("fork failed: new session did not become ready");
+  }
+
   function setDefaultProvider(provider: Provider) {
     const interaction =
       PROVIDER_INTERACTION_MODES[provider][defaultInteraction] == null
@@ -7279,6 +7451,7 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onSessionActivityChanged={() => void refreshSessionActivity()}
+                      onForkMessage={forkSessionFromMessage}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
