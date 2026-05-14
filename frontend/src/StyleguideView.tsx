@@ -11,7 +11,13 @@
 // not "the styleguide drifted from the live UI."
 
 import { useState } from "react";
-import { SquareTerminalIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  FolderIcon,
+  InfoIcon,
+  SettingsIcon,
+  SquareTerminalIcon,
+} from "lucide-react";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
 
@@ -78,6 +84,12 @@ const rowStyle: React.CSSProperties = {
   flexWrap: "wrap",
   gap: "12px",
   alignItems: "center",
+};
+const showcaseFrameStyle: React.CSSProperties = {
+  border: "1px solid var(--border-soft)",
+  borderRadius: "var(--radius-md)",
+  background: "var(--bg-base)",
+  overflow: "hidden",
 };
 
 function IconWrench({ className }: { className?: string }) {
@@ -307,6 +319,101 @@ export function StyleguideView() {
             <span className="run-tool-icon-glyph tool-color-mcp" aria-hidden="true">
               <McpIcon size={14} strokeWidth={2} />
             </span>
+          </div>
+        </section>
+
+        {/* === run header tabs === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>run header tabs</h2>
+          <p style={captionStyle}>
+            Header tabs that open side-pane views inside a session. The label
+            text must stay aligned with the icon at desktop width and remain
+            readable in the narrow horizontal-scroll state.
+          </p>
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={showcaseFrameStyle}>
+              <section className="run-panel" style={{ minHeight: 116 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      avatar-dinosaur-pool
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
+            <div style={showcaseFrameStyle}>
+              <section className="run-panel" style={{ minHeight: 116 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      session-with-files-open
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button className="run-tab run-tab-back" type="button">
+                      <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
+                      <span>Back</span>
+                    </button>
+                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
+            <div style={{ ...showcaseFrameStyle, maxWidth: 390 }}>
+              <section className="run-panel" style={{ minHeight: 142 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      narrow-session
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button className="run-tab run-tab-back" type="button">
+                      <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
+                      <span>Back</span>
+                    </button>
+                    <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
           </div>
         </section>
 
