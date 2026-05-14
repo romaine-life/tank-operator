@@ -6805,20 +6805,15 @@ export function App() {
   async function forkSessionFromMessage(request: ForkSessionRequest) {
     const mode = request.sourceSession.mode;
     const prompt = buildForkSessionPrompt(request);
+    const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(0, 80);
     setBusy(true);
     setSidebarCollapsed(false);
     setError(null);
     try {
-      const res = await authedFetch("/api/sessions/run", {
+      const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          prompt,
-          name: `fork: ${sessionDisplayName(request.sourceSession)}`.slice(0, 80),
-          model: request.model,
-          permission_mode: request.permissionMode,
-        }),
+        body: JSON.stringify({ mode }),
       });
       if (!res.ok) {
         let detail = `fork failed: ${res.status}`;
@@ -6831,17 +6826,63 @@ export function App() {
         throw new Error(detail);
       }
       const created: Session = normalizeSession(await res.json());
+      void authedFetch(`/api/sessions/${created.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }).catch(() => undefined);
       if (CHAT_MODES.has(created.mode)) {
         writeSessionInteraction(created.id, "gui");
       }
       await refresh();
       await refreshSessionActivity();
       activate(created.id);
+      await waitForSessionReady(created.id);
+      const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_nonce: newForkTurnId(),
+          prompt,
+          model: request.model,
+          permission_mode: request.permissionMode,
+          follow_up: false,
+        }),
+      });
+      if (!turnRes.ok) {
+        let detail = `fork turn failed: ${turnRes.status}`;
+        try {
+          const body = await turnRes.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // Keep the status-only detail when the response is not JSON.
+        }
+        throw new Error(detail);
+      }
+      await refreshSessionActivity();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  function newForkTurnId(): string {
+    const cryptoObj = window.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return `fork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  }
+
+  async function waitForSessionReady(id: string): Promise<Session> {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const res = await authedFetch(`/api/sessions/${id}`);
+      if (res.ok) {
+        const session: Session = normalizeSession(await res.json());
+        if (session.status === "Active") return session;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    throw new Error("fork failed: new session did not become ready");
   }
 
   function setDefaultProvider(provider: Provider) {
