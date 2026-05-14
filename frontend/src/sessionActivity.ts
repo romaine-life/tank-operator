@@ -43,10 +43,10 @@ export function normalizeSessionActivity(value: unknown): SessionActivitySummary
 
 export function sessionActivityDotStatus(
   sessionStatus: string,
-  isHeadless: boolean,
+  isChatMode: boolean,
   activity?: SessionActivitySummary,
 ): string {
-  if (!isHeadless || sessionStatus !== "Active") return sessionStatus.toLowerCase();
+  if (!isChatMode || sessionStatus !== "Active") return sessionStatus.toLowerCase();
   if (activity?.failed || activity?.status === "error") return "agent-error";
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
   if (activity?.status === "submitted" || activity?.status === "streaming") {
@@ -57,10 +57,10 @@ export function sessionActivityDotStatus(
 
 export function sessionActivityStatusLabel(
   sessionStatus: string,
-  isHeadless: boolean,
+  isChatMode: boolean,
   activity?: SessionActivitySummary,
 ): string {
-  if (!isHeadless || sessionStatus !== "Active") return sessionStatus;
+  if (!isChatMode || sessionStatus !== "Active") return sessionStatus;
   if (activity?.failed || activity?.status === "error") return "Failed";
   if (activity?.needs_input || activity?.status === "needs_input") return "Needs input";
   if (activity?.status === "submitted") return "Submitted";

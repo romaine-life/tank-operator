@@ -217,7 +217,7 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 			Labels: map[string]string{
 				"tank-operator/owner":      compat.OwnerLabel(owner),
 				"tank-operator/session-id": id,
-				"tank-operator/mode":       "codex_headless",
+				"tank-operator/mode":       compat.CodexGUIMode,
 			},
 		},
 		Spec: corev1.PodSpec{

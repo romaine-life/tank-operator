@@ -126,12 +126,12 @@ codexApiProxy:
 # refresh token to rotate, writes the new blob back to KV. ESO mirrors KV →
 # the proxy's mounted Secret on a 1m interval.
 #
-# This values block is named `credentialRefresher` for legacy reasons —
+# This values block is named `credentialRefresher` for historical reasons —
 # the original design used a CronJob that's since been retired. The block
 # stayed because two consumers still authenticate to KV via the same UAMI:
 #   - api-proxy ext_proc sidecar: KV write of rotated blobs.
 #   - orchestrator save-credentials: KV write on "+ config sub" harvest.
-# The UAMI itself (infra/credential_refresher.tf) keeps the legacy name
+# The UAMI itself (infra/credential_refresher.tf) keeps the historical name
 # for the same TF-state-stability reason; the ExternalSecret below syncs
 # its AZURE_CLIENT_ID + AZURE_TENANT_ID into a Secret both consumers
 # envFrom-pull, so DefaultAzureCredential mints a federated KV token
@@ -153,8 +153,6 @@ cosmos:
   endpoint: https://tank-operator-romaine.documents.azure.com:443/
   database: tank-operator
   profilesContainer: profiles
-  activeRunsContainer: active-runs
-  runEventsContainer: run-events
   sessionEventsContainer: session-events
   turnQueueContainer: turn-queue
 
@@ -200,17 +198,8 @@ externalSecret:
   # credentials from KV via per-server
   # ExternalSecrets, NOT from this Secret.
   #
-  # Legacy session env vars. The current GUI runners and headless-run.sh own
-  # mode-specific credential setup; keep these only while old API-key/session
-  # paths still consume the Secret.
-  #   - api_key:      ANTHROPIC_API_KEY → console.anthropic.com billing.
-  #                   Populate via scripts/setup-anthropic-key.ps1 (or .sh).
-  #   - subscription: CLAUDE_CODE_CREDENTIALS_JSON → snapshot of an
-  #                   already-logged-in machine's ~/.claude/.credentials.json.
-  #                   Populate via scripts/setup-claude-credentials.ps1 (or .sh).
-  #
   # The block is named `githubApp` and the K8s Secret is `github-app-creds`
-  # for legacy reasons — it used to carry the GitHub App private key, until
+  # from an earlier chart shape that carried the GitHub App private key, until
   # the App credentials moved to the mcp-github Deployment's own ExternalSecret
   # in the standalone mcp-github chart. Session pods never read
   # the App credentials directly; mcp-github mints installation tokens itself
@@ -240,8 +229,7 @@ externalSecret:
   # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
   # session launchers write a placeholder chatgptAuthTokens auth.json and
   # route chatgpt.com through the proxy, which injects/rotates the real
-  # tokens and writes back to KV. A sessions-namespace compatibility mirror
-  # remains only for legacy Pi CLI until that mode gets the same proxy path.
+  # tokens and writes back to KV.
   codexCredentials:
     secretName: codex-credentials
     # Key inside the K8s Secret. The proxy mounts this as

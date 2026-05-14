@@ -60,6 +60,10 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: GITHUB_APP_SECRET
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
+            - name: CODEX_CREDENTIALS_SECRET
+              value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
+            - name: SESSION_AZURE_CONFIG_SECRET
+              value: {{ include "tank-operator.sessionAzureConfigSecret" . | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -117,10 +121,6 @@ spec:
               value: {{ .Values.cosmos.database | quote }}
             - name: COSMOS_PROFILES_CONTAINER
               value: {{ .Values.cosmos.profilesContainer | quote }}
-            - name: COSMOS_ACTIVE_RUNS_CONTAINER
-              value: {{ .Values.cosmos.activeRunsContainer | quote }}
-            - name: COSMOS_RUN_EVENTS_CONTAINER
-              value: {{ .Values.cosmos.runEventsContainer | quote }}
             - name: COSMOS_SESSION_EVENTS_CONTAINER
               value: {{ .Values.cosmos.sessionEventsContainer | quote }}
             - name: COSMOS_TURN_QUEUE_CONTAINER

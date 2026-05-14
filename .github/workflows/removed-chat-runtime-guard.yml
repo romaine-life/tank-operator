@@ -1,0 +1,56 @@
+name: Removed Chat Runtime Guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent-container/**'
+      - 'agent-runner/**'
+      - 'api-proxy/**'
+      - 'backend-go/**'
+      - 'codex-runner/**'
+      - 'docs/**'
+      - 'frontend/**'
+      - 'infra/**'
+      - 'k8s/**'
+      - 'runner-shared/**'
+      - 'schemas/**'
+      - 'scripts/**'
+      - 'CLAUDE.md'
+      - 'README.md'
+      - '.github/workflows/removed-chat-runtime-guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'agent-container/**'
+      - 'agent-runner/**'
+      - 'api-proxy/**'
+      - 'backend-go/**'
+      - 'codex-runner/**'
+      - 'docs/**'
+      - 'frontend/**'
+      - 'infra/**'
+      - 'k8s/**'
+      - 'runner-shared/**'
+      - 'schemas/**'
+      - 'scripts/**'
+      - 'CLAUDE.md'
+      - 'README.md'
+      - '.github/workflows/removed-chat-runtime-guard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check removed runtime surfaces
+        run: node scripts/check-removed-chat-runtime.mjs

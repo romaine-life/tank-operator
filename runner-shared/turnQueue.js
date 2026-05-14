@@ -168,7 +168,7 @@ export function buildClaimedRecord(record, args) {
 export function buildDelayedTurnRecord(args) {
     return {
         id: `turn:${args.clientNonce}`,
-        run_id: args.clientNonce,
+        turn_id: args.clientNonce,
         session_id: args.sessionID,
         email: args.email,
         provider: args.provider,
@@ -231,5 +231,5 @@ function parsePositiveInt(value, fallback) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 export function turnClientNonce(record) {
-    return record.client_nonce?.trim() || record.run_id;
+    return record.client_nonce?.trim() || record.turn_id;
 }

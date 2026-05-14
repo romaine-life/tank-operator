@@ -15,7 +15,7 @@ func TestTurnDocShape(t *testing.T) {
 	claimExpiresAt := "2026-05-11T17:02:00Z"
 	availableAt := "2026-05-11T16:59:59Z"
 	rec := TurnRecord{
-		RunID:          "abc123",
+		TurnID:         "abc123",
 		SessionID:      "61",
 		Email:          "nelson@romaine.life",
 		Provider:       "claude",
@@ -38,7 +38,7 @@ func TestTurnDocShape(t *testing.T) {
 	doc := turnDoc(rec)
 
 	if got, want := doc["id"], "turn:abc123"; got != want {
-		t.Fatalf("id = %q, want %q (runner reads by 'turn:<run_id>')", got, want)
+		t.Fatalf("id = %q, want %q (runner reads by 'turn:<turn_id>')", got, want)
 	}
 	if got, want := doc["session_id"], "61"; got != want {
 		t.Fatalf("session_id = %q (must match container partition key /session_id)", got)
@@ -88,7 +88,7 @@ func TestTurnDocShape(t *testing.T) {
 // wrote without information loss on any field.
 func TestTurnDocRoundtrip(t *testing.T) {
 	orig := TurnRecord{
-		RunID:          "abc",
+		TurnID:         "abc",
 		SessionID:      "61",
 		Email:          "nelson@romaine.life",
 		Provider:       "claude",
@@ -117,7 +117,7 @@ func TestTurnDocRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.RunID != orig.RunID || got.SessionID != orig.SessionID ||
+	if got.TurnID != orig.TurnID || got.SessionID != orig.SessionID ||
 		got.Provider != orig.Provider || got.Prompt != orig.Prompt ||
 		got.Source != orig.Source || got.ClientNonce != orig.ClientNonce ||
 		got.Model != orig.Model || got.FollowUp != orig.FollowUp ||

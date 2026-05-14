@@ -218,8 +218,7 @@ export class Runner {
       cwd: this.cfg.workspace,
       // The api-proxy injects OAuth from KV when the placeholder bearer
       // is seen — both the SDK and the raw CLI go through this path.
-      // Permission bypass matches what k8s/session-config/headless-run.sh
-      // used to set via --dangerously-skip-permissions.
+      // Match the browser chat's permissive editing mode.
       permissionMode: "bypassPermissions",
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., agent-runner restart within the same pod).

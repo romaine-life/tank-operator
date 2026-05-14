@@ -1,15 +1,13 @@
 #!/bin/sh
 # Pod-side launch shim for the agent-runner Node service.
-# Mirrors the credential-setup logic from headless-run.sh (which runs
-# per-turn in the legacy dispatch path); here we do it ONCE per pod
-# lifetime, then exec the long-lived runner that drives the SDK.
+# Performs credential setup once per pod lifetime, then execs the
+# long-lived runner that drives the SDK.
 #
 # Why bash + exec node, not a Node entrypoint that does cred setup
 # itself: the credential blob shape and configure_claude logic are
 # small but very platform-specific (file modes, claude-code's
 # expected JSON shape), and keeping them in shell matches the
-# existing per-turn pattern so future changes can be made in one
-# place if both paths still exist.
+# existing shell setup style used by the session image.
 
 set -eu
 

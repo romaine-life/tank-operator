@@ -63,7 +63,7 @@ func TestVerifierRejectsHS256Tokens(t *testing.T) {
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
-	hs256, err := tok.SignedString([]byte("legacy-secret"))
+	hs256, err := tok.SignedString([]byte("hs256-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}

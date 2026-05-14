@@ -144,7 +144,7 @@ function storeToken(token: string): void {
 
 function isQuotaExceeded(err: unknown): boolean {
   if (!(err instanceof DOMException)) return false;
-  // Browsers spell the error name differently — Safari's legacy name
+  // Browsers spell the error name differently; Safari uses an older name.
   // was QUOTA_EXCEEDED_ERR, modern browsers throw QuotaExceededError.
   return err.name === "QuotaExceededError" || err.name === "QUOTA_EXCEEDED_ERR";
 }

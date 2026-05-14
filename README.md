@@ -1,8 +1,8 @@
 # tank-operator
 
 Web frontend over a thin K8s orchestrator that spawns ephemeral agent pods on
-demand. The launcher creates GUI/headless agent sessions backed by Kubernetes
-pods.
+demand. The launcher creates GUI chat and terminal agent sessions backed by
+Kubernetes pods.
 
 The Claude, Codex, and Pi session images are built from `claude-container/`
 in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy`). `platform-mcp` is

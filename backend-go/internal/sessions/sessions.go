@@ -28,20 +28,11 @@ var (
 )
 
 type Info struct {
-	ID      string  `json:"id"`
-	PodName *string `json:"pod_name"`
-	Owner   string  `json:"owner"`
-	Status  string  `json:"status"`
-	Mode    string  `json:"mode"`
-	// Runtime tells the SPA's chat pane which data-ingestion path to use
-	// for this session:
-	//   "sdk"    — pod has the agent-runner sidecar. Chat pane opens
-	//              /agent-ws (live) + /timeline (history).
-	//   "legacy" — no agent-runner sidecar. Chat pane uses /run (live)
-	//              + /runs/latest/events.json + /run/history (history).
-	// The renderer is the same for both; only the data source differs.
-	// Derived from the pod spec at read time; not stored anywhere.
-	Runtime      string         `json:"runtime"`
+	ID           string         `json:"id"`
+	PodName      *string        `json:"pod_name"`
+	Owner        string         `json:"owner"`
+	Status       string         `json:"status"`
+	Mode         string         `json:"mode"`
 	RequestedAt  *string        `json:"requested_at"`
 	CreatedAt    *string        `json:"created_at"`
 	ReadyAt      *string        `json:"ready_at"`
@@ -177,7 +168,6 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		Owner:        owner,
 		Status:       podStatus(pod),
 		Mode:         compat.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
-		Runtime:      runtimeFromPod(pod),
 		RequestedAt:  createdAt,
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
@@ -185,21 +175,6 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 	}
-}
-
-// runtimeFromPod returns "sdk" if the pod has either of the SDK runner
-// sidecars in its spec (agent-runner for claude_gui, codex-runner for
-// codex_gui), "legacy" otherwise. The SPA's chat pane branches on this
-// to pick the canonical-event data source vs the old stream-json one.
-// Pods that pre-date the runner roll stay on the legacy path until
-// reaped.
-func runtimeFromPod(pod *corev1.Pod) string {
-	for _, c := range pod.Spec.Containers {
-		if c.Name == "agent-runner" || c.Name == "codex-runner" {
-			return "sdk"
-		}
-	}
-	return "legacy"
 }
 
 func optionalString(value string) *string {

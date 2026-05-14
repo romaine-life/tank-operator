@@ -11,7 +11,7 @@ import {
 function baseRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
     id: "turn:client-1",
-    run_id: "client-1",
+    turn_id: "client-1",
     session_id: "63",
     email: "nelson@romaine.life",
     provider: "codex",

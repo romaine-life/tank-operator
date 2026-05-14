@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
@@ -30,7 +29,7 @@ const (
 // scoped to runner-process restarts while the session pod still exists; a dead
 // or deleted session pod remains terminal for that session.
 type TurnRecord struct {
-	RunID          string          `json:"run_id"`
+	TurnID         string          `json:"turn_id"`
 	SessionID      string          `json:"session_id"`
 	Email          string          `json:"email"`
 	Provider       string          `json:"provider"`
@@ -60,9 +59,9 @@ type TurnRecord struct {
 type TurnQueueStore interface {
 	Enqueue(ctx context.Context, rec TurnRecord) error
 	NextPending(ctx context.Context, sessionID string) (*TurnRecord, error)
-	MarkClaimed(ctx context.Context, sessionID, runID string) error
-	MarkCompleted(ctx context.Context, sessionID, runID string) error
-	MarkFailed(ctx context.Context, sessionID, runID string) error
+	MarkClaimed(ctx context.Context, sessionID, turnID string) error
+	MarkCompleted(ctx context.Context, sessionID, turnID string) error
+	MarkFailed(ctx context.Context, sessionID, turnID string) error
 }
 
 type cosmosTurnQueueStore struct {
@@ -82,8 +81,8 @@ func NewCosmosTurnQueueStore(endpoint, database, container string, cred azcore.T
 }
 
 func (s *cosmosTurnQueueStore) Enqueue(ctx context.Context, rec TurnRecord) error {
-	if rec.RunID == "" || rec.SessionID == "" {
-		return fmt.Errorf("turn queue: run_id and session_id are required")
+	if rec.TurnID == "" || rec.SessionID == "" {
+		return fmt.Errorf("turn queue: turn_id and session_id are required")
 	}
 	if rec.Status == "" {
 		rec.Status = TurnPending
@@ -98,10 +97,10 @@ func (s *cosmosTurnQueueStore) Enqueue(ctx context.Context, rec TurnRecord) erro
 		return err
 	}
 	pk := azcosmos.NewPartitionKeyString(rec.SessionID)
-	// CreateItem so a re-dispatch with the same run_id surfaces (409) rather
+	// CreateItem so a re-dispatch with the same turn_id surfaces (409) rather
 	// than silently overwriting an in-flight turn. Re-dispatches should not
 	// happen in normal operation — each user message generates a fresh
-	// run_id — but if the orchestrator double-fires, a conflict is the
+	// turn_id; if the orchestrator double-fires, a conflict is the
 	// right signal.
 	_, err = s.container.CreateItem(ctx, pk, raw, nil)
 	if err != nil {
@@ -138,24 +137,24 @@ func (s *cosmosTurnQueueStore) NextPending(ctx context.Context, sessionID string
 	return nil, nil
 }
 
-func (s *cosmosTurnQueueStore) MarkClaimed(ctx context.Context, sessionID, runID string) error {
+func (s *cosmosTurnQueueStore) MarkClaimed(ctx context.Context, sessionID, turnID string) error {
 	now := nowISO()
-	return s.patchStatus(ctx, sessionID, runID, TurnClaimed, &now, nil)
+	return s.patchStatus(ctx, sessionID, turnID, TurnClaimed, &now, nil)
 }
 
-func (s *cosmosTurnQueueStore) MarkCompleted(ctx context.Context, sessionID, runID string) error {
+func (s *cosmosTurnQueueStore) MarkCompleted(ctx context.Context, sessionID, turnID string) error {
 	now := nowISO()
-	return s.patchStatus(ctx, sessionID, runID, TurnCompleted, nil, &now)
+	return s.patchStatus(ctx, sessionID, turnID, TurnCompleted, nil, &now)
 }
 
-func (s *cosmosTurnQueueStore) MarkFailed(ctx context.Context, sessionID, runID string) error {
+func (s *cosmosTurnQueueStore) MarkFailed(ctx context.Context, sessionID, turnID string) error {
 	now := nowISO()
-	return s.patchStatus(ctx, sessionID, runID, TurnFailed, nil, &now)
+	return s.patchStatus(ctx, sessionID, turnID, TurnFailed, nil, &now)
 }
 
-func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, runID string, status TurnQueueStatus, claimedAt, completedAt *string) error {
+func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, turnID string, status TurnQueueStatus, claimedAt, completedAt *string) error {
 	pk := azcosmos.NewPartitionKeyString(sessionID)
-	resp, err := s.container.ReadItem(ctx, pk, "turn:"+runID, nil)
+	resp, err := s.container.ReadItem(ctx, pk, "turn:"+turnID, nil)
 	if err != nil {
 		var re *azcore.ResponseError
 		if errors.As(err, &re) && re.StatusCode == http.StatusNotFound {
@@ -178,17 +177,17 @@ func (s *cosmosTurnQueueStore) patchStatus(ctx context.Context, sessionID, runID
 	if err != nil {
 		return err
 	}
-	_, err = s.container.ReplaceItem(ctx, pk, "turn:"+runID, raw, nil)
+	_, err = s.container.ReplaceItem(ctx, pk, "turn:"+turnID, raw, nil)
 	return err
 }
 
-// turnDoc shapes the wire JSON. Doc id is `turn:<run_id>` so the partition
+// turnDoc shapes the wire JSON. Doc id is `turn:<turn_id>` so the partition
 // (session_id) can hold sibling kinds of docs later without collision.
 func turnDoc(r TurnRecord) map[string]any {
 	doc := map[string]any{
-		"id":               "turn:" + r.RunID,
+		"id":               "turn:" + r.TurnID,
 		"type":             "turn",
-		"run_id":           r.RunID,
+		"turn_id":          r.TurnID,
 		"session_id":       r.SessionID,
 		"email":            r.Email,
 		"provider":         r.Provider,
@@ -215,7 +214,7 @@ func turnDoc(r TurnRecord) map[string]any {
 
 func turnFromDoc(data []byte) (TurnRecord, error) {
 	var d struct {
-		RunID          string  `json:"run_id"`
+		TurnID         string  `json:"turn_id"`
 		SessionID      string  `json:"session_id"`
 		Email          string  `json:"email"`
 		Provider       string  `json:"provider"`
@@ -241,7 +240,7 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		return TurnRecord{}, err
 	}
 	return TurnRecord{
-		RunID:          d.RunID,
+		TurnID:         d.TurnID,
 		SessionID:      d.SessionID,
 		Email:          d.Email,
 		Provider:       d.Provider,
@@ -306,6 +305,3 @@ func (StubTurnQueueStore) NextPending(_ context.Context, _ string) (*TurnRecord,
 func (StubTurnQueueStore) MarkClaimed(_ context.Context, _, _ string) error   { return nil }
 func (StubTurnQueueStore) MarkCompleted(_ context.Context, _, _ string) error { return nil }
 func (StubTurnQueueStore) MarkFailed(_ context.Context, _, _ string) error    { return nil }
-
-// Ensure the time import is referenced even when only used by the helpers above.
-var _ = time.Time{}

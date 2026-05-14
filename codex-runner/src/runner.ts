@@ -192,7 +192,7 @@ export class Runner {
         // /workspace inside session pods isn't a git repo (and may never be —
         // users mount projects ad hoc). Without this flag the CLI exits with
         // "Not inside a trusted directory and --skip-git-repo-check was not
-        // specified." Same flag legacy headless-run.sh has always passed.
+        // specified."
         skipGitRepoCheck: true,
         sandboxMode: "danger-full-access",
         approvalPolicy: "never",

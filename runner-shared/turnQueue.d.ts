@@ -11,7 +11,7 @@ export interface TurnQueueConfig {
 
 export interface TurnRecord {
   id: string;
-  run_id: string;
+  turn_id: string;
   session_id: string;
   email: string;
   provider: "claude" | "codex" | string;

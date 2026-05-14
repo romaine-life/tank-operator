@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"regexp"
 	"strings"
 )
 
@@ -20,7 +19,7 @@ const (
 	CodexGUIMode          = "codex_gui"
 	PiConfigMode          = "pi_config"
 	PiCLIMode             = "pi_cli"
-	DefaultSessionMode    = ClaudeCLIMode
+	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
 	SessionServiceAccount = "claude-session"
@@ -36,20 +35,12 @@ const (
 	// that tag — which is exactly what bricked claude_gui session creation
 	// for the 15h between the Go cutover and the env-var wiring.
 	DefaultGitHubAppSecret          = "github-app-creds"
-	DefaultCodexCredsSecret         = "codex-credentials"
 	DefaultOAuthGatewayCA           = "claude-oauth-ca"
 	DefaultSessionAzureConfigSecret = "tank-session-azure-config"
 	SessionConfigDirMount           = "/opt/tank/session-config"
 )
 
 var (
-	sessionModeAliases = map[string]string{
-		"subscription":          ClaudeCLIMode,
-		"subscription_headless": ClaudeGUIMode,
-		"codex_subscription":    CodexCLIMode,
-		"codex_headless":        CodexGUIMode,
-		"pi_subscription":       PiCLIMode,
-	}
 	sessionModes = map[string]struct{}{
 		APIKeyMode:      {},
 		ClaudeCLIMode:   {},
@@ -61,7 +52,6 @@ var (
 		PiConfigMode:    {},
 		PiCLIMode:       {},
 	}
-	runIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
 )
 
 type SessionRecord struct {
@@ -77,27 +67,12 @@ type SessionRecord struct {
 	UpdatedAt   string
 }
 
-type ActiveRunRecord struct {
-	SessionID   string
-	Email       string
-	RunID       string
-	PodName     string
-	Provider    string
-	Status      string
-	StreamPath  string
-	PIDPath     string
-	StartedAt   string
-	UpdatedAt   string
-	CompletedAt *string
-}
-
 // sessionConfigMounts mirrors Python's SESSION_CONFIG_MOUNTS + the dir mount.
 var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"mcp.json", "/workspace/.mcp.json"},
 	{"default-claude.md", "/workspace/CLAUDE.md"},
 	{"default-claude.md", "/workspace/AGENTS.md"},
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
-	{"headless-run.sh", "/opt/tank/headless-run.sh"},
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
 }
@@ -126,9 +101,6 @@ type ManifestOptions struct {
 	CodexAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
-	// Secret name for codex credentials. Legacy only; live Codex sessions
-	// use codex-api-proxy and do not mount the real refresh-token Secret.
-	CodexCredsSecret string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
 	// Secret name for pod-side Azure workload-identity config
@@ -151,9 +123,6 @@ type ManifestOptions struct {
 func NormalizeSessionMode(mode string) string {
 	if mode == "" {
 		mode = DefaultSessionMode
-	}
-	if canonical, ok := sessionModeAliases[mode]; ok {
-		return canonical
 	}
 	return mode
 }
@@ -182,18 +151,6 @@ func NormalizeName(name *string) *string {
 	return &trimmed
 }
 
-func ValidateRunID(value string) bool {
-	return runIDPattern.MatchString(value)
-}
-
-func RunStreamPath(runID string) string {
-	return "/tmp/tank-run-" + runID + ".stream"
-}
-
-func RunPIDPath(runID string) string {
-	return "/tmp/tank-run-" + runID + ".pid"
-}
-
 func SessionDocID(scope, sessionID string) string {
 	if scope == "" || scope == "default" {
 		return "session:" + sessionID
@@ -206,28 +163,6 @@ func SessionCounterDocID(scope string) string {
 		return "session-counter"
 	}
 	return "session-counter:" + scope
-}
-
-func ActiveRunDoc(record ActiveRunRecord) map[string]any {
-	status := record.Status
-	if status == "" {
-		status = "running"
-	}
-	return map[string]any{
-		"id":           record.SessionID,
-		"type":         "active_run",
-		"session_id":   record.SessionID,
-		"email":        record.Email,
-		"run_id":       record.RunID,
-		"pod_name":     record.PodName,
-		"provider":     record.Provider,
-		"status":       status,
-		"stream_path":  record.StreamPath,
-		"pid_path":     record.PIDPath,
-		"started_at":   record.StartedAt,
-		"updated_at":   record.UpdatedAt,
-		"completed_at": record.CompletedAt,
-	}
 }
 
 func SessionDoc(record SessionRecord) map[string]any {
@@ -357,20 +292,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
 			})
 		}
-	}
-
-	// Legacy Pi sessions still use Codex credentials directly. Codex CLI/GUI
-	// sessions do not mount this Secret; codex-api-proxy owns refresh.
-	if mode == PiCLIMode && opts.CodexCredsSecret != "" {
-		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
-			"name":      "codex-creds",
-			"mountPath": "/etc/codex-creds",
-			"readOnly":  true,
-		})
-		volumes = append(volumes, map[string]any{
-			"name":   "codex-creds",
-			"secret": map[string]any{"secretName": opts.CodexCredsSecret, "optional": true},
-		})
 	}
 
 	// envFrom on the claude container. GitHub App for git auth; session-azure
@@ -647,9 +568,6 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.OAuthGatewayCAConfigMap == "" {
 		opts.OAuthGatewayCAConfigMap = DefaultOAuthGatewayCA
-	}
-	if opts.CodexCredsSecret == "" {
-		opts.CodexCredsSecret = DefaultCodexCredsSecret
 	}
 	if opts.GitHubAppSecret == "" {
 		opts.GitHubAppSecret = DefaultGitHubAppSecret
