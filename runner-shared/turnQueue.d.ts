@@ -19,6 +19,7 @@ export interface TurnRecord {
   provider: "claude" | "codex" | string;
   source?: string;
   client_nonce?: string;
+  target_turn_id?: string;
   prompt: string;
   model?: string;
   permission_mode?: string;
@@ -82,5 +83,7 @@ export function claimAttemptsExceeded(
   record: TurnRecord,
   maxAttempts?: number,
 ): boolean;
+
+export function isInterruptRecord(record: TurnRecord | null | undefined): boolean;
 
 export function turnClientNonce(record: TurnRecord): string;

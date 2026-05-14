@@ -51,9 +51,7 @@
         "uuid": "turn_contract:user_message.created",
         "id": "turn_contract:user_message.created",
         "order_key": "1768179840000-00000001-turn_contract:user_message.created",
-        "tank_order_key": "1768179840000-00000001-turn_contract:user_message.created",
         "sequence": 1,
-        "tank_event_seq": 1,
         "tank_turn_seq": 1,
         "conversation_id": "63",
         "session_id": "63",
@@ -154,9 +152,7 @@
         "event_id": "turn_contract:turn.started:runner",
         "uuid": "turn_contract:turn.started:runner",
         "order_key": "1768179841000-00000002-turn_contract:turn.started:runner",
-        "tank_order_key": "1768179841000-00000002-turn_contract:turn.started:runner",
         "sequence": 2,
-        "tank_event_seq": 2,
         "conversation_id": "63",
         "session_id": "63",
         "turn_id": "turn_contract",
@@ -331,7 +327,7 @@
         "visibility": "durable",
         "payload": {
           "kind": "message",
-          "text": "Replay and live delivery now converge."
+          "text": "Timeline replay and SSE delivery now converge."
         }
       }
     },

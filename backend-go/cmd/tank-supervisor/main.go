@@ -98,7 +98,7 @@ func startChild(cfg config) (*exec.Cmd, error) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureChildProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -110,11 +110,9 @@ func stopChild(cmd *exec.Cmd, timeout time.Duration) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err != nil {
+	if err := signalChildTree(cmd, syscall.SIGTERM); err != nil {
 		return err
 	}
-	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	done := make(chan struct{})
@@ -131,7 +129,7 @@ func stopChild(cmd *exec.Cmd, timeout time.Duration) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		_ = signalChildTree(cmd, syscall.SIGKILL)
 		return ctx.Err()
 	}
 }

@@ -166,6 +166,29 @@ test("projects canonical tool lifecycle and active tool state", () => {
   }
 });
 
+test("projects active client nonce for resumed running turn", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        turn_id: "turn-resumed",
+        timeline_id: "turn-resumed:user",
+        client_nonce: "client-resumed-1",
+        payload: { text: "keep working" },
+      }),
+      ev("2", "turn.started", {
+        source: "claude",
+        turn_id: "turn-resumed",
+        client_nonce: "client-resumed-1",
+      }),
+    ]),
+  );
+
+  assert.equal(projection.runStatus, "streaming");
+  assert.equal(projection.activeTurnId, "turn-resumed");
+  assert.equal(projection.activeClientNonce, "client-resumed-1");
+});
+
 test("canonical duplicate delivery converges before projection", () => {
   const events = [
     ev("1", "user_message.created", {

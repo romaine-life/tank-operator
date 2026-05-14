@@ -34,7 +34,6 @@ function cfg(): Config {
     turnQueuePollMs: 1000,
     workspace: "/workspace",
     mcpConfig: "/workspace/.mcp.json",
-    wsPort: 8090,
   };
 }
 

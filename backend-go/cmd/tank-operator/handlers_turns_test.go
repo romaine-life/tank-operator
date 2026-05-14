@@ -114,6 +114,45 @@ func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	}
 }
 
+func TestInterruptSessionTurnWritesQueueControlRecord(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	req := authedInterruptRequest(t, "64", "run-abc_123")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 1 {
+		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
+	}
+	got := queue.records[0]
+	if got.Source != "interrupt" || got.Provider != "codex" || got.TargetTurnID != "run-abc_123" || got.ClientNonce != "run-abc_123" {
+		t.Fatalf("interrupt record = %#v", got)
+	}
+	if got.Prompt != "" {
+		t.Fatalf("interrupt prompt = %q, want empty", got.Prompt)
+	}
+}
+
+func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	req := authedInterruptRequest(t, "64", "bad/slash")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 0 {
+		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	}
+}
+
 func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
@@ -200,5 +239,14 @@ func authedTurnRequest(t *testing.T, sessionID, body string) *http.Request {
 	req.SetPathValue("session_id", sessionID)
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+func authedInterruptRequest(t *testing.T, sessionID, turnID string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/turns/"+turnID+"/interrupt", nil)
+	req.SetPathValue("session_id", sessionID)
+	req.SetPathValue("turn_id", turnID)
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	return req
 }

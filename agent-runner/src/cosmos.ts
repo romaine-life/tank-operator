@@ -1,9 +1,5 @@
-// Cosmos sink for canonical SDK events. Producer contract per the
-// design discussion:
-//   - One serialization at the producer (the runner)
-//   - Same bytes go to Cosmos and to the WS broadcast
-//   - DB write happens BEFORE the WS push (read-your-writes ordering)
-//   - Idempotent receivers — dedupe by event uuid
+// Cosmos sink for canonical SDK events. The runner is the producer and the
+// durable session-events container is the transcript source of truth.
 //
 // "Canonical" = events the SPA's history-replay path should see:
 //   system (init / compact_boundary), user, assistant, tool_use_summary,

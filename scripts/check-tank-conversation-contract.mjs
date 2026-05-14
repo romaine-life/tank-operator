@@ -155,8 +155,7 @@ function fixtureLabel(fixture, index) {
 function hasRunnerStamps(event) {
   return (
     typeof event.uuid === "string" &&
-    Number.isInteger(event.tank_event_seq) &&
-    typeof event.tank_order_key === "string" &&
+    typeof event.order_key === "string" &&
     typeof event.written_at === "string"
   );
 }

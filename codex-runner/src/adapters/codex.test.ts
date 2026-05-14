@@ -21,7 +21,6 @@ function cfg(): Config {
     turnQueueContainer: "turn-queue",
     turnQueuePollMs: 1000,
     workspace: "/workspace",
-    wsPort: 8090,
   };
 }
 

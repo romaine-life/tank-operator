@@ -25,14 +25,13 @@ adapters; they are not UI state.
 
 The current implementation already has useful pieces, but they are implicit:
 
-- `agent-runner/src/runner.ts` and `codex-runner/src/runner.ts` both dispatch
-  Cosmos-first, then WebSocket, which is the right read-your-writes ordering.
+- `agent-runner/src/runner.ts` and `codex-runner/src/runner.ts` both write
+  canonical transcript events to Cosmos before the UI can observe them.
 - `agent-runner/src/cosmos.ts` and `codex-runner/src/cosmos.ts` define
   canonical-vs-live-only event allowlists, but the allowlists are provider
   shaped rather than Tank shaped.
 - `backend-go/internal/store/session_events.go` reads `session-events` by
-  session and sorts by `tank_order_key`, then timestamps, then ids. Its public
-  API paginates by durable render order.
+  session and pages by canonical `order_key`.
 - `frontend/src/App.tsx` renders Claude and Codex SDK events through the Tank
   conversation reducer/projection. It also owns status decisions such as
   stopped vs error, active tool state, and reconnect behavior directly in the
@@ -220,7 +219,7 @@ Claude SDK adapter:
 
 | Provider event | Tank event | Notes |
 | --- | --- | --- |
-| Browser submit frame | `user_message.created`, `turn.submitted` | Must persist before pushing to the SDK queue. `client_nonce` is required. |
+| Claimed `turn-queue` row | `user_message.created`, `turn.submitted` | Must persist before pushing to the SDK queue. `client_nonce` is required. |
 | First SDK output for a turn | `turn.started` | Current Claude SDK stream does not always expose a clean turn marker; adapter may synthesize this after the durable user message. |
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |
@@ -234,7 +233,7 @@ Codex SDK adapter:
 
 | Provider event | Tank event | Notes |
 | --- | --- | --- |
-| Browser submit frame | `user_message.created`, `turn.submitted` | `client_nonce` required; current `tank_turn_seq` becomes `turn_id` input. |
+| Claimed `turn-queue` row | `user_message.created`, `turn.submitted` | `client_nonce` required; current `tank_turn_seq` becomes `turn_id` input. |
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | `item.delta` | Durable only when final `item.completed` lacks enough state to replay. |
@@ -305,8 +304,19 @@ session/provider before producing canonical events. Claimed rows carry
 updates require the current `claim_id`, and expired claims can be reclaimed by
 a restarted runner in the same live session pod. Claude `ScheduleWakeup`
 re-enqueues as a delayed `turn-queue` row with `source=schedule-wakeup` and
-`available_at`. `/agent-ws` remains live delivery only; clients reconnect
-against `/timeline` instead of resending the prompt.
+`available_at`. The UI consumes durable transcript delivery from
+`GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
+`order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
+produce `resync_required`; clients reload `/timeline` instead of silently
+skipping a gap.
+
+Durable turn interruption:
+
+`POST /api/sessions/{session_id}/turns/{turn_id}/interrupt`
+
+The backend validates ownership and writes a `turn-queue` row with
+`source=interrupt` and `target_turn_id=<turn_id>`. Runners claim the row and
+abort the matching active turn from inside the session pod.
 
 Durability scope: queued SDK turns are intended to survive browser disconnects,
 orchestrator restarts/rollouts, and runner-process restarts while the session
@@ -336,8 +346,8 @@ Storage:
 - New canonical Tank event types must be added to the JSON Schema first, then
   to the Go and TypeScript contract constants in the same change. The contract
   check is expected to fail until every package agrees.
-- Replay and live delivery must produce the same reducer state for the same
-  canonical event sequence.
+- Timeline replay and SSE delivery must produce the same reducer state for the
+  same canonical event sequence.
 - `client_nonce` is the idempotency boundary for user submission. The durable
   store should reject or return the existing event for duplicate nonces.
 - Browser connection state is never agent state. Disconnect, reconnecting, and

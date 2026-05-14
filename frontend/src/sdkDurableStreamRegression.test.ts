@@ -37,7 +37,7 @@ function ev(
   };
 }
 
-function replayAfterLastOrderKey(
+function streamAfterLastOrderKey(
   events: readonly TankConversationEvent[],
   lastOrderKey: string | null,
 ): TankConversationEvent[] {
@@ -45,7 +45,7 @@ function replayAfterLastOrderKey(
   return events.filter((event) => (event.order_key ?? "") > lastOrderKey);
 }
 
-test("SDK replay and duplicate live delivery converge after reconnect", () => {
+test("durable stream resumes from the last order key without duplicating transcript units", () => {
   const canonicalTurn = [
     ev(1, "user_message.created", {
       actor: "user",
@@ -77,7 +77,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
         kind: "mcp_tool_call",
         server: "github",
         tool: "get_issue",
-        output: "Add replay/live resume regression test",
+        output: "Add durable stream resume regression test",
       },
     }),
     ev(6, "item.completed", {
@@ -86,7 +86,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
       timeline_id: "assistant-final",
       payload: {
         kind: "message",
-        text: "Replay and live delivery now converge.",
+        text: "Durable stream delivery now converges.",
       },
     }),
     ev(7, "turn.completed", {
@@ -95,29 +95,22 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     }),
   ] satisfies TankConversationEvent[];
 
-  const liveBeforeDisconnect = canonicalTurn.slice(0, 4);
-  const liveState = reduceConversationEvents(liveBeforeDisconnect);
-  const liveProjection = projectConversationState(liveState);
-  const reconnectCursor = liveProjection.lastOrderKey;
+  const stateBeforeDisconnect = reduceConversationEvents(canonicalTurn.slice(0, 4));
+  const projectionBeforeDisconnect = projectConversationState(stateBeforeDisconnect);
+  const reconnectCursor = projectionBeforeDisconnect.lastOrderKey;
 
   assert.equal(reconnectCursor, "order-004");
-  assert.equal(liveProjection.runStatus, "streaming");
-  assert.equal(liveProjection.activeToolName, "github.get_issue");
+  assert.equal(projectionBeforeDisconnect.runStatus, "streaming");
+  assert.equal(projectionBeforeDisconnect.activeToolName, "github.get_issue");
 
-  const replayedFromTimeline = replayAfterLastOrderKey(canonicalTurn, reconnectCursor);
+  const streamedAfterReconnect = streamAfterLastOrderKey(canonicalTurn, reconnectCursor);
   assert.deepEqual(
-    replayedFromTimeline.map((event) => event.event_id),
+    streamedAfterReconnect.map((event) => event.event_id),
     ["evt-005", "evt-006", "evt-007"],
   );
 
-  const stateAfterReplay = reduceConversationEvents(
-    [...replayedFromTimeline, ...replayedFromTimeline],
-    liveState,
-  );
-  const duplicateLiveFramesAfterReconnect = [canonicalTurn[4], canonicalTurn[5], canonicalTurn[6]];
-  const finalState = reduceConversationEvents(duplicateLiveFramesAfterReconnect, stateAfterReplay);
+  const finalState = reduceConversationEvents(streamedAfterReconnect, stateBeforeDisconnect);
   const expectedState = reduceConversationEvents(canonicalTurn);
-
   assert.deepEqual(finalState, expectedState);
 
   const finalProjection = projectConversationState(finalState);
@@ -128,7 +121,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     messageEntries.map((entry) => (entry.kind === "message" ? [entry.role, entry.text] : [])),
     [
       ["user", "Investigate issue #414"],
-      ["assistant", "Replay and live delivery now converge."],
+      ["assistant", "Durable stream delivery now converges."],
     ],
   );
   assert.equal(toolEntries.length, 1);
@@ -136,7 +129,7 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
     assert.equal(toolEntries[0].toolName, "github.get_issue");
     assert.equal(toolEntries[0].toolStatus, "completed");
     assert.match(toolEntries[0].toolInput ?? "", /"number": 414/);
-    assert.equal(toolEntries[0].toolOutput, "Add replay/live resume regression test");
+    assert.equal(toolEntries[0].toolOutput, "Add durable stream resume regression test");
   }
   assert.equal(finalProjection.runStatus, "ready");
   assert.equal(finalProjection.activeTurnId, null);
@@ -144,40 +137,4 @@ test("SDK replay and duplicate live delivery converge after reconnect", () => {
   assert.equal(finalProjection.failed, false);
   assert.equal(finalProjection.lastOrderKey, "order-007");
   assert.equal(new Set(finalProjection.entries.map((entry) => entry.id)).size, 3);
-});
-
-test("SDK interrupted replay stays terminal when replay and live frames duplicate", () => {
-  const interruptedTurn = [
-    ev(1, "user_message.created", {
-      actor: "user",
-      client_nonce: "client-run-stop",
-      payload: { text: "stop" },
-    }),
-    ev(2, "turn.started", { source: "codex" }),
-    ev(3, "turn.interrupted", {
-      source: "codex",
-      payload: { reason: "client_interrupt" },
-    }),
-  ] satisfies TankConversationEvent[];
-
-  const liveState = reduceConversationEvents(interruptedTurn.slice(0, 2));
-  const reconnectCursor = projectConversationState(liveState).lastOrderKey;
-  const replayedFromTimeline = replayAfterLastOrderKey(interruptedTurn, reconnectCursor);
-  const finalProjection = projectConversationState(
-    reduceConversationEvents(
-      [...replayedFromTimeline, ...replayedFromTimeline, interruptedTurn[2]],
-      liveState,
-    ),
-  );
-
-  assert.equal(reconnectCursor, "order-002");
-  assert.equal(finalProjection.stopped, true);
-  assert.equal(finalProjection.failed, false);
-  assert.equal(finalProjection.runStatus, "stopped");
-  assert.equal(finalProjection.entries.length, 1);
-  assert.equal(finalProjection.entries[0]?.kind, "message");
-  if (finalProjection.entries[0]?.kind === "message") {
-    assert.equal(finalProjection.entries[0].role, "user");
-    assert.equal(finalProjection.entries[0].text, "stop");
-  }
 });

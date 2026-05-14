@@ -1,13 +1,12 @@
 // Long-lived runner — drives one claude agent process via the SDK for
 // the pod's lifetime. The SDK's `query()` takes an async iterable of
-// user messages, so we push to a queue as WS clients submit, and the
-// SDK iterates events back out. Multi-turn coordination is implicit:
+// user messages, so we push durable queued turns into it. Multi-turn
+// coordination is implicit:
 // the SDK serializes turns internally, we just keep feeding it.
 //
-// Output fan-out per the producer contract:
-//   1. For every event, write to Cosmos FIRST (if canonical)
-//   2. Then broadcast to WS clients
-//   3. If the event contains a ScheduleWakeup, queue a wakeup turn
+// Output contract:
+//   1. For every canonical event, write to Cosmos
+//   2. If the event contains a ScheduleWakeup, queue a wakeup turn
 //
 // On error: log and keep running. Single-turn failures shouldn't kill
 // the runner; persistent failures will show up via Cosmos write errors
@@ -24,7 +23,6 @@ import { randomUUID } from "node:crypto";
 
 import {
   canonicalEventsForClaudeMessage,
-  claudeUserMessageText,
   startsClaudeTurn,
 } from "./adapters/claude.js";
 import type { Config } from "./config.js";
@@ -37,24 +35,23 @@ import {
   userSubmissionEvents,
   type TankConversationEvent,
 } from "./conversation.js";
-import { TurnQueue, turnClientNonce, type TurnRecord } from "./turnQueue.js";
+import {
+  TurnQueue,
+  isInterruptRecord,
+  turnClientNonce,
+  type TurnRecord,
+} from "./turnQueue.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
-import { WSFanout, type ClientFrame } from "./ws.js";
 
-// Pull a single dispatch out as a free function so the producer
-// contract — cosmos-first ordering + cosmos-failure suppresses ws — is
-// testable without spinning up a Runner (the WSFanout binds to a port
-// in its constructor, which makes the full Runner painful to unit-test).
+// Pull a single dispatch out as a free function so the Cosmos write contract
+// is testable without spinning up a Runner.
 //
 // Returns true on a successful end-to-end dispatch; false when the
-// canonical write failed and the broadcast was intentionally skipped.
+// canonical write failed.
 // Callers that don't care about the outcome can ignore it.
 interface DispatchSink {
   upsert(message: RunnerEvent & { uuid: string }): Promise<void>;
   create?(message: RunnerEvent & { uuid: string }): Promise<"created" | "exists">;
-}
-interface DispatchWS {
-  broadcastEvent(message: RunnerEvent): void;
 }
 
 let tankEventSeq = 0;
@@ -74,8 +71,6 @@ function stampTankEvent(message: RunnerEvent): RunnerEvent & { uuid: string } {
     ...message,
     uuid,
     ...(eventID ? { event_id: eventID } : {}),
-    tank_event_seq: tankEventSeq,
-    tank_order_key: tankOrderKey,
     written_at: writtenAt,
     ...(isTankEvent(message)
       ? {
@@ -91,7 +86,6 @@ function stampTankEvent(message: RunnerEvent): RunnerEvent & { uuid: string } {
 
 export async function dispatch(
   sink: DispatchSink,
-  ws: DispatchWS,
   message: RunnerEvent,
 ): Promise<boolean> {
   const stamped = stampTankEvent(message);
@@ -109,13 +103,11 @@ export async function dispatch(
       return false;
     }
   }
-  ws.broadcastEvent(stamped);
   return true;
 }
 
 export async function dispatchCreate(
   sink: DispatchSink,
-  ws: DispatchWS,
   message: RunnerEvent,
 ): Promise<"created" | "exists" | "failed"> {
   const stamped = stampTankEvent(message);
@@ -123,10 +115,7 @@ export async function dispatchCreate(
     console.error("invalid Tank conversation event:", stamped);
     return "failed";
   }
-  if (!isCanonical(stamped)) {
-    ws.broadcastEvent(stamped);
-    return "created";
-  }
+  if (!isCanonical(stamped)) return "created";
   try {
     const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
     if (result === "exists") return "exists";
@@ -134,7 +123,6 @@ export async function dispatchCreate(
     console.error("cosmos create failed:", err);
     return "failed";
   }
-  ws.broadcastEvent(stamped);
   return "created";
 }
 
@@ -194,28 +182,16 @@ class AsyncQueue<T> {
 
 export class Runner {
   private readonly sink: CosmosSink;
-  private readonly ws: WSFanout;
   private readonly turnQueue: TurnQueue;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   private readonly needsInputProviderItemIDs = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
-  private userFrameChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly cfg: Config) {
     this.sink = new CosmosSink(cfg);
-    this.ws = new WSFanout(cfg.wsPort);
     this.turnQueue = new TurnQueue(cfg, "claude");
-    this.ws.onMessage((frame) => {
-      if (frame.type === "user") {
-        this.userFrameChain = this.userFrameChain
-          .then(() => this.handleClientFrame(frame))
-          .catch((err) => console.error("user frame handling failed:", err));
-        return;
-      }
-      void this.handleClientFrame(frame);
-    });
   }
 
   // Run forever (or until externally aborted). Drives the SDK against
@@ -261,19 +237,13 @@ export class Runner {
         await this.interruptActiveTurn("runner_shutdown");
       }
       this.userQueue.close();
-      this.ws.close();
     }
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
     const runnerEvent = message as RunnerEvent;
     const activeTurn = await this.ensureActiveTurn(runnerEvent);
-
-    // 1+2. Dual-sink dispatch (cosmos-first ordering). Extracted so the
-    // contract — canonical: cosmos before ws, ws skipped on cosmos
-    // failure; live-only: ws only — can be tested without spinning up a
-    // Runner.
-    await dispatch(this.sink, this.ws, runnerEvent);
+    await dispatch(this.sink, runnerEvent);
 
     for (const event of canonicalEventsForClaudeMessage(
       this.cfg,
@@ -281,7 +251,7 @@ export class Runner {
       runnerEvent,
       this.needsInputProviderItemIDs,
     )) {
-      const dispatched = await dispatch(this.sink, this.ws, event);
+      const dispatched = await dispatch(this.sink, event);
       if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
         if (activeTurn) activeTurn.terminalEmitted = true;
         if (dispatched && activeTurn?.queueRecord) {
@@ -300,28 +270,6 @@ export class Runner {
     }
   }
 
-  private async handleClientFrame(frame: ClientFrame): Promise<void> {
-    if (frame.type === "user") {
-      const text = claudeUserMessageText(frame.message?.content);
-      const pendingTurn = await this.recordUserSubmission(text, frame.message, frame.client_nonce);
-      if (!pendingTurn) return;
-      this.pendingTurns.push(pendingTurn);
-
-      // Hand to the SDK iterator only after Tank owns the durable user
-      // message. The SDK enforces "wait for result before next message"
-      // internally; we don't need to gate.
-      this.userQueue.push({
-        type: "user",
-        session_id: "",
-        message: frame.message,
-        parent_tool_use_id: null,
-      } as unknown as SDKUserMessage);
-    } else if (frame.type === "interrupt") {
-      await this.interruptActiveTurn("client_interrupt");
-      this.sdkQuery?.interrupt();
-    }
-  }
-
   private startTurnQueuePolling(signal: AbortSignal): () => void {
     let stopped = false;
     const stop = () => {
@@ -332,6 +280,10 @@ export class Runner {
         try {
           const record = await this.turnQueue.claimNext();
           if (record) {
+            if (isInterruptRecord(record)) {
+              await this.acceptInterrupt(record);
+              continue;
+            }
             await this.acceptQueuedTurn(record);
             continue;
           }
@@ -376,6 +328,13 @@ export class Runner {
     } as unknown as SDKUserMessage);
   }
 
+  private async acceptInterrupt(record: TurnRecord): Promise<void> {
+    if (await this.interruptActiveTurn("client_interrupt", record.target_turn_id || record.client_nonce)) {
+      this.sdkQuery?.interrupt();
+    }
+    await this.turnQueue.markCompleted(record);
+  }
+
   private async recordUserSubmission(
     text: string,
     message: unknown,
@@ -384,7 +343,7 @@ export class Runner {
   ): Promise<PendingTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
-      await dispatch(this.sink, this.ws, {
+      await dispatch(this.sink, {
         type: "error",
         message: "client_nonce is required for user submissions",
       });
@@ -398,9 +357,9 @@ export class Runner {
       runtime: "claude",
       skillName: queueRecord?.skill_name,
     });
-    const userResult = await dispatchCreate(this.sink, this.ws, userMessage);
+    const userResult = await dispatchCreate(this.sink, userMessage);
     if (userResult === "failed") return null;
-    const submittedResult = await dispatchCreate(this.sink, this.ws, turnSubmitted);
+    const submittedResult = await dispatchCreate(this.sink, turnSubmitted);
     if (submittedResult === "failed") return null;
     if (submittedResult === "exists" && !queueRecord) return null;
     return {
@@ -421,7 +380,6 @@ export class Runner {
         this.activeTurn.started = true;
         await dispatch(
           this.sink,
-          this.ws,
           turnEvent({
             sessionID: this.cfg.sessionId,
             turnID: this.activeTurn.turnID,
@@ -435,14 +393,16 @@ export class Runner {
     return this.activeTurn;
   }
 
-  private async interruptActiveTurn(reason: "client_interrupt" | "runner_shutdown"): Promise<void> {
+  private async interruptActiveTurn(reason: "client_interrupt" | "runner_shutdown", targetTurnID = ""): Promise<boolean> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
-    if (!turn || turn.terminalEmitted) return;
+    if (!turn || turn.terminalEmitted) return false;
+    if (targetTurnID && targetTurnID !== turn.turnID && targetTurnID !== turn.clientNonce) {
+      return false;
+    }
     turn.interrupted = true;
     turn.terminalEmitted = true;
     const dispatched = await dispatch(
       this.sink,
-      this.ws,
       turnEvent({
         sessionID: this.cfg.sessionId,
         turnID: turn.turnID,
@@ -455,6 +415,7 @@ export class Runner {
     if (dispatched && turn.queueRecord) {
       await this.markQueuedTurnTerminal(turn, "turn.interrupted");
     }
+    return dispatched;
   }
 
   private async markQueuedTurnTerminal(
@@ -484,7 +445,6 @@ export class Runner {
       turn.terminalEmitted = true;
       const dispatched = await dispatch(
         this.sink,
-        this.ws,
         turnEvent({
           sessionID: this.cfg.sessionId,
           turnID: turn.turnID,
@@ -546,7 +506,6 @@ export class Runner {
     pendingTurn.terminalEmitted = true;
     const dispatched = await dispatch(
       this.sink,
-      this.ws,
       turnEvent({
         sessionID: this.cfg.sessionId,
         turnID: pendingTurn.turnID,

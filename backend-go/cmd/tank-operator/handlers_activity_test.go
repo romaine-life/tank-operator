@@ -190,6 +190,18 @@ func (s activityEventStore) ListBySession(_ context.Context, sessionID string, c
 	return store.SessionEventPage{Events: events, NextOrderKey: next, HasMore: false}, nil
 }
 
+func (s activityEventStore) HasOrderKey(_ context.Context, sessionID, orderKey string) (bool, error) {
+	if orderKey == "" {
+		return true, nil
+	}
+	for _, event := range s.events[sessionID] {
+		if event["order_key"] == orderKey {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func activityEvent(eventID, eventType, orderKey, actor string, fields map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

@@ -25,7 +25,6 @@ const (
 	SessionServiceAccount = "claude-session"
 	SessionConfigMap      = "tank-session-config"
 	SandboxAgentPort      = 2468
-	AgentRunnerWSPort     = 8090
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -111,13 +110,10 @@ type ManifestOptions struct {
 	// in test envs where the ExternalSecret isn't wired.
 	SessionAzureConfigSecret string
 	// SDK runners need Cosmos config for session-events and the turn queue.
-	// AgentRunnerWSPort is the localhost port the runner's WebSocket listens
-	// on; the orchestrator reverse-proxies /agent-ws onto it.
 	CosmosEndpoint               string
 	CosmosDatabase               string
 	CosmosSessionEventsContainer string
 	CosmosTurnQueueContainer     string
-	AgentRunnerWSPort            int
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 }
@@ -373,8 +369,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// with the claude container via the emptyDir above so the agent's
 	// edits show up in the terminal pane. Same image (binary baked in
 	// via the Dockerfile multi-stage build); different command + env.
-	// The runner claims durable turn-queue rows and serves live events
-	// through the WebSocket port.
+	// The runner claims durable turn-queue rows and writes durable transcript
+	// events to Cosmos for the orchestrator SSE stream.
 	if wantAgentRunner {
 		runnerVolumeMounts := append([]any{}, configMounts...)
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
@@ -405,7 +401,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "MCP_CONFIG", "value": "/workspace/.mcp.json"},
-			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
 		}
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
@@ -426,12 +421,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
 			"command":         []any{"bash", "/opt/tank/agent-runner-launch.sh"},
-			"ports": []any{map[string]any{
-				"name":          "agent-ws",
-				"containerPort": opts.AgentRunnerWSPort,
-			}},
-			"env":          runnerEnv,
-			"volumeMounts": runnerVolumeMounts,
+			"env":             runnerEnv,
+			"volumeMounts":    runnerVolumeMounts,
 		}
 		if len(envFrom) > 0 {
 			runnerContainer["envFrom"] = envFrom
@@ -440,8 +431,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	// Codex-runner sidecar — codex_gui only. Sibling of agent-runner:
-	// same workspace mount, same Cosmos endpoint, same WS port (only
-	// one runner per pod, never both). Different SDK underneath. Auth is
+	// same workspace mount and same Cosmos-backed turn/event contract
+	// (only one runner per pod, never both). Different SDK underneath. Auth is
 	// a pod-local placeholder auth.json plus codex-api-proxy injection;
 	// the runner never mounts the real codex-credentials Secret.
 	if wantCodexRunner {
@@ -480,7 +471,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
 			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
-			map[string]any{"name": "AGENT_RUNNER_WS_PORT", "value": itoa(opts.AgentRunnerWSPort)},
 		}
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			codexRunnerEnv = append(codexRunnerEnv,
@@ -493,12 +483,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
 			"command":         []any{"bash", "/opt/tank/codex-runner-launch.sh"},
-			"ports": []any{map[string]any{
-				"name":          "agent-ws",
-				"containerPort": opts.AgentRunnerWSPort,
-			}},
-			"env":          codexRunnerEnv,
-			"volumeMounts": runnerVolumeMounts,
+			"env":             codexRunnerEnv,
+			"volumeMounts":    runnerVolumeMounts,
 		}
 		if len(envFrom) > 0 {
 			codexRunnerContainer["envFrom"] = envFrom
@@ -627,9 +613,6 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.CosmosTurnQueueContainer == "" {
 		opts.CosmosTurnQueueContainer = "turn-queue"
-	}
-	if opts.AgentRunnerWSPort == 0 {
-		opts.AgentRunnerWSPort = AgentRunnerWSPort
 	}
 	return opts
 }

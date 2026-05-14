@@ -2,7 +2,7 @@
   "name": "tank-agent-runner",
   "private": true,
   "version": "0.1.0",
-  "description": "Long-lived pod-side runner that drives @anthropic-ai/claude-agent-sdk, exposes typed events to the SPA via WebSocket and persists canonical events to Cosmos.",
+  "description": "Long-lived pod-side runner that drives @anthropic-ai/claude-agent-sdk and persists canonical events to Cosmos.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -16,12 +16,10 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.0",
     "@azure/cosmos": "^4.5.1",
-    "@azure/identity": "^4.7.0",
-    "ws": "^8.18.0"
+    "@azure/identity": "^4.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.5.13",
     "typescript": "^5.6.0"
   }
 }

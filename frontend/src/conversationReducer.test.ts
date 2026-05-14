@@ -213,7 +213,7 @@ test("Activity and read-state events drive unread state", () => {
   assert.equal(state.unreadCount, 0);
 });
 
-test("Replay and live delivery converge through event id dedupe", () => {
+test("Timeline replay and SSE delivery converge through event id dedupe", () => {
   const events = [
     ev("1", "user_message.created", {
       actor: "user",

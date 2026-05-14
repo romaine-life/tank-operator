@@ -37,6 +37,7 @@ type TurnRecord struct {
 	Provider       string          `json:"provider"`
 	Source         string          `json:"source,omitempty"`
 	ClientNonce    string          `json:"client_nonce,omitempty"`
+	TargetTurnID   string          `json:"target_turn_id,omitempty"`
 	Prompt         string          `json:"prompt"`
 	Model          string          `json:"model,omitempty"`
 	PermissionMode string          `json:"permission_mode,omitempty"`
@@ -211,6 +212,7 @@ func turnDocForStorageKey(r TurnRecord, storageKey string) map[string]any {
 		"provider":               r.Provider,
 		"source":                 r.Source,
 		"client_nonce":           r.ClientNonce,
+		"target_turn_id":         r.TargetTurnID,
 		"prompt":                 r.Prompt,
 		"follow_up":              r.FollowUp,
 		"status":                 string(r.Status),
@@ -239,6 +241,7 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		Provider        string  `json:"provider"`
 		Source          string  `json:"source"`
 		ClientNonce     string  `json:"client_nonce"`
+		TargetTurnID    string  `json:"target_turn_id"`
 		Prompt          string  `json:"prompt"`
 		Model           string  `json:"model"`
 		PermissionMode  string  `json:"permission_mode"`
@@ -269,6 +272,7 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		Provider:       d.Provider,
 		Source:         d.Source,
 		ClientNonce:    d.ClientNonce,
+		TargetTurnID:   d.TargetTurnID,
 		Prompt:         d.Prompt,
 		Model:          d.Model,
 		PermissionMode: d.PermissionMode,
