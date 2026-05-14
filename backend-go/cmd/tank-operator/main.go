@@ -51,25 +51,19 @@ func main() {
 	// 4. Init session registry.
 	sessionReg := buildSessionRegistry(azCred)
 
-	// 5. Init active runs store.
-	activeRunsStore := buildActiveRunStore(azCred)
-
-	// 6. Init run events store.
-	runEventsStore := buildRunEventStore(azCred)
-
-	// 6b. Init turn queue store for durable SDK submissions.
+	// 5. Init turn queue store for durable SDK submissions.
 	turnQueueStore := buildTurnQueueStore(azCred)
 
-	// 6c. Init session events store for the SDK runners' canonical stream.
+	// 6. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(azCred)
 
-	// 6d. Init per-user SDK conversation read-state store.
+	// 7. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(azCred)
 
-	// 7. Init event bus.
+	// 8. Init event bus.
 	eventBus := sessions.NewEventBus()
 
-	// 8. Init Manager.
+	// 9. Init Manager.
 	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
 
 	// Session image tags come from the chart's values.yaml session.*
@@ -94,10 +88,15 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
-			ArgoCDTrackingApp: envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:      sessionImage,
-			CodexSessionImage: codexSessionImage,
-			PiSessionImage:    piSessionImage,
+			SessionsNamespace:        namespace,
+			SessionServiceAccount:    envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount),
+			SessionConfigMap:         envDefault("SESSION_CONFIGMAP", compat.SessionConfigMap),
+			ArgoCDTrackingApp:        envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:             sessionImage,
+			CodexSessionImage:        codexSessionImage,
+			PiSessionImage:           piSessionImage,
+			GitHubAppSecret:          envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
+			SessionAzureConfigSecret: envDefault("SESSION_AZURE_CONFIG_SECRET", compat.DefaultSessionAzureConfigSecret),
 			// Pass the orchestrator's Cosmos config through to the pod's
 			// agent-runner via env vars — same endpoint, same database,
 			// the runner authenticates with its own UAMI (federated to
@@ -112,7 +111,7 @@ func main() {
 		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
 	})
 
-	// 9. Init auth signer + verifier (RS256, signing key in KV).
+	// 10. Init auth signer + verifier (RS256, signing key in KV).
 	jwtKey, err := buildJWTSigner(azCred)
 	if err != nil {
 		slog.Error("JWT signing key failed", "error", err)
@@ -122,25 +121,23 @@ func main() {
 	verifier := auth.NewVerifier(jwtKey, allowedEmails)
 	minter := auth.NewMinter(jwtKey, jwtKey, allowedEmails)
 
-	// 10. Start reaper.
+	// 11. Start reaper.
 	ctx := context.Background()
 	mgr.StartReaper(ctx)
 
-	// 11. Parse internal allowed subjects.
+	// 12. Parse internal allowed subjects.
 	// Accepts both "ns/name=email" and plain "ns/name" entries.
 	internalSubjects := parseInternalSubjects(
 		envDefault("INTERNAL_API_ALLOWED_SUBJECTS", "mcp-github/mcp-github,mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"),
 	)
 
-	// 12. Register all routes.
+	// 13. Register all routes.
 	mux := http.NewServeMux()
 	srv := &appServer{
 		k8s:                     k8sClient,
 		restCfg:                 restCfg,
 		mgr:                     mgr,
 		profiles:                profileStore,
-		activeRuns:              activeRunsStore,
-		runEvents:               runEventsStore,
 		turnQueue:               turnQueueStore,
 		sessionEvents:           sessionEventsStore,
 		readStates:              readStateStore,
@@ -152,7 +149,7 @@ func main() {
 	}
 	srv.registerRoutes(mux)
 
-	// 12. Listen and serve.
+	// 14. Listen and serve.
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
@@ -234,24 +231,6 @@ func buildSessionRegistry(azCred *azidentity.DefaultAzureCredential) sessions.Se
 	return &cosmosSessionRegistryAdapter{s}
 }
 
-func buildActiveRunStore(azCred *azidentity.DefaultAzureCredential) store.ActiveRunStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
-		return store.StubActiveRunStore{}
-	}
-	s, err := store.NewCosmosActiveRunStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_ACTIVE_RUNS_CONTAINER", "active-runs"),
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("active run store disabled", "error", err)
-		return store.StubActiveRunStore{}
-	}
-	return s
-}
-
 func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential) store.SessionEventStore {
 	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
 	if endpoint == "" || azCred == nil {
@@ -302,24 +281,6 @@ func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential) store.TurnQu
 	if err != nil {
 		slog.Warn("turn queue store disabled", "error", err)
 		return store.StubTurnQueueStore{}
-	}
-	return s
-}
-
-func buildRunEventStore(azCred *azidentity.DefaultAzureCredential) store.RunEventStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
-		return store.StubRunEventStore{}
-	}
-	s, err := store.NewCosmosRunEventStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_RUN_EVENTS_CONTAINER", "run-events"),
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("run event store disabled", "error", err)
-		return store.StubRunEventStore{}
 	}
 	return s
 }

@@ -69,7 +69,7 @@ func (s *appServer) handleAgentWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !podHasSDKRunner(pod) {
-		writeError(w, http.StatusBadRequest, "session pod has no SDK runner container (legacy claude_cli/codex_cli/pi modes don't use a runner)")
+		writeError(w, http.StatusBadRequest, "session pod has no SDK runner container")
 		return
 	}
 
@@ -221,8 +221,7 @@ func podHasSDKRunner(pod *corev1.Pod) bool {
 // handleListSessionEvents reads canonical SDK events from the
 // `session-events` Cosmos container for the SPA's history-replay path.
 // Returns events strictly after `after_order_key`, the same cursor the SPA
-// renders by. The legacy `after` document-id cursor remains accepted for old
-// tabs.
+// renders by. The `after` document-id cursor remains accepted for older tabs.
 //
 // SPA contract: on session open, fetch with after="" to get the full
 // history; then open the WebSocket for live updates and dedupe by uuid.

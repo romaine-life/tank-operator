@@ -9,14 +9,9 @@ import (
 
 func TestNormalizeSessionMode(t *testing.T) {
 	tests := map[string]string{
-		"":                      ClaudeCLIMode,
-		"subscription":          ClaudeCLIMode,
-		"subscription_headless": ClaudeGUIMode,
-		"codex_subscription":    CodexCLIMode,
-		"codex_headless":        CodexGUIMode,
-		"pi_subscription":       PiCLIMode,
-		"codex_config":          CodexConfigMode,
-		"unknown":               "unknown",
+		"":             ClaudeGUIMode,
+		"codex_config": CodexConfigMode,
+		"unknown":      "unknown",
 	}
 	for input, want := range tests {
 		if got := NormalizeSessionMode(input); got != want {
@@ -49,27 +44,6 @@ func TestNormalizeName(t *testing.T) {
 	}
 }
 
-func TestRunIDsAndPaths(t *testing.T) {
-	valid := []string{"abc123", "run_abc-123.4", strings.Repeat("a", 80)}
-	for _, value := range valid {
-		if !ValidateRunID(value) {
-			t.Fatalf("ValidateRunID(%q) = false, want true", value)
-		}
-	}
-	invalid := []string{"", strings.Repeat("a", 81), "../../bad", "has space"}
-	for _, value := range invalid {
-		if ValidateRunID(value) {
-			t.Fatalf("ValidateRunID(%q) = true, want false", value)
-		}
-	}
-	if got, want := RunStreamPath("abc"), "/tmp/tank-run-abc.stream"; got != want {
-		t.Fatalf("RunStreamPath() = %q, want %q", got, want)
-	}
-	if got, want := RunPIDPath("abc"), "/tmp/tank-run-abc.pid"; got != want {
-		t.Fatalf("RunPIDPath() = %q, want %q", got, want)
-	}
-}
-
 func TestDocumentIDsAndShapes(t *testing.T) {
 	if got, want := SessionDocID("default", "12"), "session:12"; got != want {
 		t.Fatalf("SessionDocID(default) = %q, want %q", got, want)
@@ -99,28 +73,10 @@ func TestDocumentIDsAndShapes(t *testing.T) {
 		t.Fatalf("session doc email = %v, want %q", got, want)
 	}
 
-	runDoc := ActiveRunDoc(ActiveRunRecord{
-		SessionID:  "12",
-		Email:      "USER@example.COM",
-		RunID:      "run_12",
-		PodName:    "session-12",
-		Provider:   "codex",
-		StreamPath: RunStreamPath("run_12"),
-		PIDPath:    RunPIDPath("run_12"),
-	})
-	if got, want := runDoc["id"], "12"; got != want {
-		t.Fatalf("active run id = %v, want %q", got, want)
-	}
-	if got, want := runDoc["status"], "running"; got != want {
-		t.Fatalf("active run status = %v, want %q", got, want)
-	}
-	if got, want := runDoc["email"], "USER@example.COM"; got != want {
-		t.Fatalf("active run email = %v, want %q", got, want)
-	}
 }
 
 func TestPodManifestCompatibilityCore(t *testing.T) {
-	manifest := PodManifest("12", "nelson@romaine.life", "codex_headless", ManifestOptions{
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
 		PiSessionImage:    "pi-image",
@@ -240,44 +196,14 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 	}
 }
 
-func TestPythonCompatFixture(t *testing.T) {
+func TestManifestFixture(t *testing.T) {
 	fixture := loadFixture(t)
-
-	modeAliases := fixture["mode_aliases"].(map[string]any)
-	for input, want := range modeAliases {
-		if got := NormalizeSessionMode(input); got != want {
-			t.Fatalf("NormalizeSessionMode(%q) = %q, want %q", input, got, want)
-		}
-	}
 
 	for _, item := range fixture["owner_labels"].([]any) {
 		row := item.(map[string]any)
 		email := row["email"].(string)
 		if got, want := OwnerLabel(email), row["label"]; got != want {
 			t.Fatalf("OwnerLabel(%q) = %q, want %q", email, got, want)
-		}
-	}
-
-	runIDs := fixture["run_ids"].(map[string]any)
-	for _, value := range runIDs["valid"].([]any) {
-		if !ValidateRunID(value.(string)) {
-			t.Fatalf("ValidateRunID(%q) = false, want true", value)
-		}
-	}
-	for _, value := range runIDs["invalid"].([]any) {
-		if ValidateRunID(value.(string)) {
-			t.Fatalf("ValidateRunID(%q) = true, want false", value)
-		}
-	}
-
-	for _, item := range fixture["run_paths"].([]any) {
-		row := item.(map[string]any)
-		runID := row["run_id"].(string)
-		if got, want := RunStreamPath(runID), row["stream_path"]; got != want {
-			t.Fatalf("RunStreamPath(%q) = %q, want %q", runID, got, want)
-		}
-		if got, want := RunPIDPath(runID), row["pid_path"]; got != want {
-			t.Fatalf("RunPIDPath(%q) = %q, want %q", runID, got, want)
 		}
 	}
 
@@ -306,19 +232,6 @@ func TestPythonCompatFixture(t *testing.T) {
 		CreatedAt:   "2026-05-11T00:00:01+00:00",
 		UpdatedAt:   "2026-05-11T00:00:02+00:00",
 	}), fixture["session_doc"])
-
-	assertCanonicalJSON(t, ActiveRunDoc(ActiveRunRecord{
-		SessionID:  "12",
-		Email:      "USER@example.COM",
-		RunID:      "run_12",
-		PodName:    "session-12",
-		Provider:   "codex",
-		Status:     "running",
-		StreamPath: RunStreamPath("run_12"),
-		PIDPath:    RunPIDPath("run_12"),
-		StartedAt:  "2026-05-11T00:01:00+00:00",
-		UpdatedAt:  "2026-05-11T00:01:01+00:00",
-	}), fixture["active_run_doc"])
 
 	core := fixture["pod_manifest_core"].(map[string]any)
 	input := core["input"].(map[string]any)
@@ -354,7 +267,7 @@ func TestPythonCompatFixture(t *testing.T) {
 
 func loadFixture(t *testing.T) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile("testdata/python_compat.json")
+	data, err := os.ReadFile("testdata/manifest_fixture.json")
 	if err != nil {
 		t.Fatal(err)
 	}

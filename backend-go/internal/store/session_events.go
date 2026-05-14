@@ -20,7 +20,7 @@ import (
 //
 // Container partition key is /tank_session_id (the small-integer pod id,
 // not the SDK's UUID). New clients page by the same render-order cursor the
-// SPA sorts on; the legacy document-id cursor remains accepted for old tabs.
+// SPA sorts on; the document-id cursor remains accepted for older tabs.
 type SessionEventStore interface {
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 }
@@ -60,7 +60,7 @@ func NewCosmosSessionEventStore(endpoint, database, container string, cred azcor
 // query is one RU per ~1KB doc — fast and cheap. The /message/* path
 // is excluded from indexing (see infra/cosmos.tf) so large assistant
 // content doesn't inflate index size. Page slicing happens after the Go sort
-// because legacy docs may not have tank_order_key; filtering by id first can
+// because older docs may not have tank_order_key; filtering by id first can
 // skip events when id order and render order diverge.
 func (s *cosmosSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)

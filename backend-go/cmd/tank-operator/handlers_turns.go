@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const maxSDKTurnPromptBytes = 256 * 1024
@@ -38,65 +41,106 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	clientNonce := strings.TrimSpace(body.ClientNonce)
-	if clientNonce == "" || !runIDPattern.MatchString(clientNonce) {
-		writeError(w, http.StatusBadRequest, "client_nonce is required and must match run id syntax")
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
+		ClientNonce:    body.ClientNonce,
+		RequireNonce:   true,
+		Prompt:         body.Prompt,
+		Model:          body.Model,
+		PermissionMode: body.PermissionMode,
+		SkillName:      body.SkillName,
+		FollowUp:       body.FollowUp,
+	})
+	if detail != "" {
+		writeError(w, status, detail)
 		return
 	}
-	prompt := strings.TrimSpace(body.Prompt)
+	writeJSON(w, http.StatusAccepted, resp)
+}
+
+type sdkTurnRequest struct {
+	ClientNonce    string
+	RequireNonce   bool
+	Prompt         string
+	Model          string
+	PermissionMode string
+	SkillName      string
+	FollowUp       bool
+}
+
+func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]string, int, string) {
+	clientNonce := strings.TrimSpace(req.ClientNonce)
+	if clientNonce == "" {
+		if req.RequireNonce {
+			return nil, http.StatusBadRequest, "client_nonce is required and must match turn id syntax"
+		}
+		clientNonce = auth.RandomHex(12)
+	}
+	if !turnIDPattern.MatchString(clientNonce) {
+		return nil, http.StatusBadRequest, "client_nonce is required and must match turn id syntax"
+	}
+
+	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
-		writeError(w, http.StatusBadRequest, "missing prompt")
-		return
+		return nil, http.StatusBadRequest, "missing prompt"
 	}
 	if len([]byte(prompt)) > maxSDKTurnPromptBytes {
-		writeError(w, http.StatusBadRequest, "prompt too large")
-		return
+		return nil, http.StatusBadRequest, "prompt too large"
 	}
 
-	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	info, err := s.mgr.GetByOwner(ctx, email, sessionID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
-		return
-	}
-	if info.Runtime != "sdk" {
-		writeError(w, http.StatusBadRequest, "session does not have an SDK runner")
-		return
+		return nil, http.StatusNotFound, "session not found"
 	}
 
-	mode := compat.NormalizeSessionMode(info.Mode)
-	provider := "claude"
-	if mode == compat.CodexGUIMode {
-		provider = "codex"
-	} else if mode != compat.ClaudeGUIMode {
-		writeError(w, http.StatusBadRequest, "session mode does not support SDK turns")
-		return
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		return nil, http.StatusBadRequest, "session mode does not support app chat turns"
+	}
+	if info.PodName == nil {
+		return nil, http.StatusServiceUnavailable, "session pod not ready"
+	}
+	pod, err := s.k8s.CoreV1().Pods(s.namespace).Get(ctx, *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		return nil, http.StatusServiceUnavailable, "pod fetch failed: " + err.Error()
+	}
+	if !podHasSDKRunner(pod) {
+		return nil, http.StatusBadRequest, "session pod has no SDK runner container"
 	}
 
 	if s.turnQueue == nil {
-		writeError(w, http.StatusServiceUnavailable, "turn queue unavailable")
-		return
+		return nil, http.StatusServiceUnavailable, "turn queue unavailable"
 	}
-	if err := s.turnQueue.Enqueue(r.Context(), store.TurnRecord{
-		RunID:          clientNonce,
+	if err := s.turnQueue.Enqueue(ctx, store.TurnRecord{
+		TurnID:         clientNonce,
 		SessionID:      sessionID,
-		Email:          user.Email,
+		Email:          email,
 		Provider:       provider,
 		Source:         "sdk",
 		ClientNonce:    clientNonce,
 		Prompt:         prompt,
-		Model:          validateHeadlessArg(body.Model),
-		PermissionMode: validateHeadlessArg(body.PermissionMode),
-		SkillName:      validateSkillName(body.SkillName),
-		FollowUp:       body.FollowUp,
+		Model:          validateTurnArg(req.Model),
+		PermissionMode: validateTurnArg(req.PermissionMode),
+		SkillName:      validateSkillName(req.SkillName),
+		FollowUp:       req.FollowUp,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "enqueue turn: "+err.Error())
-		return
+		return nil, http.StatusInternalServerError, "enqueue turn: " + err.Error()
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
+	return map[string]string{
 		"status":       "queued",
-		"run_id":       clientNonce,
+		"turn_id":      clientNonce,
 		"client_nonce": clientNonce,
 		"provider":     provider,
-	})
+	}, 0, ""
+}
+
+func sdkProviderForMode(mode string) (string, bool) {
+	switch compat.NormalizeSessionMode(mode) {
+	case compat.ClaudeGUIMode:
+		return "claude", true
+	case compat.CodexGUIMode:
+		return "codex", true
+	default:
+		return "", false
+	}
 }

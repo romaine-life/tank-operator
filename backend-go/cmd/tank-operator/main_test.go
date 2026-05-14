@@ -278,7 +278,7 @@ func testJWT(t *testing.T) *auth.InMemoryJWT {
 	return j
 }
 
-func signedMainToken(t *testing.T, _ /*legacy secret arg*/, email string) string {
+func signedMainToken(t *testing.T, _ /*unused secret arg*/, email string) string {
 	t.Helper()
 	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "sub-1",

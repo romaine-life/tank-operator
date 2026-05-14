@@ -1,7 +1,7 @@
 #!/bin/bash
 # Idempotently materialize attended-pickup context inside a session pod.
 #
-# Headless runs call this before launching the agent so automation can verify
+# Session runners call this before launching the agent so automation can verify
 # context before work starts.
 
 if [ -z "${TANK_GLIMMUNG_CONTEXT_JSON:-}" ]; then

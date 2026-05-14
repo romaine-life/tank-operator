@@ -4135,7 +4135,7 @@ textarea.run-files-viewer-editor:focus {
   width: 100%;
   display: block;
   /* Keep the content in the second grid column even if other children
-     (e.g. the connector) are display:none in legacy modes. */
+     (e.g. the connector) are display:none in alternate views. */
   grid-column: 2;
 }
 
@@ -4972,7 +4972,7 @@ textarea.run-files-viewer-editor:focus {
   padding: 0 var(--space-3) var(--space-3);
 }
 
-/* Legacy tool-row styling (border + bg) replaced by the per-tool
+/* Older tool-row styling (border + bg) replaced by the per-tool
    styled cards above. The connector is intentionally visible now (it
    carries the colored status dot), so the older `display: none`
    override has been removed. */

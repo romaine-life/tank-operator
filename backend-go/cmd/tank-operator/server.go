@@ -18,8 +18,6 @@ type appServer struct {
 	restCfg       *rest.Config
 	mgr           *sessions.Manager
 	profiles      profilesStore
-	activeRuns    store.ActiveRunStore
-	runEvents     store.RunEventStore
 	turnQueue     store.TurnQueueStore
 	sessionEvents store.SessionEventStore
 	readStates    store.ConversationReadStateStore
@@ -50,7 +48,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
-	mux.HandleFunc("POST /api/sessions/run", s.handleCreateAndRunSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/activity", s.handleSessionActivity)
 	mux.HandleFunc("GET /api/sessions/events", s.handleSessionsEvents)
@@ -75,21 +72,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
 
-	// Legacy run endpoints - used by sessions whose pod has no SDK runner
-	// sidecar (claude_cli, codex_cli, pi, and older GUI pods). The SPA's
-	// chat pane uses these for the legacy data-ingestion path. They are not
-	// being deleted: CLI/config modes still dispatch short-lived runs through
-	// this stream-json surface.
-	mux.HandleFunc("GET /api/sessions/{session_id}/run/active", s.handleGetActiveRun)
-	mux.HandleFunc("GET /api/sessions/{session_id}/run/history", s.handleRunHistory)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events", s.handleLatestRunEvents)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/latest/events.json", s.handleLatestRunEventsJSON)
-	mux.HandleFunc("GET /api/sessions/{session_id}/runs/{run_id}/events", s.handleRunEvents)
-	mux.HandleFunc("GET /api/sessions/{session_id}/run", s.handleRunWebSocket)
-
-	// SDK runtime surface. The same chat pane consumes /agent-ws (live)
-	// and /timeline (history) when session.runtime is "sdk" — the data
-	// source differs from the legacy path, but the renderer is the same.
+	// App-managed chat surface.
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleListSessionEvents)
@@ -109,7 +92,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)
-	mux.HandleFunc("POST /api/internal/sessions/run", s.handleInternalRunSession)
 
 	// Static files.
 	staticDir := os.Getenv("TANK_OPERATOR_STATIC_DIR")

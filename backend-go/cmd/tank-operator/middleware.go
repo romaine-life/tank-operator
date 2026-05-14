@@ -13,9 +13,9 @@ import (
 const workspaceRoot = "/workspace"
 
 var (
-	runIDPattern       = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
-	headlessArgPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	skillNamePattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	turnIDPattern    = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
+	turnArgPattern   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	skillNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -43,15 +43,8 @@ type pathEscapeError struct{ path string }
 
 func (e *pathEscapeError) Error() string { return "path escapes workspace: " + e.path }
 
-func validateRunID(v string) string {
-	if runIDPattern.MatchString(v) {
-		return v
-	}
-	return auth.RandomHex(12)
-}
-
-func validateHeadlessArg(v string) string {
-	if headlessArgPattern.MatchString(v) {
+func validateTurnArg(v string) string {
+	if turnArgPattern.MatchString(v) {
 		return v
 	}
 	return ""
@@ -83,4 +76,9 @@ func (s *appServer) requireWSAuth(w http.ResponseWriter, r *http.Request) (user 
 		return auth.User{}, false
 	}
 	return user, true
+}
+
+func mustJSON(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }

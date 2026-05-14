@@ -8,7 +8,6 @@
 //   client → server: { type: "user", message: { role: "user", content: ... } }
 //                  | { type: "interrupt" }                         (abort turn)
 //                  | { type: "heartbeat", last_order_key?: string } (heartbeat/ack)
-//                  | { type: "ping" }                              (legacy heartbeat)
 //
 // Auth happens upstream at the orchestrator's TLS+JWT termination; this
 // server trusts whatever connects.
@@ -18,7 +17,6 @@ import { WebSocketServer, type WebSocket } from "ws";
 export type ClientFrame =
   | { type: "user"; message: { role: "user"; content: unknown }; client_nonce?: string }
   | { type: "interrupt" }
-  | { type: "ping"; sent_at?: number; last_order_key?: string }
   | { type: "heartbeat"; sent_at?: number; last_order_key?: string };
 
 export class WSFanout {
@@ -37,10 +35,10 @@ export class WSFanout {
         } catch {
           return;
         }
-        if (frame.type === "ping" || frame.type === "heartbeat") {
+        if (frame.type === "heartbeat") {
           ws.send(
             JSON.stringify({
-              type: frame.type === "heartbeat" ? "heartbeat_ack" : "pong",
+              type: "heartbeat_ack",
               sent_at: frame.sent_at,
               last_order_key: frame.last_order_key,
               server_time: new Date().toISOString(),

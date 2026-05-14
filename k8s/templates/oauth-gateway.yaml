@@ -23,7 +23,7 @@ Pieces:
     ext_proc sidecar writes rotated blobs back to KV and ESO mirrors KV →
     Secret on a 1m interval.
   - ExternalSecret syncing AZURE_CLIENT_ID/AZURE_TENANT_ID for the shared
-    UAMI (claude-credentials-refresher; legacy name, see infra/credential_refresher.tf).
+    UAMI (claude-credentials-refresher; historical name, see infra/credential_refresher.tf).
     Consumed by both the orchestrator (save-credentials harvest → KV) and
     the api-proxy (ext_proc rotated-blob writes → KV).
 */}}
@@ -271,7 +271,7 @@ spec:
 ---
 {{- /*
 Workload-identity bootstrap Secret for the shared `claude-credentials-refresher`
-UAMI (legacy name; see infra/credential_refresher.tf for why it's kept).
+UAMI (historical name; see infra/credential_refresher.tf for why it's kept).
 Both the orchestrator (save-credentials → KV write) and the api-proxy's
 ext_proc sidecar (rotated-blob → KV write) authenticate as this UAMI.
 ESO syncs the UAMI's client_id + tenant_id from KV into envFrom-able
