@@ -27,6 +27,21 @@ image-packaging change needs feedback before a PR is ready, manually dispatch
 that workflow with `git_ref`. Release/deploy workflows are the only path that
 publishes images.
 
+## Quality timeframe
+
+Read [docs/quality-timeframes.md](docs/quality-timeframes.md) before planning
+substantial work. This repo follows the long-term, heavy-solution operating
+mode described there. Do not ship a light or medium version when the complete
+architecture, hardening,
+observability, and migration cleanup are already understood. If the complete
+solution must be split across PRs, write the full plan first and keep every
+stage coherent by itself.
+
+Read [docs/migration-policy.md](docs/migration-policy.md) before any migration
+or cleanup work. Read
+[docs/product-inspirations.md](docs/product-inspirations.md) when making
+product or architecture decisions.
+
 ## Agentic flows ship as multi-stage LLM splits
 
 When a project on this platform ships an autonomous change workflow
