@@ -18,7 +18,58 @@ Reserve a test slot with the Glimmung MCP `checkout_test_slot` tool:
 
 The checkout response provides the assigned slot and validation URL. If Tank's UI did not update automatically, call the Tank MCP `set_test_environment` tool with the same session id, `active: true`, the slot index, and the URL.
 
-When the environment is up, hot-swap code into the test environment. We want to save time, so don't do full builds if you can avoid it. Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate.
+When the environment is up, hot-swap code into the test environment. We want to save time, so don't do full image builds if you can avoid it. Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate.
+
+## tank-operator hot-swap details
+
+Read the current contract first with `get_test_slot_hot_swap_contract(project: "tank-operator")`; do not assume paths or container names. As of this skill, tank-operator test slots use:
+
+- static source: `frontend/dist`
+- static target: `/var/run/tank-operator-static-override`
+- static writer container: `tank-operator`
+- backend artifact: `/tmp/tank-operator-go`
+- backend target: `/var/run/tank-operator-hot/tank-operator-go`
+- backend app container: `tank-operator`
+- backend restart: send `SIGHUP` to PID 1 in the `tank-operator` container
+
+Important operational constraints:
+
+- The app container mounts the static override read-write in test slots. Write static files through the `tank-operator` container; the legacy `static-writer` sidecar may exist but should not be required for hot-swap.
+- The supervisor does not watch the backend artifact. It restarts the child only on `SIGHUP`.
+- Do not kill `tank-operator-go` directly. The supervisor treats child exit as terminal and exits the container.
+- Copy static/backend into every ready app pod unless you have intentionally scaled the test deployment down for a narrow diagnostic.
+- Prefer direct `kubectl exec -i ... cat > file` or tar streams with explicit verification over blind `kubectl cp` when websocket copy streams get flaky.
+
+Static hot-swap pattern:
+
+```sh
+n=tank-operator-slot-1
+for pod in $(kubectl -n "$n" get pods -l app.kubernetes.io/name=tank-operator -o name | sed 's#pod/##'); do
+  kubectl -n "$n" exec "$pod" -c tank-operator -- sh -lc \
+    'mkdir -p /var/run/tank-operator-static-override && rm -rf /var/run/tank-operator-static-override/*'
+  tar cf - -C frontend/dist . |
+    kubectl -n "$n" exec -i "$pod" -c tank-operator -- \
+      tar xf - -C /var/run/tank-operator-static-override
+  kubectl -n "$n" exec "$pod" -c tank-operator -- sh -lc \
+    'test -f /var/run/tank-operator-static-override/index.html'
+done
+```
+
+Backend hot-swap pattern:
+
+```sh
+cd backend-go && go build -o /tmp/tank-operator-go ./cmd/tank-operator
+n=tank-operator-slot-1
+for pod in $(kubectl -n "$n" get pods -l app.kubernetes.io/name=tank-operator -o name | sed 's#pod/##'); do
+  kubectl -n "$n" exec -i "$pod" -c tank-operator -- sh -lc \
+    'cat > /var/run/tank-operator-hot/tank-operator-go.tmp &&
+     chmod 0755 /var/run/tank-operator-hot/tank-operator-go.tmp &&
+     mv /var/run/tank-operator-hot/tank-operator-go.tmp /var/run/tank-operator-hot/tank-operator-go' \
+    < /tmp/tank-operator-go
+  kubectl -n "$n" exec "$pod" -c tank-operator -- kill -HUP 1
+done
+kubectl -n "$n" wait --for=condition=Ready pod -l app.kubernetes.io/name=tank-operator --timeout=90s
+```
 
 If the user reviews the test site and has suggestions/improvements, be sure to continue collaborating with the user by implementing their changes and hot-swapping into the test env as default behavior. The user is counting on you to make this a collaboration, and making your code changes feel alive by making them accessible in the test environment is how we accomplish that.
 
