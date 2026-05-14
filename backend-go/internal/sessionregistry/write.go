@@ -116,11 +116,12 @@ func isConflict(err error) bool {
 // Upsert writes or overwrites a session record in the registry.
 func (s *CosmosStore) Upsert(ctx context.Context, record compat.SessionRecord) error {
 	normalized := strings.ToLower(record.Email)
-	docID := "session:" + record.ID
 	scope := record.Scope
 	if scope == "" {
 		scope = s.scope
 	}
+	record.Email = normalized
+	record.Scope = scope
 	now := time.Now().UTC().Format(time.RFC3339)
 	if record.UpdatedAt == "" {
 		record.UpdatedAt = now
@@ -128,20 +129,7 @@ func (s *CosmosStore) Upsert(ctx context.Context, record compat.SessionRecord) e
 	if record.CreatedAt == "" {
 		record.CreatedAt = now
 	}
-	doc := map[string]any{
-		"id":           docID,
-		"type":         "session",
-		"email":        normalized,
-		"session_id":   record.ID,
-		"mode":         record.Mode,
-		"session_scope": scope,
-		"pod_name":     record.PodName,
-		"name":         record.Name,
-		"visible":      record.Visible,
-		"requested_at": record.RequestedAt,
-		"created_at":   record.CreatedAt,
-		"updated_at":   record.UpdatedAt,
-	}
+	doc := compat.SessionDoc(record)
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return err
@@ -154,7 +142,7 @@ func (s *CosmosStore) Upsert(ctx context.Context, record compat.SessionRecord) e
 // SetName updates the display name for a session.
 func (s *CosmosStore) SetName(ctx context.Context, email, sessionID string, name *string) error {
 	normalized := strings.ToLower(email)
-	docID := "session:" + sessionID
+	docID := compat.SessionDocID(s.scope, sessionID)
 	pk := azcosmos.NewPartitionKeyString(normalized)
 
 	resp, err := s.container.ReadItem(ctx, pk, docID, nil)
@@ -182,7 +170,7 @@ func (s *CosmosStore) SetName(ctx context.Context, email, sessionID string, name
 // MarkDeleted sets visible=false on the session registry record.
 func (s *CosmosStore) MarkDeleted(ctx context.Context, email, sessionID string) error {
 	normalized := strings.ToLower(email)
-	docID := "session:" + sessionID
+	docID := compat.SessionDocID(s.scope, sessionID)
 	pk := azcosmos.NewPartitionKeyString(normalized)
 
 	resp, err := s.container.ReadItem(ctx, pk, docID, nil)

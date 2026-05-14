@@ -3,6 +3,7 @@ export const TURN_QUEUE_MAX_ATTEMPTS: number;
 
 export interface TurnQueueConfig {
   sessionId: string;
+  sessionStorageKey?: string;
   ownerEmail: string;
   cosmosEndpoint: string;
   cosmosDatabase: string;
@@ -13,6 +14,7 @@ export interface TurnRecord {
   id: string;
   turn_id: string;
   session_id: string;
+  tank_public_session_id?: string;
   email: string;
   provider: "claude" | "codex" | string;
   source?: string;
@@ -67,6 +69,7 @@ export function buildClaimedRecord(
 
 export function buildDelayedTurnRecord(args: {
   sessionID: string;
+  sessionStorageKey?: string;
   email: string;
   provider: "claude" | "codex" | string;
   prompt: string;

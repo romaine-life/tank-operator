@@ -127,6 +127,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	if opts.ManifestOpts.SessionsNamespace == "" {
 		opts.ManifestOpts.SessionsNamespace = namespace
 	}
+	if opts.ManifestOpts.SessionScope == "" {
+		opts.ManifestOpts.SessionScope = "default"
+	}
 	m := &Manager{
 		client:         client,
 		restCfg:        restCfg,
@@ -332,6 +335,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 			ID:          sessionID,
 			Email:       owner,
 			Mode:        mode,
+			Scope:       m.manifestOpts.SessionScope,
 			PodName:     podName,
 			Visible:     true,
 			RequestedAt: requestedAt,

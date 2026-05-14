@@ -46,8 +46,8 @@ func TestSessionFromDocFallsBackForMinimalShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if record.ID != "slot-a:12" {
-		t.Fatalf("id = %q, want Python removeprefix fallback", record.ID)
+	if record.ID != "12" {
+		t.Fatalf("id = %q, want public session id fallback", record.ID)
 	}
 	if record.Scope != "slot-a" {
 		t.Fatalf("scope = %q, want slot-a", record.Scope)

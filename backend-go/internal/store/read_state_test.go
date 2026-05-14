@@ -47,3 +47,24 @@ func TestReadStateRecordFromDocNormalizesFields(t *testing.T) {
 		t.Fatalf("record = %#v", rec)
 	}
 }
+
+func TestReadStateDocIDUsesScopedStorageKey(t *testing.T) {
+	if got, want := readStateDocID("default", "63"), "read-state:63"; got != want {
+		t.Fatalf("default read-state doc id = %q, want %q", got, want)
+	}
+	if got, want := readStateDocID("slot-a", "63"), "read-state:slot-a:63"; got != want {
+		t.Fatalf("slot read-state doc id = %q, want %q", got, want)
+	}
+	doc := readStateDoc("slot-a", ConversationReadStateRecord{
+		Email:            "user@example.com",
+		SessionID:        "63",
+		LastReadOrderKey: "002",
+		UpdatedAt:        "2026-05-12T00:00:00Z",
+	})
+	if got, want := doc["session_id"], "63"; got != want {
+		t.Fatalf("session_id = %q, want public id %q", got, want)
+	}
+	if got, want := doc["session_storage_key"], "slot-a:63"; got != want {
+		t.Fatalf("session_storage_key = %q, want %q", got, want)
+	}
+}

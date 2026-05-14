@@ -91,6 +91,7 @@ type ManifestOptions struct {
 	CodexSessionImage     string
 	PiSessionImage        string
 	SessionsNamespace     string
+	SessionScope          string
 	SessionServiceAccount string
 	SessionConfigMap      string
 	ArgoCDTrackingApp     string
@@ -151,14 +152,21 @@ func NormalizeName(name *string) *string {
 	return &trimmed
 }
 
-func SessionDocID(scope, sessionID string) string {
+func SessionStorageKey(scope, sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	scope = strings.TrimSpace(scope)
 	if scope == "" || scope == "default" {
-		return "session:" + sessionID
+		return sessionID
 	}
-	return "session:" + scope + ":" + sessionID
+	return scope + ":" + sessionID
+}
+
+func SessionDocID(scope, sessionID string) string {
+	return "session:" + SessionStorageKey(scope, sessionID)
 }
 
 func SessionCounterDocID(scope string) string {
+	scope = strings.TrimSpace(scope)
 	if scope == "" || scope == "default" {
 		return "session-counter"
 	}
@@ -190,6 +198,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	opts = withManifestDefaults(opts)
 	mode = NormalizeSessionMode(mode)
 	podName := "session-" + sessionID
+	storageKey := SessionStorageKey(opts.SessionScope, sessionID)
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
@@ -355,6 +364,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
 			map[string]any{
 				"name": "POD_OWNER_EMAIL",
 				"valueFrom": map[string]any{
@@ -430,6 +440,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
 			map[string]any{
 				"name": "POD_OWNER_EMAIL",
 				"valueFrom": map[string]any{
@@ -553,6 +564,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	// that fails the pod loudly when the env vars are missing.
 	if opts.SessionsNamespace == "" {
 		opts.SessionsNamespace = SessionsNamespace
+	}
+	if opts.SessionScope == "" {
+		opts.SessionScope = "default"
 	}
 	if opts.SessionServiceAccount == "" {
 		opts.SessionServiceAccount = SessionServiceAccount

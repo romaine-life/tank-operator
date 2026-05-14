@@ -1,5 +1,5 @@
 // Runtime config sourced from env vars. Mirrors agent-runner/src/config.ts:
-// same downward-API + Cosmos plumbing, different SDK underneath.
+// same downward-API + scoped Cosmos plumbing, different SDK underneath.
 //
 // Auth path: codex-sdk wraps the codex CLI subprocess, which reads
 // ~/.codex/auth.json. The launcher writes a placeholder chatgptAuthTokens
@@ -8,6 +8,7 @@
 
 export interface Config {
   sessionId: string;
+  sessionStorageKey: string;
   ownerEmail: string;
   cosmosEndpoint: string;
   cosmosDatabase: string;
@@ -31,6 +32,7 @@ export function loadConfig(): Config {
   }
   return {
     sessionId,
+    sessionStorageKey: process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
     ownerEmail: (process.env.POD_OWNER_EMAIL ?? "").trim().toLowerCase(),
     cosmosEndpoint,
     cosmosDatabase: process.env.COSMOS_DATABASE?.trim() || "tank-operator",
