@@ -122,6 +122,7 @@ const showcaseFrameStyle: React.CSSProperties = {
 const portfolioFrameStyle: React.CSSProperties = {
   ...showcaseFrameStyle,
   height: 420,
+  overflowX: "auto",
 };
 
 function Swatch({ label, token, value }: { label: string; token: string; value: string }) {
@@ -205,7 +206,7 @@ frontend/src/StyleguideView.tsx
 
 function PortfolioWorkspaceScene() {
   return (
-    <div className="shell" style={{ height: "100%", gridTemplateColumns: "260px 1fr" }}>
+    <div className="shell" style={{ height: "100%", minWidth: 880, gridTemplateColumns: "260px 1fr" }}>
       <aside className="sidebar">
         <div className="sidebar-brand">
           <button className="sidebar-home is-active" type="button" aria-label="Home">
