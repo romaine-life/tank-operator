@@ -39,6 +39,34 @@ const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">>
   codex_cli: "codex",
 };
 const STATUSES = ["active", "pending", "error"] as const;
+const SURFACE_SWATCHES = [
+  ["app", "--bg-app", "#171717"],
+  ["sidebar", "--bg-sidebar", "rgba(13,13,13,0.88)"],
+  ["control", "--bg-sidebar-control", "rgba(255,255,255,0.03)"],
+  ["hover", "--bg-sidebar-hover", "rgba(255,255,255,0.075)"],
+  ["active", "--bg-sidebar-active", "rgba(79,140,247,0.10)"],
+] as const;
+const SEMANTIC_SWATCHES = [
+  ["accent", "--accent-fg", "#b9d2fb"],
+  ["remote", "--cyan", "#67e8f9"],
+  ["online", "--status-online", "#34d399"],
+  ["failed", "--status-error-fg", "#ef6f6f"],
+  ["needs input", "--status-agent-needs-input", "#fb923c"],
+] as const;
+const TYPE_SAMPLES = [
+  ["xs", "--text-xs", "12px", "sidebar meta and compact labels"],
+  ["sm", "--text-sm", "14px", "default chrome and body"],
+  ["base", "--text-base", "16px", "brand and larger controls"],
+  ["lg", "--text-lg", "18px", "run header session title"],
+  ["2xl", "--text-2xl", "24px", "onboarding titles"],
+] as const;
+const RADIUS_SAMPLES = [
+  ["sm", "--radius-sm", "6px"],
+  ["md", "--radius-md", "8px"],
+  ["lg", "--radius-lg", "12px"],
+  ["xl", "--radius-xl", "16px"],
+  ["pill", "--radius-pill", "9999px"],
+] as const;
 
 function TankIcon({ className }: { className?: string }) {
   return (
@@ -91,6 +119,184 @@ const showcaseFrameStyle: React.CSSProperties = {
   background: "var(--bg-base)",
   overflow: "hidden",
 };
+const portfolioFrameStyle: React.CSSProperties = {
+  ...showcaseFrameStyle,
+  height: 420,
+};
+
+function Swatch({ label, token, value }: { label: string; token: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "72px 1fr",
+        gap: 10,
+        alignItems: "center",
+        minWidth: 260,
+      }}
+    >
+      <span
+        style={{
+          height: 44,
+          borderRadius: "var(--radius-md)",
+          border: "1px solid var(--border-strong)",
+          background: `var(${token})`,
+        }}
+      />
+      <span style={{ display: "grid", gap: 2 }}>
+        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{label}</span>
+        <code>{token}</code>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>{value}</span>
+      </span>
+    </div>
+  );
+}
+
+function TypeSample({
+  name,
+  token,
+  size,
+  role,
+}: {
+  name: string;
+  token: string;
+  size: string;
+  role: string;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 4, padding: "10px 0", borderTop: "1px solid var(--border-subtle)" }}>
+      <span style={{ fontFamily: "var(--font-primary)", fontSize: `var(${token})`, color: "var(--text-primary)" }}>
+        {role}
+      </span>
+      <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+        {name} · <code>{token}</code> · {size}
+      </span>
+    </div>
+  );
+}
+
+function MiniTerminal() {
+  return (
+    <div
+      aria-label="styleguide terminal sample"
+      style={{
+        flex: 1,
+        minHeight: 0,
+        padding: 18,
+        background: "#171717",
+        color: "var(--text-body)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+        lineHeight: 1.45,
+        whiteSpace: "pre-wrap",
+      }}
+    >{` ▐▛███▜▌   Codex
+▝▜█████▛▘  GPT-5.5 · /workspace
+  ▘▘ ▝▝
+
+$ rg "run-tab" frontend/src
+frontend/src/App.tsx
+frontend/src/StyleguideView.tsx
+
+[reconnected]
+❯ `}</div>
+  );
+}
+
+function PortfolioWorkspaceScene() {
+  return (
+    <div className="shell" style={{ height: "100%", gridTemplateColumns: "260px 1fr" }}>
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <button className="sidebar-home is-active" type="button" aria-label="Home">
+            <span className="sidebar-home-label">tank-operator</span>
+          </button>
+        </div>
+        <div className="sidebar-section">
+          <div className="new-row new-row-launcher">
+            <button className="new-row-provider-toggle" type="button" aria-label="choose provider">
+              <span className="new-row-provider-slot">
+                <ProviderIcon provider="codex" className="new-row-provider-icon" />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
+            </button>
+            <div className="new-row-action-group" role="group" aria-label="session actions">
+              <button className="new-row-action" type="button" aria-label="start default session">
+                <span className="row-icon">+</span>
+              </button>
+              <button className="new-row-action" type="button" aria-label="start API key session">
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button className="new-row-action" type="button" aria-label="start config session">
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="sidebar-list">
+          <div className="sidebar-section-label">Sessions</div>
+          <ul className="sessions">
+            <li className="is-open">
+              <div className="session-row-top">
+                <span className="status-dot status-active" aria-label="status active" />
+                <button className="session-open" type="button">
+                  <span className="session-id">design-showcase</span>
+                </button>
+                <button className="session-delete" aria-label="delete session" type="button">×</button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="mode mode-codex_cli mode-icon-only" title="Codex CLI" aria-label="Codex CLI">
+                  <ProviderIcon provider="codex" className="mode-provider-icon" />
+                  <span className="sr-only">codex-cli</span>
+                </span>
+                <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
+                  <span>↗</span>
+                </button>
+              </div>
+            </li>
+            <li>
+              <div className="session-row-top">
+                <span className="status-dot status-pending" aria-label="status pending" />
+                <button className="session-open" type="button">
+                  <span className="session-id">avatar-review</span>
+                </button>
+                <button className="session-delete" aria-label="delete session" type="button">×</button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
+                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
+                  <span className="sr-only">claude-cli</span>
+                </span>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </aside>
+      <section className="run-panel">
+        <header className="run-header">
+          <div className="run-header-title">
+            <button className="run-header-name-btn" type="button">design-showcase</button>
+          </div>
+          <nav className="run-tabs" aria-label="Session actions">
+            <button className="run-tab" type="button">
+              <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+              <span>Files</span>
+            </button>
+            <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+              <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Settings</span>
+            </button>
+            <button className="run-tab" type="button">
+              <InfoIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Help</span>
+            </button>
+          </nav>
+        </header>
+        <MiniTerminal />
+      </section>
+    </div>
+  );
+}
 
 function IconWrench({ className }: { className?: string }) {
   return (
@@ -187,6 +393,75 @@ export function StyleguideView() {
           a component changes. See <code>docs/styleguide-contract.md</code> in
           the glimmung repo for the contract.
         </p>
+
+        {/* === foundations: colors === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>colors</h2>
+          <p style={captionStyle}>
+            Dark-only surfaces and small semantic accents. Hover states recess
+            into darker fills; active/open states are lighter and easier to scan.
+          </p>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div style={rowStyle}>
+              {SURFACE_SWATCHES.map(([label, token, value]) => (
+                <Swatch key={token} label={label} token={token} value={value} />
+              ))}
+            </div>
+            <div style={rowStyle}>
+              {SEMANTIC_SWATCHES.map(([label, token, value]) => (
+                <Swatch key={token} label={label} token={token} value={value} />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* === foundations: type === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>type</h2>
+          <p style={captionStyle}>
+            Archivo carries chrome labels and controls. Mono is reserved for
+            terminal output and literal code/path snippets.
+          </p>
+          <div style={{ display: "grid", gap: 0, maxWidth: 620 }}>
+            {TYPE_SAMPLES.map(([name, token, size, role]) => (
+              <TypeSample key={token} name={name} token={token} size={size} role={role} />
+            ))}
+            <div style={{ display: "grid", gap: 4, padding: "10px 0", borderTop: "1px solid var(--border-subtle)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)", color: "var(--text-body)" }}>
+                /workspace/tank-operator/frontend/src/App.tsx
+              </span>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+                mono · <code>--font-mono</code> · terminal and literal paths only
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* === foundations: spacing === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>spacing and radii</h2>
+          <p style={captionStyle}>
+            Stable dimensions matter more than decorative depth. Use the radius
+            ladder consistently so labels, icons, and hover states cannot shift
+            nearby layout.
+          </p>
+          <div style={rowStyle}>
+            {RADIUS_SAMPLES.map(([name, token, size]) => (
+              <div key={token} style={{ display: "grid", gap: 8, width: 124 }}>
+                <span
+                  style={{
+                    height: 54,
+                    borderRadius: `var(${token})`,
+                    background: "var(--bg-sidebar-control)",
+                    border: "1px solid var(--row-rest-ring)",
+                  }}
+                />
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{name} · {size}</span>
+                <code>{token}</code>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* === buttons === */}
         <section style={sectionStyle}>
@@ -574,6 +849,48 @@ export function StyleguideView() {
           </p>
           <div style={rowStyle}>
             <pre className="error" style={{ margin: 0 }}>save failed: 500</pre>
+          </div>
+        </section>
+
+        {/* === portfolio scenes === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>portfolio scene: session workspace</h2>
+          <p style={captionStyle}>
+            Full shell composition for reviewing density, sidebar hierarchy,
+            run header tabs, and terminal contrast together.
+          </p>
+          <div style={portfolioFrameStyle}>
+            <PortfolioWorkspaceScene />
+          </div>
+        </section>
+
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>portfolio scene: onboarding</h2>
+          <p style={captionStyle}>
+            First-run wall. This stays sparse: one task, one primary CTA,
+            diagnostic supporting copy.
+          </p>
+          <div
+            style={{
+              ...showcaseFrameStyle,
+              minHeight: 300,
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+            }}
+          >
+            <div className="welcome-inner onboarding" style={{ maxWidth: 460 }}>
+              <h2 className="welcome-title">Connect GitHub</h2>
+              <p className="welcome-sub">
+                tank-operator needs the App installed so sessions can read and
+                write repos through mcp-github.
+              </p>
+              <a className="btn-primary onboarding-cta" href="#">Install GitHub App</a>
+              <p className="onboarding-meta">
+                signed in as <code>you@example.com</code> ·{" "}
+                <button className="link-button" type="button">Sign out</button>
+              </p>
+            </div>
           </div>
         </section>
 
