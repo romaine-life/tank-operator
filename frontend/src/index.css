@@ -3007,6 +3007,12 @@ button:disabled {
   padding: var(--space-2);
 }
 
+.run-composer > [data-slot="input-group"] {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
 .run-mode-pill {
   display: inline-flex;
   align-items: center;
