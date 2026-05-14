@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ import (
 
 const (
 	sessionEventStreamPageLimit = 100
-	sessionEventStreamPoll      = 1 * time.Second
+	sessionEventStreamSweep     = 30 * time.Second
 	sessionEventStreamHeartbeat = 15 * time.Second
 )
 
@@ -122,6 +123,11 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 		return
 	} else if !ok {
+		slog.Warn("session event stream resync required",
+			"session_id", sessionID,
+			"email", user.Email,
+			"last_order_key", cursor.AfterOrderKey,
+		)
 		writeSSEJSONEvent(w, "resync_required", "", map[string]any{
 			"reason":         "cursor_not_found",
 			"last_order_key": cursor.AfterOrderKey,
@@ -136,14 +142,37 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	})
 	flusher.Flush()
 
-	poll := time.NewTicker(sessionEventStreamPoll)
-	defer poll.Stop()
+	notify := (<-chan struct{})(nil)
+	unsubscribe := func() {}
+	if s.eventBroker != nil {
+		notify, unsubscribe = s.eventBroker.Subscribe(sessionID)
+		defer unsubscribe()
+	}
+	slog.Info("session event stream open",
+		"session_id", sessionID,
+		"email", user.Email,
+		"last_order_key", cursor.AfterOrderKey,
+		"resumed", cursor.AfterOrderKey != "",
+	)
+	defer slog.Info("session event stream close",
+		"session_id", sessionID,
+		"email", user.Email,
+	)
+
+	sweep := time.NewTicker(sessionEventStreamSweep)
+	defer sweep.Stop()
 	heartbeat := time.NewTicker(sessionEventStreamHeartbeat)
 	defer heartbeat.Stop()
 
 	for {
-		hasMore, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor)
+		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor)
 		if err != nil {
+			slog.Warn("session event stream page failed",
+				"session_id", sessionID,
+				"email", user.Email,
+				"last_order_key", cursor.AfterOrderKey,
+				"error", err,
+			)
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 				"reason": "event_page_failed",
 				"detail": err.Error(),
@@ -152,6 +181,14 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		flusher.Flush()
+		if count > 0 {
+			slog.Debug("session event stream emitted events",
+				"session_id", sessionID,
+				"count", count,
+				"last_order_key", cursor.AfterOrderKey,
+				"has_more", hasMore,
+			)
+		}
 		if hasMore {
 			continue
 		}
@@ -159,7 +196,12 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		select {
 		case <-r.Context().Done():
 			return
-		case <-poll.C:
+		case <-notify:
+		case <-sweep.C:
+			slog.Debug("session event stream sweep",
+				"session_id", sessionID,
+				"last_order_key", cursor.AfterOrderKey,
+			)
 		case <-heartbeat.C:
 			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
@@ -167,15 +209,16 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, sessionID string, cursor *store.SessionEventCursor) (bool, error) {
+func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, sessionID string, cursor *store.SessionEventCursor) (bool, int, error) {
 	eventStore := s.sessionEvents
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
 	}
 	page, err := eventStore.ListBySession(ctx, sessionID, *cursor, sessionEventStreamPageLimit)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
+	count := 0
 	for _, event := range page.Events {
 		orderKey, _ := event["order_key"].(string)
 		if orderKey == "" {
@@ -183,11 +226,12 @@ func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.Resp
 		}
 		writeSSEJSONEvent(w, "tank-event", orderKey, event)
 		cursor.AfterOrderKey = orderKey
+		count++
 	}
 	if page.NextOrderKey != "" {
 		cursor.AfterOrderKey = page.NextOrderKey
 	}
-	return page.HasMore, nil
+	return page.HasMore, count, nil
 }
 
 func (s *appServer) sessionEventCursorExists(ctx context.Context, sessionID string, cursor store.SessionEventCursor) (bool, error) {

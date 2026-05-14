@@ -41,7 +41,12 @@ orchestrator rollouts, and runner-process restarts inside the same still-live
 session pod. The browser submits turns through
 `POST /api/sessions/{session_id}/turns`, runners claim `turn-queue` rows, and
 the UI renders durable conversation events from `/timeline` and the
-`/api/sessions/{session_id}/events` SSE stream.
+`/api/sessions/{session_id}/events` SSE stream. Stop and Claude
+AskUserQuestion replies are also durable queue records: Stop is not considered
+complete until the runner writes `turn.interrupted`, and AskUserQuestion
+answers flow through `source=input-reply` rows instead of a browser-runner
+socket. Runners notify the backend after writing durable `session-events`, so
+open SSE streams wake from persisted data rather than from browser polling.
 
 Session-pod deletion or death is intentionally outside the messaging
 durability goal. A dead session pod means the session and its `emptyDir`

@@ -46,6 +46,9 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
 interface ConversationEntryBase {
   id: string;
   time: string;
+  turnId?: string;
+  clientNonce?: string;
+  providerItemId?: string;
   sourceEventId?: string;
   orderKey?: string;
 }
@@ -83,6 +86,8 @@ export function projectConversationState(
             role: message.role,
             text,
             display: message.display,
+            turnId: message.turnId,
+            clientNonce: message.clientNonce,
             time: message.createdAt ?? "",
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,
@@ -145,6 +150,8 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       kind: "message",
       role: "assistant",
       text,
+      turnId: item.turnId,
+      providerItemId: item.providerItemId,
       time: item.createdAt ?? "",
       sourceEventId: item.sourceEventId,
       orderKey: item.orderKey,
@@ -158,6 +165,8 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       id: item.id,
       kind: "reasoning",
       reasoning: { text },
+      turnId: item.turnId,
+      providerItemId: item.providerItemId,
       time: item.createdAt ?? "",
       sourceEventId: item.sourceEventId,
       orderKey: item.orderKey,
@@ -173,6 +182,8 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       toolInput: toolInput(item),
       toolOutput: toolOutput(item),
       toolStatus: toolStatus(item),
+      turnId: item.turnId,
+      providerItemId: item.providerItemId,
       time: item.createdAt ?? "",
       sourceEventId: item.sourceEventId,
       orderKey: item.orderKey,
@@ -189,6 +200,8 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       detail: text,
       severity: item.status === "failed" ? "error" : "info",
     },
+    turnId: item.turnId,
+    providerItemId: item.providerItemId,
     time: item.createdAt ?? "",
     sourceEventId: item.sourceEventId,
     orderKey: item.orderKey,

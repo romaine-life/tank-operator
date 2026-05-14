@@ -26,6 +26,7 @@ export interface ConversationItem {
   id: string;
   turnId?: string;
   parentId?: string;
+  providerItemId?: string;
   actor: "assistant" | "system" | "tool" | "runner";
   kind: string;
   status: ConversationItemStatus;
@@ -240,6 +241,7 @@ function upsertItem(
     id,
     turnId: event.turn_id,
     parentId: event.parent_id,
+    providerItemId: event.provider_item_id,
     actor: event.actor === "user" ? "runner" : event.actor,
     kind: stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
     status,

@@ -3860,6 +3860,11 @@ textarea.run-files-viewer-editor:focus {
   color: #fee2e2;
 }
 
+.run-status-stop:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}
+
 .run-status-stop-icon {
   width: 0.85rem;
   height: 0.85rem;
@@ -4515,6 +4520,11 @@ textarea.run-files-viewer-editor:focus {
   border-color: rgba(255, 255, 255, 0.25);
 }
 
+.run-tool-ask-option:disabled {
+  cursor: progress;
+  opacity: 0.72;
+}
+
 .run-tool-ask-option-label {
   font-size: var(--run-chat-font-sm);
   color: var(--text-primary);
@@ -4530,6 +4540,13 @@ textarea.run-files-viewer-editor:focus {
   font-size: var(--run-chat-font-sm);
   color: var(--text-muted);
   font-style: italic;
+}
+
+.run-tool-ask-error {
+  margin: 0;
+  color: #fca5a5;
+  font-family: var(--font-primary);
+  font-size: var(--run-chat-font-meta);
 }
 
 .run-composer textarea {

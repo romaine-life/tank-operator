@@ -53,6 +53,15 @@ Re-checked on 2026-05-12:
 - Slack separates durable history from event delivery. Tank needs history APIs
   that can reconstruct the transcript and sidebar state before a live socket is
   attached.
+- Zulip separates narrow event streams from the durable message history a
+  client can fetch again after reconnect. Tank should keep live delivery as an
+  event notification layer over the ledger, not as the only place state exists.
+- Matrix Synapse and Element Web use incremental sync tokens over persisted
+  room state. Tank should resume from a durable per-session cursor and force a
+  timeline reload when the cursor is no longer valid.
+- Mattermost and Rocket.Chat treat websocket/SSE-style delivery as a wakeup
+  channel for stored posts and events. Tank should follow that shape: providers
+  write first, clients observe second.
 - Discord Gateway uses event envelopes, sequence numbers, heartbeat/ack, and
   resume from the last sequence. Tank should make connection state separate
   from agent state and resume from a cursor.
@@ -69,6 +78,16 @@ References:
 
 - CloudCLI product and API docs: <https://cloudcli.ai/> and
   <https://developer.cloudcli.ai/>
+- Zulip server events:
+  <https://zulip.com/api/get-events> and
+  <https://zulip.com/api/register-queue>
+- Matrix Client-Server sync:
+  <https://spec.matrix.org/latest/client-server-api/#syncing>
+- Mattermost WebSocket and posts APIs:
+  <https://api.mattermost.com/#tag/WebSocket> and
+  <https://api.mattermost.com/#tag/posts>
+- Rocket.Chat realtime API:
+  <https://developer.rocket.chat/apidocs/realtime-api>
 - Slack Events API and history API:
   <https://docs.slack.dev/apis/events-api/> and
   <https://docs.slack.dev/reference/methods/conversations.history/>
@@ -308,7 +327,12 @@ re-enqueues as a delayed `turn-queue` row with `source=schedule-wakeup` and
 `GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
 `order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
 produce `resync_required`; clients reload `/timeline` instead of silently
-skipping a gap.
+skipping a gap. Open SSE streams do not poll `GET /api/sessions/activity`.
+Runners call the internal session-event notify route after durable
+`session-events` writes, and the backend wakes only streams for that session.
+The stream can still sweep the ledger on a slow interval to handle missed
+in-process notifications, but that sweep is not a live UI compatibility path
+and cannot replace durable writes.
 
 Durable turn interruption:
 
@@ -316,7 +340,36 @@ Durable turn interruption:
 
 The backend validates ownership and writes a `turn-queue` row with
 `source=interrupt` and `target_turn_id=<turn_id>`. Runners claim the row and
-abort the matching active turn from inside the session pod.
+abort the matching active turn from inside the session pod. The UI may show
+`stopping` after the enqueue succeeds, but it must not mark the run stopped or
+clear the active turn until the durable `turn.interrupted` event appears in
+timeline/SSE. Failed interrupt enqueue is a visible control error, not a local
+state transition.
+
+Durable Claude input reply:
+
+`POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`
+
+Body:
+
+```json
+{
+  "provider_item_id": "toolu_...",
+  "timeline_id": "item_...",
+  "text": "Use option A"
+}
+```
+
+The backend validates ownership, Claude GUI mode, target ids, and text size,
+then writes a `turn-queue` row with `source=input-reply`,
+`target_turn_id=<turn_id>`, `target_provider_item_id=<provider_item_id>`,
+`target_item_id=<timeline_id>`, and `input_reply=<text>`. The Claude runner
+claims the row only when the target turn is active and waiting for that
+provider item, pushes a provider tool-result message, and marks the queue row
+completed only after the durable `tool.approval_resolved` event is produced.
+Codex does not support this control row and fails it explicitly. Browser tabs
+must not send AskUserQuestion answers through a runner socket or live-only
+control channel.
 
 Durability scope: queued SDK turns are intended to survive browser disconnects,
 orchestrator restarts/rollouts, and runner-process restarts while the session
@@ -329,7 +382,9 @@ Activity summary:
 `GET /api/sessions/activity`
 
 Returns per-session activity summaries for the sidebar so unopened sessions can
-show running, unread, failed, and needs-input states.
+show running, unread, failed, and needs-input states. This endpoint is a
+snapshot API for session lists and initial paint; it is not a transcript-live
+polling fallback for an open session.
 
 Storage:
 

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	authv1 "k8s.io/api/authentication/v1"
@@ -204,6 +206,93 @@ func TestHandleInternalGitHubAttestationRejectsUnboundSAToken(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleInternalSessionEventsNotifyWakesMatchingSession(t *testing.T) {
+	server := internalSessionEventsNotifyServer(t, "12")
+	ch, unsubscribe := server.eventBroker.Subscribe("12")
+	defer unsubscribe()
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/12/events/notify", strings.NewReader(`{"last_order_key":"001"}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalSessionEventsNotify(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("session event stream was not notified")
+	}
+}
+
+func TestHandleInternalSessionEventsNotifyRejectsOtherSession(t *testing.T) {
+	server := internalSessionEventsNotifyServer(t, "12")
+	ch, unsubscribe := server.eventBroker.Subscribe("12")
+	defer unsubscribe()
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/13/events/notify", strings.NewReader(`{}`))
+	req.SetPathValue("session_id", "13")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalSessionEventsNotify(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	select {
+	case <-ch:
+		t.Fatal("event stream should not be notified for a mismatched session")
+	default:
+	}
+}
+
+func internalSessionEventsNotifyServer(t *testing.T, sessionID string) *appServer {
+	t.Helper()
+	k8s := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "session-" + sessionID,
+			Namespace: "tank-operator-sessions",
+			UID:       types.UID("pod-uid-" + sessionID),
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "tank-operator",
+				"tank-operator/session-id":     sessionID,
+				"tank-operator/session-scope":  "slot-a",
+			},
+			Annotations: map[string]string{
+				"tank-operator/owner-email": "owner@example.test",
+			},
+		},
+		Spec: corev1.PodSpec{ServiceAccountName: "claude-session"},
+	})
+	k8s.Fake.PrependReactor("create", "tokenreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
+		review := action.(ktesting.CreateAction).GetObject().(*authv1.TokenReview)
+		if len(review.Spec.Audiences) != 1 || review.Spec.Audiences[0] != "tank-operator" {
+			t.Fatalf("audiences=%#v, want tank-operator audience", review.Spec.Audiences)
+		}
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
+				Authenticated: true,
+				User: authv1.UserInfo{
+					Username: "system:serviceaccount:tank-operator-sessions:claude-session",
+					Extra: map[string]authv1.ExtraValue{
+						"authentication.kubernetes.io/pod-name": {"session-" + sessionID},
+						"authentication.kubernetes.io/pod-uid":  {"pod-uid-" + sessionID},
+					},
+				},
+			},
+		}, nil
+	})
+	return &appServer{
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "slot-a",
+		sessionServiceAccount: "claude-session",
+		eventBroker:           newSessionEventBroker(),
 	}
 }
 

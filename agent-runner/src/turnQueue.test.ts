@@ -5,6 +5,7 @@ import {
   buildClaimedRecord,
   buildDelayedTurnRecord,
   claimAttemptsExceeded,
+  isInputReplyRecord,
   isInterruptRecord,
   type TurnRecord,
 } from "./turnQueue.js";
@@ -67,4 +68,12 @@ test("schedule wakeups are durable delayed queue rows", () => {
 test("interrupt rows are explicit control records", () => {
   assert.equal(isInterruptRecord(baseRecord({ source: "interrupt", target_turn_id: "client-1" })), true);
   assert.equal(isInterruptRecord(baseRecord({ source: "sdk" })), false);
+});
+
+test("input reply rows are explicit control records", () => {
+  assert.equal(
+    isInputReplyRecord(baseRecord({ source: "input-reply", target_provider_item_id: "toolu_1" })),
+    true,
+  );
+  assert.equal(isInputReplyRecord(baseRecord({ source: "sdk" })), false);
 });

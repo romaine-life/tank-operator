@@ -31,28 +31,31 @@ const (
 // scoped to runner-process restarts while the session pod still exists; a dead
 // or deleted session pod remains terminal for that session.
 type TurnRecord struct {
-	TurnID         string          `json:"turn_id"`
-	SessionID      string          `json:"session_id"`
-	Email          string          `json:"email"`
-	Provider       string          `json:"provider"`
-	Source         string          `json:"source,omitempty"`
-	ClientNonce    string          `json:"client_nonce,omitempty"`
-	TargetTurnID   string          `json:"target_turn_id,omitempty"`
-	Prompt         string          `json:"prompt"`
-	Model          string          `json:"model,omitempty"`
-	PermissionMode string          `json:"permission_mode,omitempty"`
-	SkillName      string          `json:"skill_name,omitempty"`
-	FollowUp       bool            `json:"follow_up"`
-	Status         TurnQueueStatus `json:"status"`
-	CreatedAt      string          `json:"created_at"`
-	ClaimedAt      *string         `json:"claimed_at"`
-	ClaimID        *string         `json:"claim_id"`
-	ClaimedBy      *string         `json:"claimed_by"`
-	ClaimExpiresAt *string         `json:"claim_expires_at"`
-	AttemptCount   int             `json:"attempt_count"`
-	AvailableAt    *string         `json:"available_at"`
-	CompletedAt    *string         `json:"completed_at"`
-	LastError      string          `json:"last_error,omitempty"`
+	TurnID               string          `json:"turn_id"`
+	SessionID            string          `json:"session_id"`
+	Email                string          `json:"email"`
+	Provider             string          `json:"provider"`
+	Source               string          `json:"source,omitempty"`
+	ClientNonce          string          `json:"client_nonce,omitempty"`
+	TargetTurnID         string          `json:"target_turn_id,omitempty"`
+	TargetItemID         string          `json:"target_item_id,omitempty"`
+	TargetProviderItemID string          `json:"target_provider_item_id,omitempty"`
+	InputReply           string          `json:"input_reply,omitempty"`
+	Prompt               string          `json:"prompt"`
+	Model                string          `json:"model,omitempty"`
+	PermissionMode       string          `json:"permission_mode,omitempty"`
+	SkillName            string          `json:"skill_name,omitempty"`
+	FollowUp             bool            `json:"follow_up"`
+	Status               TurnQueueStatus `json:"status"`
+	CreatedAt            string          `json:"created_at"`
+	ClaimedAt            *string         `json:"claimed_at"`
+	ClaimID              *string         `json:"claim_id"`
+	ClaimedBy            *string         `json:"claimed_by"`
+	ClaimExpiresAt       *string         `json:"claim_expires_at"`
+	AttemptCount         int             `json:"attempt_count"`
+	AvailableAt          *string         `json:"available_at"`
+	CompletedAt          *string         `json:"completed_at"`
+	LastError            string          `json:"last_error,omitempty"`
 }
 
 // TurnQueueStore persists per-session turn descriptors. The orchestrator
@@ -203,60 +206,66 @@ func turnDocForStorageKey(r TurnRecord, storageKey string) map[string]any {
 		storageKey = r.SessionID
 	}
 	doc := map[string]any{
-		"id":                     "turn:" + r.TurnID,
-		"type":                   "turn",
-		"turn_id":                r.TurnID,
-		"session_id":             storageKey,
-		"tank_public_session_id": r.SessionID,
-		"email":                  r.Email,
-		"provider":               r.Provider,
-		"source":                 r.Source,
-		"client_nonce":           r.ClientNonce,
-		"target_turn_id":         r.TargetTurnID,
-		"prompt":                 r.Prompt,
-		"follow_up":              r.FollowUp,
-		"status":                 string(r.Status),
-		"created_at":             r.CreatedAt,
-		"claimed_at":             r.ClaimedAt,
-		"claim_id":               r.ClaimID,
-		"claimed_by":             r.ClaimedBy,
-		"claim_expires_at":       r.ClaimExpiresAt,
-		"attempt_count":          r.AttemptCount,
-		"available_at":           r.AvailableAt,
-		"completed_at":           r.CompletedAt,
-		"last_error":             r.LastError,
-		"model":                  r.Model,
-		"permission_mode":        r.PermissionMode,
-		"skill_name":             r.SkillName,
+		"id":                      "turn:" + r.TurnID,
+		"type":                    "turn",
+		"turn_id":                 r.TurnID,
+		"session_id":              storageKey,
+		"tank_public_session_id":  r.SessionID,
+		"email":                   r.Email,
+		"provider":                r.Provider,
+		"source":                  r.Source,
+		"client_nonce":            r.ClientNonce,
+		"target_turn_id":          r.TargetTurnID,
+		"target_item_id":          r.TargetItemID,
+		"target_provider_item_id": r.TargetProviderItemID,
+		"input_reply":             r.InputReply,
+		"prompt":                  r.Prompt,
+		"follow_up":               r.FollowUp,
+		"status":                  string(r.Status),
+		"created_at":              r.CreatedAt,
+		"claimed_at":              r.ClaimedAt,
+		"claim_id":                r.ClaimID,
+		"claimed_by":              r.ClaimedBy,
+		"claim_expires_at":        r.ClaimExpiresAt,
+		"attempt_count":           r.AttemptCount,
+		"available_at":            r.AvailableAt,
+		"completed_at":            r.CompletedAt,
+		"last_error":              r.LastError,
+		"model":                   r.Model,
+		"permission_mode":         r.PermissionMode,
+		"skill_name":              r.SkillName,
 	}
 	return doc
 }
 
 func turnFromDoc(data []byte) (TurnRecord, error) {
 	var d struct {
-		TurnID          string  `json:"turn_id"`
-		SessionID       string  `json:"session_id"`
-		PublicSessionID string  `json:"tank_public_session_id"`
-		Email           string  `json:"email"`
-		Provider        string  `json:"provider"`
-		Source          string  `json:"source"`
-		ClientNonce     string  `json:"client_nonce"`
-		TargetTurnID    string  `json:"target_turn_id"`
-		Prompt          string  `json:"prompt"`
-		Model           string  `json:"model"`
-		PermissionMode  string  `json:"permission_mode"`
-		SkillName       string  `json:"skill_name"`
-		FollowUp        bool    `json:"follow_up"`
-		Status          string  `json:"status"`
-		CreatedAt       string  `json:"created_at"`
-		ClaimedAt       *string `json:"claimed_at"`
-		ClaimID         *string `json:"claim_id"`
-		ClaimedBy       *string `json:"claimed_by"`
-		ClaimExpiresAt  *string `json:"claim_expires_at"`
-		AttemptCount    int     `json:"attempt_count"`
-		AvailableAt     *string `json:"available_at"`
-		CompletedAt     *string `json:"completed_at"`
-		LastError       string  `json:"last_error"`
+		TurnID               string  `json:"turn_id"`
+		SessionID            string  `json:"session_id"`
+		PublicSessionID      string  `json:"tank_public_session_id"`
+		Email                string  `json:"email"`
+		Provider             string  `json:"provider"`
+		Source               string  `json:"source"`
+		ClientNonce          string  `json:"client_nonce"`
+		TargetTurnID         string  `json:"target_turn_id"`
+		TargetItemID         string  `json:"target_item_id"`
+		TargetProviderItemID string  `json:"target_provider_item_id"`
+		InputReply           string  `json:"input_reply"`
+		Prompt               string  `json:"prompt"`
+		Model                string  `json:"model"`
+		PermissionMode       string  `json:"permission_mode"`
+		SkillName            string  `json:"skill_name"`
+		FollowUp             bool    `json:"follow_up"`
+		Status               string  `json:"status"`
+		CreatedAt            string  `json:"created_at"`
+		ClaimedAt            *string `json:"claimed_at"`
+		ClaimID              *string `json:"claim_id"`
+		ClaimedBy            *string `json:"claimed_by"`
+		ClaimExpiresAt       *string `json:"claim_expires_at"`
+		AttemptCount         int     `json:"attempt_count"`
+		AvailableAt          *string `json:"available_at"`
+		CompletedAt          *string `json:"completed_at"`
+		LastError            string  `json:"last_error"`
 	}
 	if err := json.Unmarshal(data, &d); err != nil {
 		return TurnRecord{}, err
@@ -266,28 +275,31 @@ func turnFromDoc(data []byte) (TurnRecord, error) {
 		sessionID = d.SessionID
 	}
 	return TurnRecord{
-		TurnID:         d.TurnID,
-		SessionID:      sessionID,
-		Email:          d.Email,
-		Provider:       d.Provider,
-		Source:         d.Source,
-		ClientNonce:    d.ClientNonce,
-		TargetTurnID:   d.TargetTurnID,
-		Prompt:         d.Prompt,
-		Model:          d.Model,
-		PermissionMode: d.PermissionMode,
-		SkillName:      d.SkillName,
-		FollowUp:       d.FollowUp,
-		Status:         TurnQueueStatus(d.Status),
-		CreatedAt:      d.CreatedAt,
-		ClaimedAt:      d.ClaimedAt,
-		ClaimID:        d.ClaimID,
-		ClaimedBy:      d.ClaimedBy,
-		ClaimExpiresAt: d.ClaimExpiresAt,
-		AttemptCount:   d.AttemptCount,
-		AvailableAt:    d.AvailableAt,
-		CompletedAt:    d.CompletedAt,
-		LastError:      d.LastError,
+		TurnID:               d.TurnID,
+		SessionID:            sessionID,
+		Email:                d.Email,
+		Provider:             d.Provider,
+		Source:               d.Source,
+		ClientNonce:          d.ClientNonce,
+		TargetTurnID:         d.TargetTurnID,
+		TargetItemID:         d.TargetItemID,
+		TargetProviderItemID: d.TargetProviderItemID,
+		InputReply:           d.InputReply,
+		Prompt:               d.Prompt,
+		Model:                d.Model,
+		PermissionMode:       d.PermissionMode,
+		SkillName:            d.SkillName,
+		FollowUp:             d.FollowUp,
+		Status:               TurnQueueStatus(d.Status),
+		CreatedAt:            d.CreatedAt,
+		ClaimedAt:            d.ClaimedAt,
+		ClaimID:              d.ClaimID,
+		ClaimedBy:            d.ClaimedBy,
+		ClaimExpiresAt:       d.ClaimExpiresAt,
+		AttemptCount:         d.AttemptCount,
+		AvailableAt:          d.AvailableAt,
+		CompletedAt:          d.CompletedAt,
+		LastError:            d.LastError,
 	}, nil
 }
 

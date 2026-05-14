@@ -42,6 +42,7 @@ import {
 } from "./conversation.js";
 import {
   TurnQueue,
+  isInputReplyRecord,
   isInterruptRecord,
   turnClientNonce,
   type TurnRecord,
@@ -412,6 +413,13 @@ export class Runner {
         try {
           const record = await this.turnQueue.claimNext();
           if (record) {
+            if (isInputReplyRecord(record)) {
+              await this.turnQueue.markFailed(
+                record,
+                new Error("input replies are not supported by codex"),
+              );
+              continue;
+            }
             if (isInterruptRecord(record)) {
               await this.acceptInterrupt(record);
               continue;

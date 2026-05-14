@@ -12,7 +12,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const maxSDKTurnPromptBytes = 256 * 1024
+const (
+	maxSDKTurnPromptBytes = 256 * 1024
+	maxSDKInputReplyBytes = 64 * 1024
+)
 
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime
 // sessions. The browser writes work here and reads transcript events from the
@@ -100,6 +103,82 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":         "queued",
 		"target_turn_id": targetTurnID,
+	})
+}
+
+func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	targetTurnID := strings.TrimSpace(r.PathValue("turn_id"))
+	if sessionID == "" || targetTurnID == "" || !turnIDPattern.MatchString(targetTurnID) {
+		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
+		return
+	}
+
+	var body struct {
+		ProviderItemID string `json:"provider_item_id"`
+		TimelineID     string `json:"timeline_id"`
+		Text           string `json:"text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	providerItemID := strings.TrimSpace(body.ProviderItemID)
+	timelineID := strings.TrimSpace(body.TimelineID)
+	text := strings.TrimSpace(body.Text)
+	if providerItemID == "" || timelineID == "" {
+		writeError(w, http.StatusBadRequest, "provider_item_id and timeline_id are required")
+		return
+	}
+	if text == "" {
+		writeError(w, http.StatusBadRequest, "missing input reply text")
+		return
+	}
+	if len([]byte(text)) > maxSDKInputReplyBytes {
+		writeError(w, http.StatusBadRequest, "input reply too large")
+		return
+	}
+
+	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	if compat.NormalizeSessionMode(info.Mode) != compat.ClaudeGUIMode {
+		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI sessions")
+		return
+	}
+	if s.turnQueue == nil {
+		writeError(w, http.StatusServiceUnavailable, "turn queue unavailable")
+		return
+	}
+
+	if err := s.turnQueue.Enqueue(r.Context(), store.TurnRecord{
+		TurnID:               "input_reply_" + auth.RandomHex(12),
+		SessionID:            sessionID,
+		Email:                user.Email,
+		Provider:             "claude",
+		Source:               "input-reply",
+		ClientNonce:          targetTurnID,
+		TargetTurnID:         targetTurnID,
+		TargetItemID:         timelineID,
+		TargetProviderItemID: providerItemID,
+		InputReply:           text,
+		Prompt:               text,
+		Status:               store.TurnPending,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "enqueue input reply: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":                  "queued",
+		"target_turn_id":          targetTurnID,
+		"target_item_id":          timelineID,
+		"target_provider_item_id": providerItemID,
 	})
 }
 

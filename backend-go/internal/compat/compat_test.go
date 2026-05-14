@@ -144,6 +144,7 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := codexRunner["image"], "codex-image"; got != want {
 		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
 	}
+	assertVolumeMount(t, codexRunner, "tank-operator-sa-token")
 	volumes := spec["volumes"].([]any)
 	// codex_gui adds session-config + Tank attestation token + workspace
 	// emptyDir. Codex auth is proxy-owned, so the real codex-credentials
@@ -196,6 +197,7 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 				CosmosDatabase:               "tank-db",
 				CosmosSessionEventsContainer: "events",
 				CosmosTurnQueueContainer:     "turns",
+				TankOperatorInternalURL:      "http://tank-operator.tank-operator.svc.cluster.local",
 			})
 			spec := manifest["spec"].(map[string]any)
 			containers := spec["containers"].([]any)
@@ -215,6 +217,13 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 			if got, want := env["TANK_SESSION_STORAGE_KEY"], "slot-a:12"; got != want {
 				t.Fatalf("TANK_SESSION_STORAGE_KEY = %v, want %q", got, want)
 			}
+			if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.tank-operator.svc.cluster.local"; got != want {
+				t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+			}
+			if got, want := env["TANK_OPERATOR_TOKEN_PATH"], "/var/run/secrets/tank-operator/token"; got != want {
+				t.Fatalf("TANK_OPERATOR_TOKEN_PATH = %v, want %q", got, want)
+			}
+			assertVolumeMount(t, findContainer(t, containers, runnerName), "tank-operator-sa-token")
 		})
 	}
 }

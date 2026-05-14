@@ -134,9 +134,12 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   sourceEventId?: string;
   orderKey?: string;
   localOnly?: boolean;
+  turnId?: string;
   clientNonce?: string;
+  providerItemId?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
+type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
 type SdkConnectionState =
   | "idle"
   | "connecting"
@@ -2775,8 +2778,11 @@ function RunMarkdown({ children }: { children: string }) {
   );
 }
 
-const RunContext = createContext<{ sendStdin: (text: string) => void; user: SessionUser | null }>({
-  sendStdin: () => {},
+const RunContext = createContext<{
+  sendInputReply: (entry: TranscriptEntry, text: string) => Promise<void>;
+  user: SessionUser | null;
+}>({
+  sendInputReply: async () => {},
   user: null,
 });
 
@@ -2974,8 +2980,10 @@ function ToolAskUserBody({
   entry: TranscriptEntry;
   input: Record<string, unknown> | null;
 }) {
-  const { sendStdin } = useContext(RunContext);
+  const { sendInputReply } = useContext(RunContext);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
+  const [pendingAnswer, setPendingAnswer] = useState<string | null>(null);
+  const [replyError, setReplyError] = useState<string | null>(null);
 
   const questions = Array.isArray(input?.questions)
     ? (input.questions as Array<Record<string, unknown>>)
@@ -3005,17 +3013,27 @@ function ToolAskUserBody({
             <div className="run-tool-ask-options">
               {options.map((opt, oi) => {
                 const label = String(opt.label ?? "");
+                const pending = pendingAnswer === label;
                 return (
                   <button
                     key={oi}
                     type="button"
                     className="run-tool-ask-option"
+                    disabled={pendingAnswer !== null}
                     onClick={() => {
-                      sendStdin(label + "\n");
-                      setSelectedAnswer(label);
+                      setPendingAnswer(label);
+                      setReplyError(null);
+                      void sendInputReply(entry, label)
+                        .then(() => setSelectedAnswer(label))
+                        .catch((err) =>
+                          setReplyError(err instanceof Error ? err.message : String(err)),
+                        )
+                        .finally(() => setPendingAnswer(null));
                     }}
                   >
-                    <span className="run-tool-ask-option-label">{label}</span>
+                    <span className="run-tool-ask-option-label">
+                      {pending ? "Sending..." : label}
+                    </span>
                     {typeof opt.description === "string" && opt.description && (
                       <span className="run-tool-ask-option-desc">
                         {opt.description}
@@ -3028,6 +3046,7 @@ function ToolAskUserBody({
           </div>
         );
       })}
+      {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
   );
 }
@@ -3425,7 +3444,7 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
-  const [runStatus, setRunStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
   const activeToolUseIdRef = useRef<string | null>(null);
@@ -3543,9 +3562,11 @@ function ChatPane({
     model: string;
     permissionMode: string;
     turnStart: number;
-    cancelled: boolean;
+    submitAccepted: boolean;
+    stopRequested: boolean;
   } | null>(null);
   const activeInterruptTargetRef = useRef<string | null>(null);
+  const stoppingTargetRef = useRef<string | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3630,20 +3651,25 @@ function ChatPane({
 
     if (currentRunRef.current) {
       if (sdkActive) {
-        setRunStatus("running");
+        setRunStatus(
+          currentRunRef.current.stopRequested || stoppingTargetRef.current
+            ? "stopping"
+            : "running",
+        );
         setRunning(true);
       }
       return;
     }
 
     if (sdkActive) {
-      setRunStatus("running");
+      setRunStatus(stoppingTargetRef.current ? "stopping" : "running");
       setRunning(true);
       setRunStartedAt((startedAt) => startedAt ?? Date.now());
       setNow(Date.now());
       return;
     }
 
+    stoppingTargetRef.current = null;
     setRunning(false);
     if (projection.runStatus === "error") {
       setRunStatus("error");
@@ -4297,12 +4323,17 @@ function ChatPane({
     sdkConversationStateRef.current = initialConversationState;
     sdkAssistantDurationsRef.current = new Map();
     sdkTimelineCursorRef.current = null;
+    currentRunRef.current = null;
+    activeInterruptTargetRef.current = null;
+    stoppingTargetRef.current = null;
     setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
     setHistoryAttempted(false);
     setContinueHintVisible(false);
     setSdkConnectionState("idle");
+    setRunStatus("idle");
+    setRunning(false);
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -4619,6 +4650,7 @@ function ChatPane({
 
   function cancelRun() {
     const run = currentRunRef.current;
+    if (run?.stopRequested || stoppingTargetRef.current) return;
     const interruptTarget = run?.id ?? activeInterruptTargetRef.current;
     if (!interruptTarget) {
       const id = nextEntryId("sdk-interrupt-error");
@@ -4631,23 +4663,32 @@ function ChatPane({
       return;
     }
     if (run) {
-      run.cancelled = true;
+      run.stopRequested = true;
     }
-    void interruptSdkTurn(interruptTarget);
-    currentRunRef.current = null;
-    setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Stopped");
-    scheduledWakeupRef.current = false;
-    setActiveTool(null);
-    setRunning(false);
-    setSdkConnectionState("idle");
-    setRunStatus((prev) => (prev === "running" ? "done" : prev));
+    stoppingTargetRef.current = interruptTarget;
+    setLastStatusText(null);
+    setRunStatus("stopping");
+    setRunning(true);
+    if (run && !run.submitAccepted) return;
+    void requestSdkInterrupt(interruptTarget, run);
   }
 
-  async function interruptSdkTurn(turnID: string): Promise<void> {
-    await authedFetch(
-      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/interrupt`,
-      { method: "POST" },
-    ).catch((err) => {
+  async function requestSdkInterrupt(
+    turnID: string,
+    run: NonNullable<typeof currentRunRef.current> | null,
+  ): Promise<void> {
+    try {
+      await interruptSdkTurn(turnID);
+    } catch (err) {
+      if (run && currentRunRef.current?.id === run.id) {
+        run.stopRequested = false;
+      }
+      if (stoppingTargetRef.current === turnID) {
+        stoppingTargetRef.current = null;
+      }
+      setRunStatus("running");
+      setRunning(true);
+      setLastStatusText("Stop failed");
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
@@ -4655,7 +4696,24 @@ function ChatPane({
           id,
         ),
       );
-    });
+    }
+  }
+
+  async function interruptSdkTurn(turnID: string): Promise<void> {
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/interrupt`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      let detail = `interrupt failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
   }
 
   function handleSubmit(message: PromptInputMessage) {
@@ -4813,7 +4871,8 @@ function ChatPane({
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
       permissionMode: composerMode,
       turnStart,
-      cancelled: false,
+      submitAccepted: false,
+      stopRequested: false,
     };
     currentRunRef.current = run;
     const optimisticTime = nowIso();
@@ -4846,11 +4905,20 @@ function ChatPane({
     setComposerText("");
     void enqueueSdkTurn(run)
       .then(() => {
-        if (currentRunRef.current?.id === run.id && !run.cancelled) setSdkConnectionState("connected");
+        if (currentRunRef.current?.id !== run.id) return;
+        run.submitAccepted = true;
+        if (run.stopRequested) {
+          void requestSdkInterrupt(run.id, run);
+          return;
+        }
+        setSdkConnectionState("connected");
       })
       .catch((err) => {
-        if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+        if (currentRunRef.current?.id !== run.id) return;
         currentRunRef.current = null;
+        if (stoppingTargetRef.current === run.id) {
+          stoppingTargetRef.current = null;
+        }
         setRunning(false);
         setRunStatus("error");
         setSdkConnectionState("idle");
@@ -4875,8 +4943,11 @@ function ChatPane({
       clearRealtime?: boolean;
     } = {},
   ): void {
-    if (currentRunRef.current?.id !== run.id || run.cancelled) return;
+    if (currentRunRef.current?.id !== run.id) return;
     currentRunRef.current = null;
+    if (stoppingTargetRef.current === run.id) {
+      stoppingTargetRef.current = null;
+    }
     const durationMs = Date.now() - run.turnStart;
     updateSdkLastAssistantDuration(durationMs);
     if (terminal.status === "done") {
@@ -4961,7 +5032,7 @@ function ChatPane({
   }, [visible, session.id, session.status]);
 
   const submitStatus =
-    runStatus === "running"
+    runStatus === "running" || runStatus === "stopping"
       ? "streaming"
       : runStatus === "error"
         ? "error"
@@ -5003,21 +5074,53 @@ function ChatPane({
   const elapsedLabel = formatStreamElapsed(elapsedMs);
   const dotPhase = Math.floor(now / 500) % 3; // 0..2
   const dots = ".".repeat(dotPhase + 1);
+  const isStopping = runStatus === "stopping";
   // When a tool call is in flight, show its name. Otherwise cycle the
   // generic verbs every 3s (matches cloudcli's ClaudeStatus pattern).
   const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
-  const verb = activeToolName
+  const verb = isStopping
+    ? "Stopping"
+    : activeToolName
     ? `Using ${formatToolLabel(activeToolName)}`
     : STREAM_VERBS[verbIndex];
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
 
-  const sendStdin = (_text: string) => {};
+  async function sendInputReply(entry: TranscriptEntry, text: string): Promise<void> {
+    const turnID = entry.turnId?.trim();
+    const providerItemID = entry.providerItemId?.trim();
+    if (!turnID || !providerItemID) {
+      throw new Error("input reply target is not available");
+    }
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/input-reply`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider_item_id: providerItemID,
+          timeline_id: entry.id,
+          text,
+        }),
+      },
+    );
+    if (!res.ok) {
+      let detail = `input reply failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+  }
+
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
 
   return (
-    <RunContext.Provider value={{ sendStdin, user }}>
+    <RunContext.Provider value={{ sendInputReply, user }}>
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
@@ -5597,11 +5700,12 @@ function ChatPane({
                 type="button"
                 className="run-status-stop"
                 onClick={cancelRun}
-                aria-label="Stop generating"
+                disabled={isStopping}
+                aria-label={isStopping ? "Stopping generation" : "Stop generating"}
               >
                 <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
-                <span>Stop</span>
-                <kbd className="run-status-kbd">ESC</kbd>
+                <span>{isStopping ? "Stopping" : "Stop"}</span>
+                {!isStopping && <kbd className="run-status-kbd">ESC</kbd>}
               </button>
             </>
           )}

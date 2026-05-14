@@ -20,6 +20,9 @@ export interface TurnRecord {
   source?: string;
   client_nonce?: string;
   target_turn_id?: string;
+  target_item_id?: string;
+  target_provider_item_id?: string;
+  input_reply?: string;
   prompt: string;
   model?: string;
   permission_mode?: string;
@@ -85,5 +88,7 @@ export function claimAttemptsExceeded(
 ): boolean;
 
 export function isInterruptRecord(record: TurnRecord | null | undefined): boolean;
+
+export function isInputReplyRecord(record: TurnRecord | null | undefined): boolean;
 
 export function turnClientNonce(record: TurnRecord): string;
