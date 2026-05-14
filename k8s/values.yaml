@@ -63,6 +63,9 @@ session:
   idleTimeoutSeconds: 604800
   reaperIntervalSeconds: 60
 
+appConfig:
+  configMap: tank-operator-app-config
+
 ingress:
   hostname: tank.romaine.life
   gatewayName: main

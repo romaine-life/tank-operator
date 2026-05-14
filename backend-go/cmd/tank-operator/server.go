@@ -124,10 +124,41 @@ func (s *appServer) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *appServer) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+	writeJSON(w, http.StatusOK, publicConfig())
+}
+
+func publicConfig() map[string]string {
+	return map[string]string{
 		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
 		"entra_authority": "https://login.microsoftonline.com/common",
-	})
+		"fork_session_prompt_template": readOptionalFile(
+			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),
+			defaultForkSessionPromptTemplate,
+		),
+	}
+}
+
+const defaultForkSessionPromptTemplate = `The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.
+
+Use the forked assistant message as the immediate starting point. The previous session data is identified below; read that session's transcript from Tank Operator data if it would help, but do not assume you need the entire prior conversation before making progress.
+
+Forked assistant message:
+{{forked_message}}
+
+Source session pointer:
+` + "```json" + `
+{{source_session_json}}
+` + "```"
+
+func readOptionalFile(path string, fallback string) string {
+	if strings.TrimSpace(path) == "" {
+		return fallback
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fallback
+	}
+	return string(body)
 }
 
 type tankStaticRootSet struct {

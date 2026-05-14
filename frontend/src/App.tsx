@@ -161,6 +161,26 @@ type ForkSessionRequest = {
   permissionMode: string;
 };
 
+type AppPublicConfig = {
+  fork_session_prompt_template?: string;
+};
+
+const DEFAULT_FORK_SESSION_PROMPT_TEMPLATE = [
+  "The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.",
+  "",
+  "Use the forked assistant message as the immediate starting point. The previous session data is identified below; read that session's transcript from Tank Operator data if it would help, but do not assume you need the entire prior conversation before making progress.",
+  "",
+  "Forked assistant message:",
+  "{{forked_message}}",
+  "",
+  "Source session pointer:",
+  "```json",
+  "{{source_session_json}}",
+  "```",
+].join("\n");
+
+let appConfigPromise: Promise<AppPublicConfig> | null = null;
+
 interface Session {
   id: string;
   pod_name: string | null;
@@ -2593,7 +2613,29 @@ function quoteMessageText(text: string, style: QuoteStyle): string {
   return `${fence}\n${text}\n${fence}`;
 }
 
-function buildForkSessionPrompt(request: ForkSessionRequest): string {
+function replaceAllLiteral(input: string, search: string, replacement: string): string {
+  return input.split(search).join(replacement);
+}
+
+async function fetchAppPublicConfig(): Promise<AppPublicConfig> {
+  if (!appConfigPromise) {
+    appConfigPromise = fetch("/api/config")
+      .then((res) => {
+        if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
+        return res.json() as Promise<AppPublicConfig>;
+      })
+      .catch(() => ({}));
+  }
+  return appConfigPromise;
+}
+
+async function forkSessionPromptTemplate(): Promise<string> {
+  const config = await fetchAppPublicConfig();
+  const template = config.fork_session_prompt_template;
+  return typeof template === "string" && template.trim() ? template : DEFAULT_FORK_SESSION_PROMPT_TEMPLATE;
+}
+
+async function buildForkSessionPrompt(request: ForkSessionRequest): Promise<string> {
   const sourceName = sessionDisplayName(request.sourceSession);
   const payload = {
     source_session_id: request.sourceSession.id,
@@ -2604,19 +2646,12 @@ function buildForkSessionPrompt(request: ForkSessionRequest): string {
     forked_message_order_key: request.forkedEntry.orderKey ?? null,
     forked_message_source_event_id: request.forkedEntry.sourceEventId ?? null,
   };
-  return [
-    "The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.",
-    "",
-    "Use the forked assistant message as the immediate starting point. The previous session data is identified below; read that session's transcript from Tank Operator data if it would help, but do not assume you need the entire prior conversation before making progress.",
-    "",
-    "Forked assistant message:",
-    quoteMessageText(request.forkedEntry.text ?? "", "fence"),
-    "",
-    "Source session pointer:",
-    "```json",
+  const template = await forkSessionPromptTemplate();
+  return replaceAllLiteral(
+    replaceAllLiteral(template, "{{forked_message}}", quoteMessageText(request.forkedEntry.text ?? "", "fence")),
+    "{{source_session_json}}",
     JSON.stringify(payload, null, 2),
-    "```",
-  ].join("\n");
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -6828,7 +6863,7 @@ export function App() {
 
   async function forkSessionFromMessage(request: ForkSessionRequest) {
     const mode = request.sourceSession.mode;
-    const prompt = buildForkSessionPrompt(request);
+    const prompt = await buildForkSessionPrompt(request);
     const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(0, 80);
     setBusy(true);
     setSidebarCollapsed(false);

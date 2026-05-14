@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tank-operator.appConfigMap" . }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+data:
+  fork-session.md: |
+{{ .Files.Get "app-config/fork-session.md" | indent 4 }}

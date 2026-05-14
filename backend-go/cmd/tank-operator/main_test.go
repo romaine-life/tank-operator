@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -60,6 +62,31 @@ func TestConfig(t *testing.T) {
 	}
 	if body["entra_client_id"] != "client-1" || body["entra_authority"] != "https://login.microsoftonline.com/common" {
 		t.Fatalf("body = %#v", body)
+	}
+	if body["fork_session_prompt_template"] == "" {
+		t.Fatalf("missing fork_session_prompt_template: %#v", body)
+	}
+}
+
+func TestConfigReadsForkSessionPromptTemplateFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fork-session.md")
+	if err := os.WriteFile(path, []byte("fork template {{forked_message}}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TANK_FORK_SESSION_PROMPT_FILE", path)
+	response := httptest.NewRecorder()
+
+	config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := body["fork_session_prompt_template"], "fork template {{forked_message}}"; got != want {
+		t.Fatalf("fork_session_prompt_template = %q, want %q", got, want)
 	}
 }
 
