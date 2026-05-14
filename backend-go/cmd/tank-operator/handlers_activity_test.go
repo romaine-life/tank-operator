@@ -196,9 +196,33 @@ func activityEvent(eventID, eventType, orderKey, actor string, fields map[string
 		"type":       eventType,
 		"order_key":  orderKey,
 		"actor":      actor,
+		"source":     "tank",
 		"session_id": "63",
 		"created_at": "2026-05-12T00:00:00Z",
 		"visibility": "durable",
+	}
+	switch eventType {
+	case "user_message.created":
+		event["turn_id"] = "turn-1"
+		event["item_id"] = "turn-1:user"
+		event["client_nonce"] = "client-1"
+		event["payload"] = map[string]any{"text": "hello", "display": map[string]any{"kind": "plain"}}
+	case "turn.submitted":
+		event["turn_id"] = "turn-1"
+		event["client_nonce"] = "client-1"
+		event["payload"] = map[string]any{"status": "submitted"}
+	case "turn.started", "turn.completed", "turn.failed", "turn.interrupted":
+		event["turn_id"] = "turn-1"
+	case "item.started", "item.delta", "item.completed", "item.failed":
+		event["turn_id"] = "turn-1"
+		event["item_id"] = "item-1"
+		event["payload"] = map[string]any{"kind": "message"}
+	case "tool.approval_requested", "tool.approval_resolved":
+		event["turn_id"] = "turn-1"
+		event["item_id"] = "approval-1"
+		event["payload"] = map[string]any{"kind": "needs_input"}
+	case "read_state.updated":
+		event["payload"] = map[string]any{"last_read_order_key": orderKey}
 	}
 	for key, value := range fields {
 		event[key] = value

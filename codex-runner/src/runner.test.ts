@@ -152,6 +152,34 @@ test("dispatchCreate suppresses duplicate client_nonce submissions", async () =>
   assert.equal(broadcasted, false);
 });
 
+test("dispatchCreate rejects malformed Tank-owned events before fanout", async () => {
+  let createCalled = false;
+  let broadcasted = false;
+  const ok = await dispatchCreate(
+    {
+      async upsert() {
+        throw new Error("upsert should not be used for malformed event");
+      },
+      async create() {
+        createCalled = true;
+        return "created";
+      },
+    },
+    {
+      broadcastEvent() {
+        broadcasted = true;
+      },
+    },
+    {
+      ...userMessageEvent(),
+      payload: { text: "hello" },
+    },
+  );
+  assert.equal(ok, "failed");
+  assert.equal(createCalled, false);
+  assert.equal(broadcasted, false);
+});
+
 test("live-only: turn.started broadcasts without a cosmos write", async () => {
   const order: Order = [];
   const ok = await dispatch(

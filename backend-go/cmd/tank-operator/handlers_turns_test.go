@@ -42,7 +42,7 @@ func (*recordingTurnQueue) MarkFailed(context.Context, string, string) error    
 func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 	queue := &recordingTurnQueue{}
 	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
-	body := `{"client_nonce":"turn-abc_123","prompt":"  hello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
+	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
 
@@ -61,8 +61,40 @@ func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 	if got.Source != "sdk" || got.Provider != "claude" || got.SessionID != "63" || got.Email != "user@example.com" {
 		t.Fatalf("record routing fields = %#v", got)
 	}
-	if got.Prompt != "hello sdk" || got.Model != "claude-sonnet-4-6" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" || !got.FollowUp {
+	if got.Prompt != "/test\n\nhello sdk" || got.Model != "claude-sonnet-4-6" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" || !got.FollowUp {
 		t.Fatalf("record payload fields = %#v", got)
+	}
+}
+
+func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-skill","prompt":"hello","skill_name":"test"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(queue.records) != 0 {
+		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	}
+}
+
+func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
+	queue := &recordingTurnQueue{}
+	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-skill","prompt":"$test","skill_name":"test"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if got := queue.records[0].SkillName; got != "test" {
+		t.Fatalf("skill_name = %q, want test", got)
 	}
 }
 

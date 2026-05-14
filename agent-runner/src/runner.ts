@@ -31,6 +31,7 @@ import type { Config } from "./config.js";
 import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
 import {
   normalizeClientNonce,
+  isTankConversationEvent,
   turnEvent,
   turnIDForClientNonce,
   userSubmissionEvents,
@@ -94,6 +95,10 @@ export async function dispatch(
   message: RunnerEvent,
 ): Promise<boolean> {
   const stamped = stampTankEvent(message);
+  if (isMalformedTankEvent(stamped)) {
+    console.error("invalid Tank conversation event:", stamped);
+    return false;
+  }
   if (isCanonical(stamped)) {
     try {
       await sink.upsert(stamped);
@@ -114,6 +119,10 @@ export async function dispatchCreate(
   message: RunnerEvent,
 ): Promise<"created" | "exists" | "failed"> {
   const stamped = stampTankEvent(message);
+  if (isMalformedTankEvent(stamped)) {
+    console.error("invalid Tank conversation event:", stamped);
+    return "failed";
+  }
   if (!isCanonical(stamped)) {
     ws.broadcastEvent(stamped);
     return "created";
@@ -127,6 +136,10 @@ export async function dispatchCreate(
   }
   ws.broadcastEvent(stamped);
   return "created";
+}
+
+function isMalformedTankEvent(message: RunnerEvent): boolean {
+  return isTankEvent(message) && !isTankConversationEvent(message);
 }
 
 function isTankEvent(message: RunnerEvent): message is TankConversationEvent {
@@ -383,6 +396,7 @@ export class Runner {
       text,
       message,
       runtime: "claude",
+      skillName: queueRecord?.skill_name,
     });
     const userResult = await dispatchCreate(this.sink, this.ws, userMessage);
     if (userResult === "failed") return null;

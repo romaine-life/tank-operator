@@ -175,5 +175,162 @@
       "type": "integer",
       "minimum": 0
     }
-  }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "userMessagePayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["text", "display"],
+      "properties": {
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "message": {},
+        "display": {
+          "oneOf": [
+            { "$ref": "#/$defs/plainUserDisplay" },
+            { "$ref": "#/$defs/skillInvocationDisplay" }
+          ]
+        }
+      }
+    },
+    "plainUserDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "plain" }
+      }
+    },
+    "skillInvocationDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "skill_name"],
+      "properties": {
+        "kind": { "const": "skill_invocation" },
+        "skill_name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "supplemental_text": { "type": "string" }
+      }
+    },
+    "statusPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status"],
+      "properties": {
+        "status": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "itemPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "readStatePayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["last_read_order_key"],
+      "properties": {
+        "last_read_order_key": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "user_message.created" } }, "required": ["type"] },
+      "then": {
+        "required": ["turn_id", "item_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "user" },
+          "source": { "const": "tank" },
+          "payload": { "$ref": "#/$defs/userMessagePayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "turn.submitted" } }, "required": ["type"] },
+      "then": {
+        "required": ["turn_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "runner" },
+          "source": { "const": "tank" },
+          "payload": { "$ref": "#/$defs/statusPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["turn.started", "turn.completed", "turn.failed", "turn.interrupted"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id"],
+        "properties": {
+          "actor": { "const": "runner" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["item.started", "item.delta", "item.completed", "item.failed"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id", "item_id", "payload"],
+        "properties": {
+          "payload": { "$ref": "#/$defs/itemPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["tool.approval_requested", "tool.approval_resolved"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id", "item_id", "payload"],
+        "properties": {
+          "actor": { "const": "tool" },
+          "payload": { "$ref": "#/$defs/itemPayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "session.activity_updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["payload"],
+        "properties": {
+          "payload": { "$ref": "#/$defs/statusPayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "read_state.updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["payload"],
+        "properties": {
+          "payload": { "$ref": "#/$defs/readStatePayload" }
+        }
+      }
+    }
+  ]
 }

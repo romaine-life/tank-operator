@@ -2461,7 +2461,25 @@ function conversationEventSortKey(event: TankConversationEvent): string {
 function conversationEntriesToTranscript(
   entries: ConversationViewEntry[],
 ): TranscriptEntry[] {
-  return entries.map((entry) => entry as TranscriptEntry);
+  return entries.flatMap((entry) => {
+    if (entry.kind !== "message" || entry.role !== "user") {
+      return [entry as TranscriptEntry];
+    }
+    const display = entry.display;
+    if (!display || display.kind !== "skill_invocation") return [entry as TranscriptEntry];
+
+    return appendSkillInvocation(
+      [],
+      display.skill_name,
+      display.supplemental_text ?? "",
+      entry.time,
+    ).map((skillEntry, index) => ({
+      ...skillEntry,
+      transcriptSource: "server",
+      sourceEventId: entry.sourceEventId,
+      orderKey: entry.orderKey ? `${entry.orderKey}:skill:${index}` : undefined,
+    }));
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -5,13 +5,23 @@ import {
   initialConversationState,
   reduceConversationEvents,
 } from "./conversationReducer.ts";
-import type { TankConversationEvent } from "./tankConversation.ts";
+import { isTankConversationEvent, type TankConversationEvent } from "./tankConversation.ts";
 
 function ev(
   event_id: string,
   type: TankConversationEvent["type"],
   fields: Partial<TankConversationEvent> = {},
 ): TankConversationEvent {
+  const defaults: Partial<TankConversationEvent> = {};
+  if (type === "user_message.created") {
+    defaults.actor = "user";
+    defaults.item_id = "turn-1:user";
+    defaults.client_nonce = "client-1";
+  }
+  if (type === "turn.submitted") {
+    defaults.client_nonce = "client-1";
+    defaults.payload = { status: "submitted" };
+  }
   return {
     event_id,
     order_key: event_id.padStart(4, "0"),
@@ -22,6 +32,7 @@ function ev(
     type,
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
+    ...defaults,
     ...fields,
   };
 }
@@ -222,4 +233,39 @@ test("Replay and live delivery converge through event id dedupe", () => {
 
   assert.deepEqual(replayThenLive, replayOnly);
   assert.notDeepEqual(replayOnly, initialConversationState);
+});
+
+test("contract guard rejects malformed per-type events", () => {
+  assert.equal(isTankConversationEvent(ev("10", "user_message.created", {
+    actor: "user",
+    item_id: "turn-1:user",
+    client_nonce: "client-1",
+    payload: { text: "hello", display: { kind: "plain" } },
+  })), true);
+
+  assert.equal(isTankConversationEvent({
+    event_id: "bad-user",
+    order_key: "bad-user",
+    session_id: "63",
+    turn_id: "turn-1",
+    actor: "user",
+    source: "tank",
+    type: "user_message.created",
+    created_at: "2026-05-12T00:00:00.000Z",
+    visibility: "durable",
+    payload: { text: "hello" },
+  }), false);
+
+  assert.equal(isTankConversationEvent({
+    event_id: "bad-item",
+    order_key: "bad-item",
+    session_id: "63",
+    turn_id: "turn-1",
+    actor: "assistant",
+    source: "claude",
+    type: "item.delta",
+    created_at: "2026-05-12T00:00:00.000Z",
+    visibility: "durable",
+    payload: { kind: "message", delta: "x" },
+  }), false);
 });
