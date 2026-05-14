@@ -1061,17 +1061,20 @@ button:disabled {
 .session-row-top {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: flex-end;
   min-width: 0;
+  min-height: 64px;
+  position: relative;
+  padding-left: 64px;
   padding-right: 68px;
 }
 
 .session-row-bottom {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
-  /* Indent so chips/actions visually align with the name after status + avatar. */
-  padding-left: calc(6px + 20px + (var(--space-2) * 2));
+  padding-left: 64px;
   padding-right: 28px;
 }
 
@@ -1123,9 +1126,10 @@ button:disabled {
 .session-open {
   background: transparent;
   display: flex;
+  justify-content: flex-end;
   flex: 0 1 auto;
   align-items: center;
-  text-align: left;
+  text-align: right;
   padding: 1px var(--space-1);
   font-family: var(--font-primary);
   font-size: 13px;
@@ -1249,10 +1253,14 @@ button:disabled {
 }
 
 .sidebar.is-collapsed .session-row-top {
+  display: flex;
   width: 100%;
   height: 100%;
   justify-content: center;
   position: relative;
+  min-height: 0;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .sidebar.is-collapsed .status-dot {
@@ -1291,6 +1299,13 @@ button:disabled {
   flex-shrink: 0;
   background: var(--text-faint);
   display: inline-block;
+}
+
+.session-row-top > .status-dot {
+  position: absolute;
+  right: 64px;
+  top: 13px;
+  z-index: 1;
 }
 
 .status-dot.status-active  { background: var(--status-online); }
@@ -1343,18 +1358,24 @@ button:disabled {
 
 .session-avatar {
   display: block;
-  width: 20px;
-  height: 20px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  transform: translate(-50%, -50%);
   flex-shrink: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
   object-fit: contain;
-  padding: 2px;
+  padding: 7px;
   box-shadow: var(--shadow-avatar-inset);
 }
 
 .sidebar.is-collapsed .session-avatar {
   display: block;
+  position: static;
+  transform: none;
   width: 24px;
   height: 24px;
   flex-shrink: 0;
