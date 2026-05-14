@@ -96,6 +96,13 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if !ok {
 		return nil, http.StatusBadRequest, "session mode does not support app chat turns"
 	}
+	skillName := validateSkillName(req.SkillName)
+	if strings.TrimSpace(req.SkillName) != "" && skillName == "" {
+		return nil, http.StatusBadRequest, "skill_name is invalid"
+	}
+	if skillName != "" && !promptMatchesSkillTrigger(provider, skillName, prompt) {
+		return nil, http.StatusBadRequest, "skill_name does not match prompt trigger"
+	}
 	if info.PodName == nil {
 		return nil, http.StatusServiceUnavailable, "session pod not ready"
 	}
@@ -120,7 +127,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Prompt:         prompt,
 		Model:          validateTurnArg(req.Model),
 		PermissionMode: validateTurnArg(req.PermissionMode),
-		SkillName:      validateSkillName(req.SkillName),
+		SkillName:      skillName,
 		FollowUp:       req.FollowUp,
 	}); err != nil {
 		return nil, http.StatusInternalServerError, "enqueue turn: " + err.Error()
@@ -132,6 +139,18 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		"client_nonce": clientNonce,
 		"provider":     provider,
 	}, 0, ""
+}
+
+func promptMatchesSkillTrigger(provider, skillName, prompt string) bool {
+	trigger := skillPromptTrigger(provider, skillName)
+	return prompt == trigger || strings.HasPrefix(prompt, trigger+" ") || strings.HasPrefix(prompt, trigger+"\n")
+}
+
+func skillPromptTrigger(provider, skillName string) string {
+	if provider == "codex" {
+		return "$" + skillName
+	}
+	return "/" + skillName
 }
 
 func sdkProviderForMode(mode string) (string, bool) {

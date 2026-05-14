@@ -10,6 +10,16 @@ function ev(
   type: TankConversationEvent["type"],
   fields: Partial<TankConversationEvent> = {},
 ): TankConversationEvent {
+  const defaults: Partial<TankConversationEvent> = {};
+  if (type === "user_message.created") {
+    defaults.actor = "user";
+    defaults.item_id = "turn-1:user";
+    defaults.client_nonce = "client-1";
+  }
+  if (type === "turn.submitted") {
+    defaults.client_nonce = "client-1";
+    defaults.payload = { status: "submitted" };
+  }
   return {
     event_id,
     order_key: event_id.padStart(4, "0"),
@@ -20,6 +30,7 @@ function ev(
     type,
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
+    ...defaults,
     ...fields,
   };
 }
@@ -126,4 +137,34 @@ test("canonical duplicate delivery converges before projection", () => {
   assert.equal(projection.entries.length, 1);
   assert.equal(projection.stopped, true);
   assert.equal(projection.failed, false);
+});
+
+test("projects durable skill invocation display metadata", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        item_id: "turn-1:user",
+        client_nonce: "client-1",
+        payload: {
+          text: "/test\n\nplease verify",
+          display: {
+            kind: "skill_invocation",
+            skill_name: "test",
+            supplemental_text: "please verify",
+          },
+        },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.entries.length, 1);
+  assert.equal(projection.entries[0]?.kind, "message");
+  if (projection.entries[0]?.kind === "message") {
+    assert.deepEqual(projection.entries[0].display, {
+      kind: "skill_invocation",
+      skill_name: "test",
+      supplemental_text: "please verify",
+    });
+  }
 });

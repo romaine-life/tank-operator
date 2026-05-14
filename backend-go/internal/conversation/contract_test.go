@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,13 @@ type conversationSchema struct {
 	Properties map[string]struct {
 		Enum []string `json:"enum"`
 	} `json:"properties"`
+}
+
+type conversationFixtures struct {
+	Events []struct {
+		Name  string         `json:"name"`
+		Event map[string]any `json:"event"`
+	} `json:"events"`
 }
 
 func TestContractEnumsMatchSchema(t *testing.T) {
@@ -47,6 +55,102 @@ func TestContractEnumsMatchSchema(t *testing.T) {
 			actual := goStringConstants(t, tt.goType)
 			if !reflect.DeepEqual(actual, expected) {
 				t.Fatalf("%s enum drift:\nGo:     %#v\nSchema: %#v", tt.name, actual, expected)
+			}
+		})
+	}
+}
+
+func TestFixtureEventsValidate(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("../../../schemas/tank-conversation-event.fixtures.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures conversationFixtures
+	if err := json.Unmarshal(fixtureBytes, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures.Events) == 0 {
+		t.Fatal("expected fixtures")
+	}
+	for _, fixture := range fixtures.Events {
+		t.Run(fixture.Name, func(t *testing.T) {
+			if err := ValidateEventMap(fixture.Event); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
+	valid := map[string]any{
+		"event_id":     "evt-1",
+		"order_key":    "order-1",
+		"session_id":   "63",
+		"turn_id":      "turn-1",
+		"item_id":      "turn-1:user",
+		"client_nonce": "client-1",
+		"actor":        "user",
+		"source":       "tank",
+		"type":         "user_message.created",
+		"created_at":   "2026-05-12T00:00:00.000Z",
+		"visibility":   "durable",
+		"payload": map[string]any{
+			"text": "hello",
+			"display": map[string]any{
+				"kind": "plain",
+			},
+		},
+	}
+
+	tests := []struct {
+		name  string
+		edit  func(map[string]any)
+		error string
+	}{
+		{
+			name:  "missing client nonce",
+			edit:  func(event map[string]any) { delete(event, "client_nonce") },
+			error: "client_nonce",
+		},
+		{
+			name:  "missing item id",
+			edit:  func(event map[string]any) { delete(event, "item_id") },
+			error: "item_id",
+		},
+		{
+			name: "missing text",
+			edit: func(event map[string]any) {
+				event["client_nonce"] = "client-1"
+				event["payload"] = map[string]any{}
+			},
+			error: "payload.text",
+		},
+		{
+			name: "bad skill display",
+			edit: func(event map[string]any) {
+				event["client_nonce"] = "client-1"
+				event["payload"] = map[string]any{
+					"text": "hello",
+					"display": map[string]any{
+						"kind":       "skill_invocation",
+						"skill_name": "",
+					},
+				}
+			},
+			error: "skill_name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := cloneMap(valid)
+			tt.edit(event)
+			err := ValidateEventMap(event)
+			if err == nil {
+				t.Fatalf("ValidateEventMap succeeded, want error containing %q", tt.error)
+			}
+			if !strings.Contains(err.Error(), tt.error) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.error)
 			}
 		})
 	}
@@ -95,4 +199,16 @@ func goStringConstants(t *testing.T, typeName string) []string {
 func isIdentNamed(expr ast.Expr, name string) bool {
 	ident, ok := expr.(*ast.Ident)
 	return ok && ident.Name == name
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		if nested, ok := value.(map[string]any); ok {
+			output[key] = cloneMap(nested)
+			continue
+		}
+		output[key] = value
+	}
+	return output
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 )
 
 // SessionEventStore reads the canonical SDK events the pod-side
@@ -86,6 +87,9 @@ func (s *cosmosSessionEventStore) ListBySession(ctx context.Context, tankSession
 		for _, raw := range page.Items {
 			var doc map[string]any
 			if err := json.Unmarshal(raw, &doc); err != nil {
+				continue
+			}
+			if err := conversation.ValidateEventMap(doc); err != nil {
 				continue
 			}
 			doc["tank_session_id"] = tankSessionID

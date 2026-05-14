@@ -58,13 +58,17 @@ export interface TankConversationEvent {
   [key: string]: unknown;
 }
 
+export type UserMessageDisplay =
+  | { kind: "plain" }
+  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
+
 const TANK_EVENT_TYPE_SET = new Set<string>(TANK_EVENT_TYPES);
 const TANK_ACTOR_SET = new Set<string>(TANK_ACTORS);
 const TANK_EVENT_SOURCE_SET = new Set<string>(TANK_EVENT_SOURCES);
 const TANK_VISIBILITY_SET = new Set<string>(TANK_VISIBILITIES);
 
 export function isTankConversationEvent(event: { [key: string]: unknown }): event is TankConversationEvent {
-  return (
+  if (
     typeof event.event_id === "string" &&
     typeof event.session_id === "string" &&
     typeof event.type === "string" &&
@@ -76,11 +80,14 @@ export function isTankConversationEvent(event: { [key: string]: unknown }): even
     typeof event.created_at === "string" &&
     typeof event.visibility === "string" &&
     TANK_VISIBILITY_SET.has(event.visibility)
-  );
+  ) {
+    return isValidEventByType(event);
+  }
+  return false;
 }
 
 export function isDurableTankConversationEvent(event: { [key: string]: unknown }): boolean {
-  return isTankConversationEvent(event) && event.visibility !== "live-only";
+  return isTankConversationEvent(event) && event.visibility !== "live-only" && hasOrderCursor(event);
 }
 
 export function normalizeClientNonce(value: unknown): string | null {
@@ -103,11 +110,15 @@ export function userSubmissionEvents(args: {
   text: string;
   message: unknown;
   runtime: "claude" | "codex";
+  skillName?: string;
   now?: string;
 }): { turnID: string; userMessage: TankConversationEvent; turnSubmitted: TankConversationEvent } {
+  const text = requireNonEmpty(args.text, "text");
+  const clientNonce = requireNonEmpty(args.clientNonce, "clientNonce");
   const createdAt = args.now ?? new Date().toISOString();
-  const turnID = turnIDForClientNonce(args.clientNonce);
+  const turnID = turnIDForClientNonce(clientNonce);
   const producer = { name: `${args.runtime}-runner`, runtime: args.runtime };
+  const display = userMessageDisplay(args.skillName, text);
   return {
     turnID,
     userMessage: {
@@ -116,7 +127,7 @@ export function userSubmissionEvents(args: {
       session_id: args.sessionID,
       turn_id: turnID,
       item_id: userItemID(turnID),
-      client_nonce: args.clientNonce,
+      client_nonce: clientNonce,
       actor: "user",
       source: "tank",
       type: "user_message.created",
@@ -124,8 +135,9 @@ export function userSubmissionEvents(args: {
       producer,
       visibility: "durable",
       payload: {
-        text: args.text,
+        text,
         message: args.message,
+        display,
       },
     },
     turnSubmitted: {
@@ -133,7 +145,7 @@ export function userSubmissionEvents(args: {
       conversation_id: args.sessionID,
       session_id: args.sessionID,
       turn_id: turnID,
-      client_nonce: args.clientNonce,
+      client_nonce: clientNonce,
       actor: "runner",
       source: "tank",
       type: "turn.submitted",
@@ -231,4 +243,87 @@ function stableIDPart(value: string): string {
   if (safe.length >= 6 && safe.length <= 80) return safe;
   if (safe.length > 80) return `${safe.slice(0, 64)}-${hash}`;
   return hash;
+}
+
+function isValidEventByType(event: { [key: string]: unknown }): boolean {
+  switch (event.type) {
+    case "user_message.created":
+      return hasStrings(event, ["turn_id", "item_id", "client_nonce"]) && isUserMessagePayload(event.payload);
+    case "turn.submitted":
+      return event.actor === "runner" && event.source === "tank" && hasStrings(event, ["turn_id", "client_nonce"]) && isStringPayload(event.payload, "status");
+    case "turn.started":
+    case "turn.completed":
+    case "turn.failed":
+    case "turn.interrupted":
+      return event.actor === "runner" && hasStrings(event, ["turn_id"]);
+    case "item.started":
+    case "item.delta":
+    case "item.completed":
+    case "item.failed":
+      return hasStrings(event, ["turn_id", "item_id"]) && isStringPayload(event.payload, "kind");
+    case "tool.approval_requested":
+    case "tool.approval_resolved":
+      return event.actor === "tool" && hasStrings(event, ["turn_id", "item_id"]) && isStringPayload(event.payload, "kind");
+    case "session.activity_updated":
+      return isStringPayload(event.payload, "status");
+    case "read_state.updated":
+      return isStringPayload(event.payload, "last_read_order_key");
+    default:
+      return true;
+  }
+}
+
+function hasOrderCursor(event: { [key: string]: unknown }): boolean {
+  return typeof event.order_key === "string" && event.order_key
+    ? true
+    : typeof event.sequence === "number" && Number.isInteger(event.sequence) && event.sequence >= 0;
+}
+
+function hasStrings(event: { [key: string]: unknown }, keys: string[]): boolean {
+  return keys.every((key) => typeof event[key] === "string" && event[key]);
+}
+
+function isUserMessagePayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.text !== "string" || !record.text) return false;
+  return isUserMessageDisplay(record.display);
+}
+
+function isUserMessageDisplay(display: unknown): display is UserMessageDisplay {
+  if (!display || typeof display !== "object" || Array.isArray(display)) return false;
+  const record = display as Record<string, unknown>;
+  if (record.kind === "plain") return true;
+  return record.kind === "skill_invocation" && isSkillName(record.skill_name);
+}
+
+function isStringPayload(payload: unknown, key: string): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === "string" && value.length > 0;
+}
+
+function userMessageDisplay(skillName: string | undefined, text: string): UserMessageDisplay {
+  if (!skillName) return { kind: "plain" };
+  if (!isSkillName(skillName)) throw new Error("skillName is invalid");
+  return {
+    kind: "skill_invocation",
+    skill_name: skillName,
+    supplemental_text: skillSupplementalText(skillName, text),
+  };
+}
+
+function skillSupplementalText(skillName: string, text: string): string {
+  const triggerPattern = new RegExp(`^[$/]${skillName}(?:\\s+|\\n+)?`, "i");
+  return text.trim().replace(triggerPattern, "").trim();
+}
+
+function isSkillName(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
+function requireNonEmpty(value: string, field: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${field} is required`);
+  return trimmed;
 }

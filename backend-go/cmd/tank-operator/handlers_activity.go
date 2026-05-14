@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -226,6 +227,9 @@ func isActivityStatus(status string) bool {
 }
 
 func isDurableTankActivityEvent(event map[string]any) bool {
+	if err := conversation.ValidateEventMap(event); err != nil {
+		return false
+	}
 	if visibility, _ := event["visibility"].(string); visibility == "live-only" {
 		return false
 	}

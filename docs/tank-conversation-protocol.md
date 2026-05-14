@@ -119,6 +119,36 @@ Optional fields:
 - `payload`: type-specific data. Keep provider raw payloads under
   `payload.provider` only when needed for a specialized renderer.
 
+Per-event requirements are enforced by
+`schemas/tank-conversation-event.schema.json` and runtime validators. The
+general envelope is not enough for validity. For example,
+`user_message.created` requires `turn_id`, `item_id`, `client_nonce`, and
+`payload.text`; `item.*` requires `turn_id`, `item_id`, and `payload.kind`.
+Malformed Tank-owned events must be rejected before persistence or websocket
+fanout rather than rendered with fallback ids or empty text.
+
+User-originated display semantics live in the durable user message payload.
+Plain user text uses:
+
+```json
+{ "display": { "kind": "plain" } }
+```
+
+Skill invocations use:
+
+```json
+{
+  "display": {
+    "kind": "skill_invocation",
+    "skill_name": "test",
+    "supplemental_text": "optional user text"
+  }
+}
+```
+
+The frontend must render skill invocation UI from this durable metadata. It
+must not infer skill cards from raw `/skill` or `$skill` prompt text.
+
 ## Event Families
 
 Conversation lifecycle:

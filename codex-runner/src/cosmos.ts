@@ -111,7 +111,7 @@ export function stampEventID(
     tank_event_seq: seq,
     tank_order_key: tankOrderKey,
     written_at: writtenAt,
-    ...(isDurableTankConversationEvent(event)
+    ...(hasTankEventEnvelope(event)
       ? {
           order_key: typeof event.order_key === "string" && event.order_key ? event.order_key : tankOrderKey,
           sequence: typeof event.sequence === "number" ? event.sequence : seq,
@@ -120,6 +120,10 @@ export function stampEventID(
         }
       : {}),
   };
+}
+
+function hasTankEventEnvelope(event: CodexEvent): boolean {
+  return typeof event.event_id === "string" && typeof event.visibility === "string";
 }
 
 export class CosmosSink {

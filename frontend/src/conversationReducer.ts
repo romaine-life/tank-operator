@@ -1,4 +1,4 @@
-import type { TankConversationEvent } from "./tankConversation";
+import type { TankConversationEvent, UserMessageDisplay } from "./tankConversation";
 
 export type ConversationRunStatus =
   | "ready"
@@ -16,6 +16,7 @@ export interface ConversationMessage {
   text: string;
   turnId?: string;
   clientNonce?: string;
+  display?: UserMessageDisplay;
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
@@ -203,12 +204,14 @@ function applyUserMessage(
     return state;
   }
   const text = stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
+  if (!event.item_id || !event.turn_id || !event.client_nonce || !text) return state;
   const message: ConversationMessage = {
-    id: event.item_id ?? event.event_id,
+    id: event.item_id,
     role: "user",
     text,
     turnId: event.turn_id,
     clientNonce: event.client_nonce,
+    display: userMessageDisplay(event),
     orderKey: event.order_key,
     sourceEventId: event.event_id,
     createdAt: event.created_at,
@@ -228,7 +231,8 @@ function upsertItem(
   status: ConversationItemStatus,
   appendDelta = false,
 ): ConversationReducerState {
-  const id = event.item_id ?? event.event_id;
+  if (!event.item_id || !event.turn_id) return state;
+  const id = event.item_id;
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, appendDelta ? "delta" : "text");
   const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
@@ -310,6 +314,28 @@ function numberPayload(event: TankConversationEvent, key: string): number | unde
 function booleanPayload(event: TankConversationEvent, key: string): boolean | undefined {
   const value = event.payload?.[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | undefined {
+  const display = event.payload?.display;
+  if (!display || typeof display !== "object" || Array.isArray(display)) return undefined;
+  const record = display as Record<string, unknown>;
+  if (record.kind === "plain") return { kind: "plain" };
+  if (record.kind !== "skill_invocation") return undefined;
+  if (typeof record.skill_name !== "string") return undefined;
+  if (
+    record.supplemental_text !== undefined &&
+    typeof record.supplemental_text !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "skill_invocation",
+    skill_name: record.skill_name,
+    ...(typeof record.supplemental_text === "string"
+      ? { supplemental_text: record.supplemental_text }
+      : {}),
+  };
 }
 
 function errorText(event: TankConversationEvent): string | null {

@@ -18,6 +18,7 @@ test("canonical: durable Tank conversation envelope", () => {
   assert.equal(
     isCanonical({
       event_id: "turn_1:item.started:toolu_1",
+      order_key: "order-1",
       session_id: "63",
       turn_id: "turn_1",
       item_id: "toolu_1",
@@ -26,6 +27,7 @@ test("canonical: durable Tank conversation envelope", () => {
       type: "item.started",
       created_at: "2026-05-12T00:00:00Z",
       visibility: "durable",
+      payload: { kind: "tool" },
     } as any),
     true,
   );
@@ -35,6 +37,7 @@ test("NOT canonical: live-only Tank conversation envelope", () => {
   assert.equal(
     isCanonical({
       event_id: "turn_1:item.delta:toolu_1",
+      order_key: "order-1",
       session_id: "63",
       turn_id: "turn_1",
       item_id: "toolu_1",
@@ -43,6 +46,7 @@ test("NOT canonical: live-only Tank conversation envelope", () => {
       type: "item.delta",
       created_at: "2026-05-12T00:00:00Z",
       visibility: "live-only",
+      payload: { kind: "tool" },
     } as any),
     false,
   );

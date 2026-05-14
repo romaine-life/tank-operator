@@ -11,6 +11,16 @@ function ev(
   fields: Partial<TankConversationEvent> = {},
 ): TankConversationEvent {
   const orderKey = `order-${String(index).padStart(3, "0")}`;
+  const defaults: Partial<TankConversationEvent> = {};
+  if (type === "user_message.created") {
+    defaults.actor = "user";
+    defaults.item_id = "turn-414:user";
+    defaults.client_nonce = "client-run-414";
+  }
+  if (type === "turn.submitted") {
+    defaults.client_nonce = "client-run-414";
+    defaults.payload = { status: "submitted" };
+  }
   return {
     event_id: `evt-${String(index).padStart(3, "0")}`,
     order_key: orderKey,
@@ -22,6 +32,7 @@ function ev(
     type,
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
+    ...defaults,
     ...fields,
   };
 }

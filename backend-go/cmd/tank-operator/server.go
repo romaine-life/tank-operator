@@ -73,6 +73,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sessions/{session_id}/files/content", s.handleWriteFile)
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
+	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-tools", s.handleListMCPTools)
 
 	// App-managed chat surface.
 	mux.HandleFunc("GET /api/sessions/{session_id}/agent-ws", s.handleAgentWebSocket)
@@ -91,6 +92,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)

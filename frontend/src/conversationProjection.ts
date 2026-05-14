@@ -3,6 +3,7 @@ import type {
   ConversationReducerState,
   ConversationRunStatus,
 } from "./conversationReducer";
+import type { UserMessageDisplay } from "./tankConversation";
 
 export type ConversationViewEntry =
   | ConversationMessageEntry
@@ -14,6 +15,7 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   kind: "message";
   role: "user" | "assistant" | "system";
   text: string;
+  display?: UserMessageDisplay;
 }
 
 export interface ConversationToolEntry extends ConversationEntryBase {
@@ -79,6 +81,7 @@ export function projectConversationState(
             kind: "message" as const,
             role: message.role,
             text,
+            display: message.display,
             time: message.createdAt ?? "",
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,

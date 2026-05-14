@@ -36,6 +36,7 @@ import {
 } from "./cosmos.js";
 import {
   normalizeClientNonce,
+  isTankConversationEvent,
   turnEvent,
   turnIDForClientNonce,
   userSubmissionEvents,
@@ -94,6 +95,10 @@ export async function dispatch(
   event: CodexEvent,
 ): Promise<boolean> {
   const stamped = stampEventID(event);
+  if (isMalformedTankEvent(stamped)) {
+    console.error("invalid Tank conversation event:", stamped);
+    return false;
+  }
   if (isCanonical(stamped)) {
     try {
       await sink.upsert(stamped);
@@ -114,6 +119,10 @@ export async function dispatchCreate(
   event: CodexEvent,
 ): Promise<"created" | "exists" | "failed"> {
   const stamped = stampEventID(event);
+  if (isMalformedTankEvent(stamped)) {
+    console.error("invalid Tank conversation event:", stamped);
+    return "failed";
+  }
   if (!isCanonical(stamped)) {
     ws.broadcastEvent(stamped);
     return "created";
@@ -129,6 +138,14 @@ export async function dispatchCreate(
   }
   ws.broadcastEvent(stamped);
   return "created";
+}
+
+function isMalformedTankEvent(event: CodexEvent): boolean {
+  return hasTankEventEnvelope(event) && !isTankConversationEvent(event);
+}
+
+function hasTankEventEnvelope(event: CodexEvent): boolean {
+  return typeof event.event_id === "string" && typeof event.visibility === "string";
 }
 
 function isAbortError(err: unknown): boolean {
@@ -431,6 +448,7 @@ export class Runner {
       text,
       message: { role: "user", content: text },
       runtime: "codex",
+      skillName: queueRecord?.skill_name,
     });
     const userResult = await dispatchCreate(this.sink, this.ws, {
       ...userMessage,
