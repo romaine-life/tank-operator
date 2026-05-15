@@ -33,38 +33,20 @@ func TestStubConversationReadStateStoreIsMonotonic(t *testing.T) {
 	}
 }
 
-func TestReadStateRecordFromDocNormalizesFields(t *testing.T) {
-	rec, err := readStateRecordFromDoc([]byte(`{
-		"email": "User@Example.COM",
-		"session_id": "63",
-		"last_read_order_key": "002",
-		"updated_at": "2026-05-12T00:00:00Z"
-	}`))
-	if err != nil {
-		t.Fatal(err)
+func TestNormalizeReadStateEmailLowercasesAndTrims(t *testing.T) {
+	if got := normalizeReadStateEmail("  User@Example.COM "); got != "user@example.com" {
+		t.Fatalf("normalize = %q", got)
 	}
-	if rec.Email != "user@example.com" || rec.SessionID != "63" || rec.LastReadOrderKey != "002" {
-		t.Fatalf("record = %#v", rec)
+	if got := normalizeReadStateEmail(""); got != "" {
+		t.Fatalf("empty = %q", got)
 	}
 }
 
-func TestReadStateDocIDUsesScopedStorageKey(t *testing.T) {
-	if got, want := readStateDocID("default", "63"), "read-state:63"; got != want {
-		t.Fatalf("default read-state doc id = %q, want %q", got, want)
+func TestReadStateMemoryKeyEmpty(t *testing.T) {
+	if key, _, _ := readStateMemoryKey("", "63"); key != "" {
+		t.Fatalf("empty email -> key %q", key)
 	}
-	if got, want := readStateDocID("slot-a", "63"), "read-state:slot-a:63"; got != want {
-		t.Fatalf("slot read-state doc id = %q, want %q", got, want)
-	}
-	doc := readStateDoc("slot-a", ConversationReadStateRecord{
-		Email:            "user@example.com",
-		SessionID:        "63",
-		LastReadOrderKey: "002",
-		UpdatedAt:        "2026-05-12T00:00:00Z",
-	})
-	if got, want := doc["session_id"], "63"; got != want {
-		t.Fatalf("session_id = %q, want public id %q", got, want)
-	}
-	if got, want := doc["session_storage_key"], "slot-a:63"; got != want {
-		t.Fatalf("session_storage_key = %q, want %q", got, want)
+	if key, _, _ := readStateMemoryKey("a@b", "  "); key != "" {
+		t.Fatalf("empty sessionID -> key %q", key)
 	}
 }

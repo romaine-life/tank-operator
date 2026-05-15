@@ -3,18 +3,19 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 )
 
 // SessionEventStore reads the canonical SDK events the pod-side runners write
-// to the session-events Cosmos container. The orchestrator owns writes through
+// to the session_events Postgres table. The orchestrator owns writes through
 // the session bus persister, and the SPA consumes those same durable rows
 // through timeline snapshots and the SSE stream.
 type SessionEventStore interface {
@@ -34,28 +35,20 @@ type SessionEventPage struct {
 	HasMore      bool
 }
 
-type cosmosSessionEventStore struct {
-	container *azcosmos.ContainerClient
-	scope     string
+type postgresSessionEventStore struct {
+	pool  *pgxpool.Pool
+	scope string
 }
 
-func NewCosmosSessionEventStore(endpoint, database, container, scope string, cred azcore.TokenCredential) (SessionEventStore, error) {
+func NewPostgresSessionEventStore(pool *pgxpool.Pool, scope string) SessionEventStore {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "default"
 	}
-	client, err := azcosmos.NewClient(endpoint, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-	c, err := client.NewContainer(database, container)
-	if err != nil {
-		return nil, err
-	}
-	return &cosmosSessionEventStore{container: c, scope: scope}, nil
+	return &postgresSessionEventStore{pool: pool, scope: scope}
 }
 
-func (s *cosmosSessionEventStore) Upsert(ctx context.Context, event map[string]any) error {
+func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string]any) error {
 	if err := conversation.ValidateEventMap(event); err != nil {
 		return err
 	}
@@ -78,125 +71,149 @@ func (s *cosmosSessionEventStore) Upsert(ctx context.Context, event map[string]a
 	if id == "" {
 		return errMissingSessionEventField("id")
 	}
+	orderKey := stringField(doc, "order_key")
+	if orderKey == "" {
+		return errMissingSessionEventField("order_key")
+	}
 	doc["id"] = id
 	doc["tank_session_id"] = storageKey
 	if _, ok := doc["tank_public_session_id"]; !ok && publicSessionID != "" {
 		doc["tank_public_session_id"] = publicSessionID
 	}
-	raw, err := json.Marshal(doc)
+	payload, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	return retryOnCosmosThrottle(ctx, func() error {
-		_, err := s.container.UpsertItem(ctx, azcosmos.NewPartitionKeyString(storageKey), raw, nil)
-		return err
-	})
+	turnID := stringField(doc, "turn_id")
+	eventType := stringField(doc, "type")
+
+	const q = `
+		INSERT INTO session_events (
+			tank_session_id, order_key, event_id, turn_id, event_type, payload
+		) VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), $6)
+		ON CONFLICT (tank_session_id, order_key) DO UPDATE
+		SET event_id   = EXCLUDED.event_id,
+			turn_id    = EXCLUDED.turn_id,
+			event_type = EXCLUDED.event_type,
+			payload    = EXCLUDED.payload
+	`
+	_, err = s.pool.Exec(ctx, q, storageKey, orderKey, id, turnID, eventType, payload)
+	return err
 }
 
 // ListBySession returns events for one session strictly after the canonical
-// Tank order_key cursor. The query stays within one partition and pages by
-// order_key in Cosmos, avoiding full-session reads on every replay or stream
-// tick.
-func (s *cosmosSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
+// Tank order_key cursor. Indexed seek on (tank_session_id, order_key) so no
+// full-session scan on every replay or stream tick.
+func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
 	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
 
-	query := "SELECT * FROM c WHERE c.tank_session_id = @sid AND IS_DEFINED(c.order_key) AND c.order_key != ''"
-	params := []azcosmos.QueryParameter{
-		{Name: "@sid", Value: storageKey},
-		{Name: "@limit", Value: queryLimit},
-	}
+	const baseQuery = `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1 AND order_key <> ''
+	`
+	q := baseQuery
+	args := []any{storageKey}
 	if cursor.AfterOrderKey != "" {
-		query += " AND c.order_key > @after"
-		params = append(params, azcosmos.QueryParameter{Name: "@after", Value: cursor.AfterOrderKey})
+		q += " AND order_key > $2 ORDER BY order_key ASC LIMIT $3"
+		args = append(args, cursor.AfterOrderKey, queryLimit)
+	} else {
+		q += " ORDER BY order_key ASC LIMIT $2"
+		args = append(args, queryLimit)
 	}
-	query += " ORDER BY c.order_key ASC OFFSET 0 LIMIT @limit"
 
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return SessionEventPage{}, err
+	}
+	defer rows.Close()
+
 	out := make([]map[string]any, 0, queryLimit)
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
 			return SessionEventPage{}, err
 		}
-		for _, raw := range page.Items {
-			var doc map[string]any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
-			}
-			if err := conversation.ValidateEventMap(doc); err != nil {
-				// Per docs/migration-policy.md, the read path no longer
-				// silently filters malformed docs. The producer-side cutover
-				// (runner dispatch contract, persister schema-terminal NAK)
-				// guarantees only Tank events land in Cosmos, and the
-				// pre-deploy Cosmos audit script (scripts/audit-session-
-				// events.py) clears any pre-existing rows. A failure here
-				// means one of those guarantees regressed — surface it.
-				return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
-			}
-			doc["tank_session_id"] = tankSessionID
-			out = append(out, doc)
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
 		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			// Per docs/migration-policy.md, the read path no longer silently
+			// filters malformed docs. The producer-side cutover (runner
+			// dispatch contract, persister schema-terminal NAK) guarantees
+			// only Tank events land in storage. A failure here means one of
+			// those guarantees regressed — surface it.
+			return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		doc["tank_session_id"] = tankSessionID
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return SessionEventPage{}, err
 	}
 	return sessionEventPageFromOrdered(out, limit), nil
 }
 
-func (s *cosmosSessionEventStore) HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error) {
+func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error) {
 	if strings.TrimSpace(orderKey) == "" {
 		return true, nil
 	}
 	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
-	query := "SELECT TOP 1 VALUE c.order_key FROM c WHERE c.tank_session_id = @sid AND c.order_key = @order_key"
-	params := []azcosmos.QueryParameter{
-		{Name: "@sid", Value: storageKey},
-		{Name: "@order_key", Value: orderKey},
+	const q = `
+		SELECT 1
+		FROM session_events
+		WHERE tank_session_id = $1 AND order_key = $2
+		LIMIT 1
+	`
+	var one int
+	err := s.pool.QueryRow(ctx, q, storageKey, orderKey).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return false, err
-		}
-		if len(page.Items) > 0 {
-			return true, nil
-		}
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return true, nil
 }
 
-func (s *cosmosSessionEventStore) FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error) {
+func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error) {
 	if strings.TrimSpace(turnID) == "" {
 		return nil, nil
 	}
 	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
-	query := "SELECT TOP 1 * FROM c WHERE c.tank_session_id = @sid AND c.turn_id = @turn_id AND (c.type = @completed OR c.type = @failed OR c.type = @interrupted) ORDER BY c.order_key DESC"
-	params := []azcosmos.QueryParameter{
-		{Name: "@sid", Value: storageKey},
-		{Name: "@turn_id", Value: turnID},
-		{Name: "@completed", Value: string(conversation.EventTurnCompleted)},
-		{Name: "@failed", Value: string(conversation.EventTurnFailed)},
-		{Name: "@interrupted", Value: string(conversation.EventTurnInterrupted)},
+	const q = `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND turn_id = $2
+			AND event_type IN ($3, $4, $5)
+		ORDER BY order_key DESC
+		LIMIT 1
+	`
+	var payload []byte
+	err := s.pool.QueryRow(ctx, q, storageKey, turnID,
+		string(conversation.EventTurnCompleted),
+		string(conversation.EventTurnFailed),
+		string(conversation.EventTurnInterrupted),
+	).Scan(&payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
 	}
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, raw := range page.Items {
-			var doc map[string]any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
-			}
-			if err := conversation.ValidateEventMap(doc); err != nil {
-				return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
-			}
-			doc["tank_session_id"] = tankSessionID
-			return doc, nil
-		}
+	if err != nil {
+		return nil, err
 	}
-	return nil, nil
+	var doc map[string]any
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
+	}
+	if err := conversation.ValidateEventMap(doc); err != nil {
+		return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
+	}
+	doc["tank_session_id"] = tankSessionID
+	return doc, nil
 }
 
 func sessionEventPageFromOrdered(events []map[string]any, limit int) SessionEventPage {
@@ -230,7 +247,7 @@ func normalizeSessionEventLimit(limit int) int {
 	return limit
 }
 
-// Stub for local dev where Cosmos isn't configured.
+// Stub for local dev where Postgres isn't configured.
 type StubSessionEventStore struct{}
 
 func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) error { return nil }

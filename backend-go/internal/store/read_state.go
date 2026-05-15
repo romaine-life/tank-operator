@@ -2,23 +2,17 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net/http"
 	"strings"
 	"sync"
-	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
-
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ConversationReadStateStore persists the per-user render cursor for a Tank
 // conversation. The cursor is the same render-order value used by /timeline,
-// not a Cosmos document id.
+// not any storage primary key.
 type ConversationReadStateStore interface {
 	Get(ctx context.Context, email, sessionID string) (*ConversationReadStateRecord, error)
 	Set(ctx context.Context, email, sessionID, lastReadOrderKey string) (ConversationReadStateRecord, error)
@@ -31,54 +25,59 @@ type ConversationReadStateRecord struct {
 	UpdatedAt        string `json:"updated_at"`
 }
 
-type cosmosConversationReadStateStore struct {
-	container *azcosmos.ContainerClient
-	scope     string
+type postgresConversationReadStateStore struct {
+	pool  *pgxpool.Pool
+	scope string
 }
 
-func NewCosmosConversationReadStateStore(endpoint, database, container, scope string, cred azcore.TokenCredential) (ConversationReadStateStore, error) {
+// NewPostgresConversationReadStateStore returns a read-state store backed by
+// the conversation_read_state table. `scope` is the session scope (e.g.
+// "default" or "slot-a"); rows live in a composite primary key keyed by
+// (email, session_scope, session_id) so the same email can have independent
+// cursors per scope.
+func NewPostgresConversationReadStateStore(pool *pgxpool.Pool, scope string) ConversationReadStateStore {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "default"
 	}
-	client, err := azcosmos.NewClient(endpoint, cred, nil)
-	if err != nil {
-		return nil, err
-	}
-	c, err := client.NewContainer(database, container)
-	if err != nil {
-		return nil, err
-	}
-	return &cosmosConversationReadStateStore{container: c, scope: scope}, nil
+	return &postgresConversationReadStateStore{pool: pool, scope: scope}
 }
 
-func (s *cosmosConversationReadStateStore) Get(ctx context.Context, email, sessionID string) (*ConversationReadStateRecord, error) {
+func (s *postgresConversationReadStateStore) Get(ctx context.Context, email, sessionID string) (*ConversationReadStateRecord, error) {
 	normalized := normalizeReadStateEmail(email)
 	sessionID = strings.TrimSpace(sessionID)
 	if normalized == "" || sessionID == "" {
 		return nil, nil
 	}
-	resp, err := s.container.ReadItem(ctx, azcosmos.NewPartitionKeyString(normalized), readStateDocID(s.scope, sessionID), nil)
+	const q = `
+		SELECT last_read_order_key, updated_at
+		FROM conversation_read_state
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	var (
+		lastReadOrderKey string
+		updatedAt        string
+	)
+	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(&lastReadOrderKey, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
-		if isCosmosNotFound(err) {
-			return nil, nil
-		}
 		return nil, err
 	}
-	rec, err := readStateRecordFromDoc(resp.Value)
-	if err != nil {
-		return nil, err
-	}
-	if rec.Email == "" {
-		rec.Email = normalized
-	}
-	if rec.SessionID == "" {
-		rec.SessionID = sessionID
-	}
-	return &rec, nil
+	return &ConversationReadStateRecord{
+		Email:            normalized,
+		SessionID:        sessionID,
+		LastReadOrderKey: lastReadOrderKey,
+		UpdatedAt:        updatedAt,
+	}, nil
 }
 
-func (s *cosmosConversationReadStateStore) Set(ctx context.Context, email, sessionID, lastReadOrderKey string) (ConversationReadStateRecord, error) {
+// Set advances the cursor monotonically. If the supplied key is not strictly
+// greater than the stored value, the row is left unchanged and the stored
+// record is returned (matching the Cosmos impl's idempotent behavior). The
+// comparison is done atomically inside the UPSERT — no read-then-write race.
+func (s *postgresConversationReadStateStore) Set(ctx context.Context, email, sessionID, lastReadOrderKey string) (ConversationReadStateRecord, error) {
 	normalized := normalizeReadStateEmail(email)
 	sessionID = strings.TrimSpace(sessionID)
 	lastReadOrderKey = strings.TrimSpace(lastReadOrderKey)
@@ -86,67 +85,39 @@ func (s *cosmosConversationReadStateStore) Set(ctx context.Context, email, sessi
 		return ConversationReadStateRecord{}, nil
 	}
 
-	docID := readStateDocID(s.scope, sessionID)
-	pk := azcosmos.NewPartitionKeyString(normalized)
-	for attempt := 0; attempt < 20; attempt++ {
-		resp, readErr := s.container.ReadItem(ctx, pk, docID, nil)
-
-		var existing *ConversationReadStateRecord
-		var etag string
-		exists := false
-		if readErr == nil {
-			rec, err := readStateRecordFromDoc(resp.Value)
-			if err != nil {
-				return ConversationReadStateRecord{}, fmt.Errorf("decode read state: %w", err)
-			}
-			if rec.LastReadOrderKey != "" && rec.LastReadOrderKey >= lastReadOrderKey {
-				return rec, nil
-			}
-			existing = &rec
-			etag = string(resp.ETag)
-			exists = true
-		} else if !isCosmosNotFound(readErr) {
-			return ConversationReadStateRecord{}, fmt.Errorf("read read state: %w", readErr)
-		}
-
-		rec := ConversationReadStateRecord{
-			Email:            normalized,
-			SessionID:        sessionID,
-			LastReadOrderKey: lastReadOrderKey,
-			UpdatedAt:        nowISO(),
-		}
-		if existing != nil && existing.UpdatedAt != "" && existing.LastReadOrderKey == lastReadOrderKey {
-			rec.UpdatedAt = existing.UpdatedAt
-		}
-		raw, err := json.Marshal(readStateDoc(s.scope, rec))
-		if err != nil {
-			return ConversationReadStateRecord{}, err
-		}
-
-		var writeErr error
-		if exists {
-			opts := &azcosmos.ItemOptions{IfMatchEtag: (*azcore.ETag)(&etag)}
-			_, writeErr = s.container.ReplaceItem(ctx, pk, docID, raw, opts)
-		} else {
-			_, writeErr = s.container.CreateItem(ctx, pk, raw, nil)
-		}
-		if writeErr == nil {
-			return rec, nil
-		}
-		if isCosmosConflict(writeErr) {
-			continue
-		}
-		if isCosmosThrottled(writeErr) {
-			select {
-			case <-time.After(cosmosRetryAfter(writeErr)):
-				continue
-			case <-ctx.Done():
-				return ConversationReadStateRecord{}, ctx.Err()
-			}
-		}
-		return ConversationReadStateRecord{}, fmt.Errorf("write read state: %w", writeErr)
+	// GREATEST() picks the higher cursor; updated_at only advances when the
+	// stored cursor was actually replaced. RETURNING gives us the post-update
+	// state in one round-trip.
+	const q = `
+		INSERT INTO conversation_read_state (
+			email, session_scope, session_id, last_read_order_key, updated_at
+		) VALUES ($1, $2, $3, $4, now())
+		ON CONFLICT (email, session_scope, session_id) DO UPDATE
+		SET last_read_order_key = GREATEST(
+				EXCLUDED.last_read_order_key,
+				conversation_read_state.last_read_order_key
+			),
+			updated_at = CASE
+				WHEN EXCLUDED.last_read_order_key > conversation_read_state.last_read_order_key
+				THEN now()
+				ELSE conversation_read_state.updated_at
+			END
+		RETURNING last_read_order_key, updated_at
+	`
+	var (
+		storedKey   string
+		storedStamp string
+	)
+	if err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID, lastReadOrderKey).
+		Scan(&storedKey, &storedStamp); err != nil {
+		return ConversationReadStateRecord{}, err
 	}
-	return ConversationReadStateRecord{}, fmt.Errorf("could not update read state after 20 retries")
+	return ConversationReadStateRecord{
+		Email:            normalized,
+		SessionID:        sessionID,
+		LastReadOrderKey: storedKey,
+		UpdatedAt:        storedStamp,
+	}, nil
 }
 
 type StubConversationReadStateStore struct {
@@ -208,60 +179,6 @@ func readStateMemoryKey(email, sessionID string) (string, string, string) {
 	return normalized + "\x1f" + trimmedSessionID, normalized, trimmedSessionID
 }
 
-func readStateDocID(scope, sessionID string) string {
-	return "read-state:" + compat.SessionStorageKey(scope, sessionID)
-}
-
-func readStateDoc(scope string, rec ConversationReadStateRecord) map[string]any {
-	scope = strings.TrimSpace(scope)
-	if scope == "" {
-		scope = "default"
-	}
-	storageKey := compat.SessionStorageKey(scope, rec.SessionID)
-	return map[string]any{
-		"id":                  readStateDocID(scope, rec.SessionID),
-		"type":                "conversation_read_state",
-		"email":               normalizeReadStateEmail(rec.Email),
-		"session_id":          strings.TrimSpace(rec.SessionID),
-		"session_scope":       strings.TrimSpace(scope),
-		"session_storage_key": storageKey,
-		"last_read_order_key": strings.TrimSpace(rec.LastReadOrderKey),
-		"updated_at":          rec.UpdatedAt,
-	}
-}
-
-func readStateRecordFromDoc(data []byte) (ConversationReadStateRecord, error) {
-	var doc struct {
-		Email            string `json:"email"`
-		SessionID        string `json:"session_id"`
-		LastReadOrderKey string `json:"last_read_order_key"`
-		UpdatedAt        string `json:"updated_at"`
-	}
-	if err := json.Unmarshal(data, &doc); err != nil {
-		return ConversationReadStateRecord{}, err
-	}
-	return ConversationReadStateRecord{
-		Email:            normalizeReadStateEmail(doc.Email),
-		SessionID:        strings.TrimSpace(doc.SessionID),
-		LastReadOrderKey: strings.TrimSpace(doc.LastReadOrderKey),
-		UpdatedAt:        doc.UpdatedAt,
-	}, nil
-}
-
 func normalizeReadStateEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
-}
-
-func isCosmosNotFound(err error) bool {
-	var respErr *azcore.ResponseError
-	return errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound
-}
-
-func isCosmosConflict(err error) bool {
-	var respErr *azcore.ResponseError
-	if !errors.As(err, &respErr) {
-		return false
-	}
-	return respErr.StatusCode == http.StatusConflict ||
-		respErr.StatusCode == http.StatusPreconditionFailed
 }
