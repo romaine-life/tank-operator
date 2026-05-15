@@ -45,7 +45,6 @@ ARG GO_VERSION=1.26.2
 ARG VITE_VERSION=5.4.21
 ARG TYPESCRIPT_VERSION=5.9.3
 ARG TANK_AGENT=claude
-ARG PLATFORM_MCP_REF=main
 
 # ripgrep + make round out the bash surface (rg replaces grep for repo
 # search; make is needed for several of the consumed repos' dev flows).
@@ -122,9 +121,6 @@ RUN npm install -g @sandbox-agent/cli@0.4.2
 RUN pip install --no-cache-dir --break-system-packages \
         "pytest==${PYTEST_VERSION}" \
         "ruff==${RUFF_VERSION}"
-
-RUN pip install --no-cache-dir --break-system-packages \
-        "git+https://github.com/nelsong6/platform-mcp.git@${PLATFORM_MCP_REF}"
 
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session

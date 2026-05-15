@@ -11,7 +11,7 @@ func TestParseMCPServerEntries(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{
 		"mcpServers": {
 			"github": {"type": "http", "url": "http://127.0.0.1:9992/"},
-			"platform": {"command": "platform-mcp"},
+			"localfs": {"command": "localfs-mcp"},
 			"broken": "skip me",
 			"k8s": {"url": "http://127.0.0.1:9993/"}
 		}
@@ -36,9 +36,9 @@ func TestParseMCPServerEntries(t *testing.T) {
 			Enabled:   true,
 		},
 		{
-			Name:      "platform",
+			Name:      "localfs",
 			Transport: "stdio",
-			Target:    "platform-mcp",
+			Target:    "localfs-mcp",
 			Source:    "/workspace/.mcp.json",
 			Enabled:   true,
 		},
