@@ -152,7 +152,7 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 			summary.ActiveTurnID = nil
 			summary.NeedsInput = false
 			summary.Failed = false
-		case "turn.failed":
+		case "turn.failed", "turn.command_failed":
 			summary.Status = "error"
 			summary.ActiveTurnID = nil
 			summary.NeedsInput = false
@@ -240,6 +240,7 @@ func isDurableTankActivityEvent(event map[string]any) bool {
 		"turn.started",
 		"turn.completed",
 		"turn.failed",
+		"turn.command_failed",
 		"turn.interrupted",
 		"item.started",
 		"item.delta",
@@ -267,6 +268,7 @@ func isUnreadOutputEvent(event map[string]any) bool {
 		"tool.approval_requested",
 		"tool.approval_resolved",
 		"turn.failed",
+		"turn.command_failed",
 		"turn.interrupted":
 		return true
 	default:

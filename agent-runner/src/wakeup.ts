@@ -1,6 +1,13 @@
-// ScheduleWakeup detection in SDK events. The pod-side runner detects
-// the agent's tool_use call and publishes the wakeup prompt as a delayed
-// JetStream session command. The same live pod runner consumes it when due.
+// ScheduleWakeup detection in SDK events. The pod-side runner extracts
+// the agent's tool_use call and schedules an in-process setTimeout; when
+// the timer fires, the runner publishes the wakeup prompt as a normal
+// submit_turn command (source=schedule-wakeup) to the session command
+// subject, which the same runner then consumes as if it were a user turn.
+// Timer state lives in the runner process: it survives orchestrator
+// rollouts (the session pod is independent), but a runner-process restart
+// inside a live pod loses pending wakeups. That matches the durability
+// boundary in docs/product-inspirations.md, which scopes scheduled-wake
+// state to runtime state rather than durable messaging.
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 

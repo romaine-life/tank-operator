@@ -91,6 +91,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	}
 
 	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	interruptTurnID := "interrupt_" + auth.RandomHex(12)
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
 		CommandID:         "interrupt:" + targetTurnID + ":" + auth.RandomHex(12),
 		Type:              sessionbus.CommandInterrupt,
@@ -99,11 +100,25 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		Email:             user.Email,
 		Provider:          provider,
 		Source:            "interrupt",
-		TurnID:            "interrupt_" + auth.RandomHex(12),
+		TurnID:            interruptTurnID,
 		ClientNonce:       targetTurnID,
 		TargetTurnID:      targetTurnID,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
+		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+			SessionID:         sessionID,
+			SessionStorageKey: storageKey,
+			Email:             user.Email,
+			TurnID:            interruptTurnID,
+			ClientNonce:       targetTurnID,
+			Runtime:           provider,
+			Reason:            "publish_interrupt_failed: " + err.Error(),
+			Now:               time.Now().UTC(),
+		})
+		if writeErr := s.sessionEvents.Upsert(r.Context(), failedEvent); writeErr != nil {
+			slog.Warn("persist turn.command_failed for interrupt",
+				"session_id", sessionID, "target_turn_id", targetTurnID, "error", writeErr)
+		}
 		writeError(w, http.StatusInternalServerError, "publish interrupt: "+err.Error())
 		return
 	}
@@ -165,6 +180,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 	}
 
 	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	inputReplyTurnID := "input_reply_" + auth.RandomHex(12)
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
 		CommandID:            "input-reply:" + targetTurnID + ":" + auth.RandomHex(12),
 		Type:                 sessionbus.CommandInputReply,
@@ -173,7 +189,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		Email:                user.Email,
 		Provider:             "claude",
 		Source:               "input-reply",
-		TurnID:               "input_reply_" + auth.RandomHex(12),
+		TurnID:               inputReplyTurnID,
 		ClientNonce:          targetTurnID,
 		TargetTurnID:         targetTurnID,
 		TargetItemID:         timelineID,
@@ -182,6 +198,20 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		Prompt:               text,
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
+		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+			SessionID:         sessionID,
+			SessionStorageKey: storageKey,
+			Email:             user.Email,
+			TurnID:            inputReplyTurnID,
+			ClientNonce:       targetTurnID,
+			Runtime:           "claude",
+			Reason:            "publish_input_reply_failed: " + err.Error(),
+			Now:               time.Now().UTC(),
+		})
+		if writeErr := s.sessionEvents.Upsert(r.Context(), failedEvent); writeErr != nil {
+			slog.Warn("persist turn.command_failed for input reply",
+				"session_id", sessionID, "target_turn_id", targetTurnID, "error", writeErr)
+		}
 		writeError(w, http.StatusInternalServerError, "publish input reply: "+err.Error())
 		return
 	}
@@ -286,6 +316,34 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := s.sessionBus.PublishCommand(ctx, command); err != nil {
+		// Command publish failed — NATS is likely broken. Persist the
+		// pre-command user_message.created + turn.submitted events
+		// directly to Cosmos so the user's submission isn't lost from
+		// the durable record, then emit a turn.command_failed marker
+		// keyed to the same turn_id so the renderer can show the
+		// stranded submission as failed instead of perpetually
+		// "submitted."
+		for _, event := range events {
+			if writeErr := s.sessionEvents.Upsert(ctx, event); writeErr != nil {
+				slog.Warn("persist boundary event after publish failure",
+					"session_id", sessionID, "turn_id", turnID,
+					"event_type", event["type"], "error", writeErr)
+			}
+		}
+		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+			SessionID:         sessionID,
+			SessionStorageKey: storageKey,
+			Email:             email,
+			TurnID:            turnID,
+			ClientNonce:       clientNonce,
+			Runtime:           provider,
+			Reason:            "publish_submit_turn_failed: " + err.Error(),
+			Now:               time.Now().UTC(),
+		})
+		if writeErr := s.sessionEvents.Upsert(ctx, failedEvent); writeErr != nil {
+			slog.Warn("persist turn.command_failed",
+				"session_id", sessionID, "turn_id", turnID, "error", writeErr)
+		}
 		return nil, http.StatusInternalServerError, "publish turn: " + err.Error()
 	}
 	for _, event := range events {

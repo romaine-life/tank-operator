@@ -34,7 +34,6 @@ type appServer struct {
 	sessionEvents            store.SessionEventStore
 	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
-	eventBus                 *sessions.EventBus
 	verifier                 *auth.Verifier
 	minter                   *auth.Minter
 	namespace                string
@@ -53,6 +52,8 @@ type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
 	PublishEvent(context.Context, string, map[string]any) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
+	PublishSessionListWake(context.Context, string) error
+	SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {

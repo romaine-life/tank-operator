@@ -100,6 +100,7 @@
         "turn.started",
         "turn.completed",
         "turn.failed",
+        "turn.command_failed",
         "turn.interrupted",
         "item.started",
         "item.delta",
@@ -271,6 +272,28 @@
         "required": ["turn_id"],
         "properties": {
           "actor": { "const": "runner" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": { "const": "turn.command_failed" }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": {
+            "type": "object",
+            "required": ["reason"],
+            "properties": {
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
         }
       }
     },

@@ -223,6 +223,30 @@
       }
     },
     {
+      "name": "turn command failed",
+      "event": {
+        "event_id": "turn_contract:turn.command_failed:publish_failed",
+        "order_key": "order-0007a",
+        "sequence": 7,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "system",
+        "source": "tank",
+        "type": "turn.command_failed",
+        "created_at": "2026-05-12T00:00:06.500Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "reason": "publish_submit_turn_failed: nats down"
+        }
+      }
+    },
+    {
       "name": "turn interrupted",
       "event": {
         "event_id": "turn_contract:turn.interrupted:client_interrupt",

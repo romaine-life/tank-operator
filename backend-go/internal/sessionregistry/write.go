@@ -190,23 +190,13 @@ func (s *CosmosStore) MarkDeleted(ctx context.Context, email, sessionID string) 
 }
 
 func (s *CosmosStore) readSessionDoc(ctx context.Context, pk azcosmos.PartitionKey, sessionID string) (azcosmos.ItemResponse, string, error) {
-	for _, docID := range sessionDocIDs(s.scope, sessionID) {
-		resp, err := s.container.ReadItem(ctx, pk, docID, nil)
-		if err == nil {
-			return resp, docID, nil
+	docID := compat.SessionDocID(s.scope, sessionID)
+	resp, err := s.container.ReadItem(ctx, pk, docID, nil)
+	if err != nil {
+		if isNotFound(err) {
+			return azcosmos.ItemResponse{}, "", fmt.Errorf("session not found")
 		}
-		if !isNotFound(err) {
-			return azcosmos.ItemResponse{}, "", err
-		}
+		return azcosmos.ItemResponse{}, "", err
 	}
-	return azcosmos.ItemResponse{}, "", fmt.Errorf("session not found")
-}
-
-func sessionDocIDs(scope, sessionID string) []string {
-	primary := compat.SessionDocID(scope, sessionID)
-	legacy := "session:" + sessionID
-	if primary == legacy {
-		return []string{primary}
-	}
-	return []string{primary, legacy}
+	return resp, docID, nil
 }

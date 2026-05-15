@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -70,7 +71,12 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
 	flusher.Flush()
 
-	ch, cancel := s.eventBus.Subscribe(user.Email)
+	ch, cancel, err := s.sessionBus.SubscribeSessionListWake(r.Context(), user.Email)
+	if err != nil {
+		slog.Warn("session list wake subscribe failed", "email", user.Email, "error", err)
+		writeError(w, http.StatusInternalServerError, "session bus unavailable")
+		return
+	}
 	defer cancel()
 
 	keepalive := time.NewTicker(30 * time.Second)

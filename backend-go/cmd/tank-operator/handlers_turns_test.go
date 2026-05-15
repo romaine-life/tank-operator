@@ -17,6 +17,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 type recordingSessionBus struct {
@@ -42,6 +43,12 @@ func (b *recordingSessionBus) PublishEvent(_ context.Context, _ string, event ma
 }
 
 func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
+func (*recordingSessionBus) PublishSessionListWake(context.Context, string) error { return nil }
+
+func (*recordingSessionBus) SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error) {
 	return make(chan struct{}), func() {}, nil
 }
 
@@ -268,12 +275,13 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 	k8s := fake.NewSimpleClientset(clientObjects...)
 	ns := compat.SessionsNamespace
 	return &appServer{
-		k8s:          k8s,
-		mgr:          sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
-		sessionBus:   bus,
-		verifier:     auth.NewVerifier(testJWT(t), "user@example.com"),
-		namespace:    ns,
-		sessionScope: "default",
+		k8s:           k8s,
+		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
+		sessionBus:    bus,
+		sessionEvents: store.StubSessionEventStore{},
+		verifier:      auth.NewVerifier(testJWT(t), "user@example.com"),
+		namespace:     ns,
+		sessionScope:  "default",
 	}
 }
 
