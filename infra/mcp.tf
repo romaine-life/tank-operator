@@ -75,14 +75,6 @@ resource "azurerm_cosmosdb_sql_role_assignment" "mcp_azure_personal_infra_server
   scope               = data.azurerm_cosmosdb_account.infra_serverless.id
 }
 
-resource "azurerm_cosmosdb_sql_role_assignment" "mcp_azure_personal_tank_operator_contributor" {
-  resource_group_name = data.azurerm_resource_group.main.name
-  account_name        = azurerm_cosmosdb_account.tank_operator.name
-  role_definition_id  = "${azurerm_cosmosdb_account.tank_operator.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"
-  principal_id        = module.mcp_azure_personal.managed_identity_principal_id
-  scope               = azurerm_cosmosdb_account.tank_operator.id
-}
-
 # ----------------------------------------------------------------------------
 # mcp-tank-operator: thin shim — session CRUD on behalf of caller pod IP
 # ----------------------------------------------------------------------------

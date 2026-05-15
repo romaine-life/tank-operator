@@ -112,21 +112,21 @@ spec:
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST
               value: https://login.microsoftonline.com/
-            # Cosmos DB profile store (#57). Auth is via the same workload
-            # identity as the KV writer above â€” DefaultAzureCredential picks
-            # up the federated SA-token. Empty COSMOS_ENDPOINT puts the
-            # backend's profiles store in degraded "stub" mode (logged
-            # warning at startup, in-memory Profile returned for any
-            # get_or_create), which keeps first-install boot working before
-            # tofu has provisioned the account.
-            - name: COSMOS_ENDPOINT
-              value: {{ .Values.cosmos.endpoint | quote }}
-            - name: COSMOS_DATABASE
-              value: {{ .Values.cosmos.database | quote }}
-            - name: COSMOS_PROFILES_CONTAINER
-              value: {{ .Values.cosmos.profilesContainer | quote }}
-            - name: COSMOS_SESSION_EVENTS_CONTAINER
-              value: {{ .Values.cosmos.sessionEventsContainer | quote }}
+            # Postgres Flexible Server — durable history layer. Auth is via
+            # the same workload identity as the KV writer above; pgx mints a
+            # fresh AAD token for `ossrdbms-aad.database.windows.net` on every
+            # dial via BeforeConnect, and pool MaxConnLifetime is bounded
+            # below the token's ~60-min expiry so a connection never holds an
+            # expired credential. Empty POSTGRES_HOST puts every durable
+            # store in degraded "stub" mode (logged warning at startup,
+            # in-memory implementations returned), which keeps first-install
+            # boot working before tofu has provisioned the server.
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
             - name: NATS_URL
               value: {{ .Values.sessionBus.url | quote }}
             - name: NATS_STREAM

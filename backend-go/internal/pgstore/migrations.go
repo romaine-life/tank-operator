@@ -66,6 +66,17 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS session_events_created_at
 		ON session_events (created_at)`,
 
+	// `session_counters` — monotonic session-id allocator, one row per scope.
+	// Replaces the Cosmos `session-counter[:scope]` document the previous
+	// store kept under a sentinel email. The atomic INCREMENT-AND-RETURN
+	// happens via the UPSERT in sessionregistry.NextSessionID.
+	`CREATE TABLE IF NOT EXISTS session_counters (
+		session_scope       text PRIMARY KEY,
+		next_session_number bigint NOT NULL DEFAULT 1,
+		created_at          timestamptz NOT NULL DEFAULT now(),
+		updated_at          timestamptz NOT NULL DEFAULT now()
+	)`,
+
 	// `conversation_read_state` — per-user, per-session render cursor.
 	`CREATE TABLE IF NOT EXISTS conversation_read_state (
 		email                text NOT NULL,
