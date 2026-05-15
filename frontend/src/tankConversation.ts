@@ -112,6 +112,11 @@ function isValidEventByType(event: Record<string, unknown>): boolean {
     case "turn.failed":
     case "turn.interrupted":
       return event.actor === "runner" && hasStrings(event, ["turn_id"]);
+    case "turn.command_failed":
+      return event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["turn_id"]) &&
+        isStringPayload(event.payload, "reason");
     case "item.started":
     case "item.delta":
     case "item.completed":

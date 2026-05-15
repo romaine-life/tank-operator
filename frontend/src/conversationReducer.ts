@@ -129,6 +129,16 @@ export function conversationReducer(
         lastError: errorText(event),
         lastUsage: event.payload?.usage ?? next.lastUsage,
       };
+    case "turn.command_failed":
+      return {
+        ...next,
+        runStatus: "error",
+        activeTurnId: null,
+        activeItemId: null,
+        needsInput: false,
+        failed: true,
+        lastError: errorText(event),
+      };
     case "turn.interrupted":
       return {
         ...next,
