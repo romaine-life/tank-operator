@@ -50,6 +50,14 @@ func (s fakeSessionEventStore) FindTurnTerminal(_ context.Context, _ string, tur
 	return nil, nil
 }
 
+func (s fakeSessionEventStore) LatestLifecycleEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (s fakeSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string) (int, error) {
+	return 0, nil
+}
+
 func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 	tests := []struct {
 		name   string
