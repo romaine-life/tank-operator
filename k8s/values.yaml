@@ -164,36 +164,12 @@ sessionBus:
   streamReplicas: 2
   authSecret: tank-nats-auth
   tokenKvKey: tank-nats-token
-  url: nats://tank-nats.tank-operator.svc.cluster.local:4222
-
-nats:
-  fullnameOverride: tank-nats
-  config:
-    cluster:
-      enabled: true
-      replicas: 2
-    jetstream:
-      enabled: true
-      fileStore:
-        enabled: true
-        pvc:
-          enabled: true
-          size: 5Gi
-    merge:
-      authorization:
-        token: << $NATS_TOKEN >>
-  container:
-    image:
-      repository: nats
-      tag: 2.14.0-alpine
-    env:
-      NATS_TOKEN:
-        valueFrom:
-          secretKeyRef:
-            name: tank-nats-auth
-            key: token
-  promExporter:
-    enabled: true
+  # NATS lives in its own namespace, deployed by infra-bootstrap's nats
+  # chart. tank-operator chart no longer owns the NATS sub-chart; the
+  # ExternalSecret template in k8s/templates/externalsecret-nats.yaml
+  # still provisions the auth token Secret in the orchestrator and
+  # sessions namespaces so clients can connect.
+  url: nats://tank-nats.nats.svc.cluster.local:4222
 
 # GitHub App slug used for the install URL the orchestrator redirects users
 # to (#57 stage 2). The App's Setup URL must be configured to point at
