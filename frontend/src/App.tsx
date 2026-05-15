@@ -1419,13 +1419,13 @@ function DemoLanding() {
                   className={isActive ? "is-open" : ""}
                   onClick={() => setActiveDemoSession(s.id)}
                 >
+                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <span
                       className={statusDotClass}
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
-                    <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
@@ -7109,13 +7109,13 @@ export function App() {
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
+                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <span
                       className={statusDotClass}
                       title={statusLabel}
                       aria-label={`status: ${statusLabel}`}
                     />
-                    <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                     {isEditing ? (
                       <input
                         className="session-name-input"

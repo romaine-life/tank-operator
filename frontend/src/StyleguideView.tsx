@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
+import { AgentAvatarIcon, getSessionAvatar } from "./sessionAvatars";
 
 const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
@@ -1005,6 +1006,7 @@ export function StyleguideView() {
           </p>
           <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
             <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("my-session")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-active" aria-label="status active" />
                 <button className="session-open" type="button">
@@ -1041,6 +1043,7 @@ export function StyleguideView() {
               </div>
             </li>
             <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("starting")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-pending" aria-label="status pending" />
                 <button className="session-open" type="button">
