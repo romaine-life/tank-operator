@@ -123,39 +123,6 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 	return err
 }
 
-func (b *Bus) PublishEvent(ctx context.Context, sessionStorageKey string, event map[string]any) error {
-	if b == nil {
-		return fmt.Errorf("session bus unavailable")
-	}
-	sessionStorageKey = strings.TrimSpace(sessionStorageKey)
-	if sessionStorageKey == "" {
-		sessionID, _ := event["session_id"].(string)
-		sessionStorageKey = compat.SessionStorageKey(b.scope, sessionID)
-	}
-	if sessionStorageKey == "" {
-		return fmt.Errorf("event session storage key is required")
-	}
-	if _, ok := event["tank_session_id"]; !ok {
-		event["tank_session_id"] = sessionStorageKey
-	}
-	msgID, _ := event["id"].(string)
-	if msgID == "" {
-		msgID, _ = event["uuid"].(string)
-	}
-	if msgID == "" {
-		msgID, _ = event["event_id"].(string)
-	}
-	if msgID == "" {
-		return fmt.Errorf("event id is required")
-	}
-	raw, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	_, err = b.js.Publish(ctx, EventSubject(sessionStorageKey), raw, jetstream.WithMsgID(msgID))
-	return err
-}
-
 // PublishSessionEventWake signals SSE subscribers on
 // /api/sessions/{id}/events that new durable events landed in Cosmos
 // for this session. The persister already publishes this after its own
@@ -329,9 +296,11 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 	var event map[string]any
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
 		// Invalid JSON is a producer-side bug that can never succeed on
-		// retry. Terminate immediately so the consumer doesn't churn.
-		_ = msg.TermWithReason("invalid json")
-		return nil
+		// retry. Surface it as a schema rejection so handlePersistMessage
+		// terminates the message AND increments the producer-regression
+		// counter — without this, an encoding bug at the producer would
+		// silently terminate forever with no alert.
+		return &conversation.SchemaError{Cause: fmt.Errorf("invalid json: %w", err)}
 	}
 	if store == nil {
 		return fmt.Errorf("session event store unavailable")

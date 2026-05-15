@@ -26,6 +26,23 @@ type recordingSessionBus struct {
 	err              error
 }
 
+// recordingSessionEventStore captures every backend-owned Upsert so tests
+// can verify the durable-before-202 guarantee that handlers_turns.go
+// makes. Wraps the no-op stub for the other SessionEventStore methods.
+type recordingSessionEventStore struct {
+	store.StubSessionEventStore
+	upserts []map[string]any
+	err     error
+}
+
+func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) error {
+	if r.err != nil {
+		return r.err
+	}
+	r.upserts = append(r.upserts, event)
+	return nil
+}
+
 func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionbus.Command) error {
 	if b.err != nil {
 		return b.err
@@ -66,11 +83,22 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	}
 	// Boundary events are persisted to Cosmos directly (handler must
 	// guarantee durability before returning success), and each persist
-	// publishes a NATS wake so SSE clients see them immediately. With
-	// two boundary events + the wake call ordering, we expect at least
-	// one wake per session storage key.
+	// publishes a NATS wake so SSE clients see them immediately.
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("Cosmos upserts = %d, want 2 (user_message.created + turn.submitted)", len(es.upserts))
+	}
+	wantTypes := []string{"user_message.created", "turn.submitted"}
+	for i, want := range wantTypes {
+		if got, _ := es.upserts[i]["type"].(string); got != want {
+			t.Fatalf("upsert[%d].type = %q, want %q", i, got, want)
+		}
+		if _, ok := es.upserts[i]["event_id"].(string); !ok {
+			t.Fatalf("upsert[%d] missing event_id; full event = %#v", i, es.upserts[i])
+		}
+	}
 	if len(bus.wakes) < 2 {
-		t.Fatalf("session-event wakes = %d, want >=2", len(bus.wakes))
+		t.Fatalf("session-event wakes = %d, want >=2 (one per boundary event)", len(bus.wakes))
 	}
 	got := bus.commands[0]
 	if got.Type != sessionbus.CommandSubmitTurn || got.ClientNonce != "turn-abc_123" {
@@ -280,7 +308,7 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 		k8s:           k8s,
 		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
 		sessionBus:    bus,
-		sessionEvents: store.StubSessionEventStore{},
+		sessionEvents: &recordingSessionEventStore{},
 		verifier:      auth.NewVerifier(testJWT(t), "user@example.com"),
 		namespace:     ns,
 		sessionScope:  "default",

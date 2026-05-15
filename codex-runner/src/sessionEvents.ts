@@ -32,10 +32,6 @@ export class SessionEventSink {
     await this.bus.publishEvent(event);
   }
 
-  async create(event: StampedTankEvent): Promise<"created" | "exists"> {
-    return this.bus.publishEvent(event);
-  }
-
   async findTurnTerminal(turnID: string): Promise<TankConversationEvent | null> {
     return (await this.bus.findTurnTerminal(turnID)) as TankConversationEvent | null;
   }

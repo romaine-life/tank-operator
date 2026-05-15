@@ -172,20 +172,29 @@ func TurnCommandFailedEventMap(args TurnCommandFailedArgs) map[string]any {
 	return event
 }
 
+// StampEventMap attaches uuid, order_key, sequence, and written_at to a
+// built Tank event. Panics if the input is missing event_id or visibility
+// so a coding bug in the builder layer is loud at runtime instead of
+// silently emitting a half-stamped doc. Matches the JS
+// stampTankEvent semantics in runner-shared/conversation-builders.js.
 func StampEventMap(event map[string]any) map[string]any {
+	eventID, _ := event["event_id"].(string)
+	if eventID == "" {
+		panic(fmt.Sprintf("StampEventMap: event_id is required (type=%v)", event["type"]))
+	}
+	visibility, _ := event["visibility"].(string)
+	if visibility == "" {
+		panic(fmt.Sprintf("StampEventMap: visibility is required (type=%v)", event["type"]))
+	}
 	out := make(map[string]any, len(event)+4)
 	for k, v := range event {
 		out[k] = v
 	}
 	now := time.Now().UTC()
 	seq := eventSequence.Add(1)
-	eventID, _ := out["event_id"].(string)
 	uuid, _ := out["uuid"].(string)
 	if uuid == "" {
 		uuid = eventID
-	}
-	if uuid == "" {
-		uuid = fmt.Sprintf("%d", seq)
 	}
 	writtenAt, _ := out["written_at"].(string)
 	if writtenAt == "" {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -23,13 +24,26 @@ const (
 // persistBackendEvent writes a backend-owned Tank conversation event
 // directly to the Cosmos session-events ledger and wakes any active SSE
 // subscribers on the per-session events subject. Backend-owned events
-// (user_message.created, turn.submitted, turn.command_failed) do not go
-// through the JetStream events subject: the backend is the authority, so
-// it writes durably itself and signals the live path explicitly. This is
-// the single replacement for the prior best-effort PublishEvent path
-// that left SSE clients waiting up to one heartbeat for boundary events.
+// (user_message.created, turn.submitted, turn.command_failed) are the
+// backend's authority: it writes durably itself and signals the live
+// path explicitly so SSE clients don't wait up to one heartbeat for
+// boundary events.
+//
+// SchemaError responses increment the same producer-regression counter
+// the persister uses, so the backend-as-producer path is visible to the
+// alert that the runner-as-producer path already feeds.
 func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, event map[string]any) error {
 	if err := s.sessionEvents.Upsert(ctx, event); err != nil {
+		var schemaErr *conversation.SchemaError
+		if errors.As(err, &schemaErr) {
+			recordSessionEventPersistSchemaRejected()
+			slog.Warn("backend-event schema rejected",
+				"storage_key", storageKey,
+				"event_type", event["type"],
+				"event_id", event["event_id"],
+				"error", schemaErr.Error(),
+			)
+		}
 		return err
 	}
 	if s.sessionBus != nil && storageKey != "" {
