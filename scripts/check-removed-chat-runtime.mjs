@@ -105,6 +105,14 @@ const blocked = [
   { name: "phantom session.activity_updated event type", pattern: /["']session\.activity_updated["']|\bEventActivityUpdated\b/ },
   { name: "phantom read_state.updated event type", pattern: /["']read_state\.updated["']|\bEventReadStateUpdated\b/ },
   { name: "phantom audit-only visibility", pattern: /["']audit-only["']|\bVisibilityAudit\b/ },
+  // Dead-after-cutover symbols. The producer-side cutover (PR #461)
+  // removed every caller of Bus.PublishEvent, EventSubject, and
+  // SessionEventSink.create — the cleanup PR deleted the now-unreachable
+  // definitions. Block reintroduction so a future refactor doesn't
+  // accidentally rebuild the dual-publish path.
+  { name: "removed Bus.PublishEvent", pattern: /\bfunc \(b \*Bus\) PublishEvent\b|\bsessionBus\.PublishEvent\b|\bbus\.PublishEvent\b/ },
+  { name: "removed EventSubject helper", pattern: /\bfunc EventSubject\b|\bEventSubject\(/ },
+  { name: "removed SessionEventSink.create", pattern: /\bsink\.create\(|create\(message: StampedTankEvent|create\(event: StampedTankEvent/ },
 ];
 
 const failures = [];

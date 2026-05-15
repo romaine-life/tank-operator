@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,22 +162,21 @@ func TestPersistMessageTerminatesInvalidJSON(t *testing.T) {
 	if msg.termed != 1 {
 		t.Fatalf("termed = %d, want 1 for invalid JSON", msg.termed)
 	}
-	if msg.termRsn != "invalid json" {
-		t.Fatalf("term reason = %q, want %q", msg.termRsn, "invalid json")
+	if !strings.Contains(msg.termRsn, "invalid json") {
+		t.Fatalf("term reason = %q, want substring %q", msg.termRsn, "invalid json")
 	}
-	if msg.acked != 1 {
-		// Invalid JSON path returns nil from persistOneEvent (after
-		// terming inline), so the outer handler proceeds to Ack. That's
-		// fine: TermWithReason already removed the message; the Ack is a
-		// no-op. The counters MUST stay zero.
-		t.Fatalf("acked = %d, want 1 (post-term cleanup)", msg.acked)
+	if msg.acked != 0 {
+		t.Fatalf("acked = %d, want 0 — invalid JSON terminates without ack", msg.acked)
 	}
 	if len(store.upserts) != 0 {
 		t.Fatalf("upserts = %d, want 0 for invalid JSON", len(store.upserts))
 	}
-	if metrics.schemaRejected != 0 || metrics.transientFailure != 0 {
-		t.Fatalf("counters fired on invalid JSON: schema=%d transient=%d",
-			metrics.schemaRejected, metrics.transientFailure)
+	if metrics.schemaRejected != 1 {
+		t.Fatalf("schema_rejected counter = %d, want 1 — invalid JSON is a producer regression", metrics.schemaRejected)
+	}
+	if metrics.transientFailure != 0 {
+		t.Fatalf("transient counter = %d, want 0 — invalid JSON is permanent not transient",
+			metrics.transientFailure)
 	}
 }
 
