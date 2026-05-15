@@ -31,7 +31,14 @@ resource "random_password" "pg_admin" {
 resource "azurerm_postgresql_flexible_server" "tank_operator" {
   name                = "tank-operator-pg"
   resource_group_name = data.azurerm_resource_group.main.name
-  location            = data.azurerm_resource_group.main.location
+
+  # Pinned to westus3 because the subscription's westus2 capacity for
+  # Flexible Server is currently restricted (`LocationIsOfferRestricted`).
+  # westus3 is in the same physical area as westus2; latency from AKS in
+  # westus2 to this DB is comparable to intra-region and egress cost at the
+  # current write volume is sub-dollar. Move back to westus2 if/when the
+  # quota request lands (https://aka.ms/postgres-request-quota-increase).
+  location = "westus3"
 
   version    = "16"
   sku_name   = "B_Standard_B1ms"
