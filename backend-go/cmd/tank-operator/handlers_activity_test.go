@@ -98,7 +98,7 @@ func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 			nil,
 			compat.SessionsNamespace,
 			nil,
-			sessions.NewEventBus(),
+			nil,
 			sessions.ManagerOptions{},
 		),
 		sessionEvents: activityEventStore{events: map[string][]map[string]any{
@@ -145,7 +145,7 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 			nil,
 			compat.SessionsNamespace,
 			nil,
-			sessions.NewEventBus(),
+			nil,
 			sessions.ManagerOptions{},
 		),
 		sessionEvents: activityEventStore{events: map[string][]map[string]any{

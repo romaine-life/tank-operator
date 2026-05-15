@@ -141,6 +141,50 @@ func (b *Bus) PublishEvent(ctx context.Context, sessionStorageKey string, event 
 	return err
 }
 
+// PublishSessionListWake signals to SSE subscribers on /api/sessions/events
+// that the owner's session list has changed. Replaces the in-process
+// EventBus fanout pattern with a NATS subject so the live path matches
+// docs/product-inspirations.md ("Work delivery should use a real
+// command/event fabric. Browser polling, process memory fanout, and
+// database polling are not the normal live path for app-managed GUI chat.").
+func (b *Bus) PublishSessionListWake(_ context.Context, email string) error {
+	if b == nil {
+		return fmt.Errorf("session bus unavailable")
+	}
+	if strings.TrimSpace(email) == "" {
+		return nil
+	}
+	return b.nc.Publish(SessionListWakeSubject(email), nil)
+}
+
+// SubscribeSessionListWake returns a channel that receives a struct{} on
+// every session-list-change signal for the owner. Channel cap is 1 so
+// multiple wakes coalesce into one resync — same semantics as the prior
+// in-process EventBus.
+func (b *Bus) SubscribeSessionListWake(ctx context.Context, email string) (<-chan struct{}, func(), error) {
+	if b == nil {
+		return nil, func() {}, fmt.Errorf("session bus unavailable")
+	}
+	ch := make(chan struct{}, 1)
+	sub, err := b.nc.Subscribe(SessionListWakeSubject(email), func(*nats.Msg) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	unsubscribe := func() {
+		_ = sub.Unsubscribe()
+	}
+	go func() {
+		<-ctx.Done()
+		unsubscribe()
+	}()
+	return ch, unsubscribe, nil
+}
+
 func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan struct{}, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")

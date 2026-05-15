@@ -36,41 +36,15 @@ type SessionRegistry interface {
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
-// EventBus notifies SSE subscribers when a session list changes.
-type EventBus struct {
-	mu          sync.Mutex
-	subscribers map[string][]chan struct{}
-}
-
-func NewEventBus() *EventBus { return &EventBus{subscribers: map[string][]chan struct{}{}} }
-
-func (b *EventBus) Subscribe(owner string) (ch <-chan struct{}, cancel func()) {
-	c := make(chan struct{}, 1)
-	b.mu.Lock()
-	b.subscribers[owner] = append(b.subscribers[owner], c)
-	b.mu.Unlock()
-	return c, func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		subs := b.subscribers[owner]
-		for i, s := range subs {
-			if s == c {
-				b.subscribers[owner] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
-	}
-}
-
-func (b *EventBus) Publish(owner string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, c := range b.subscribers[owner] {
-		select {
-		case c <- struct{}{}:
-		default:
-		}
-	}
+// SessionListWaker is implemented by the session bus; it broadcasts a
+// "session list changed" signal for the given owner email to SSE
+// subscribers on /api/sessions/events. Replaces the in-process EventBus
+// pattern so the live path is a NATS subject, per
+// docs/product-inspirations.md ("Browser polling, process memory fanout,
+// and database polling are not the normal live path for app-managed
+// GUI chat.").
+type SessionListWaker interface {
+	PublishSessionListWake(ctx context.Context, email string) error
 }
 
 // Manager owns session lifecycle: create, delete, patch, reaper.
@@ -79,7 +53,7 @@ type Manager struct {
 	restCfg   *rest.Config
 	namespace string
 	registry  SessionRegistry
-	events    *EventBus
+	waker     SessionListWaker
 
 	manifestOpts compat.ManifestOptions
 
@@ -110,7 +84,7 @@ type ManagerOptions struct {
 	CodexAPIProxyHost string
 }
 
-func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, events *EventBus, opts ManagerOptions) *Manager {
+func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, waker SessionListWaker, opts ManagerOptions) *Manager {
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = defaultIdleTimeout
 		if v := os.Getenv("IDLE_TIMEOUT_SECONDS"); v != "" {
@@ -135,7 +109,7 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		restCfg:        restCfg,
 		namespace:      namespace,
 		registry:       registry,
-		events:         events,
+		waker:          waker,
 		manifestOpts:   opts.ManifestOpts,
 		wsCount:        map[string]int{},
 		lastActivity:   map[string]time.Time{},
@@ -226,8 +200,8 @@ func (m *Manager) reapIdle(ctx context.Context) {
 		if m.registry != nil && owner != "" {
 			_ = m.registry.MarkDeleted(ctx, owner, sessionID)
 		}
-		if m.events != nil && owner != "" {
-			m.events.Publish(owner)
+		if m.waker != nil && owner != "" {
+			_ = m.waker.PublishSessionListWake(ctx, owner)
 		}
 	}
 }
@@ -344,8 +318,8 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		})
 	}
 
-	if m.events != nil {
-		m.events.Publish(owner)
+	if m.waker != nil && owner != "" {
+		_ = m.waker.PublishSessionListWake(ctx, owner)
 	}
 	return info, nil
 }
@@ -370,8 +344,8 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 	if m.registry != nil {
 		_ = m.registry.MarkDeleted(ctx, owner, sessionID)
 	}
-	if m.events != nil {
-		m.events.Publish(owner)
+	if m.waker != nil && owner != "" {
+		_ = m.waker.PublishSessionListWake(ctx, owner)
 	}
 	return nil
 }
@@ -405,8 +379,8 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	if m.registry != nil {
 		_ = m.registry.SetName(ctx, owner, sessionID, normalized)
 	}
-	if m.events != nil {
-		m.events.Publish(owner)
+	if m.waker != nil && owner != "" {
+		_ = m.waker.PublishSessionListWake(ctx, owner)
 	}
 
 	return m.GetByOwner(ctx, owner, sessionID)
@@ -445,8 +419,8 @@ func (m *Manager) patchAnnotation(ctx context.Context, owner, sessionID, annotat
 	if _, patchErr := m.client.CoreV1().Pods(m.namespace).Patch(ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{}); patchErr != nil && !k8serrors.IsNotFound(patchErr) {
 		return Info{}, fmt.Errorf("patch annotation %s: %w", annotation, patchErr)
 	}
-	if m.events != nil {
-		m.events.Publish(owner)
+	if m.waker != nil && owner != "" {
+		_ = m.waker.PublishSessionListWake(ctx, owner)
 	}
 	return m.GetByOwner(ctx, owner, sessionID)
 }

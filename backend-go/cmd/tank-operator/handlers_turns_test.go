@@ -46,6 +46,12 @@ func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan stru
 	return make(chan struct{}), func() {}, nil
 }
 
+func (*recordingSessionBus) PublishSessionListWake(context.Context, string) error { return nil }
+
+func (*recordingSessionBus) SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))

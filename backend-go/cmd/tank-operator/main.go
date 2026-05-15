@@ -64,10 +64,9 @@ func main() {
 	// 7. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(azCred, sessionScope)
 
-	// 8. Init event bus.
-	eventBus := sessions.NewEventBus()
-
-	// 9. Init Manager.
+	// 8. Init Manager. SessionListWaker wakes are routed through the
+	// NATS session bus (per-email subject), replacing the prior
+	// in-process EventBus.
 	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
 	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount)
 	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
@@ -93,7 +92,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
+	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, sessionBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
 			SessionsNamespace:       namespace,
 			SessionServiceAccount:   sessionServiceAccount,
@@ -151,7 +150,6 @@ func main() {
 		sessionEvents:            sessionEventsStore,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
-		eventBus:                 eventBus,
 		verifier:                 verifier,
 		minter:                   minter,
 		namespace:                namespace,

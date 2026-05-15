@@ -36,6 +36,15 @@ func WakeSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.wake", liveRoot, StorageToken(sessionStorageKey))
 }
 
+// SessionListWakeSubject names the per-owner wake subject that signals
+// the user's /api/sessions list has changed. SSE subscribers listen on
+// this subject; Manager mutations (Upsert, MarkDeleted, SetName, etc.)
+// publish here so the in-process EventBus is no longer needed.
+func SessionListWakeSubject(email string) string {
+	normalized := strings.TrimSpace(strings.ToLower(email))
+	return fmt.Sprintf("%s.sessions.%s.wake", liveRoot, base64.RawURLEncoding.EncodeToString([]byte(normalized)))
+}
+
 func sanitizeSubjectToken(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {
