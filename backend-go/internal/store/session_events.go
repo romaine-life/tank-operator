@@ -86,8 +86,10 @@ func (s *cosmosSessionEventStore) Upsert(ctx context.Context, event map[string]a
 	if err != nil {
 		return err
 	}
-	_, err = s.container.UpsertItem(ctx, azcosmos.NewPartitionKeyString(storageKey), raw, nil)
-	return err
+	return retryOnCosmosThrottle(ctx, func() error {
+		_, err := s.container.UpsertItem(ctx, azcosmos.NewPartitionKeyString(storageKey), raw, nil)
+		return err
+	})
 }
 
 // ListBySession returns events for one session strictly after the canonical

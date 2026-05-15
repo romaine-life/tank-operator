@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
@@ -134,6 +135,14 @@ func (s *cosmosConversationReadStateStore) Set(ctx context.Context, email, sessi
 		}
 		if isCosmosConflict(writeErr) {
 			continue
+		}
+		if isCosmosThrottled(writeErr) {
+			select {
+			case <-time.After(cosmosRetryAfter(writeErr)):
+				continue
+			case <-ctx.Done():
+				return ConversationReadStateRecord{}, ctx.Err()
+			}
 		}
 		return ConversationReadStateRecord{}, fmt.Errorf("write read state: %w", writeErr)
 	}
