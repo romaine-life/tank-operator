@@ -112,6 +112,66 @@ type UserSubmissionArgs struct {
 	Now               time.Time
 }
 
+// TurnCommandFailedArgs describes the durable event emitted when the
+// orchestrator fails to publish a session command (submit_turn,
+// interrupt_turn, input_reply) to the session bus. The runner never
+// gets the command, so the runner-emitted turn.* terminal events never
+// arrive. Without this event, a client refreshing /timeline sees the
+// user_message.created stranded and the turn perpetually "submitted."
+type TurnCommandFailedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	TurnID            string
+	ClientNonce       string
+	Runtime           string
+	Reason            string
+	Now               time.Time
+}
+
+// TurnCommandFailedEventMap builds a turn.command_failed event keyed
+// by the same turn_id the failed command targeted, so client renderers
+// associate it with the stranded turn submission.
+func TurnCommandFailedEventMap(args TurnCommandFailedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        args.TurnID + ":turn.command_failed",
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"turn_id":         args.TurnID,
+		"client_nonce":    args.ClientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventTurnCommandFailed),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
+		"payload": map[string]any{
+			"reason": args.Reason,
+		},
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	return event
+}
+
 func StampEventMap(event map[string]any) map[string]any {
 	out := make(map[string]any, len(event)+4)
 	for k, v := range event {

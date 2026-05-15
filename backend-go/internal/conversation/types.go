@@ -45,6 +45,7 @@ const (
 	EventTurnStarted          EventType = "turn.started"
 	EventTurnCompleted        EventType = "turn.completed"
 	EventTurnFailed           EventType = "turn.failed"
+	EventTurnCommandFailed    EventType = "turn.command_failed"
 	EventTurnInterrupted      EventType = "turn.interrupted"
 	EventItemStarted          EventType = "item.started"
 	EventItemDelta            EventType = "item.delta"
@@ -136,6 +137,14 @@ func ValidateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorRunner {
 			return fmt.Errorf("%s must be actor=runner", eventType)
 		}
+	case EventTurnCommandFailed:
+		if err := requireFields(event, "turn_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("turn.command_failed must be actor=system source=tank")
+		}
+		return requirePayloadString(event, "reason")
 	case EventItemStarted, EventItemDelta, EventItemCompleted, EventItemFailed:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
@@ -263,6 +272,7 @@ func validEventType(eventType EventType) bool {
 		EventTurnStarted,
 		EventTurnCompleted,
 		EventTurnFailed,
+		EventTurnCommandFailed,
 		EventTurnInterrupted,
 		EventItemStarted,
 		EventItemDelta,
