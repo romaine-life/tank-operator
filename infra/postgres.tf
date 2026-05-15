@@ -29,7 +29,7 @@ resource "random_password" "pg_admin" {
 }
 
 resource "azurerm_postgresql_flexible_server" "tank_operator" {
-  name                = "tank-operator-pg"
+  name                = "tank-operator-db"
   resource_group_name = data.azurerm_resource_group.main.name
 
   # Pinned to westus3 because the subscription's westus2 capacity for
