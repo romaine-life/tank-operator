@@ -276,19 +276,26 @@ func (b *Bus) persistEventMessage(ctx context.Context, store EventStore, msg jet
 }
 
 func (b *Bus) ensureStream(ctx context.Context) error {
+	// Memory storage matches the infra-bootstrap NATS chart's
+	// jetstream.fileStore.enabled=false config. The chart caps each
+	// replica's JetStream RAM at 256Mi; the stream-level MaxBytes here
+	// caps the stream within that budget so a runaway producer can't
+	// fill memory and OOM the NATS pod. AllowMsgSchedules is no longer
+	// needed since ScheduleWakeup is now a pod-local setTimeout.
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:              b.stream,
-		Description:       "Tank session command and event delivery bus",
-		Subjects:          []string{subjectRoot + ".>"},
-		Retention:         jetstream.LimitsPolicy,
-		Discard:           jetstream.DiscardOld,
-		MaxAge:            7 * 24 * time.Hour,
-		MaxMsgSize:        2 * 1024 * 1024,
-		Storage:           jetstream.FileStorage,
-		Replicas:          b.replicas,
-		Duplicates:        24 * time.Hour,
-		AllowMsgTTL:       true,
-		AllowMsgSchedules: true,
+		Name:        b.stream,
+		Description: "Tank session command and event delivery bus",
+		Subjects:    []string{subjectRoot + ".>"},
+		Retention:   jetstream.LimitsPolicy,
+		Discard:     jetstream.DiscardOld,
+		MaxAge:      7 * 24 * time.Hour,
+		MaxBytes:    128 * 1024 * 1024,
+		MaxMsgs:     100_000,
+		MaxMsgSize:  2 * 1024 * 1024,
+		Storage:     jetstream.MemoryStorage,
+		Replicas:    b.replicas,
+		Duplicates:  24 * time.Hour,
+		AllowMsgTTL: true,
 	})
 	return err
 }
