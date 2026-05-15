@@ -1,50 +1,6 @@
 {
   "events": [
     {
-      "name": "conversation started",
-      "event": {
-        "event_id": "evt-conversation-started",
-        "order_key": "order-0001",
-        "sequence": 1,
-        "conversation_id": "63",
-        "session_id": "63",
-        "actor": "system",
-        "source": "tank",
-        "type": "conversation.started",
-        "created_at": "2026-05-12T00:00:00.000Z",
-        "producer": {
-          "name": "tank-operator",
-          "runtime": "backend-go"
-        },
-        "visibility": "durable",
-        "payload": {
-          "status": "ready"
-        }
-      }
-    },
-    {
-      "name": "conversation archived",
-      "event": {
-        "event_id": "evt-conversation-archived",
-        "order_key": "order-0002",
-        "sequence": 2,
-        "conversation_id": "63",
-        "session_id": "63",
-        "actor": "system",
-        "source": "tank",
-        "type": "conversation.archived",
-        "created_at": "2026-05-12T00:00:01.000Z",
-        "producer": {
-          "name": "tank-operator",
-          "runtime": "backend-go"
-        },
-        "visibility": "durable",
-        "payload": {
-          "reason": "user_requested"
-        }
-      }
-    },
-    {
       "name": "persisted codex user message with runner and storage stamps",
       "event": {
         "event_id": "turn_contract:user_message.created",
@@ -439,55 +395,6 @@
           "kind": "needs_input",
           "resolved": true,
           "is_error": false
-        }
-      }
-    },
-    {
-      "name": "activity updated",
-      "event": {
-        "event_id": "evt-session-activity-updated",
-        "order_key": "order-0015",
-        "sequence": 15,
-        "conversation_id": "63",
-        "session_id": "63",
-        "actor": "runner",
-        "source": "tank",
-        "type": "session.activity_updated",
-        "created_at": "2026-05-12T00:00:14.000Z",
-        "producer": {
-          "name": "tank-operator",
-          "runtime": "backend-go"
-        },
-        "visibility": "durable",
-        "payload": {
-          "status": "streaming",
-          "last_order_key": "order-0014",
-          "unread_count": 3,
-          "needs_input": false,
-          "failed": false,
-          "active_turn_id": "turn_contract"
-        }
-      }
-    },
-    {
-      "name": "read state updated",
-      "event": {
-        "event_id": "evt-read-state-updated",
-        "order_key": "order-0016",
-        "sequence": 16,
-        "conversation_id": "63",
-        "session_id": "63",
-        "actor": "runner",
-        "source": "tank",
-        "type": "read_state.updated",
-        "created_at": "2026-05-12T00:00:15.000Z",
-        "producer": {
-          "name": "tank-operator",
-          "runtime": "backend-go"
-        },
-        "visibility": "audit-only",
-        "payload": {
-          "last_read_order_key": "order-0015"
         }
       }
     }

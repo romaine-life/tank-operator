@@ -102,7 +102,7 @@ import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
   type TankConversationEvent,
-} from "./tankConversation";
+} from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
 

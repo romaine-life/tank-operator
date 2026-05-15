@@ -50,28 +50,6 @@ func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
 	}
 }
 
-func TestSummarizeSessionActivityAppliesReadState(t *testing.T) {
-	summary := summarizeSessionActivity(
-		sessionActivitySummary{SessionID: "63", Status: "ready"},
-		[]map[string]any{
-			activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
-			activityEvent("r1", "read_state.updated", "002", "runner", map[string]any{
-				"payload": map[string]any{"last_read_order_key": "001"},
-			}),
-			activityEvent("m2", "item.completed", "003", "assistant", map[string]any{"timeline_id": "msg-2"}),
-			activityEvent("done", "turn.completed", "004", "runner", map[string]any{"turn_id": "turn-1"}),
-		},
-		"",
-	)
-
-	if summary.UnreadCount != 1 {
-		t.Fatalf("unread = %d, want 1", summary.UnreadCount)
-	}
-	if summary.Status != "ready" || summary.Failed || summary.NeedsInput {
-		t.Fatalf("state = %#v, want ready/non-attention", summary)
-	}
-}
-
 func TestSummarizeSessionActivityAppliesPersistedReadState(t *testing.T) {
 	events := []map[string]any{
 		activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
@@ -249,8 +227,6 @@ func activityEvent(eventID, eventType, orderKey, actor string, fields map[string
 		event["turn_id"] = "turn-1"
 		event["timeline_id"] = "approval-1"
 		event["payload"] = map[string]any{"kind": "needs_input"}
-	case "read_state.updated":
-		event["payload"] = map[string]any{"last_read_order_key": orderKey}
 	}
 	for key, value := range fields {
 		event[key] = value

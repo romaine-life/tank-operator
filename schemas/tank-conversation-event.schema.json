@@ -93,8 +93,6 @@
     "type": {
       "type": "string",
       "enum": [
-        "conversation.started",
-        "conversation.archived",
         "user_message.created",
         "turn.submitted",
         "turn.started",
@@ -107,9 +105,7 @@
         "item.completed",
         "item.failed",
         "tool.approval_requested",
-        "tool.approval_resolved",
-        "session.activity_updated",
-        "read_state.updated"
+        "tool.approval_resolved"
       ]
     },
     "created_at": {
@@ -138,7 +134,7 @@
     },
     "visibility": {
       "type": "string",
-      "enum": ["durable", "live-only", "audit-only"]
+      "enum": ["durable", "live-only"]
     },
     "payload": {
       "type": "object",
@@ -225,14 +221,6 @@
       "required": ["kind"],
       "properties": {
         "kind": { "$ref": "#/$defs/nonEmptyString" }
-      }
-    },
-    "readStatePayload": {
-      "type": "object",
-      "additionalProperties": true,
-      "required": ["last_read_order_key"],
-      "properties": {
-        "last_read_order_key": { "$ref": "#/$defs/nonEmptyString" }
       }
     }
   },
@@ -327,24 +315,6 @@
         "properties": {
           "actor": { "const": "tool" },
           "payload": { "$ref": "#/$defs/itemPayload" }
-        }
-      }
-    },
-    {
-      "if": { "properties": { "type": { "const": "session.activity_updated" } }, "required": ["type"] },
-      "then": {
-        "required": ["payload"],
-        "properties": {
-          "payload": { "$ref": "#/$defs/statusPayload" }
-        }
-      }
-    },
-    {
-      "if": { "properties": { "type": { "const": "read_state.updated" } }, "required": ["type"] },
-      "then": {
-        "required": ["payload"],
-        "properties": {
-          "payload": { "$ref": "#/$defs/readStatePayload" }
         }
       }
     }

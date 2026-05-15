@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 
 import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
-import { isTankConversationEvent } from "../conversation.js";
+import { isTankConversationEvent } from "../../../runner-shared/conversation.js";
+import { stampTankEvent } from "../../../runner-shared/conversation-builders.js";
 import {
   CodexTankEventAdapter,
   canonicalEventsForCodexEvent,
@@ -36,7 +37,10 @@ function acceptedTurn(fields: Partial<CodexAdapterTurn> = {}): CodexAdapterTurn 
 function mappedEvent(adapter: CodexTankEventAdapter, event: CodexEvent) {
   const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), event);
   assert.equal(events.length, 1);
-  assert.equal(isTankConversationEvent(events[0]!), true);
+  // Adapter output is pre-stamp; the runner stamps order_key + sequence
+  // before publishing. Validate the full envelope here so the test
+  // mirrors what the persister receives.
+  assert.equal(isTankConversationEvent(stampTankEvent(events[0]!)), true);
   return events[0]!;
 }
 

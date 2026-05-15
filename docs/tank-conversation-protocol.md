@@ -103,15 +103,16 @@ References:
 ## Event Envelope
 
 Every Tank event has a stable envelope. The shared JSON Schema lives at
-`schemas/tank-conversation-event.schema.json`; TypeScript and Go stubs live at
-`frontend/src/tankConversation.ts` and `backend-go/internal/conversation`.
-The JSON Schema is the source of truth for `actor`, `source`, `visibility`,
-and event `type` enums. Changes to those enums must update the schema first;
-`scripts/check-tank-conversation-contract.mjs` and the Go conversation package
-test then verify the frontend, agent-runner, codex-runner, and Go definitions
-match it. The same script also validates representative canonical fixtures in
-`schemas/tank-conversation-event.fixtures.json`, including runner-stamped and
-persisted timeline shapes.
+`schemas/tank-conversation-event.schema.json`; the single TypeScript stub
+lives at `runner-shared/conversation.{js,d.ts}` (consumed by codex-runner,
+agent-runner, and the frontend); the Go stub lives at
+`backend-go/internal/conversation`. The JSON Schema is the source of truth
+for `actor`, `source`, `visibility`, and event `type` enums. Changes to
+those enums must update the schema first;
+`scripts/check-tank-conversation-contract.mjs` and the Go conversation
+package test then verify the shared TS module and Go definitions match it.
+The same script validates canonical fixtures in
+`schemas/tank-conversation-event.fixtures.json`.
 
 Required fields:
 
@@ -125,7 +126,7 @@ Required fields:
 - `source`: `tank`, `claude`, or `codex`.
 - `type`: stable Tank event type.
 - `created_at`: producer timestamp in RFC3339 format.
-- `visibility`: `durable`, `live-only`, or `audit-only`.
+- `visibility`: `durable` or `live-only`.
 
 Optional fields:
 
@@ -173,11 +174,6 @@ must not infer skill cards from raw `/skill` or `$skill` prompt text.
 
 ## Event Families
 
-Conversation lifecycle:
-
-- `conversation.started`
-- `conversation.archived`
-
 User input:
 
 - `user_message.created`
@@ -188,6 +184,7 @@ Turn lifecycle:
 - `turn.started`
 - `turn.completed`
 - `turn.failed`
+- `turn.command_failed`
 - `turn.interrupted`
 
 Item lifecycle:
@@ -202,10 +199,10 @@ Tool and approval lifecycle:
 - `tool.approval_requested`
 - `tool.approval_resolved`
 
-Session/read activity:
-
-- `session.activity_updated`
-- `read_state.updated`
+Session activity (`/api/sessions/activity`) and per-conversation read state
+(`/api/sessions/{id}/read_state`) are computed server-side from the durable
+event ledger and exposed via their own REST endpoints. They are not Tank
+event types — adding one is a schema change, not a derived projection.
 
 ## State Machine
 

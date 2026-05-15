@@ -15,10 +15,12 @@
 // runner-process restarts inside the same live session pod; session pod death
 // is terminal and out of scope.
 //
-// Output contract:
-//   1. For every canonical event, stamp a uuid and publish to the session bus
-// On error: log and keep accepting new user messages. Single-turn
-// failures shouldn't kill the runner.
+// Output contract: the adapter at adapters/codex.ts converts raw codex SDK
+// events into Tank conversation events; the runner stamps and publishes
+// those Tank events on the session bus. Raw provider events never reach
+// the bus. Boundary events (user_message.created, turn.submitted) are
+// owned by the backend (handlers_turns.go) — the runner does not publish
+// them. On error: log and keep accepting new commands.
 
 import { Codex, type Thread } from "@openai/codex-sdk";
 
@@ -27,19 +29,17 @@ import {
   type CodexAdapterTurn,
 } from "./adapters/codex.js";
 import type { Config } from "./config.js";
+import { SessionEventSink, type StampedTankEvent } from "./sessionEvents.js";
 import {
-  SessionEventSink,
-  isCanonical,
-  stampEventID,
-  type CodexEvent,
-} from "./sessionEvents.js";
-import {
+  isDurableTankConversationEvent,
   normalizeClientNonce,
-  isTankConversationEvent,
+  type TankConversationEvent,
+} from "../../runner-shared/conversation.js";
+import {
+  stampTankEvent,
   turnEvent,
   turnIDForClientNonce,
-  userSubmissionEvents,
-} from "./conversation.js";
+} from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
   isInputReplyCommand,
@@ -80,65 +80,35 @@ class AsyncQueue<T> {
   }
 }
 
-// Pull the per-event dispatch out as a free function so the session-bus publish
-// contract is testable without spinning up a Runner.
+// Pull the per-event dispatch out as a free function so the session-bus
+// publish contract is testable without spinning up a Runner. The sink only
+// accepts stamped Tank conversation events; anything else is rejected here
+// by isDurableTankConversationEvent so the producer-side filter matches the
+// persister-side ValidateEventMap rules.
 //
-// Returns true on a successful end-to-end dispatch; false when the
-// canonical write failed.
+// Returns true on a successful end-to-end dispatch (or when the event was
+// non-durable and intentionally dropped); false when the publish failed.
 interface DispatchSink {
-  upsert(event: CodexEvent & { uuid: string }): Promise<void>;
-  create?(event: CodexEvent & { uuid: string }): Promise<"created" | "exists">;
+  upsert(event: StampedTankEvent): Promise<void>;
 }
 export async function dispatch(
   sink: DispatchSink,
-  event: CodexEvent,
+  event: TankConversationEvent,
 ): Promise<boolean> {
-  const stamped = stampEventID(event);
-  if (isMalformedTankEvent(stamped)) {
-    console.error("invalid Tank conversation event:", stamped);
+  const stamped = stampTankEvent(event);
+  if (!isDurableTankConversationEvent(stamped)) {
+    // Live-only or otherwise non-durable Tank events are not persisted.
+    return true;
+  }
+  try {
+    await sink.upsert(stamped);
+  } catch (err) {
+    console.error("session bus publish failed:", err);
+    // Don't broadcast a live event we couldn't persist — the SPA's
+    // history-replay would then disagree with what it saw live.
     return false;
   }
-  if (isCanonical(stamped)) {
-    try {
-      await sink.upsert(stamped);
-    } catch (err) {
-      console.error("session bus publish failed:", err);
-      // Don't broadcast a live event we couldn't persist — the SPA's
-      // history-replay would then disagree with what it saw live.
-      return false;
-    }
-  }
   return true;
-}
-
-export async function dispatchCreate(
-  sink: DispatchSink,
-  event: CodexEvent,
-): Promise<"created" | "exists" | "failed"> {
-  const stamped = stampEventID(event);
-  if (isMalformedTankEvent(stamped)) {
-    console.error("invalid Tank conversation event:", stamped);
-    return "failed";
-  }
-  if (!isCanonical(stamped)) return "created";
-  try {
-    const result = sink.create
-      ? await sink.create(stamped)
-      : (await sink.upsert(stamped), "created");
-    if (result === "exists") return "exists";
-  } catch (err) {
-    console.error("session bus create failed:", err);
-    return "failed";
-  }
-  return "created";
-}
-
-function isMalformedTankEvent(event: CodexEvent): boolean {
-  return hasTankEventEnvelope(event) && !isTankConversationEvent(event);
-}
-
-function hasTankEventEnvelope(event: CodexEvent): boolean {
-  return typeof event.event_id === "string" && typeof event.visibility === "string";
 }
 
 function isAbortError(err: unknown): boolean {
@@ -251,7 +221,6 @@ export class Runner {
         }
         if (commandRecord && this.commandBus.attemptsExceeded(commandRecord)) {
           await this.failCommandRecord(
-            input,
             clientNonce,
             turnSeq,
             commandRecord,
@@ -262,12 +231,7 @@ export class Runner {
           this.clearCommandTurnTarget(clientNonce);
           continue;
         }
-        const turn = await this.recordUserSubmission(
-          input,
-          clientNonce,
-          turnSeq,
-          commandRecord,
-        );
+        const turn = this.acceptTurn(clientNonce, turnSeq, commandRecord);
         if (!turn) {
           if (commandRecord)
             await this.commandBus.markFailed(
@@ -316,19 +280,14 @@ export class Runner {
           });
           for await (const event of streamed.events) {
             if (signal.aborted) break;
-            const codexEvent = {
-              ...(event as CodexEvent),
-              tank_turn_seq: turnSeq,
-            };
-            await dispatch(this.sink, codexEvent);
+            // Codex provider events are adapter inputs, not bus content. The
+            // adapter converts them into Tank conversation events; only those
+            // reach the durable session bus.
             for (const canonicalEvent of this.codexAdapter.canonicalEventsForCodexEvent(
               turn,
-              codexEvent,
+              event as { type: string; [k: string]: unknown },
             )) {
-              const dispatched = await dispatch(
-                this.sink,
-                canonicalEvent,
-              );
+              const dispatched = await dispatch(this.sink, canonicalEvent);
               if (
                 dispatched &&
                 (canonicalEvent.type === "turn.completed" ||
@@ -343,8 +302,9 @@ export class Runner {
           const interrupted =
             this.currentAbort.signal.aborted && isAbortError(err);
           if (interrupted) {
-            const dispatched = await dispatch(this.sink, {
-              ...turnEvent({
+            const dispatched = await dispatch(
+              this.sink,
+              turnEvent({
                 sessionID: this.cfg.sessionId,
                 turnID: turn.turnID,
                 clientNonce: turn.clientNonce,
@@ -354,17 +314,13 @@ export class Runner {
                   ? "client_interrupt"
                   : "runner_shutdown",
               }),
-              tank_turn_seq: turnSeq,
-            } as CodexEvent);
+            );
             if (dispatched) {
               await this.markCommandTerminal(turn, "turn.interrupted");
             }
             console.info("codex turn interrupted");
             continue;
           }
-          // Synthetic error event so the SPA sees something when the SDK
-          // throws (e.g., process exit, network failure, quota error that
-          // surfaced as an exception rather than a turn.failed).
           const errMessage = err instanceof Error ? err.message : String(err);
           const dispatched = await dispatch(
             this.sink,
@@ -381,11 +337,6 @@ export class Runner {
           if (dispatched) {
             await this.markCommandTerminal(turn, "turn.failed");
           }
-          await dispatch(this.sink, {
-            type: "error",
-            message: errMessage,
-            tank_turn_seq: turnSeq,
-          });
           console.error("codex turn failed:", err);
         } finally {
           signal.removeEventListener("abort", onOuterAbort);
@@ -493,42 +444,23 @@ export class Runner {
     }
   }
 
-  private async recordUserSubmission(
-    text: string,
+  // acceptTurn normalizes the client nonce and assembles the in-memory
+  // turn record. Boundary events (user_message.created, turn.submitted)
+  // are durably written by the backend when the user POSTed the turn —
+  // the runner does not republish them. Returns null when the command
+  // payload is malformed (the caller marks the command failed).
+  private acceptTurn(
     rawClientNonce: unknown,
     turnSeq: number,
     commandRecord?: SessionCommandRecord,
-  ): Promise<AcceptedTurn | null> {
+  ): AcceptedTurn | null {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
-      await dispatch(this.sink, {
-        type: "error",
-        message: "client_nonce is required for user submissions",
-        tank_turn_seq: turnSeq,
-      });
+      console.error("codex command rejected: client_nonce is required");
       return null;
     }
-    const { turnID, userMessage, turnSubmitted } = userSubmissionEvents({
-      sessionID: this.cfg.sessionId,
-      clientNonce,
-      text,
-      message: { role: "user", content: text },
-      runtime: "codex",
-      skillName: commandRecord?.skill_name,
-    });
-    const userResult = await dispatchCreate(this.sink, {
-      ...userMessage,
-      tank_turn_seq: turnSeq,
-    });
-    if (userResult === "failed") return null;
-    const submittedResult = await dispatchCreate(this.sink, {
-      ...turnSubmitted,
-      tank_turn_seq: turnSeq,
-    });
-    if (submittedResult === "failed") return null;
-    if (submittedResult === "exists" && !commandRecord) return null;
     return {
-      turnID,
+      turnID: turnIDForClientNonce(clientNonce),
       clientNonce,
       turnSeq,
       ...(commandRecord ? { commandRecord } : {}),
@@ -574,18 +506,12 @@ export class Runner {
   }
 
   private async failCommandRecord(
-    text: string,
     clientNonce: string | undefined,
     turnSeq: number,
     commandRecord: SessionCommandRecord,
     err: unknown,
   ): Promise<void> {
-    const turn = await this.recordUserSubmission(
-      text,
-      clientNonce,
-      turnSeq,
-      commandRecord,
-    );
+    const turn = this.acceptTurn(clientNonce, turnSeq, commandRecord);
     if (!turn) {
       await this.commandBus.markFailed(commandRecord, err);
       return;

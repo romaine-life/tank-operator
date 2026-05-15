@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
 
 import type { Config } from "../config.js";
-import type { RunnerEvent } from "../sessionEvents.js";
-import { itemEvent, turnEvent, type TankConversationEvent } from "../conversation.js";
+import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
+import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+
+// ClaudeProviderEvent is the runner's view of the raw Claude SDK message
+// shape consumed by this adapter. Kept loose because the adapter has to
+// inspect provider-specific fields that the SDK's narrow union types hide.
+export interface ClaudeProviderEvent {
+  type: string;
+  subtype?: string;
+  uuid?: string;
+  [k: string]: unknown;
+}
 
 export interface ClaudeTurnContext {
   turnID: string;
@@ -33,14 +43,14 @@ export function claudeUserMessageText(content: unknown): string {
   return String(content ?? "");
 }
 
-export function startsClaudeTurn(event: RunnerEvent): boolean {
+export function startsClaudeTurn(event: ClaudeProviderEvent): boolean {
   return event.type === "assistant" || event.type === "user" || event.type === "result";
 }
 
 export function canonicalEventsForClaudeMessage(
   cfg: Config,
   turn: ClaudeTurnContext | null,
-  message: RunnerEvent,
+  message: ClaudeProviderEvent,
   needsInputProviderItemIDs: Set<string>,
 ): TankConversationEvent[] {
   if (!turn) return [];
@@ -198,7 +208,7 @@ export function canonicalEventsForClaudeMessage(
   return [];
 }
 
-function providerEventID(message: RunnerEvent): string | undefined {
+function providerEventID(message: ClaudeProviderEvent): string | undefined {
   for (const key of ["uuid", "id", "message_id", "session_id"]) {
     const value = message[key];
     if (typeof value === "string" && value) return value;
@@ -206,7 +216,7 @@ function providerEventID(message: RunnerEvent): string | undefined {
   return undefined;
 }
 
-function claudeMessageContent(message: RunnerEvent): unknown[] {
+function claudeMessageContent(message: ClaudeProviderEvent): unknown[] {
   const body = message.message;
   if (body && typeof body === "object" && "content" in body) {
     const content = (body as { content?: unknown }).content;

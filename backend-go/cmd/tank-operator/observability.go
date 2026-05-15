@@ -16,6 +16,18 @@ var (
 	sessionEventStreamEmittedTotal    = expvar.NewInt("tank_session_event_stream_emitted_total")
 	sessionEventStreamHeartbeatTotal  = expvar.NewInt("tank_session_event_stream_heartbeat_total")
 	sessionEventWakeSubscribeFailures = expvar.NewInt("tank_session_event_wake_subscribe_failure_total")
+
+	// Persister: schema rejections are permanent — anything malformed will
+	// fail the same way on retry. The persister terminates these and
+	// increments this counter. Steady-state expectation is zero; any
+	// non-zero value means a producer is emitting non-Tank events to the
+	// bus and the cutover guard in conversation-contract.yml missed it.
+	sessionEventPersistSchemaRejectedTotal = expvar.NewInt("tank_session_event_persist_schema_rejected_total")
+	// Transient persister failures (Cosmos throttling, network blips). These
+	// are retried up to the JetStream MaxDeliver bound; the counter helps
+	// distinguish them from schema rejections so alerts on the rejection
+	// counter aren't masked by infrastructure noise.
+	sessionEventPersistTransientFailureTotal = expvar.NewInt("tank_session_event_persist_transient_failure_total")
 )
 
 func recordSessionEventStreamError() {
@@ -24,6 +36,28 @@ func recordSessionEventStreamError() {
 
 func recordSessionEventTimelineFailure() {
 	sessionEventTimelineFailureTotal.Add(1)
+}
+
+func recordSessionEventPersistSchemaRejected() {
+	sessionEventPersistSchemaRejectedTotal.Add(1)
+}
+
+func recordSessionEventPersistTransientFailure() {
+	sessionEventPersistTransientFailureTotal.Add(1)
+}
+
+// expvarPersisterMetrics wires the persister's PersisterMetrics interface
+// (defined in internal/sessionbus) to the package-level expvar counters
+// above. The interface stays in the internal package so the persister
+// doesn't need to import expvar directly.
+type expvarPersisterMetrics struct{}
+
+func (expvarPersisterMetrics) RecordSchemaRejected() {
+	recordSessionEventPersistSchemaRejected()
+}
+
+func (expvarPersisterMetrics) RecordTransientFailure() {
+	recordSessionEventPersistTransientFailure()
 }
 
 func recordSessionEventLag(event map[string]any) {

@@ -30,6 +30,7 @@ const ignoredFiles = new Set([
 
 const ignoredRelativePaths = new Set([
   "scripts/check-removed-chat-runtime.mjs",
+  "scripts/check-tank-conversation-contract.mjs",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
 ]);
@@ -80,6 +81,30 @@ const blocked = [
   { name: "retired session Azure config option", pattern: /\bSessionAzureConfigSecret\b/ },
   { name: "retired session Azure config default", pattern: /\bDefaultSessionAzureConfigSecret\b/ },
   { name: "retired session workload identity resource", pattern: /\btank_session_identity\b/ },
+  // Producer-permissive raw-provider event dispatch (the SDK migration's
+  // hidden dual path). Tank events are the only thing on the session bus
+  // now; isCanonical / CANONICAL_TYPES / stampEventID were the runner-side
+  // filter that let raw provider events through. tank.user_message was a
+  // phantom canonical type that never matched the schema. The conditional
+  // stampers (stampEventID, stampTankEvent local copies) silently emitted
+  // half-envelopes; the unconditional runner-shared stampTankEvent throws
+  // instead.
+  { name: "removed CANONICAL_TYPES producer-permissive filter", pattern: /\bCANONICAL_TYPES\b/ },
+  { name: "removed isCanonical producer-side filter", pattern: /\bisCanonical\b/ },
+  { name: "removed local stampEventID stamper", pattern: /\bstampEventID\b/ },
+  { name: "removed phantom canonical tank.user_message type", pattern: /\btank\.user_message\b/ },
+  { name: "duplicate codex-runner conversation contract", pattern: /codex-runner\/src\/conversation\.ts\b/ },
+  { name: "duplicate agent-runner conversation contract", pattern: /agent-runner\/src\/conversation\.ts\b/ },
+  { name: "duplicate frontend tankConversation contract", pattern: /frontend\/src\/tankConversation\.ts\b/ },
+  // Phantom Tank event types: schema/code surface that no production code
+  // ever emitted. They became maintenance debt with no live emitter, so
+  // they were deleted per docs/migration-policy.md (no inactive surface
+  // without a concrete plan to wire it up).
+  { name: "phantom conversation.started event type", pattern: /["']conversation\.started["']|\bEventConversationStarted\b/ },
+  { name: "phantom conversation.archived event type", pattern: /["']conversation\.archived["']|\bEventConversationArchived\b/ },
+  { name: "phantom session.activity_updated event type", pattern: /["']session\.activity_updated["']|\bEventActivityUpdated\b/ },
+  { name: "phantom read_state.updated event type", pattern: /["']read_state\.updated["']|\bEventReadStateUpdated\b/ },
+  { name: "phantom audit-only visibility", pattern: /["']audit-only["']|\bVisibilityAudit\b/ },
 ];
 
 const failures = [];

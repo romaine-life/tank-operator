@@ -1,16 +1,19 @@
 // Long-lived runner — drives one claude agent process via the SDK for
 // the pod's lifetime. The SDK's `query()` takes an async iterable of
 // user messages, so we push durable session commands into it. Multi-turn
-// coordination is implicit:
-// the SDK serializes turns internally, we just keep feeding it.
+// coordination is implicit: the SDK serializes turns internally, we just
+// keep feeding it.
 //
-// Output contract:
-//   1. For every canonical event, publish to the session bus
-//   2. If the event contains a ScheduleWakeup, publish a delayed wakeup command
+// Output contract: adapters/claude.ts converts raw Claude SDK messages
+// into Tank conversation events; the runner stamps and publishes those
+// Tank events on the session bus. Raw provider events never reach the
+// bus. Boundary events (user_message.created, turn.submitted) are owned
+// by the backend (handlers_turns.go) — the runner does not republish them.
+// ScheduleWakeup is a pod-local setTimeout that re-enqueues a submit_turn
+// command when the timer fires.
 //
-// On error: log and keep running. Single-turn failures shouldn't kill
-// the runner; persistent failures will show up via session-bus publish errors
-// and the SPA's user can refresh.
+// On error: log and keep running. Single-turn failures shouldn't kill the
+// runner; persistent failures will surface via session-bus publish errors.
 
 import {
   query,
@@ -24,17 +27,20 @@ import { randomUUID } from "node:crypto";
 import {
   canonicalEventsForClaudeMessage,
   startsClaudeTurn,
+  type ClaudeProviderEvent,
 } from "./adapters/claude.js";
 import type { Config } from "./config.js";
-import { SessionEventSink, isCanonical, type RunnerEvent } from "./sessionEvents.js";
+import { SessionEventSink, type StampedTankEvent } from "./sessionEvents.js";
 import {
+  isDurableTankConversationEvent,
   normalizeClientNonce,
-  isTankConversationEvent,
+  type TankConversationEvent,
+} from "../../runner-shared/conversation.js";
+import {
+  stampTankEvent,
   turnEvent,
   turnIDForClientNonce,
-  userSubmissionEvents,
-  type TankConversationEvent,
-} from "./conversation.js";
+} from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
   isInputReplyCommand,
@@ -44,95 +50,32 @@ import {
 } from "./sessionCommands.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 
-// Pull a single dispatch out as a free function so the session-bus publish contract
-// is testable without spinning up a Runner.
+// Pull a single dispatch out as a free function so the session-bus publish
+// contract is testable without spinning up a Runner. The sink only accepts
+// stamped Tank conversation events; the durable filter here matches the
+// persister-side ValidateEventMap rules.
 //
-// Returns true on a successful end-to-end dispatch; false when the
-// canonical publish failed.
-// Callers that don't care about the outcome can ignore it.
+// Returns true on a successful end-to-end dispatch (or when the event was
+// non-durable and intentionally dropped); false when the publish failed.
 interface DispatchSink {
-  upsert(message: RunnerEvent & { uuid: string }): Promise<void>;
-  create?(message: RunnerEvent & { uuid: string }): Promise<"created" | "exists">;
-}
-
-let tankEventSeq = 0;
-
-function stampTankEvent(message: RunnerEvent): RunnerEvent & { uuid: string } {
-  tankEventSeq += 1;
-  const now = Date.now();
-  const eventID = typeof message.event_id === "string" && message.event_id ? message.event_id : "";
-  const uuid = typeof message.uuid === "string" && message.uuid ? message.uuid : eventID || randomUUID();
-  const writtenAt = new Date(now).toISOString();
-  const tankOrderKey = [
-    String(now).padStart(13, "0"),
-    String(tankEventSeq).padStart(8, "0"),
-    uuid,
-  ].join("-");
-  return {
-    ...message,
-    uuid,
-    ...(eventID ? { event_id: eventID } : {}),
-    written_at: writtenAt,
-    ...(isTankEvent(message)
-      ? {
-          order_key:
-            typeof message.order_key === "string" && message.order_key ? message.order_key : tankOrderKey,
-          sequence: typeof message.sequence === "number" ? message.sequence : tankEventSeq,
-          created_at:
-            typeof message.created_at === "string" && message.created_at ? message.created_at : writtenAt,
-        }
-      : {}),
-  };
+  upsert(message: StampedTankEvent): Promise<void>;
 }
 
 export async function dispatch(
   sink: DispatchSink,
-  message: RunnerEvent,
+  message: TankConversationEvent,
 ): Promise<boolean> {
   const stamped = stampTankEvent(message);
-  if (isMalformedTankEvent(stamped)) {
-    console.error("invalid Tank conversation event:", stamped);
+  if (!isDurableTankConversationEvent(stamped)) {
+    return true;
+  }
+  try {
+    await sink.upsert(stamped);
+  } catch (err) {
+    console.error("session bus publish failed:", err);
     return false;
   }
-  if (isCanonical(stamped)) {
-    try {
-      await sink.upsert(stamped);
-    } catch (err) {
-      console.error("session bus publish failed:", err);
-      // Don't broadcast a live event we couldn't persist — the SPA's
-      // history-replay would then disagree with what it saw live.
-      return false;
-    }
-  }
   return true;
-}
-
-export async function dispatchCreate(
-  sink: DispatchSink,
-  message: RunnerEvent,
-): Promise<"created" | "exists" | "failed"> {
-  const stamped = stampTankEvent(message);
-  if (isMalformedTankEvent(stamped)) {
-    console.error("invalid Tank conversation event:", stamped);
-    return "failed";
-  }
-  if (!isCanonical(stamped)) return "created";
-  try {
-    const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
-    if (result === "exists") return "exists";
-  } catch (err) {
-    console.error("session bus create failed:", err);
-    return "failed";
-  }
-  return "created";
-}
-
-function isMalformedTankEvent(message: RunnerEvent): boolean {
-  return isTankEvent(message) && !isTankConversationEvent(message);
-}
-
-function isTankEvent(message: RunnerEvent): message is TankConversationEvent {
-  return typeof message.event_id === "string" && typeof message.visibility === "string";
 }
 
 export interface PendingTurn {
@@ -276,14 +219,16 @@ export class Runner {
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
-    const runnerEvent = message as RunnerEvent;
-    const activeTurn = await this.ensureActiveTurn(runnerEvent);
-    await dispatch(this.sink, runnerEvent);
+    // Claude SDK events are adapter inputs, not bus content. The adapter
+    // converts them into Tank conversation events; only those reach the
+    // durable session bus.
+    const providerEvent = message as ClaudeProviderEvent;
+    const activeTurn = await this.ensureActiveTurn(providerEvent);
 
     for (const event of canonicalEventsForClaudeMessage(
       this.cfg,
       activeTurn,
-      runnerEvent,
+      providerEvent,
       this.needsInputProviderItemIDs,
     )) {
       const dispatched = await dispatch(this.sink, event);
@@ -296,14 +241,13 @@ export class Runner {
         }
       }
       if (dispatched && event.type === "tool.approval_resolved" && event.provider_item_id) {
-        await this.markInputReplyCompleted(event.provider_item_id);
+        await this.markInputReplyCompleted(event.provider_item_id as string);
       }
     }
-    if (runnerEvent.type === "result" && this.activeTurn === activeTurn) {
+    if (providerEvent.type === "result" && this.activeTurn === activeTurn) {
       this.activeTurn = null;
     }
 
-    // 3. ScheduleWakeup detection
     const wakeup = extractWakeup(message);
     if (wakeup) {
       this.scheduleWakeup(wakeup);
@@ -350,12 +294,7 @@ export class Runner {
       );
       return;
     }
-    const pendingTurn = await this.recordUserSubmission(
-      prompt,
-      { role: "user", content: prompt },
-      clientNonce,
-      record,
-    );
+    const pendingTurn = this.acceptTurn(prompt, clientNonce, record);
     if (!pendingTurn) {
       await this.commandBus.markFailed(record, new Error("session command was not accepted"));
       return;
@@ -415,35 +354,23 @@ export class Runner {
     this.userQueue.push(buildInputReplyMessage(targetProviderItemID, text));
   }
 
-  private async recordUserSubmission(
+  // acceptTurn normalizes the client nonce and assembles the in-memory
+  // pending-turn record. Boundary events (user_message.created,
+  // turn.submitted) are durably written by the backend when the user
+  // POSTed the turn — the runner does not republish them. Returns null
+  // when the command payload is malformed (the caller marks failed).
+  private acceptTurn(
     text: string,
-    message: unknown,
     rawClientNonce: unknown,
     commandRecord?: SessionCommandRecord,
-  ): Promise<PendingTurn | null> {
+  ): PendingTurn | null {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
-      await dispatch(this.sink, {
-        type: "error",
-        message: "client_nonce is required for user submissions",
-      });
+      console.error("claude command rejected: client_nonce is required");
       return null;
     }
-    const { turnID, userMessage, turnSubmitted } = userSubmissionEvents({
-      sessionID: this.cfg.sessionId,
-      clientNonce,
-      text,
-      message,
-      runtime: "claude",
-      skillName: commandRecord?.skill_name,
-    });
-    const userResult = await dispatchCreate(this.sink, userMessage);
-    if (userResult === "failed") return null;
-    const submittedResult = await dispatchCreate(this.sink, turnSubmitted);
-    if (submittedResult === "failed") return null;
-    if (submittedResult === "exists" && !commandRecord) return null;
     return {
-      turnID,
+      turnID: turnIDForClientNonce(clientNonce),
       clientNonce,
       text,
       started: false,
@@ -453,7 +380,7 @@ export class Runner {
     };
   }
 
-  private async ensureActiveTurn(event: RunnerEvent): Promise<PendingTurn | null> {
+  private async ensureActiveTurn(event: ClaudeProviderEvent): Promise<PendingTurn | null> {
     if (!this.activeTurn && this.pendingTurns.length > 0 && startsClaudeTurn(event)) {
       this.activeTurn = this.pendingTurns.shift() ?? null;
       if (this.activeTurn && !this.activeTurn.started) {
@@ -604,12 +531,7 @@ export class Runner {
 
   private async failCommandRecord(record: SessionCommandRecord, err: unknown): Promise<void> {
     const prompt = String(record.prompt ?? "").trim();
-    const pendingTurn = await this.recordUserSubmission(
-      prompt,
-      { role: "user", content: prompt },
-      commandClientNonce(record),
-      record,
-    );
+    const pendingTurn = this.acceptTurn(prompt, commandClientNonce(record), record);
     if (!pendingTurn) {
       await this.commandBus.markFailed(record, err);
       return;

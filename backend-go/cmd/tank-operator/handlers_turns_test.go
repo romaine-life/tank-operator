@@ -21,9 +21,9 @@ import (
 )
 
 type recordingSessionBus struct {
-	commands []sessionbus.Command
-	events   []map[string]any
-	err      error
+	commands         []sessionbus.Command
+	wakes            []string
+	err              error
 }
 
 func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionbus.Command) error {
@@ -34,11 +34,8 @@ func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionb
 	return nil
 }
 
-func (b *recordingSessionBus) PublishEvent(_ context.Context, _ string, event map[string]any) error {
-	if b.err != nil {
-		return b.err
-	}
-	b.events = append(b.events, event)
+func (b *recordingSessionBus) PublishSessionEventWake(_ context.Context, storageKey string) error {
+	b.wakes = append(b.wakes, storageKey)
 	return nil
 }
 
@@ -67,8 +64,13 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	if len(bus.commands) != 1 {
 		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
-	if len(bus.events) != 2 {
-		t.Fatalf("published events = %d, want 2", len(bus.events))
+	// Boundary events are persisted to Cosmos directly (handler must
+	// guarantee durability before returning success), and each persist
+	// publishes a NATS wake so SSE clients see them immediately. With
+	// two boundary events + the wake call ordering, we expect at least
+	// one wake per session storage key.
+	if len(bus.wakes) < 2 {
+		t.Fatalf("session-event wakes = %d, want >=2", len(bus.wakes))
 	}
 	got := bus.commands[0]
 	if got.Type != sessionbus.CommandSubmitTurn || got.ClientNonce != "turn-abc_123" {
