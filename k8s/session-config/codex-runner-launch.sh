@@ -37,9 +37,20 @@ EOF
     # codex's mcp config lives in config.toml under [mcp_servers.<name>]
     # blocks. Generate them from the same .mcp.json the claude path uses
     # so both runtimes see the same MCP surface.
+    #
+    # MCP entries are either HTTP (have `url`) or stdio (have `command`).
+    # Emit the right key for each — previously this always emitted
+    # `url = "..."`, defaulting to `""` for stdio entries, which made
+    # codex's rmcp HTTP client try to parse an empty string as a URL and
+    # fail with "relative URL without a base", killing the whole turn.
     mcp_block="$(jq -r '
       .mcpServers | to_entries[] |
-      "[mcp_servers." + .key + "]\nurl = \"" + (.value.url // "") + "\""
+      if .value.url then
+        "[mcp_servers." + .key + "]\nurl = \"" + .value.url + "\""
+      else
+        "[mcp_servers." + .key + "]\ncommand = \"" + (.value.command // "") + "\"" +
+        (if .value.args then "\nargs = " + (.value.args | tojson) else "" end)
+      end
     ' /workspace/.mcp.json 2>/dev/null || true)"
   fi
 
