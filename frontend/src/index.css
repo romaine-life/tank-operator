@@ -1063,10 +1063,8 @@ button:disabled {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
-  position: relative;
   padding-left: 62px;
   padding-right: 68px;
-  z-index: 1;
 }
 
 .session-row-bottom {
