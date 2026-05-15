@@ -20,6 +20,27 @@ const (
 	maxSDKInputReplyBytes = 64 * 1024
 )
 
+// persistBackendEvent writes a backend-owned Tank conversation event
+// directly to the Cosmos session-events ledger and wakes any active SSE
+// subscribers on the per-session events subject. Backend-owned events
+// (user_message.created, turn.submitted, turn.command_failed) do not go
+// through the JetStream events subject: the backend is the authority, so
+// it writes durably itself and signals the live path explicitly. This is
+// the single replacement for the prior best-effort PublishEvent path
+// that left SSE clients waiting up to one heartbeat for boundary events.
+func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, event map[string]any) error {
+	if err := s.sessionEvents.Upsert(ctx, event); err != nil {
+		return err
+	}
+	if s.sessionBus != nil && storageKey != "" {
+		if err := s.sessionBus.PublishSessionEventWake(ctx, storageKey); err != nil {
+			slog.Warn("session event wake publish failed",
+				"storage_key", storageKey, "event_type", event["type"], "error", err)
+		}
+	}
+	return nil
+}
+
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime
 // sessions. The browser writes work here and reads transcript events from the
 // durable SSE stream; runner-local transports are not part of the UI contract.
@@ -115,7 +136,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 			Reason:            "publish_interrupt_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
-		if writeErr := s.sessionEvents.Upsert(r.Context(), failedEvent); writeErr != nil {
+		if writeErr := s.persistBackendEvent(r.Context(), storageKey, failedEvent); writeErr != nil {
 			slog.Warn("persist turn.command_failed for interrupt",
 				"session_id", sessionID, "target_turn_id", targetTurnID, "error", writeErr)
 		}
@@ -208,7 +229,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 			Reason:            "publish_input_reply_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
-		if writeErr := s.sessionEvents.Upsert(r.Context(), failedEvent); writeErr != nil {
+		if writeErr := s.persistBackendEvent(r.Context(), storageKey, failedEvent); writeErr != nil {
 			slog.Warn("persist turn.command_failed for input reply",
 				"session_id", sessionID, "target_turn_id", targetTurnID, "error", writeErr)
 		}
@@ -315,21 +336,24 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		FollowUp:          req.FollowUp,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if err := s.sessionBus.PublishCommand(ctx, command); err != nil {
-		// Command publish failed — NATS is likely broken. Persist the
-		// pre-command user_message.created + turn.submitted events
-		// directly to Cosmos so the user's submission isn't lost from
-		// the durable record, then emit a turn.command_failed marker
-		// keyed to the same turn_id so the renderer can show the
-		// stranded submission as failed instead of perpetually
-		// "submitted."
-		for _, event := range events {
-			if writeErr := s.sessionEvents.Upsert(ctx, event); writeErr != nil {
-				slog.Warn("persist boundary event after publish failure",
-					"session_id", sessionID, "turn_id", turnID,
-					"event_type", event["type"], "error", writeErr)
-			}
+	// Boundary events are backend-owned: the orchestrator accepted the turn,
+	// the orchestrator persists user_message.created + turn.submitted to
+	// the durable ledger before any runner involvement. Writing directly
+	// to Cosmos here (instead of publishing onto the bus and waiting for
+	// the persister) keeps a single source of truth for these events and
+	// guarantees they exist before this handler returns success. The
+	// runner-side dispatchCreate of these events was removed during the
+	// SDK migration cutover; the backend is now the sole producer.
+	for _, event := range events {
+		if writeErr := s.persistBackendEvent(ctx, storageKey, event); writeErr != nil {
+			return nil, http.StatusInternalServerError, "persist boundary event: " + writeErr.Error()
 		}
+	}
+	if err := s.sessionBus.PublishCommand(ctx, command); err != nil {
+		// Command publish failed — NATS is likely broken. Boundary events
+		// are already durable above; emit a turn.command_failed marker
+		// keyed to the same turn_id so the SPA renders the stranded
+		// submission as failed instead of perpetually "submitted."
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
 			SessionID:         sessionID,
 			SessionStorageKey: storageKey,
@@ -340,21 +364,11 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			Reason:            "publish_submit_turn_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
-		if writeErr := s.sessionEvents.Upsert(ctx, failedEvent); writeErr != nil {
+		if writeErr := s.persistBackendEvent(ctx, storageKey, failedEvent); writeErr != nil {
 			slog.Warn("persist turn.command_failed",
 				"session_id", sessionID, "turn_id", turnID, "error", writeErr)
 		}
 		return nil, http.StatusInternalServerError, "publish turn: " + err.Error()
-	}
-	for _, event := range events {
-		if err := s.sessionBus.PublishEvent(ctx, storageKey, event); err != nil {
-			slog.Warn("submit boundary event publish failed after command accepted",
-				"session_id", sessionID,
-				"turn_id", turnID,
-				"event_type", event["type"],
-				"error", err,
-			)
-		}
 	}
 
 	return map[string]string{

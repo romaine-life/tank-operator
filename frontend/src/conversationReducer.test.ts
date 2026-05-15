@@ -5,7 +5,7 @@ import {
   initialConversationState,
   reduceConversationEvents,
 } from "./conversationReducer.ts";
-import { isTankConversationEvent, type TankConversationEvent } from "./tankConversation.ts";
+import { isTankConversationEvent, type TankConversationEvent } from "../../runner-shared/conversation.js";
 
 function ev(
   event_id: string,
@@ -189,28 +189,6 @@ test("Provider error becomes terminal error state without needs-input", () => {
   assert.equal(state.failed, true);
   assert.equal(state.needsInput, false);
   assert.equal(state.activeTurnId, null);
-});
-
-test("Activity and read-state events drive unread state", () => {
-  const state = reduceConversationEvents([
-    ev("1", "session.activity_updated", {
-      payload: {
-        status: "streaming",
-        needs_input: false,
-        failed: false,
-        active_turn_id: "turn-1",
-        unread_count: 3,
-      },
-    }),
-    ev("2", "read_state.updated", {
-      payload: { last_read_order_key: "0002" },
-    }),
-  ]);
-
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.activeTurnId, "turn-1");
-  assert.equal(state.lastReadOrderKey, "0002");
-  assert.equal(state.unreadCount, 0);
 });
 
 test("Timeline replay and SSE delivery converge through event id dedupe", () => {

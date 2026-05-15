@@ -32,29 +32,24 @@ type Visibility string
 const (
 	VisibilityDurable  Visibility = "durable"
 	VisibilityLiveOnly Visibility = "live-only"
-	VisibilityAudit    Visibility = "audit-only"
 )
 
 type EventType string
 
 const (
-	EventConversationStarted  EventType = "conversation.started"
-	EventConversationArchived EventType = "conversation.archived"
-	EventUserMessageCreated   EventType = "user_message.created"
-	EventTurnSubmitted        EventType = "turn.submitted"
-	EventTurnStarted          EventType = "turn.started"
-	EventTurnCompleted        EventType = "turn.completed"
-	EventTurnFailed           EventType = "turn.failed"
-	EventTurnCommandFailed    EventType = "turn.command_failed"
-	EventTurnInterrupted      EventType = "turn.interrupted"
-	EventItemStarted          EventType = "item.started"
-	EventItemDelta            EventType = "item.delta"
-	EventItemCompleted        EventType = "item.completed"
-	EventItemFailed           EventType = "item.failed"
-	EventApprovalRequested    EventType = "tool.approval_requested"
-	EventApprovalResolved     EventType = "tool.approval_resolved"
-	EventActivityUpdated      EventType = "session.activity_updated"
-	EventReadStateUpdated     EventType = "read_state.updated"
+	EventUserMessageCreated EventType = "user_message.created"
+	EventTurnSubmitted      EventType = "turn.submitted"
+	EventTurnStarted        EventType = "turn.started"
+	EventTurnCompleted      EventType = "turn.completed"
+	EventTurnFailed         EventType = "turn.failed"
+	EventTurnCommandFailed  EventType = "turn.command_failed"
+	EventTurnInterrupted    EventType = "turn.interrupted"
+	EventItemStarted        EventType = "item.started"
+	EventItemDelta          EventType = "item.delta"
+	EventItemCompleted      EventType = "item.completed"
+	EventItemFailed         EventType = "item.failed"
+	EventApprovalRequested  EventType = "tool.approval_requested"
+	EventApprovalResolved   EventType = "tool.approval_resolved"
 )
 
 type ProducerMetadata struct {
@@ -86,10 +81,42 @@ type Event struct {
 
 var skillNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// SchemaError wraps a permanent ValidateEventMap failure. The persister
+// matches against this with errors.As to route schema rejections through a
+// terminal NAK path (instead of the retry path used for transient Cosmos /
+// network failures). Steady-state expectation: zero SchemaErrors on the
+// session bus; non-zero indicates a producer is emitting non-Tank events.
+type SchemaError struct {
+	Cause error
+}
+
+func (e *SchemaError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "schema rejected"
+	}
+	return "schema rejected: " + e.Cause.Error()
+}
+
+func (e *SchemaError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // ValidateEventMap validates the runtime JSON shape of a Tank conversation
 // event. It intentionally enforces per-type requirements instead of accepting
-// any object that happens to have the broad envelope fields.
+// any object that happens to have the broad envelope fields. Failures are
+// wrapped in SchemaError so callers can branch on permanent vs transient
+// failures.
 func ValidateEventMap(event map[string]any) error {
+	if err := validateEventMap(event); err != nil {
+		return &SchemaError{Cause: err}
+	}
+	return nil
+}
+
+func validateEventMap(event map[string]any) error {
 	if event == nil {
 		return fmt.Errorf("event is required")
 	}
@@ -158,10 +185,6 @@ func ValidateEventMap(event map[string]any) error {
 			return fmt.Errorf("%s must be actor=tool", eventType)
 		}
 		return requirePayloadString(event, "kind")
-	case EventActivityUpdated:
-		return requirePayloadString(event, "status")
-	case EventReadStateUpdated:
-		return requirePayloadString(event, "last_read_order_key")
 	}
 	return nil
 }
@@ -256,7 +279,7 @@ func validSource(source Source) bool {
 
 func validVisibility(visibility Visibility) bool {
 	switch visibility {
-	case VisibilityDurable, VisibilityLiveOnly, VisibilityAudit:
+	case VisibilityDurable, VisibilityLiveOnly:
 		return true
 	default:
 		return false
@@ -265,9 +288,7 @@ func validVisibility(visibility Visibility) bool {
 
 func validEventType(eventType EventType) bool {
 	switch eventType {
-	case EventConversationStarted,
-		EventConversationArchived,
-		EventUserMessageCreated,
+	case EventUserMessageCreated,
 		EventTurnSubmitted,
 		EventTurnStarted,
 		EventTurnCompleted,
@@ -279,9 +300,7 @@ func validEventType(eventType EventType) bool {
 		EventItemCompleted,
 		EventItemFailed,
 		EventApprovalRequested,
-		EventApprovalResolved,
-		EventActivityUpdated,
-		EventReadStateUpdated:
+		EventApprovalResolved:
 		return true
 	default:
 		return false

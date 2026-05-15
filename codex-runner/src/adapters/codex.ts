@@ -1,6 +1,7 @@
 import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
-import { itemEvent, turnEvent, type TankConversationEvent } from "../conversation.js";
+import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
+import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 
 export interface CodexAdapterTurn {
   turnID: string;

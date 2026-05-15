@@ -128,7 +128,7 @@ func main() {
 	mgr.StartReaper(ctx)
 	if sessionBus != nil {
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore); err != nil {
+			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, expvarPersisterMetrics{}); err != nil {
 				slog.Error("session bus event persister stopped", "error", err)
 			}
 		}()

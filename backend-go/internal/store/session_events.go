@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -122,10 +123,17 @@ func (s *cosmosSessionEventStore) ListBySession(ctx context.Context, tankSession
 		for _, raw := range page.Items {
 			var doc map[string]any
 			if err := json.Unmarshal(raw, &doc); err != nil {
-				continue
+				return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
 			}
 			if err := conversation.ValidateEventMap(doc); err != nil {
-				continue
+				// Per docs/migration-policy.md, the read path no longer
+				// silently filters malformed docs. The producer-side cutover
+				// (runner dispatch contract, persister schema-terminal NAK)
+				// guarantees only Tank events land in Cosmos, and the
+				// pre-deploy Cosmos audit script (scripts/audit-session-
+				// events.py) clears any pre-existing rows. A failure here
+				// means one of those guarantees regressed — surface it.
+				return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
 			}
 			doc["tank_session_id"] = tankSessionID
 			out = append(out, doc)
@@ -179,10 +187,10 @@ func (s *cosmosSessionEventStore) FindTurnTerminal(ctx context.Context, tankSess
 		for _, raw := range page.Items {
 			var doc map[string]any
 			if err := json.Unmarshal(raw, &doc); err != nil {
-				continue
+				return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
 			}
 			if err := conversation.ValidateEventMap(doc); err != nil {
-				continue
+				return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
 			}
 			doc["tank_session_id"] = tankSessionID
 			return doc, nil

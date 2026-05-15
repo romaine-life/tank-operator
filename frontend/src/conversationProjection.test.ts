@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { reduceConversationEvents } from "./conversationReducer.ts";
 import { projectConversationState } from "./conversationProjection.ts";
-import type { TankConversationEvent } from "./tankConversation.ts";
+import type { TankConversationEvent } from "../../runner-shared/conversation.js";
 
 function ev(
   event_id: string,

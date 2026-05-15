@@ -42,6 +42,32 @@ or cleanup work. Read
 [docs/product-inspirations.md](docs/product-inspirations.md) when making
 product or architecture decisions.
 
+## Migration audit checklist (procedural)
+
+The migration-policy doc is not values — it is a checklist. Before declaring
+any phase of a migration done, run these literal greps. Treat each as a
+gate, not a guideline; a non-zero match means the phase is incomplete and
+needs a blocker report per `docs/migration-policy.md`.
+
+- Grep for every name, route, type, env var, and constant the old system
+  owned. Anything still present is unmigrated.
+- Grep the changed package for `legacy`, `compat`, `fallback`, `temporary`,
+  `exception`, `TODO`, `FIXME`. Each is a deletion target.
+- Grep the test suite for tests that pin the old behavior. They block the
+  cutover; delete them or convert them into "retired path stays out" guards
+  in `scripts/check-removed-chat-runtime.mjs`.
+- Confirm `scripts/check-removed-chat-runtime.mjs` lists the new forbidden
+  patterns so a future PR can't reintroduce them.
+- Confirm an observability counter or alert exists for "the old path is
+  being used again" — `docs/quality-timeframes.md` names observability as
+  a completion requirement, not a follow-up.
+- Confirm the cutover is atomic: no fallback layer, no parallel path that
+  "works for now," no read-side silent skip on old data shapes.
+
+Skipping this checklist is the failure mode that left dual-path debt in
+the SDK migration. The checklist takes ~10 minutes and runs *before*
+ExitPlanMode, not after merge.
+
 ## Agentic flows ship as multi-stage LLM splits
 
 When a project on this platform ships an autonomous change workflow

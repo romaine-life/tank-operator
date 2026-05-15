@@ -6,10 +6,19 @@ import {
   type ClaudeTurnContext,
 } from "./claude.js";
 import type { Config } from "../config.js";
-import { isTankConversationEvent, type TankConversationEvent } from "../conversation.js";
+import {
+  isTankConversationEvent,
+  type TankConversationEvent,
+} from "../../../runner-shared/conversation.js";
+import { stampTankEvent } from "../../../runner-shared/conversation-builders.js";
 
+// Adapter output doesn't carry order_key/sequence until dispatch stamps
+// it; running the event through stampTankEvent here mirrors what the
+// runner does before publishing to the bus, so the assertion validates
+// the full post-stamp envelope the persister sees.
 function assertTankEventFixture(event: TankConversationEvent, label = event.type) {
-  assert.equal(isTankConversationEvent(event), true, `${label} should satisfy the Tank envelope`);
+  const stamped = stampTankEvent(event);
+  assert.equal(isTankConversationEvent(stamped), true, `${label} should satisfy the Tank envelope`);
 }
 
 function turn(fields: Partial<ClaudeTurnContext> = {}): ClaudeTurnContext {

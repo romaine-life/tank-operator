@@ -1,0 +1,66 @@
+export const TANK_ACTORS: readonly ["user", "assistant", "system", "tool", "runner"];
+export type TankActor = (typeof TANK_ACTORS)[number];
+
+export const TANK_EVENT_SOURCES: readonly ["tank", "claude", "codex"];
+export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
+
+export const TANK_VISIBILITIES: readonly ["durable", "live-only"];
+export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
+
+export const TANK_EVENT_TYPES: readonly [
+  "user_message.created",
+  "turn.submitted",
+  "turn.started",
+  "turn.completed",
+  "turn.failed",
+  "turn.command_failed",
+  "turn.interrupted",
+  "item.started",
+  "item.delta",
+  "item.completed",
+  "item.failed",
+  "tool.approval_requested",
+  "tool.approval_resolved",
+];
+export type TankEventType = (typeof TANK_EVENT_TYPES)[number];
+
+export interface TankProducerMetadata {
+  name?: string;
+  version?: string;
+  runtime?: string;
+  provider_event_id?: string;
+}
+
+export type UserMessageDisplay =
+  | { kind: "plain" }
+  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
+
+export interface TankConversationEvent<
+  TPayload extends Record<string, unknown> = Record<string, unknown>,
+> {
+  event_id: string;
+  uuid?: string;
+  order_key?: string;
+  sequence?: number;
+  conversation_id?: string;
+  session_id: string;
+  turn_id?: string;
+  timeline_id?: string;
+  provider_item_id?: string;
+  parent_id?: string;
+  client_nonce?: string;
+  actor: TankActor;
+  source: TankEventSource;
+  type: TankEventType;
+  created_at: string;
+  written_at?: string;
+  producer?: TankProducerMetadata;
+  visibility: TankVisibility;
+  payload?: TPayload;
+  [key: string]: unknown;
+}
+
+export function isTankConversationEvent(event: unknown): event is TankConversationEvent;
+export function isDurableTankConversationEvent(event: unknown): event is TankConversationEvent;
+
+export function normalizeClientNonce(value: unknown): string | null;

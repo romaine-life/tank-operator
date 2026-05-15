@@ -5,9 +5,10 @@ on:
     branches: [main]
     paths:
       - 'schemas/tank-conversation-event.schema.json'
+      - 'schemas/tank-conversation-event.fixtures.json'
       - 'backend-go/internal/conversation/**'
-      - 'frontend/src/tankConversation.ts'
-      - 'frontend/src/*.test.ts'
+      - 'backend-go/internal/sessionbus/**'
+      - 'frontend/src/**'
       - 'agent-runner/src/**'
       - 'codex-runner/src/**'
       - 'runner-shared/**'
@@ -18,9 +19,10 @@ on:
     branches: [main]
     paths:
       - 'schemas/tank-conversation-event.schema.json'
+      - 'schemas/tank-conversation-event.fixtures.json'
       - 'backend-go/internal/conversation/**'
-      - 'frontend/src/tankConversation.ts'
-      - 'frontend/src/*.test.ts'
+      - 'backend-go/internal/sessionbus/**'
+      - 'frontend/src/**'
       - 'agent-runner/src/**'
       - 'codex-runner/src/**'
       - 'runner-shared/**'

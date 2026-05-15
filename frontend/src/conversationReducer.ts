@@ -1,4 +1,4 @@
-import type { TankConversationEvent, UserMessageDisplay } from "./tankConversation";
+import type { TankConversationEvent, UserMessageDisplay } from "../../runner-shared/conversation.js";
 
 export type ConversationRunStatus =
   | "ready"
@@ -85,10 +85,6 @@ export function conversationReducer(
   };
 
   switch (event.type) {
-    case "conversation.started":
-      return next;
-    case "conversation.archived":
-      return { ...next, runStatus: "ready", activeTurnId: null, activeItemId: null };
     case "user_message.created":
       return applyUserMessage(next, event);
     case "turn.submitted":
@@ -193,10 +189,6 @@ export function conversationReducer(
         event,
         "completed",
       );
-    case "session.activity_updated":
-      return applyActivity(next, event);
-    case "read_state.updated":
-      return applyReadState(next, event);
   }
 }
 
@@ -272,34 +264,6 @@ function upsertItem(
   };
 }
 
-function applyActivity(
-  state: ConversationReducerState,
-  event: TankConversationEvent,
-): ConversationReducerState {
-  const status = stringPayload(event, "status");
-  const unreadCount = numberPayload(event, "unread_count");
-  return {
-    ...state,
-    runStatus: isRunStatus(status) ? status : state.runStatus,
-    needsInput: booleanPayload(event, "needs_input") ?? state.needsInput,
-    failed: booleanPayload(event, "failed") ?? state.failed,
-    activeTurnId: stringPayload(event, "active_turn_id") ?? state.activeTurnId,
-    unreadCount: unreadCount ?? state.unreadCount,
-  };
-}
-
-function applyReadState(
-  state: ConversationReducerState,
-  event: TankConversationEvent,
-): ConversationReducerState {
-  return {
-    ...state,
-    lastReadOrderKey:
-      stringPayload(event, "last_read_order_key") ?? event.order_key ?? state.lastReadOrderKey,
-    unreadCount: 0,
-  };
-}
-
 function matchingActiveItem(
   state: ConversationReducerState,
   event: TankConversationEvent,
@@ -316,16 +280,6 @@ function defaultItemKind(event: TankConversationEvent): string {
 function stringPayload(event: TankConversationEvent, key: string): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function numberPayload(event: TankConversationEvent, key: string): number | undefined {
-  const value = event.payload?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function booleanPayload(event: TankConversationEvent, key: string): boolean | undefined {
-  const value = event.payload?.[key];
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | undefined {
@@ -359,15 +313,4 @@ function errorText(event: TankConversationEvent): string | null {
   }
   const reason = stringPayload(event, "reason");
   return reason ?? null;
-}
-
-function isRunStatus(value: string | undefined): value is ConversationRunStatus {
-  return (
-    value === "ready" ||
-    value === "submitted" ||
-    value === "streaming" ||
-    value === "needs_input" ||
-    value === "stopped" ||
-    value === "error"
-  );
 }

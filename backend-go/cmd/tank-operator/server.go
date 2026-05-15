@@ -50,7 +50,7 @@ type appServer struct {
 
 type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
-	PublishEvent(context.Context, string, map[string]any) error
+	PublishSessionEventWake(context.Context, string) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
 	PublishSessionListWake(context.Context, string) error
 	SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error)

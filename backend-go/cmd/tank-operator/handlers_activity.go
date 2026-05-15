@@ -178,51 +178,11 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 			} else {
 				summary.Status = "ready"
 			}
-		case "session.activity_updated":
-			applyActivityUpdatedEvent(&summary, event)
-		case "read_state.updated":
-			eventReadOrderKey := activityPayloadString(event, "last_read_order_key")
-			if eventReadOrderKey == "" {
-				eventReadOrderKey = activityEventOrderKey(event)
-			}
-			if eventReadOrderKey > readOrderKey {
-				readOrderKey = eventReadOrderKey
-			}
 		}
 	}
 
 	summary.UnreadCount = countUnreadOutputs(outputMarkers, readOrderKey)
 	return summary
-}
-
-func applyActivityUpdatedEvent(summary *sessionActivitySummary, event map[string]any) {
-	if status := activityPayloadString(event, "status"); isActivityStatus(status) {
-		summary.Status = status
-	}
-	if needsInput, ok := activityPayloadBool(event, "needs_input"); ok {
-		summary.NeedsInput = needsInput
-		if needsInput {
-			summary.Status = "needs_input"
-		}
-	}
-	if failed, ok := activityPayloadBool(event, "failed"); ok {
-		summary.Failed = failed
-		if failed {
-			summary.Status = "error"
-		}
-	}
-	if activeTurnID := activityPayloadString(event, "active_turn_id"); activeTurnID != "" {
-		summary.ActiveTurnID = stringPtr(activeTurnID)
-	}
-}
-
-func isActivityStatus(status string) bool {
-	switch status {
-	case "ready", "submitted", "streaming", "needs_input", "stopped", "error":
-		return true
-	default:
-		return false
-	}
 }
 
 func isDurableTankActivityEvent(event map[string]any) bool {
@@ -233,9 +193,7 @@ func isDurableTankActivityEvent(event map[string]any) bool {
 		return false
 	}
 	switch activityEventType(event) {
-	case "conversation.started",
-		"conversation.archived",
-		"user_message.created",
+	case "user_message.created",
 		"turn.submitted",
 		"turn.started",
 		"turn.completed",
@@ -247,9 +205,7 @@ func isDurableTankActivityEvent(event map[string]any) bool {
 		"item.completed",
 		"item.failed",
 		"tool.approval_requested",
-		"tool.approval_resolved",
-		"session.activity_updated",
-		"read_state.updated":
+		"tool.approval_resolved":
 		return true
 	default:
 		return false
@@ -344,16 +300,6 @@ func activityEventTime(event map[string]any) string {
 func activityPayload(event map[string]any) map[string]any {
 	payload, _ := event["payload"].(map[string]any)
 	return payload
-}
-
-func activityPayloadString(event map[string]any, key string) string {
-	value, _ := activityPayload(event)[key].(string)
-	return value
-}
-
-func activityPayloadBool(event map[string]any, key string) (bool, bool) {
-	value, ok := activityPayload(event)[key].(bool)
-	return value, ok
 }
 
 func activityOptionalString(event map[string]any, key string) *string {

@@ -2,18 +2,17 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = path.join(repoRoot, "schemas", "tank-conversation-event.schema.json");
 const fixturePath = path.join(repoRoot, "schemas", "tank-conversation-event.fixtures.json");
+const sharedContractPath = path.join(repoRoot, "runner-shared", "conversation.js");
 const requireFromFrontend = createRequire(path.join(repoRoot, "frontend", "package.json"));
-let ts;
 let Ajv2020;
 let addFormats;
 try {
-  ts = requireFromFrontend("typescript");
   Ajv2020 = requireDefault(requireFromFrontend("ajv/dist/2020"));
   addFormats = requireDefault(requireFromFrontend("ajv-formats"));
 } catch (err) {
@@ -31,25 +30,35 @@ const expectedEnums = {
   TANK_EVENT_TYPES: schemaEnum("type"),
 };
 
-const tsContractFiles = [
+const failures = [];
+
+// runner-shared/conversation.js is the single source of truth for the TS
+// side of the contract. Both runners and the frontend import these arrays
+// from here, so verifying just this module covers every TS consumer.
+const sharedModule = await import(pathToFileURL(sharedContractPath).href);
+for (const [constName, expected] of Object.entries(expectedEnums)) {
+  const actual = sharedModule[constName];
+  if (!Array.isArray(actual) || actual.some((value) => typeof value !== "string")) {
+    failures.push(`runner-shared/conversation.js: missing or invalid ${constName}`);
+    continue;
+  }
+  compareArrays(`runner-shared/conversation.js:${constName}`, actual, expected);
+}
+
+// Defence-in-depth: confirm no stray local copies of the contract reintroduce
+// drift between languages. If any runner or the frontend grows its own
+// TANK_EVENT_TYPES const, the cutover to the shared module has regressed.
+const forbiddenLocalConstFiles = [
   "frontend/src/tankConversation.ts",
   "agent-runner/src/conversation.ts",
   "codex-runner/src/conversation.ts",
 ];
-
-const failures = [];
-
-for (const relativePath of tsContractFiles) {
-  const absolutePath = path.join(repoRoot, relativePath);
-  const source = await fs.readFile(absolutePath, "utf8");
-  const sourceFile = ts.createSourceFile(relativePath, source, ts.ScriptTarget.Latest, true);
-  for (const [constName, expected] of Object.entries(expectedEnums)) {
-    const actual = stringArrayConst(sourceFile, constName);
-    if (!actual) {
-      failures.push(`${relativePath}: missing exported ${constName}`);
-      continue;
-    }
-    compareArrays(`${relativePath}:${constName}`, actual, expected);
+for (const relativePath of forbiddenLocalConstFiles) {
+  try {
+    await fs.access(path.join(repoRoot, relativePath));
+    failures.push(`${relativePath}: must not exist — runner-shared/conversation.js is the single source`);
+  } catch {
+    // missing — that's the desired state
   }
 }
 
@@ -182,43 +191,3 @@ function formatAjvErrors(errors) {
     .join("; ");
 }
 
-function stringArrayConst(sourceFile, constName) {
-  let values = null;
-  visit(sourceFile);
-  return values;
-
-  function visit(node) {
-    if (values) return;
-    if (!ts.isVariableStatement(node)) {
-      ts.forEachChild(node, visit);
-      return;
-    }
-    const isExported = node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-    if (!isExported) return;
-    for (const declaration of node.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== constName) continue;
-      const initializer = unwrapExpression(declaration.initializer);
-      if (!initializer || !ts.isArrayLiteralExpression(initializer)) return;
-      const elements = [];
-      for (const element of initializer.elements) {
-        if (!ts.isStringLiteral(element)) return;
-        elements.push(element.text);
-      }
-      values = elements;
-      return;
-    }
-  }
-}
-
-function unwrapExpression(expression) {
-  let current = expression;
-  while (
-    current &&
-    (ts.isAsExpression(current) ||
-      ts.isSatisfiesExpression?.(current) ||
-      ts.isParenthesizedExpression(current))
-  ) {
-    current = current.expression;
-  }
-  return current;
-}

@@ -3,6 +3,7 @@ package sessionbus
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 )
 
 type Config struct {
@@ -25,6 +27,19 @@ type Config struct {
 type EventStore interface {
 	Upsert(context.Context, map[string]any) error
 }
+
+// PersisterMetrics receives counters from the schema-rejection / transient-
+// failure split in the persister. Steady-state expectation: zero schema
+// rejections. Wired to expvar in cmd/tank-operator/observability.go.
+type PersisterMetrics interface {
+	RecordSchemaRejected()
+	RecordTransientFailure()
+}
+
+type noopPersisterMetrics struct{}
+
+func (noopPersisterMetrics) RecordSchemaRejected()    {}
+func (noopPersisterMetrics) RecordTransientFailure()  {}
 
 type Bus struct {
 	nc       *nats.Conn
@@ -141,6 +156,26 @@ func (b *Bus) PublishEvent(ctx context.Context, sessionStorageKey string, event 
 	return err
 }
 
+// PublishSessionEventWake signals SSE subscribers on
+// /api/sessions/{id}/events that new durable events landed in Cosmos
+// for this session. The persister already publishes this after its own
+// Upsert; backend code that direct-writes events to Cosmos (e.g.,
+// boundary events on submit-turn, turn.command_failed when a command
+// publish fails) must call this to keep the live SSE path consistent
+// with the durable ledger. SSE clients otherwise wait up to one
+// heartbeat interval before noticing — which is exactly the bug this
+// fixes.
+func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey string) error {
+	if b == nil {
+		return fmt.Errorf("session bus unavailable")
+	}
+	sessionStorageKey = strings.TrimSpace(sessionStorageKey)
+	if sessionStorageKey == "" {
+		return nil
+	}
+	return b.nc.Publish(WakeSubject(sessionStorageKey), nil)
+}
+
 // PublishSessionListWake signals to SSE subscribers on /api/sessions/events
 // that the owner's session list has changed. Replaces the in-process
 // EventBus fanout pattern with a NATS subject so the live path matches
@@ -210,9 +245,12 @@ func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan stru
 	return ch, unsubscribe, nil
 }
 
-func (b *Bus) RunEventPersister(ctx context.Context, store EventStore) error {
+func (b *Bus) RunEventPersister(ctx context.Context, store EventStore, metrics PersisterMetrics) error {
 	if b == nil {
 		return fmt.Errorf("session bus unavailable")
+	}
+	if metrics == nil {
+		metrics = noopPersisterMetrics{}
 	}
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.stream, jetstream.ConsumerConfig{
 		Name:          "tank-session-event-persister",
@@ -229,17 +267,7 @@ func (b *Bus) RunEventPersister(ctx context.Context, store EventStore) error {
 		return err
 	}
 	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
-		if err := b.persistEventMessage(ctx, store, msg); err != nil {
-			slog.Warn("session bus event persist failed",
-				"subject", msg.Subject(),
-				"error", err,
-			)
-			_ = msg.NakWithDelay(5 * time.Second)
-			return
-		}
-		if err := msg.Ack(); err != nil {
-			slog.Warn("session bus event ack failed", "subject", msg.Subject(), "error", err)
-		}
+		b.handlePersistMessage(ctx, store, metrics, msg)
 	})
 	if err != nil {
 		return err
@@ -250,9 +278,58 @@ func (b *Bus) RunEventPersister(ctx context.Context, store EventStore) error {
 	return nil
 }
 
-func (b *Bus) persistEventMessage(ctx context.Context, store EventStore, msg jetstream.Msg) error {
+// persistableMessage is the narrow ack/term/data surface of jetstream.Msg
+// used by handlePersistMessage. Defined here so unit tests can supply a
+// stub without spinning up an in-process NATS server.
+type persistableMessage interface {
+	Subject() string
+	Data() []byte
+	Ack() error
+	NakWithDelay(delay time.Duration) error
+	TermWithReason(reason string) error
+}
+
+// handlePersistMessage routes one bus message through the store and acks /
+// NAKs / terminates based on the outcome.
+func (b *Bus) handlePersistMessage(ctx context.Context, store EventStore, metrics PersisterMetrics, msg persistableMessage) {
+	err := b.persistOneEvent(ctx, store, msg)
+	if err == nil {
+		if ackErr := msg.Ack(); ackErr != nil {
+			slog.Warn("session bus event ack failed", "subject", msg.Subject(), "error", ackErr)
+		}
+		return
+	}
+	// Schema rejection is permanent — a retry would fail the same way.
+	// Terminate the message so it doesn't burn 20 redeliveries + 200
+	// ack-pending slots on something the persister can never accept.
+	// The metric makes the producer-side regression visible.
+	var schemaErr *conversation.SchemaError
+	if errors.As(err, &schemaErr) {
+		metrics.RecordSchemaRejected()
+		slog.Warn("session bus event terminated: schema rejected",
+			"subject", msg.Subject(),
+			"error", schemaErr.Error(),
+			"event_type", eventTypeForLog(msg.Data()),
+		)
+		_ = msg.TermWithReason("schema rejected: " + schemaErr.Error())
+		return
+	}
+	metrics.RecordTransientFailure()
+	slog.Warn("session bus event persist failed",
+		"subject", msg.Subject(),
+		"error", err,
+	)
+	_ = msg.NakWithDelay(5 * time.Second)
+}
+
+// persistOneEvent unmarshals + upserts + wakes for one message. Mirrors
+// persistEventMessage but takes the narrow persistableMessage interface so
+// it can be unit-tested without a live NATS server.
+func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persistableMessage) error {
 	var event map[string]any
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
+		// Invalid JSON is a producer-side bug that can never succeed on
+		// retry. Terminate immediately so the consumer doesn't churn.
 		_ = msg.TermWithReason("invalid json")
 		return nil
 	}
@@ -267,12 +344,22 @@ func (b *Bus) persistEventMessage(ctx context.Context, store EventStore, msg jet
 		sessionID, _ := event["session_id"].(string)
 		storageKey = compat.SessionStorageKey(b.scope, sessionID)
 	}
-	if storageKey != "" {
+	if storageKey != "" && b.nc != nil {
 		if err := b.nc.Publish(WakeSubject(storageKey), nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func eventTypeForLog(data []byte) string {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return ""
+	}
+	return probe.Type
 }
 
 func (b *Bus) ensureStream(ctx context.Context) error {

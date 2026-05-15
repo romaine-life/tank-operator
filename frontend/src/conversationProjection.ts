@@ -3,7 +3,7 @@ import type {
   ConversationReducerState,
   ConversationRunStatus,
 } from "./conversationReducer";
-import type { UserMessageDisplay } from "./tankConversation";
+import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 
 export type ConversationViewEntry =
   | ConversationMessageEntry
