@@ -1063,6 +1063,7 @@ button:disabled {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding-left: 62px;
   padding-right: 68px;
 }
 
@@ -1070,9 +1071,9 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
-  /* Indent so chips/actions visually align with the name above the dot. */
-  padding-left: calc(6px + var(--space-2));
+  padding-left: 62px;
   padding-right: 28px;
+  z-index: 1;
 }
 
 .sessions li:not(.is-closing):hover {
@@ -1163,6 +1164,7 @@ button:disabled {
   line-height: 1;
   min-width: 2.5rem;
   pointer-events: none;
+  z-index: 2;
 }
 
 .session-stat {
@@ -1188,6 +1190,7 @@ button:disabled {
   right: 7px;
   top: 50%;
   transform: translateY(-50%);
+  z-index: 2;
 }
 
 .session-delete:hover:not(:disabled) {
@@ -1249,10 +1252,14 @@ button:disabled {
 }
 
 .sidebar.is-collapsed .session-row-top {
+  display: flex;
   width: 100%;
   height: 100%;
   justify-content: center;
   position: relative;
+  min-height: 0;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .sidebar.is-collapsed .status-dot {
@@ -1291,6 +1298,11 @@ button:disabled {
   flex-shrink: 0;
   background: var(--text-faint);
   display: inline-block;
+}
+
+.session-row-top > .status-dot {
+  position: relative;
+  z-index: 2;
 }
 
 .status-dot.status-active  { background: var(--status-online); }
@@ -1341,19 +1353,35 @@ button:disabled {
   display: block;
 }
 
-.session-provider-icon {
-  display: none;
-}
-
-.sidebar.is-collapsed .session-provider-icon {
+.session-avatar {
   display: block;
-  width: 18px;
-  height: 18px;
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  width: 42px;
+  height: 42px;
+  transform: translateY(-50%);
   flex-shrink: 0;
-  opacity: 0.85;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  object-fit: contain;
+  padding: 6px;
+  box-shadow: var(--shadow-avatar-inset);
+  pointer-events: none;
+  z-index: 0;
 }
 
-.sidebar.is-collapsed .sessions li.is-open:not(.is-closing) .session-provider-icon {
+.sidebar.is-collapsed .session-avatar {
+  display: block;
+  position: static;
+  transform: none;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
+.sidebar.is-collapsed .sessions li.is-open:not(.is-closing) .session-avatar {
   opacity: 1;
 }
 
@@ -3007,6 +3035,12 @@ button:disabled {
   padding: var(--space-2);
 }
 
+.run-composer > [data-slot="input-group"] {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
 .run-mode-pill {
   display: inline-flex;
   align-items: center;
@@ -3793,6 +3827,12 @@ textarea.run-files-viewer-editor:focus {
   height: 1.4rem;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.run-status-avatar {
+  width: 1.1rem;
+  height: 1.1rem;
+  object-fit: contain;
 }
 
 .run-status-text {
@@ -4697,15 +4737,16 @@ textarea.run-files-viewer-editor:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--mode-codex-cli-bg);
-  color: var(--mode-codex-cli-fg);
+  background: rgba(255, 255, 255, 0.07);
   flex-shrink: 0;
+  box-shadow: var(--shadow-avatar-inset);
 }
 
 .run-msg-ai-icon {
-  width: 14px;
-  height: 14px;
+  width: 1.35rem;
+  height: 1.35rem;
   display: block;
+  object-fit: contain;
 }
 
 .run-transcript-message[data-variant="assistant"]::before {

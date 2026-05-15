@@ -71,6 +71,7 @@ func main() {
 	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
 	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount)
 	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
+	designSelectionNamespace := envDefault("DESIGN_SELECTION_NAMESPACE", currentPodNamespace())
 
 	// Session image tags come from the chart's values.yaml session.*
 	// keys, bumped per-commit to fingerprinted tags by the
@@ -143,20 +144,21 @@ func main() {
 	// 13. Register all routes.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:                     k8sClient,
-		restCfg:                 restCfg,
-		mgr:                     mgr,
-		profiles:                profileStore,
-		sessionEvents:           sessionEventsStore,
-		sessionBus:              sessionBus,
-		readStates:              readStateStore,
-		eventBus:                eventBus,
-		verifier:                verifier,
-		minter:                  minter,
-		namespace:               namespace,
-		sessionScope:            sessionScope,
-		sessionServiceAccount:   sessionServiceAccount,
-		internalAllowedSubjects: internalSubjects,
+		k8s:                      k8sClient,
+		restCfg:                  restCfg,
+		mgr:                      mgr,
+		profiles:                 profileStore,
+		sessionEvents:            sessionEventsStore,
+		sessionBus:               sessionBus,
+		readStates:               readStateStore,
+		eventBus:                 eventBus,
+		verifier:                 verifier,
+		minter:                   minter,
+		namespace:                namespace,
+		sessionScope:             sessionScope,
+		sessionServiceAccount:    sessionServiceAccount,
+		designSelectionNamespace: designSelectionNamespace,
+		internalAllowedSubjects:  internalSubjects,
 	}
 	srv.registerRoutes(mux)
 
@@ -356,6 +358,14 @@ func envDefault(name, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func currentPodNamespace() string {
+	raw, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func parseEmailSet(raw string) map[string]bool {

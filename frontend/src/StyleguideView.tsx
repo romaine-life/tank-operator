@@ -11,9 +11,16 @@
 // not "the styleguide drifted from the live UI."
 
 import { useState } from "react";
-import { SquareTerminalIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  FolderIcon,
+  InfoIcon,
+  SettingsIcon,
+  SquareTerminalIcon,
+} from "lucide-react";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
+import { AgentAvatarIcon, getSessionAvatar } from "./sessionAvatars";
 
 const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
@@ -33,6 +40,181 @@ const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">>
   codex_cli: "codex",
 };
 const STATUSES = ["active", "pending", "error"] as const;
+const SURFACE_SWATCHES = [
+  ["app", "--bg-app", "#171717"],
+  ["sidebar", "--bg-sidebar", "rgba(13,13,13,0.88)"],
+  ["control", "--bg-sidebar-control", "rgba(255,255,255,0.03)"],
+  ["hover", "--bg-sidebar-hover", "rgba(255,255,255,0.075)"],
+  ["active", "--bg-sidebar-active", "rgba(79,140,247,0.10)"],
+] as const;
+const SEMANTIC_SWATCHES = [
+  ["accent", "--accent-fg", "#b9d2fb"],
+  ["remote", "--cyan", "#67e8f9"],
+  ["online", "--status-online", "#34d399"],
+  ["failed", "--status-error-fg", "#ef6f6f"],
+  ["needs input", "--status-agent-needs-input", "#fb923c"],
+] as const;
+const TYPE_SAMPLES = [
+  ["xs", "--text-xs", "12px", "sidebar meta and compact labels"],
+  ["sm", "--text-sm", "14px", "default chrome and body"],
+  ["base", "--text-base", "16px", "brand and larger controls"],
+  ["lg", "--text-lg", "18px", "run header session title"],
+  ["2xl", "--text-2xl", "24px", "onboarding titles"],
+] as const;
+const RADIUS_SAMPLES = [
+  ["sm", "--radius-sm", "6px"],
+  ["md", "--radius-md", "8px"],
+  ["lg", "--radius-lg", "12px"],
+  ["xl", "--radius-xl", "16px"],
+  ["pill", "--radius-pill", "9999px"],
+] as const;
+
+type InspectBox = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  label: string;
+};
+
+type DesignSelection = {
+  url: string;
+  path: string;
+  selected_at: string;
+  viewport: {
+    width: number;
+    height: number;
+  };
+  element: {
+    tag: string;
+    role: string | null;
+    name: string | null;
+    text: string;
+    id: string | null;
+    class_name: string | null;
+    test_id: string | null;
+    design_component: string | null;
+    design_state: string | null;
+    design_source: string | null;
+  };
+  specimen: {
+    heading: string | null;
+  };
+  rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  selectors: {
+    test_id: string | null;
+    role: string | null;
+    css_hint: string;
+  };
+  styles: {
+    display: string;
+    position: string;
+    color: string;
+    background_color: string;
+    font_size: string;
+  };
+};
+
+function readableElementName(el: HTMLElement) {
+  const labelledBy = el.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const label = labelledBy
+      .split(/\s+/)
+      .map((id) => document.getElementById(id)?.textContent?.trim())
+      .filter(Boolean)
+      .join(" ");
+    if (label) return label;
+  }
+  return (
+    el.getAttribute("aria-label") ||
+    el.getAttribute("title") ||
+    el.textContent?.replace(/\s+/g, " ").trim() ||
+    null
+  );
+}
+
+function cssHint(el: HTMLElement) {
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const testId = el.dataset.testid;
+  if (testId) return `[data-testid="${testId}"]`;
+  const component = el.dataset.designComponent;
+  if (component) return `[data-design-component="${component}"]`;
+  const className = Array.from(el.classList).slice(0, 2).map((name) => `.${CSS.escape(name)}`).join("");
+  return `${el.tagName.toLowerCase()}${className}`;
+}
+
+function nearestSpecimenHeading(el: HTMLElement, root: HTMLElement) {
+  const section = el.closest("section");
+  if (!section || !root.contains(section)) return null;
+  return section.querySelector("h2")?.textContent?.replace(/\s+/g, " ").trim() || null;
+}
+
+function inspectBoxFor(el: HTMLElement): InspectBox {
+  const rect = el.getBoundingClientRect();
+  return {
+    top: rect.top,
+    left: rect.left,
+    width: rect.width,
+    height: rect.height,
+    label: el.dataset.designComponent || el.getAttribute("aria-label") || el.tagName.toLowerCase(),
+  };
+}
+
+function selectionForElement(el: HTMLElement, root: HTMLElement): DesignSelection {
+  const rect = el.getBoundingClientRect();
+  const styles = window.getComputedStyle(el);
+  const name = readableElementName(el);
+  const role = el.getAttribute("role") || (el instanceof HTMLButtonElement ? "button" : null);
+  const testId = el.dataset.testid || null;
+
+  return {
+    url: window.location.href,
+    path: window.location.pathname,
+    selected_at: new Date().toISOString(),
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    },
+    element: {
+      tag: el.tagName.toLowerCase(),
+      role,
+      name,
+      text: el.textContent?.replace(/\s+/g, " ").trim().slice(0, 160) || "",
+      id: el.id || null,
+      class_name: el.className || null,
+      test_id: testId,
+      design_component: el.dataset.designComponent || null,
+      design_state: el.dataset.designState || null,
+      design_source: el.dataset.designSource || null,
+    },
+    specimen: {
+      heading: nearestSpecimenHeading(el, root),
+    },
+    rect: {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    },
+    selectors: {
+      test_id: testId ? `[data-testid="${testId}"]` : null,
+      role: role && name ? `getByRole('${role}', { name: ${JSON.stringify(name)} })` : null,
+      css_hint: cssHint(el),
+    },
+    styles: {
+      display: styles.display,
+      position: styles.position,
+      color: styles.color,
+      background_color: styles.backgroundColor,
+      font_size: styles.fontSize,
+    },
+  };
+}
 
 function TankIcon({ className }: { className?: string }) {
   return (
@@ -79,6 +261,191 @@ const rowStyle: React.CSSProperties = {
   gap: "12px",
   alignItems: "center",
 };
+const showcaseFrameStyle: React.CSSProperties = {
+  border: "1px solid var(--border-soft)",
+  borderRadius: "var(--radius-md)",
+  background: "var(--bg-base)",
+  overflow: "hidden",
+};
+const portfolioFrameStyle: React.CSSProperties = {
+  ...showcaseFrameStyle,
+  height: 420,
+  overflowX: "auto",
+};
+
+function Swatch({ label, token, value }: { label: string; token: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "72px 1fr",
+        gap: 10,
+        alignItems: "center",
+        minWidth: 260,
+      }}
+    >
+      <span
+        style={{
+          height: 44,
+          borderRadius: "var(--radius-md)",
+          border: "1px solid var(--border-strong)",
+          background: `var(${token})`,
+        }}
+      />
+      <span style={{ display: "grid", gap: 2 }}>
+        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{label}</span>
+        <code>{token}</code>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>{value}</span>
+      </span>
+    </div>
+  );
+}
+
+function TypeSample({
+  name,
+  token,
+  size,
+  role,
+}: {
+  name: string;
+  token: string;
+  size: string;
+  role: string;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 4, padding: "10px 0", borderTop: "1px solid var(--border-subtle)" }}>
+      <span style={{ fontFamily: "var(--font-primary)", fontSize: `var(${token})`, color: "var(--text-primary)" }}>
+        {role}
+      </span>
+      <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+        {name} · <code>{token}</code> · {size}
+      </span>
+    </div>
+  );
+}
+
+function MiniTerminal() {
+  return (
+    <div
+      aria-label="styleguide terminal sample"
+      style={{
+        flex: 1,
+        minHeight: 0,
+        padding: 18,
+        background: "#171717",
+        color: "var(--text-body)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+        lineHeight: 1.45,
+        whiteSpace: "pre-wrap",
+      }}
+    >{` ▐▛███▜▌   Codex
+▝▜█████▛▘  GPT-5.5 · /workspace
+  ▘▘ ▝▝
+
+$ rg "run-tab" frontend/src
+frontend/src/App.tsx
+frontend/src/StyleguideView.tsx
+
+[reconnected]
+❯ `}</div>
+  );
+}
+
+function PortfolioWorkspaceScene() {
+  return (
+    <div className="shell" style={{ height: "100%", minWidth: 880, gridTemplateColumns: "260px 1fr" }}>
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <button className="sidebar-home is-active" type="button" aria-label="Home">
+            <span className="sidebar-home-label">tank-operator</span>
+          </button>
+        </div>
+        <div className="sidebar-section">
+          <div className="new-row new-row-launcher">
+            <button className="new-row-provider-toggle" type="button" aria-label="choose provider">
+              <span className="new-row-provider-slot">
+                <ProviderIcon provider="codex" className="new-row-provider-icon" />
+              </span>
+              <IconChevronDown className="new-row-provider-chevron" />
+            </button>
+            <div className="new-row-action-group" role="group" aria-label="session actions">
+              <button className="new-row-action" type="button" aria-label="start default session">
+                <span className="row-icon">+</span>
+              </button>
+              <button className="new-row-action" type="button" aria-label="start API key session">
+                <IconKey className="new-row-action-icon" />
+              </button>
+              <button className="new-row-action" type="button" aria-label="start config session">
+                <IconWrench className="new-row-action-icon" />
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="sidebar-list">
+          <div className="sidebar-section-label">Sessions</div>
+          <ul className="sessions">
+            <li className="is-open">
+              <div className="session-row-top">
+                <span className="status-dot status-active" aria-label="status active" />
+                <button className="session-open" type="button">
+                  <span className="session-id">design-showcase</span>
+                </button>
+                <button className="session-delete" aria-label="delete session" type="button">×</button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="mode mode-codex_cli mode-icon-only" title="Codex CLI" aria-label="Codex CLI">
+                  <ProviderIcon provider="codex" className="mode-provider-icon" />
+                  <span className="sr-only">codex-cli</span>
+                </span>
+                <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
+                  <span>↗</span>
+                </button>
+              </div>
+            </li>
+            <li>
+              <div className="session-row-top">
+                <span className="status-dot status-pending" aria-label="status pending" />
+                <button className="session-open" type="button">
+                  <span className="session-id">avatar-review</span>
+                </button>
+                <button className="session-delete" aria-label="delete session" type="button">×</button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
+                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
+                  <span className="sr-only">claude-cli</span>
+                </span>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </aside>
+      <section className="run-panel">
+        <header className="run-header">
+          <div className="run-header-title">
+            <button className="run-header-name-btn" type="button">design-showcase</button>
+          </div>
+          <nav className="run-tabs" aria-label="Session actions">
+            <button className="run-tab" type="button">
+              <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+              <span>Files</span>
+            </button>
+            <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+              <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Settings</span>
+            </button>
+            <button className="run-tab" type="button">
+              <InfoIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Help</span>
+            </button>
+          </nav>
+        </header>
+        <MiniTerminal />
+      </section>
+    </div>
+  );
+}
 
 function IconWrench({ className }: { className?: string }) {
   return (
@@ -145,9 +512,55 @@ function IconChevronDown({ className }: { className?: string }) {
 
 export function StyleguideView() {
   const [dropdownOpen, setDropdownOpen] = useState(true);
+  const [inspectMode, setInspectMode] = useState(false);
+  const [hoverBox, setHoverBox] = useState<InspectBox | null>(null);
+  const [selectedBox, setSelectedBox] = useState<InspectBox | null>(null);
+  const [selection, setSelection] = useState<DesignSelection | null>(null);
+  const [selectionStatus, setSelectionStatus] = useState("no selection yet");
+
+  function handleInspectMove(event: React.MouseEvent<HTMLDivElement>) {
+    if (!inspectMode || !(event.target instanceof HTMLElement)) return;
+    const target = event.target.closest<HTMLElement>("[data-inspectable], button, a, [role], code, pre, li, section");
+    if (!target || target.closest("[data-inspector-control]")) {
+      setHoverBox(null);
+      return;
+    }
+    setHoverBox(inspectBoxFor(target));
+  }
+
+  function handleInspectClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (!inspectMode || !(event.target instanceof HTMLElement)) return;
+    if (event.target.closest("[data-inspector-control]")) return;
+
+    const target = event.target.closest<HTMLElement>("[data-inspectable], button, a, [role], code, pre, li, section");
+    if (!target) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const nextSelection = selectionForElement(target, event.currentTarget);
+    setSelection(nextSelection);
+    setSelectedBox(inspectBoxFor(target));
+    setSelectionStatus("posting selection...");
+
+    void fetch("/api/design/selection", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(nextSelection),
+    })
+      .then((res) => {
+        setSelectionStatus(res.ok ? "selection posted" : `post failed: ${res.status}`);
+      })
+      .catch((error: unknown) => {
+        setSelectionStatus(error instanceof Error ? `post failed: ${error.message}` : "post failed");
+      });
+  }
 
   return (
     <div
+      onMouseMove={handleInspectMove}
+      onMouseLeave={() => setHoverBox(null)}
+      onClickCapture={handleInspectClick}
       style={{
         minHeight: "100vh",
         background: "var(--bg-app)",
@@ -175,6 +588,137 @@ export function StyleguideView() {
           a component changes. See <code>docs/styleguide-contract.md</code> in
           the glimmung repo for the contract.
         </p>
+
+        <section
+          data-inspector-control
+          style={{
+            ...sectionStyle,
+            position: "sticky",
+            top: 0,
+            zIndex: 30,
+            background: "rgba(23,23,23,0.94)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <h2 style={headStyle}>select element</h2>
+          <p style={captionStyle}>
+            Toggle inspection, hover to confirm the target, then click a UI
+            element. The styleguide posts a structured selection packet to
+            <code> /api/design/selection</code>; agents can read it from
+            <code> /api/design/selection/latest</code>.
+          </p>
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={rowStyle}>
+              <button
+                className={inspectMode ? "btn-primary" : "btn-secondary"}
+                type="button"
+                onClick={() => {
+                  setInspectMode((value) => !value);
+                  setHoverBox(null);
+                }}
+              >
+                {inspectMode ? "selecting..." : "Select element"}
+              </button>
+              <button
+                className="link-button"
+                type="button"
+                onClick={() => {
+                  setSelection(null);
+                  setSelectedBox(null);
+                  setSelectionStatus("no selection yet");
+                }}
+              >
+                Clear
+              </button>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+                {selectionStatus}
+              </span>
+            </div>
+            {selection && (
+              <pre
+                className="error"
+                style={{
+                  margin: 0,
+                  maxHeight: 220,
+                  overflow: "auto",
+                  background: "var(--bg-base)",
+                  color: "var(--text-body)",
+                }}
+              >
+                {JSON.stringify(selection, null, 2)}
+              </pre>
+            )}
+          </div>
+        </section>
+
+        {/* === foundations: colors === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>colors</h2>
+          <p style={captionStyle}>
+            Dark-only surfaces and small semantic accents. Hover states recess
+            into darker fills; active/open states are lighter and easier to scan.
+          </p>
+          <div style={{ display: "grid", gap: 18 }}>
+            <div style={rowStyle}>
+              {SURFACE_SWATCHES.map(([label, token, value]) => (
+                <Swatch key={token} label={label} token={token} value={value} />
+              ))}
+            </div>
+            <div style={rowStyle}>
+              {SEMANTIC_SWATCHES.map(([label, token, value]) => (
+                <Swatch key={token} label={label} token={token} value={value} />
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* === foundations: type === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>type</h2>
+          <p style={captionStyle}>
+            Archivo carries chrome labels and controls. Mono is reserved for
+            terminal output and literal code/path snippets.
+          </p>
+          <div style={{ display: "grid", gap: 0, maxWidth: 620 }}>
+            {TYPE_SAMPLES.map(([name, token, size, role]) => (
+              <TypeSample key={token} name={name} token={token} size={size} role={role} />
+            ))}
+            <div style={{ display: "grid", gap: 4, padding: "10px 0", borderTop: "1px solid var(--border-subtle)" }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)", color: "var(--text-body)" }}>
+                /workspace/tank-operator/frontend/src/App.tsx
+              </span>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>
+                mono · <code>--font-mono</code> · terminal and literal paths only
+              </span>
+            </div>
+          </div>
+        </section>
+
+        {/* === foundations: spacing === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>spacing and radii</h2>
+          <p style={captionStyle}>
+            Stable dimensions matter more than decorative depth. Use the radius
+            ladder consistently so labels, icons, and hover states cannot shift
+            nearby layout.
+          </p>
+          <div style={rowStyle}>
+            {RADIUS_SAMPLES.map(([name, token, size]) => (
+              <div key={token} style={{ display: "grid", gap: 8, width: 124 }}>
+                <span
+                  style={{
+                    height: 54,
+                    borderRadius: `var(${token})`,
+                    background: "var(--bg-sidebar-control)",
+                    border: "1px solid var(--row-rest-ring)",
+                  }}
+                />
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{name} · {size}</span>
+                <code>{token}</code>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* === buttons === */}
         <section style={sectionStyle}>
@@ -310,6 +854,147 @@ export function StyleguideView() {
           </div>
         </section>
 
+        {/* === run header tabs === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>run header tabs</h2>
+          <p style={captionStyle}>
+            Header tabs that open side-pane views inside a session. The label
+            text must stay aligned with the icon at desktop width and remain
+            readable in the narrow horizontal-scroll state.
+          </p>
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={showcaseFrameStyle}>
+              <section className="run-panel" style={{ minHeight: 116 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      avatar-dinosaur-pool
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button
+                      className="run-tab"
+                      type="button"
+                      aria-pressed={false}
+                      data-testid="styleguide-run-tab-files"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="rest"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-settings-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="active"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
+            <div style={showcaseFrameStyle}>
+              <section className="run-panel" style={{ minHeight: 116 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      session-with-files-open
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button
+                      className="run-tab run-tab-back"
+                      type="button"
+                      data-testid="styleguide-run-tab-back"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="side-pane-back"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
+                      <span>Back</span>
+                    </button>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-files-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="side-pane-open"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
+            <div style={{ ...showcaseFrameStyle, maxWidth: 390 }}>
+              <section className="run-panel" style={{ minHeight: 142 }}>
+                <header className="run-header">
+                  <div className="run-header-title">
+                    <button className="run-header-name-btn" type="button">
+                      narrow-session
+                    </button>
+                  </div>
+                  <nav className="run-tabs" aria-label="Session actions">
+                    <button
+                      className="run-tab run-tab-back"
+                      type="button"
+                      data-testid="styleguide-run-tab-back-narrow"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="narrow-side-pane-back"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
+                      <span>Back</span>
+                    </button>
+                    <button
+                      className="run-tab run-tab-active"
+                      type="button"
+                      aria-pressed={true}
+                      data-testid="styleguide-run-tab-files-narrow-active"
+                      data-design-component="RunHeaderTab"
+                      data-design-state="narrow-side-pane-open"
+                      data-design-source="frontend/src/App.tsx"
+                    >
+                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                      <span>Files</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Settings</span>
+                    </button>
+                    <button className="run-tab" type="button" aria-pressed={false}>
+                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                      <span>Help</span>
+                    </button>
+                  </nav>
+                </header>
+              </section>
+            </div>
+          </div>
+        </section>
+
         {/* === session row === */}
         <section style={sectionStyle}>
           <h2 style={headStyle}>session row</h2>
@@ -321,6 +1006,7 @@ export function StyleguideView() {
           </p>
           <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
             <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("my-session")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-active" aria-label="status active" />
                 <button className="session-open" type="button">
@@ -357,6 +1043,7 @@ export function StyleguideView() {
               </div>
             </li>
             <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("starting")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-pending" aria-label="status pending" />
                 <button className="session-open" type="button">
@@ -470,6 +1157,48 @@ export function StyleguideView() {
           </div>
         </section>
 
+        {/* === portfolio scenes === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>portfolio scene: session workspace</h2>
+          <p style={captionStyle}>
+            Full shell composition for reviewing density, sidebar hierarchy,
+            run header tabs, and terminal contrast together.
+          </p>
+          <div style={portfolioFrameStyle}>
+            <PortfolioWorkspaceScene />
+          </div>
+        </section>
+
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>portfolio scene: onboarding</h2>
+          <p style={captionStyle}>
+            First-run wall. This stays sparse: one task, one primary CTA,
+            diagnostic supporting copy.
+          </p>
+          <div
+            style={{
+              ...showcaseFrameStyle,
+              minHeight: 300,
+              display: "grid",
+              placeItems: "center",
+              padding: 24,
+            }}
+          >
+            <div className="welcome-inner onboarding" style={{ maxWidth: 460 }}>
+              <h2 className="welcome-title">Connect GitHub</h2>
+              <p className="welcome-sub">
+                tank-operator needs the App installed so sessions can read and
+                write repos through mcp-github.
+              </p>
+              <a className="btn-primary onboarding-cta" href="#">Install GitHub App</a>
+              <p className="onboarding-meta">
+                signed in as <code>you@example.com</code> ·{" "}
+                <button className="link-button" type="button">Sign out</button>
+              </p>
+            </div>
+          </div>
+        </section>
+
         {/* === boot states === */}
         <section style={sectionStyle}>
           <h2 style={headStyle}>boot state</h2>
@@ -483,6 +1212,56 @@ export function StyleguideView() {
           </div>
         </section>
       </div>
+      {inspectMode && hoverBox && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            top: hoverBox.top,
+            left: hoverBox.left,
+            width: hoverBox.width,
+            height: hoverBox.height,
+            border: "1px solid var(--cyan)",
+            boxShadow: "0 0 0 1px rgba(103,232,249,0.24)",
+            pointerEvents: "none",
+            zIndex: 1000,
+          }}
+        >
+          <span
+            style={{
+              position: "absolute",
+              left: 0,
+              top: -22,
+              maxWidth: 240,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--cyan)",
+              color: "#082f36",
+              fontSize: "var(--text-xs)",
+              padding: "2px 6px",
+            }}
+          >
+            {hoverBox.label}
+          </span>
+        </div>
+      )}
+      {selectedBox && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed",
+            top: selectedBox.top,
+            left: selectedBox.left,
+            width: selectedBox.width,
+            height: selectedBox.height,
+            border: "2px solid var(--status-online)",
+            pointerEvents: "none",
+            zIndex: 999,
+          }}
+        />
+      )}
     </div>
   );
 }
