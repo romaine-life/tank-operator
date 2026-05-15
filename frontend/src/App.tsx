@@ -5013,6 +5013,9 @@ function ChatPane({
         sdkEventSourceRef.current = openSdkEventStream();
       });
     });
+    source.addEventListener("stream-error", () => {
+      setSdkConnectionState("connection_lost");
+    });
     source.onerror = () => {
       setSdkConnectionState("connection_lost");
     };

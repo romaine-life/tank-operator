@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isCanonical, stampEventID } from "./cosmos.js";
+import { isCanonical, stampEventID } from "./sessionEvents.js";
 
-// Pins which codex SDK event types make it into the durable Cosmos log
+// Pins which codex SDK event types make it into the durable event ledger
 // vs which stay live-only. Drift here affects the SPA's history-replay
 // correctness.
 

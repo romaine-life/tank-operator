@@ -65,6 +65,21 @@ const blocked = [
   { name: "retired Tank event sequence storage name", pattern: /\btank_event_seq\b/ },
   { name: "retired frontend activity poll interval", pattern: /\bPOLL_INTERVAL_MS\b/ },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
+  { name: "retired internal session event notify route", pattern: /\/events\/notify\b/ },
+  { name: "retired in-memory session event broker", pattern: /\bsessionEventBroker\b/ },
+  { name: "retired session event notifier", pattern: /\bSessionEventNotifier\b/ },
+  { name: "retired runner session notify helper", pattern: /\bsessionNotify\b/ },
+  { name: "retired turn queue name", pattern: /\bturn[-_ ]queue\b/i },
+  { name: "retired TurnQueue type", pattern: /\bTurnQueue\b/ },
+  { name: "retired turnQueue identifier", pattern: /\bturnQueue\b/ },
+  { name: "retired turn queue env var", pattern: /\bCOSMOS_TURN_QUEUE_CONTAINER\b/ },
+  { name: "retired turn queue env prefix", pattern: /\bTURN_QUEUE_/ },
+  { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
+  { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
+  { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },
+  { name: "retired session Azure config option", pattern: /\bSessionAzureConfigSecret\b/ },
+  { name: "retired session Azure config default", pattern: /\bDefaultSessionAzureConfigSecret\b/ },
+  { name: "retired session workload identity resource", pattern: /\btank_session_identity\b/ },
 ];
 
 const failures = [];

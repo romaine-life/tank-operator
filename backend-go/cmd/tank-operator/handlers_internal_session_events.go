@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -18,38 +16,43 @@ type internalSessionPodCaller struct {
 	PodUID    string
 }
 
-func (s *appServer) handleInternalSessionEventsNotify(w http.ResponseWriter, r *http.Request) {
+func (s *appServer) handleInternalSessionTurnTerminal(w http.ResponseWriter, r *http.Request) {
 	caller, ok := s.requireInternalSessionPodCaller(w, r)
 	if !ok {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	turnID := strings.TrimSpace(r.PathValue("turn_id"))
 	if sessionID == "" {
 		writeError(w, http.StatusBadRequest, "missing session_id")
 		return
 	}
+	if turnID == "" || !turnIDPattern.MatchString(turnID) {
+		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
+		return
+	}
 	if sessionID != caller.SessionID {
-		writeError(w, http.StatusForbidden, "session event notify target does not match caller pod")
+		writeError(w, http.StatusForbidden, "session turn target does not match caller pod")
 		return
 	}
 
-	var body struct {
-		LastOrderKey string `json:"last_order_key"`
+	if s.sessionEvents == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"terminal": false})
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && r.Body != nil {
-		body.LastOrderKey = ""
+	event, err := s.sessionEvents.FindTurnTerminal(r.Context(), sessionID, turnID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-
-	if s.eventBroker != nil {
-		s.eventBroker.Notify(sessionID)
+	if event == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"terminal": false})
+		return
 	}
-	slog.Debug("session event stream notified",
-		"session_id", sessionID,
-		"pod", caller.PodName,
-		"email", caller.Email,
-		"last_order_key", strings.TrimSpace(body.LastOrderKey),
-	)
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "notified"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"terminal": true,
+		"event":    event,
+	})
 }
 
 func (s *appServer) requireInternalSessionPodCaller(w http.ResponseWriter, r *http.Request) (internalSessionPodCaller, bool) {

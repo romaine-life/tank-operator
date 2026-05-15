@@ -146,9 +146,10 @@ credentialRefresher:
   kvClientIdKey: claude-credentials-refresher-mi-client-id
   kvTenantIdKey: mcp-tenant-id
 
-# Cosmos DB â€” per-user profile store for multi-user (#57). Provisioned by
-# infra/cosmos.tf; same workload-identity auth path as the KV writer above
-# (the `claude-credentials-refresher-identity` UAMI carries both roles).
+# Cosmos DB: per-user profile store plus the app-managed session-events
+# ledger. Provisioned by infra/cosmos.tf; same workload-identity auth path as
+# the KV writer above (the `claude-credentials-refresher-identity` UAMI carries
+# both roles).
 # Account name is a tofu variable defaulting to `tank-operator-romaine`;
 # update `endpoint` here if you set TF_VAR_cosmos_account_name to something
 # else.
@@ -157,7 +158,42 @@ cosmos:
   database: tank-operator
   profilesContainer: profiles
   sessionEventsContainer: session-events
-  turnQueueContainer: turn-queue
+
+sessionBus:
+  stream: TANK_SESSION_BUS
+  streamReplicas: 2
+  authSecret: tank-nats-auth
+  tokenKvKey: tank-nats-token
+  url: nats://tank-nats.tank-operator.svc.cluster.local:4222
+
+nats:
+  fullnameOverride: tank-nats
+  config:
+    cluster:
+      enabled: true
+      replicas: 2
+    jetstream:
+      enabled: true
+      fileStore:
+        enabled: true
+        pvc:
+          enabled: true
+          size: 5Gi
+    merge:
+      authorization:
+        token: << $NATS_TOKEN >>
+  container:
+    image:
+      repository: nats
+      tag: 2.14.0-alpine
+    env:
+      NATS_TOKEN:
+        valueFrom:
+          secretKeyRef:
+            name: tank-nats-auth
+            key: token
+  promExporter:
+    enabled: true
 
 # GitHub App slug used for the install URL the orchestrator redirects users
 # to (#57 stage 2). The App's Setup URL must be configured to point at
@@ -245,17 +281,6 @@ externalSecret:
         kvKey: tank-operator-oauth-client-id
       - envVar: ALLOWED_EMAILS
         kvKey: romaine-life-admin-emails
-  # Pod-side workload-identity config for session pods. Mirrors the
-  # tank-session UAMI's client_id + the shared cluster tenant id into a
-  # Secret in the SESSIONS namespace; session pods envFrom it so
-  # DefaultAzureCredential can mint a federated Cosmos token via the
-  # pod's projected SA token. Phase A of the SDK migration.
-  # UAMI + role assignments: infra/tank_session_identity.tf
-  sessionAzureConfig:
-    secretName: tank-session-azure-config
-    clientIdKvKey: tank-session-mi-client-id
-    tenantIdKvKey: mcp-tenant-id
-
 # Session-JWT signing key in Key Vault. Private bytes never leave the vault;
 # orchestrator calls KV's Sign operation per mint and caches the public key
 # locally for in-process verification. See infra/jwt_signing_key.tf.

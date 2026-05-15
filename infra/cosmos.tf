@@ -1,9 +1,9 @@
 # ============================================================================
-# Cosmos DB — profile store for multi-user (#57)
+# Cosmos DB — profile store and session-events ledger
 # ============================================================================
-# Per-user profile rows live here, keyed by email. Each profile carries the
-# user's GitHub App installation_id so mcp-github (#57 stage 3) can mint a
-# per-caller installation token instead of every user sharing the host's.
+# Per-user profile rows live here, keyed by email. The app-managed GUI chat
+# ledger also lives here as `session-events`; NATS JetStream delivers
+# commands/events, but Cosmos remains the product history source of truth.
 #
 # Why Cosmos and not Postgres: relational isn't load-bearing for the profile
 # shape (one document per user, no joins) and Azure managed Postgres is
@@ -105,25 +105,6 @@ resource "azurerm_cosmosdb_sql_container" "session_events" {
     # monotonic watermark).
     excluded_path { path = "/message/*" }
     excluded_path { path = "/result/*" }
-  }
-}
-
-resource "azurerm_cosmosdb_sql_container" "turn_queue" {
-  name                = "turn-queue"
-  resource_group_name = data.azurerm_resource_group.main.name
-  account_name        = azurerm_cosmosdb_account.tank_operator.name
-  database_name       = azurerm_cosmosdb_sql_database.tank_operator.name
-  partition_key_paths = ["/session_id"]
-  # 7d — turn rows have a lifecycle of seconds to minutes; the TTL is a
-  # safety net for any row a runner failed to mark completed (orchestrator
-  # restart mid-write, runner crash before the status flip, etc.). The
-  # rows past the runner's claim time are just history.
-  default_ttl = 604800
-
-  indexing_policy {
-    indexing_mode = "consistent"
-    included_path { path = "/*" }
-    excluded_path { path = "/prompt/*" }
   }
 }
 

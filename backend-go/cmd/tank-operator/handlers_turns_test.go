@@ -15,33 +15,39 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-type recordingTurnQueue struct {
-	records []store.TurnRecord
-	err     error
+type recordingSessionBus struct {
+	commands []sessionbus.Command
+	events   []map[string]any
+	err      error
 }
 
-func (q *recordingTurnQueue) Enqueue(_ context.Context, rec store.TurnRecord) error {
-	if q.err != nil {
-		return q.err
+func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionbus.Command) error {
+	if b.err != nil {
+		return b.err
 	}
-	q.records = append(q.records, rec)
+	b.commands = append(b.commands, command)
 	return nil
 }
 
-func (*recordingTurnQueue) NextPending(context.Context, string) (*store.TurnRecord, error) {
-	return nil, nil
+func (b *recordingSessionBus) PublishEvent(_ context.Context, _ string, event map[string]any) error {
+	if b.err != nil {
+		return b.err
+	}
+	b.events = append(b.events, event)
+	return nil
 }
-func (*recordingTurnQueue) MarkClaimed(context.Context, string, string) error   { return nil }
-func (*recordingTurnQueue) MarkCompleted(context.Context, string, string) error { return nil }
-func (*recordingTurnQueue) MarkFailed(context.Context, string, string) error    { return nil }
 
-func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
+func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
@@ -51,11 +57,14 @@ func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 1 {
-		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
-	got := queue.records[0]
-	if got.TurnID != "turn-abc_123" || got.ClientNonce != "turn-abc_123" {
+	if len(bus.events) != 2 {
+		t.Fatalf("published events = %d, want 2", len(bus.events))
+	}
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandSubmitTurn || got.ClientNonce != "turn-abc_123" {
 		t.Fatalf("turn/client nonce = %q/%q", got.TurnID, got.ClientNonce)
 	}
 	if got.Source != "sdk" || got.Provider != "claude" || got.SessionID != "63" || got.Email != "user@example.com" {
@@ -67,8 +76,8 @@ func TestEnqueueSessionTurnWritesSDKTurnQueueRecord(t *testing.T) {
 }
 
 func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-skill","prompt":"hello","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
@@ -77,14 +86,14 @@ func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 0 {
-		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
 	}
 }
 
 func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
 	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-skill","prompt":"$test","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
@@ -93,14 +102,14 @@ func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if got := queue.records[0].SkillName; got != "test" {
+	if got := bus.commands[0].SkillName; got != "test" {
 		t.Fatalf("skill_name = %q, want test", got)
 	}
 }
 
 func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
 	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -109,14 +118,14 @@ func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if got := queue.records[0].Provider; got != "codex" {
+	if got := bus.commands[0].Provider; got != "codex" {
 		t.Fatalf("provider = %q, want codex", got)
 	}
 }
 
-func TestInterruptSessionTurnWritesQueueControlRecord(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+func TestInterruptSessionTurnPublishesControlCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
 	req := authedInterruptRequest(t, "64", "run-abc_123")
 	resp := httptest.NewRecorder()
 
@@ -125,11 +134,11 @@ func TestInterruptSessionTurnWritesQueueControlRecord(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 1 {
-		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
-	got := queue.records[0]
-	if got.Source != "interrupt" || got.Provider != "codex" || got.TargetTurnID != "run-abc_123" || got.ClientNonce != "run-abc_123" {
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandInterrupt || got.Source != "interrupt" || got.Provider != "codex" || got.TargetTurnID != "run-abc_123" || got.ClientNonce != "run-abc_123" {
 		t.Fatalf("interrupt record = %#v", got)
 	}
 	if got.Prompt != "" {
@@ -138,8 +147,8 @@ func TestInterruptSessionTurnWritesQueueControlRecord(t *testing.T) {
 }
 
 func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
 	req := authedInterruptRequest(t, "64", "bad/slash")
 	resp := httptest.NewRecorder()
 
@@ -148,14 +157,14 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 0 {
-		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
 	}
 }
 
-func TestInputReplySessionTurnWritesQueueControlRecord(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"  Continue  "}`)
 	resp := httptest.NewRecorder()
 
@@ -164,11 +173,11 @@ func TestInputReplySessionTurnWritesQueueControlRecord(t *testing.T) {
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 1 {
-		t.Fatalf("enqueued records = %d, want 1", len(queue.records))
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
-	got := queue.records[0]
-	if got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandInputReply || got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
 		t.Fatalf("input reply routing fields = %#v", got)
 	}
 	if got.TargetProviderItemID != "toolu_123" || got.TargetItemID != "turn-active_123:item:toolu_123" || got.InputReply != "Continue" || got.Prompt != "Continue" {
@@ -177,8 +186,8 @@ func TestInputReplySessionTurnWritesQueueControlRecord(t *testing.T) {
 }
 
 func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
 	req := authedInputReplyRequest(t, "64", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
 	resp := httptest.NewRecorder()
 
@@ -187,14 +196,14 @@ func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 0 {
-		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
 	}
 }
 
 func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
 	resp := httptest.NewRecorder()
 
@@ -203,14 +212,14 @@ func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 0 {
-		t.Fatalf("enqueued records = %d, want 0", len(queue.records))
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
 	}
 }
 
 func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
 	req := authedTurnRequest(t, "65", `{"client_nonce":"turn-no-runner","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -219,14 +228,14 @@ func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(queue.records) != 0 {
-		t.Fatalf("enqueued turn for pod without SDK runner: %#v", queue.records)
+	if len(bus.commands) != 0 {
+		t.Fatalf("published turn for pod without SDK runner: %#v", bus.commands)
 	}
 }
 
 func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
-	queue := &recordingTurnQueue{}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-66", "66", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "66", `{"client_nonce":"bad/slash","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -237,9 +246,9 @@ func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 	}
 }
 
-func TestEnqueueSessionTurnSurfacesQueueFailure(t *testing.T) {
-	queue := &recordingTurnQueue{err: errors.New("cosmos down")}
-	app := testTurnsApp(t, queue, sdkSessionPod("session-67", "67", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+func TestEnqueueSessionTurnSurfacesSessionBusFailure(t *testing.T) {
+	bus := &recordingSessionBus{err: errors.New("nats down")}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-67", "67", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "67", `{"client_nonce":"turn-fail","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -250,7 +259,7 @@ func TestEnqueueSessionTurnSurfacesQueueFailure(t *testing.T) {
 	}
 }
 
-func testTurnsApp(t *testing.T, queue store.TurnQueueStore, pods ...*corev1.Pod) *appServer {
+func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *appServer {
 	t.Helper()
 	clientObjects := make([]runtime.Object, 0, len(pods))
 	for _, pod := range pods {
@@ -259,11 +268,12 @@ func testTurnsApp(t *testing.T, queue store.TurnQueueStore, pods ...*corev1.Pod)
 	k8s := fake.NewSimpleClientset(clientObjects...)
 	ns := compat.SessionsNamespace
 	return &appServer{
-		k8s:       k8s,
-		mgr:       sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
-		turnQueue: queue,
-		verifier:  auth.NewVerifier(testJWT(t), "user@example.com"),
-		namespace: ns,
+		k8s:          k8s,
+		mgr:          sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
+		sessionBus:   bus,
+		verifier:     auth.NewVerifier(testJWT(t), "user@example.com"),
+		namespace:    ns,
+		sessionScope: "default",
 	}
 }
 

@@ -1,6 +1,6 @@
 // tank-agent-runner is the pod-side process that drives
-// @anthropic-ai/claude-agent-sdk for one session pod's lifetime and writes
-// canonical transcript events to Cosmos.
+// @anthropic-ai/claude-agent-sdk for one session pod's lifetime and publishes
+// canonical transcript events to the session bus.
 
 import { loadConfig } from "./config.js";
 import { Runner } from "./runner.js";
@@ -12,9 +12,8 @@ async function main(): Promise<void> {
       msg: "agent-runner starting",
       session_id: cfg.sessionId,
       owner_email: cfg.ownerEmail,
-      cosmos_endpoint: cfg.cosmosEndpoint,
-      cosmos_db: cfg.cosmosDatabase,
-      cosmos_container: cfg.sessionEventsContainer,
+      nats_url: cfg.natsURL,
+      nats_stream: cfg.natsStream,
       workspace: cfg.workspace,
     }),
   );

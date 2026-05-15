@@ -17,31 +17,34 @@ resurrection or preservation of in-flight agent work after the pod is gone.
 
 Tank sessions should behave like durable conversations with live event
 delivery layered on top. Browser tabs are clients, pod-side runners are
-producers, Cosmos and the backend are the source of truth, and React renders a
-projection of Tank conversation events. Provider-specific events are inputs to
-adapters; they are not UI state.
+producers, the Cosmos `session-events` ledger is the replay source of truth,
+NATS JetStream is the durable live work fabric, and React renders a projection
+of Tank conversation events. Provider-specific events are inputs to adapters;
+they are not UI state.
 
-## Current Code Review
+## Current Architecture
 
-The current implementation already has useful pieces, but they are implicit:
+The implementation has explicit durable and live boundaries:
 
-- `agent-runner/src/runner.ts` and `codex-runner/src/runner.ts` both write
-  canonical transcript events to Cosmos before the UI can observe them.
-- `agent-runner/src/cosmos.ts` and `codex-runner/src/cosmos.ts` define
-  canonical-vs-live-only event allowlists, but the allowlists are provider
-  shaped rather than Tank shaped.
+- `agent-runner/src/runner.ts` and `codex-runner/src/runner.ts` publish
+  canonical transcript events to the NATS JetStream session bus before the UI
+  can observe them.
+- `agent-runner/src/sessionEvents.ts` and `codex-runner/src/sessionEvents.ts`
+  define canonical-vs-live-only event allowlists.
+- The backend session-bus persister writes bus events to Cosmos
+  `session-events` and wakes SSE streams only after the ledger write commits.
 - `backend-go/internal/store/session_events.go` reads `session-events` by
   session and pages by canonical `order_key`.
 - `frontend/src/App.tsx` renders Claude and Codex SDK events through the Tank
   conversation reducer/projection. It also owns status decisions such as
   stopped vs error, active tool state, and reconnect behavior directly in the
   pane.
-- The GUI chat path persists `session-events` and queues work in
-  `turn-queue`. A future provider should map provider output into the stable
-  Tank protocol before touching frontend sidebar and chat state logic.
+- The GUI chat path publishes durable SDK commands to NATS JetStream. A future
+  provider should map provider output into the stable Tank protocol before
+  touching frontend sidebar and chat state logic.
 
-This ADR makes the missing contract explicit before the next implementation
-step rewires producers, backend APIs, and UI projection.
+This ADR is the live contract for the app-managed GUI chat path. Changes to
+producer, backend, or UI behavior should update this document in the same PR.
 
 ## Borrowed Constraints
 
@@ -238,7 +241,7 @@ Claude SDK adapter:
 
 | Provider event | Tank event | Notes |
 | --- | --- | --- |
-| Claimed `turn-queue` row | `user_message.created`, `turn.submitted` | Must persist before pushing to the SDK queue. `client_nonce` is required. |
+| JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
 | First SDK output for a turn | `turn.started` | Current Claude SDK stream does not always expose a clean turn marker; adapter may synthesize this after the durable user message. |
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |
@@ -252,7 +255,7 @@ Codex SDK adapter:
 
 | Provider event | Tank event | Notes |
 | --- | --- | --- |
-| Claimed `turn-queue` row | `user_message.created`, `turn.submitted` | `client_nonce` required; current `tank_turn_seq` becomes `turn_id` input. |
+| JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | `item.delta` | Durable only when final `item.completed` lacks enough state to replay. |
@@ -316,35 +319,35 @@ Body:
 }
 ```
 
-The backend validates session ownership and SDK runtime, writes a `turn-queue`
-row with `source=sdk`, and returns `202 Accepted`. Runners claim due rows by
-session/provider before producing canonical events. Claimed rows carry
-`claim_id`, `claimed_by`, `claim_expires_at`, and `attempt_count`; terminal
-updates require the current `claim_id`, and expired claims can be reclaimed by
-a restarted runner in the same live session pod. Claude `ScheduleWakeup`
-re-enqueues as a delayed `turn-queue` row with `source=schedule-wakeup` and
-`available_at`. The UI consumes durable transcript delivery from
+The backend validates session ownership and SDK runtime, publishes
+`user_message.created` and `turn.submitted` events to the session bus, then
+publishes a durable JetStream `submit_turn` command keyed by `client_nonce`.
+The runner consumes commands through a durable per-session/per-provider
+consumer and calls JetStream `working()` while a long turn is in flight.
+Command ack happens only after the corresponding durable terminal event is
+published. Claude `ScheduleWakeup` publishes a delayed JetStream command with
+`source=schedule-wakeup`.
+
+The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
 `order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
 produce `resync_required`; clients reload `/timeline` instead of silently
 skipping a gap. Open SSE streams do not poll `GET /api/sessions/activity`.
-Runners call the internal session-event notify route after durable
-`session-events` writes, and the backend wakes only streams for that session.
-The stream can still sweep the ledger on a slow interval to handle missed
-in-process notifications, but that sweep is not a live UI compatibility path
-and cannot replace durable writes.
+The backend event persister wakes SSE streams through NATS only after the
+Cosmos `session-events` write commits. There is no ledger sweep or browser
+polling fallback for live transcript delivery.
 
 Durable turn interruption:
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/interrupt`
 
-The backend validates ownership and writes a `turn-queue` row with
-`source=interrupt` and `target_turn_id=<turn_id>`. Runners claim the row and
-abort the matching active turn from inside the session pod. The UI may show
-`stopping` after the enqueue succeeds, but it must not mark the run stopped or
-clear the active turn until the durable `turn.interrupted` event appears in
-timeline/SSE. Failed interrupt enqueue is a visible control error, not a local
-state transition.
+The backend validates ownership and publishes a durable JetStream
+`interrupt_turn` command with `target_turn_id=<turn_id>`. Runners consume the
+command and abort the matching active turn from inside the session pod. The UI
+may show `stopping` after publish succeeds, but it must not mark the run
+stopped or clear the active turn until the durable `turn.interrupted` event
+appears in timeline/SSE. Failed interrupt publish is a visible control error,
+not a local state transition.
 
 Durable Claude input reply:
 
@@ -361,21 +364,20 @@ Body:
 ```
 
 The backend validates ownership, Claude GUI mode, target ids, and text size,
-then writes a `turn-queue` row with `source=input-reply`,
+then publishes a durable JetStream `input_reply` command with
 `target_turn_id=<turn_id>`, `target_provider_item_id=<provider_item_id>`,
 `target_item_id=<timeline_id>`, and `input_reply=<text>`. The Claude runner
-claims the row only when the target turn is active and waiting for that
-provider item, pushes a provider tool-result message, and marks the queue row
-completed only after the durable `tool.approval_resolved` event is produced.
-Codex does not support this control row and fails it explicitly. Browser tabs
-must not send AskUserQuestion answers through a runner socket or live-only
-control channel.
+accepts the command only when the target turn is active and waiting for that
+provider item, pushes a provider tool-result message, and acks the command
+only after the durable `tool.approval_resolved` event is produced. Codex does
+not support this command and fails it explicitly. Browser tabs must not send
+AskUserQuestion answers through a runner socket or live-only control channel.
 
-Durability scope: queued SDK turns are intended to survive browser disconnects,
-orchestrator restarts/rollouts, and runner-process restarts while the session
-pod itself is still live. Session-pod deletion or death is terminal for the
-session and its `emptyDir` workspace; recovering a dead session pod is an
-explicit non-goal for this protocol.
+Durability scope: session commands are intended to survive browser
+disconnects, orchestrator restarts/rollouts, and runner-process restarts while
+the session pod itself is still live. Session-pod deletion or death is terminal
+for the session and its `emptyDir` workspace; recovering a dead session pod is
+an explicit non-goal for this protocol.
 
 Activity summary:
 
@@ -389,10 +391,22 @@ polling fallback for an open session.
 Storage:
 
 - Keep `session-events` as the durable ledger, partitioned by `tank_session_id`.
+- Use NATS JetStream as the durable command/event fabric, not as the product
+  history database. Commands are acked only after durable terminal events are
+  published; events are acknowledged by the backend persister after Cosmos
+  upsert succeeds.
 - Add or materialize per-user read state keyed by `email + session_id`.
 - Use `order_key` as the pagination cursor. Document id is only a dedupe key.
 - Compute unread and attention state server-side from durable events plus read
   state.
+
+Operational counters:
+
+- `/debug/vars` exposes stream opens, reconnects, `resync_required`, stream
+  errors, timeline read failures, emitted events, heartbeats, wake-subscribe
+  failures, and observed SSE event lag.
+- Missing-message investigations should start from those counters and the
+  durable `session-events` ledger cursor, not from browser-local state.
 
 ## Migration Guardrails
 

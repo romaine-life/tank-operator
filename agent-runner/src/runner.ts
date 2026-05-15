@@ -1,15 +1,15 @@
 // Long-lived runner — drives one claude agent process via the SDK for
 // the pod's lifetime. The SDK's `query()` takes an async iterable of
-// user messages, so we push durable queued turns into it. Multi-turn
+// user messages, so we push durable session commands into it. Multi-turn
 // coordination is implicit:
 // the SDK serializes turns internally, we just keep feeding it.
 //
 // Output contract:
-//   1. For every canonical event, write to Cosmos
-//   2. If the event contains a ScheduleWakeup, queue a wakeup turn
+//   1. For every canonical event, publish to the session bus
+//   2. If the event contains a ScheduleWakeup, publish a delayed wakeup command
 //
 // On error: log and keep running. Single-turn failures shouldn't kill
-// the runner; persistent failures will show up via Cosmos write errors
+// the runner; persistent failures will show up via session-bus publish errors
 // and the SPA's user can refresh.
 
 import {
@@ -26,7 +26,7 @@ import {
   startsClaudeTurn,
 } from "./adapters/claude.js";
 import type { Config } from "./config.js";
-import { CosmosSink, isCanonical, type RunnerEvent } from "./cosmos.js";
+import { SessionEventSink, isCanonical, type RunnerEvent } from "./sessionEvents.js";
 import {
   normalizeClientNonce,
   isTankConversationEvent,
@@ -36,19 +36,19 @@ import {
   type TankConversationEvent,
 } from "./conversation.js";
 import {
-  TurnQueue,
-  isInputReplyRecord,
-  isInterruptRecord,
-  turnClientNonce,
-  type TurnRecord,
-} from "./turnQueue.js";
+  SessionCommandBus,
+  isInputReplyCommand,
+  isInterruptCommand,
+  commandClientNonce,
+  type SessionCommandRecord,
+} from "./sessionCommands.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 
-// Pull a single dispatch out as a free function so the Cosmos write contract
+// Pull a single dispatch out as a free function so the session-bus publish contract
 // is testable without spinning up a Runner.
 //
 // Returns true on a successful end-to-end dispatch; false when the
-// canonical write failed.
+// canonical publish failed.
 // Callers that don't care about the outcome can ignore it.
 interface DispatchSink {
   upsert(message: RunnerEvent & { uuid: string }): Promise<void>;
@@ -98,7 +98,7 @@ export async function dispatch(
     try {
       await sink.upsert(stamped);
     } catch (err) {
-      console.error("cosmos upsert failed:", err);
+      console.error("session bus publish failed:", err);
       // Don't broadcast a live event we couldn't persist — the SPA's
       // history-replay would then disagree with what it saw live.
       return false;
@@ -121,7 +121,7 @@ export async function dispatchCreate(
     const result = sink.create ? await sink.create(stamped) : (await sink.upsert(stamped), "created");
     if (result === "exists") return "exists";
   } catch (err) {
-    console.error("cosmos create failed:", err);
+    console.error("session bus create failed:", err);
     return "failed";
   }
   return "created";
@@ -142,20 +142,22 @@ export interface PendingTurn {
   started: boolean;
   interrupted: boolean;
   terminalEmitted: boolean;
-  queueRecord?: TurnRecord;
-  stopLeaseRenewal?: () => void;
+  commandRecord?: SessionCommandRecord;
+  stopCommandHeartbeat?: () => void;
 }
 
 interface PendingInputReply {
-  record: TurnRecord;
-  stopLeaseRenewal?: () => void;
+  record: SessionCommandRecord;
+  stopCommandHeartbeat?: () => void;
 }
 
-export function inputReplyTargetProviderItemID(record: TurnRecord): string {
+type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
+
+export function inputReplyTargetProviderItemID(record: SessionCommandRecord): string {
   return String(record.target_provider_item_id ?? "").trim();
 }
 
-export function inputReplyText(record: TurnRecord): string {
+export function inputReplyText(record: SessionCommandRecord): string {
   return String(record.input_reply ?? "").trim();
 }
 
@@ -213,8 +215,8 @@ class AsyncQueue<T> {
 }
 
 export class Runner {
-  private readonly sink: CosmosSink;
-  private readonly turnQueue: TurnQueue;
+  private readonly sink: SessionEventSink;
+  private readonly commandBus: SessionCommandBus;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   private readonly needsInputProviderItemIDs = new Set<string>();
@@ -223,14 +225,14 @@ export class Runner {
   private sdkQuery: Query | null = null;
 
   constructor(private readonly cfg: Config) {
-    this.sink = new CosmosSink(cfg);
-    this.turnQueue = new TurnQueue(cfg, "claude");
+    this.sink = new SessionEventSink(cfg);
+    this.commandBus = new SessionCommandBus(cfg, "claude");
   }
 
   // Run forever (or until externally aborted). Drives the SDK against
   // the user queue and fans events out to both sinks.
   async run(signal: AbortSignal): Promise<void> {
-    const stopPolling = this.startTurnQueuePolling(signal);
+    const stopConsumer = this.startCommandConsumer(signal);
     const onAbort = () => {
       this.userQueue.close();
       this.sdkQuery?.interrupt();
@@ -262,10 +264,10 @@ export class Runner {
       }
     } catch (err) {
       console.error("SDK query exited with error:", err);
-      await this.failActiveQueuedTurn(err);
+      await this.failActiveCommandTurn(err);
     } finally {
       signal.removeEventListener("abort", onAbort);
-      stopPolling();
+      stopConsumer();
       if (signal.aborted) {
         await this.interruptActiveTurn("runner_shutdown");
       }
@@ -286,9 +288,11 @@ export class Runner {
     )) {
       const dispatched = await dispatch(this.sink, event);
       if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
-        if (activeTurn) activeTurn.terminalEmitted = true;
-        if (dispatched && activeTurn?.queueRecord) {
-          await this.markQueuedTurnTerminal(activeTurn, event.type);
+        if (dispatched && activeTurn) {
+          activeTurn.terminalEmitted = true;
+          if (activeTurn.commandRecord) {
+            await this.markCommandTerminal(activeTurn, event.type);
+          }
         }
       }
       if (dispatched && event.type === "tool.approval_resolved" && event.provider_item_id) {
@@ -306,98 +310,106 @@ export class Runner {
     }
   }
 
-  private startTurnQueuePolling(signal: AbortSignal): () => void {
-    let stopped = false;
-    const stop = () => {
-      stopped = true;
-    };
-    void (async () => {
-      while (!stopped && !signal.aborted) {
-        try {
-          const record = await this.turnQueue.claimNext();
-          if (record) {
-            if (isInputReplyRecord(record)) {
-              await this.acceptInputReply(record);
-              continue;
-            }
-            if (isInterruptRecord(record)) {
-              await this.acceptInterrupt(record);
-              continue;
-            }
-            await this.acceptQueuedTurn(record);
-            continue;
-          }
-        } catch (err) {
-          console.error("turn queue poll failed:", err);
+  private startCommandConsumer(signal: AbortSignal): () => void {
+    let stopConsumer: (() => Promise<void>) | null = null;
+    void this.commandBus
+      .startCommandConsumer(async (record) => {
+        if (isInputReplyCommand(record)) {
+          await this.acceptInputReply(record);
+          return;
         }
-        await sleep(this.cfg.turnQueuePollMs, signal, () => stopped);
-      }
-    })().catch((err) => console.error("turn queue poller crashed:", err));
-    return stop;
+        if (isInterruptCommand(record)) {
+          await this.acceptInterrupt(record);
+          return;
+        }
+        await this.acceptCommandTurn(record);
+      }, signal)
+      .then((stop) => {
+        stopConsumer = stop;
+      })
+      .catch((err) => console.error("session bus command consumer crashed:", err));
+    return () => {
+      void stopConsumer?.();
+    };
   }
 
-  private async acceptQueuedTurn(record: TurnRecord): Promise<void> {
-    const clientNonce = turnClientNonce(record);
-    if (await this.finalizeQueuedRecordIfAlreadyTerminal(record, clientNonce)) {
+  private async acceptCommandTurn(record: SessionCommandRecord): Promise<void> {
+    const clientNonce = commandClientNonce(record);
+    const prompt = String(record.prompt ?? "").trim();
+    if (!prompt) {
+      await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
       return;
     }
-    if (this.turnQueue.attemptsExceeded(record)) {
-      await this.failQueuedRecord(
+    if (await this.finalizeCommandIfAlreadyTerminal(record, clientNonce)) {
+      return;
+    }
+    if (this.commandBus.attemptsExceeded(record)) {
+      await this.failCommandRecord(
         record,
-        new Error(`turn queue exceeded ${record.attempt_count ?? "unknown"} claim attempts`),
+        new Error(`session command exceeded ${record.attempt_count ?? "unknown"} claim attempts`),
       );
       return;
     }
     const pendingTurn = await this.recordUserSubmission(
-      record.prompt,
-      { role: "user", content: record.prompt },
+      prompt,
+      { role: "user", content: prompt },
       clientNonce,
       record,
     );
     if (!pendingTurn) {
-      await this.turnQueue.markFailed(record, new Error("queued turn was not accepted"));
+      await this.commandBus.markFailed(record, new Error("session command was not accepted"));
       return;
     }
-    pendingTurn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(record);
+    pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
     this.userQueue.push({
       type: "user",
       session_id: "",
-      message: { role: "user", content: record.prompt },
+      message: { role: "user", content: prompt },
       parent_tool_use_id: null,
     } as unknown as SDKUserMessage);
   }
 
-  private async acceptInterrupt(record: TurnRecord): Promise<void> {
-    if (await this.interruptActiveTurn("client_interrupt", record.target_turn_id || record.client_nonce)) {
+  private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
+    const outcome = await this.interruptActiveTurn(
+      "client_interrupt",
+      record.target_turn_id || record.client_nonce,
+    );
+    if (outcome === "interrupted") {
       this.sdkQuery?.interrupt();
+      await this.commandBus.markCompleted(record);
+      return;
     }
-    await this.turnQueue.markCompleted(record);
+    if (outcome === "publish_failed") {
+      await this.commandBus.markFailed(record, new Error("interrupt event publish failed"));
+      return;
+    }
+    await this.commandBus.markCompleted(record);
   }
 
-  private async acceptInputReply(record: TurnRecord): Promise<void> {
+  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
     const targetProviderItemID = inputReplyTargetProviderItemID(record);
     const text = inputReplyText(record);
     if (!targetProviderItemID || !text) {
-      await this.turnQueue.markFailed(record, new Error("input reply missing target or text"));
+      await this.commandBus.markFailed(record, new Error("input reply missing target or text"));
       return;
     }
     if (!this.activeTurn || !this.turnMatchesTarget(this.activeTurn, record.target_turn_id || record.client_nonce)) {
-      await this.turnQueue.markFailed(record, new Error("input reply target turn is not active"));
+      await this.commandBus.markFailed(record, new Error("input reply target turn is not active"));
       return;
     }
     if (!this.needsInputProviderItemIDs.has(targetProviderItemID)) {
-      await this.turnQueue.markFailed(record, new Error("input reply target is not waiting for input"));
+      await this.commandBus.markFailed(record, new Error("input reply target is not waiting for input"));
       return;
     }
     if (this.pendingInputReplies.has(targetProviderItemID)) {
-      await this.turnQueue.markFailed(record, new Error("input reply already pending for target"));
+      await this.commandBus.markFailed(record, new Error("input reply already pending for target"));
       return;
     }
 
     const pending: PendingInputReply = {
       record,
-      stopLeaseRenewal: this.turnQueue.startLeaseRenewal(record),
+      stopCommandHeartbeat: this.commandBus.startCommandHeartbeat(record),
     };
     this.pendingInputReplies.set(targetProviderItemID, pending);
     this.userQueue.push(buildInputReplyMessage(targetProviderItemID, text));
@@ -407,7 +419,7 @@ export class Runner {
     text: string,
     message: unknown,
     rawClientNonce: unknown,
-    queueRecord?: TurnRecord,
+    commandRecord?: SessionCommandRecord,
   ): Promise<PendingTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
@@ -423,13 +435,13 @@ export class Runner {
       text,
       message,
       runtime: "claude",
-      skillName: queueRecord?.skill_name,
+      skillName: commandRecord?.skill_name,
     });
     const userResult = await dispatchCreate(this.sink, userMessage);
     if (userResult === "failed") return null;
     const submittedResult = await dispatchCreate(this.sink, turnSubmitted);
     if (submittedResult === "failed") return null;
-    if (submittedResult === "exists" && !queueRecord) return null;
+    if (submittedResult === "exists" && !commandRecord) return null;
     return {
       turnID,
       clientNonce,
@@ -437,7 +449,7 @@ export class Runner {
       started: false,
       interrupted: false,
       terminalEmitted: false,
-      ...(queueRecord ? { queueRecord } : {}),
+      ...(commandRecord ? { commandRecord } : {}),
     };
   }
 
@@ -461,14 +473,16 @@ export class Runner {
     return this.activeTurn;
   }
 
-  private async interruptActiveTurn(reason: "client_interrupt" | "runner_shutdown", targetTurnID = ""): Promise<boolean> {
+  private async interruptActiveTurn(
+    reason: "client_interrupt" | "runner_shutdown",
+    targetTurnID = "",
+  ): Promise<InterruptOutcome> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
-    if (!turn || turn.terminalEmitted) return false;
+    if (!turn || turn.terminalEmitted) return "not_found";
     if (!this.turnMatchesTarget(turn, targetTurnID)) {
-      return false;
+      return "not_found";
     }
     turn.interrupted = true;
-    turn.terminalEmitted = true;
     const dispatched = await dispatch(
       this.sink,
       turnEvent({
@@ -480,34 +494,35 @@ export class Runner {
         reason,
       }),
     );
-    if (dispatched && turn.queueRecord) {
-      await this.markQueuedTurnTerminal(turn, "turn.interrupted");
+    if (!dispatched) {
+      turn.interrupted = false;
+      return "publish_failed";
     }
-    return dispatched;
+    turn.terminalEmitted = true;
+    if (turn.commandRecord) {
+      await this.markCommandTerminal(turn, "turn.interrupted");
+    }
+    return "interrupted";
   }
 
   private turnMatchesTarget(turn: Pick<PendingTurn, "turnID" | "clientNonce">, targetTurnID = ""): boolean {
     return !targetTurnID || targetTurnID === turn.turnID || targetTurnID === turn.clientNonce;
   }
 
-  private async markQueuedTurnTerminal(
+  private async markCommandTerminal(
     turn: PendingTurn,
     type: "turn.completed" | "turn.failed" | "turn.interrupted",
   ): Promise<void> {
     await this.failPendingInputRepliesForTurn(turn, new Error(type));
-    if (!turn.queueRecord) return;
-    const record = turn.queueRecord;
-    turn.stopLeaseRenewal?.();
-    turn.stopLeaseRenewal = undefined;
-    turn.queueRecord = undefined;
+    if (!turn.commandRecord) return;
+    const record = turn.commandRecord;
+    turn.stopCommandHeartbeat?.();
+    turn.stopCommandHeartbeat = undefined;
+    turn.commandRecord = undefined;
     try {
-      if (type === "turn.completed") {
-        await this.turnQueue.markCompleted(record);
-      } else {
-        await this.turnQueue.markFailed(record, new Error(type));
-      }
+      await this.commandBus.markCompleted(record);
     } catch (err) {
-      console.error("turn queue terminal mark failed:", err);
+      console.error("session command terminal mark failed:", err);
     }
   }
 
@@ -515,9 +530,9 @@ export class Runner {
     const pending = this.pendingInputReplies.get(providerItemID);
     if (!pending) return;
     this.pendingInputReplies.delete(providerItemID);
-    pending.stopLeaseRenewal?.();
+    pending.stopCommandHeartbeat?.();
     try {
-      await this.turnQueue.markCompleted(pending.record);
+      await this.commandBus.markCompleted(pending.record);
     } catch (err) {
       console.error("input reply terminal mark failed:", err);
     }
@@ -532,20 +547,19 @@ export class Runner {
         continue;
       }
       this.pendingInputReplies.delete(providerItemID);
-      pending.stopLeaseRenewal?.();
+      pending.stopCommandHeartbeat?.();
       try {
-        await this.turnQueue.markFailed(pending.record, err);
+        await this.commandBus.markFailed(pending.record, err);
       } catch (markErr) {
         console.error("input reply failure mark failed:", markErr);
       }
     }
   }
 
-  private async failActiveQueuedTurn(err: unknown): Promise<void> {
+  private async failActiveCommandTurn(err: unknown): Promise<void> {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
-    if (!turn?.queueRecord) return;
+    if (!turn?.commandRecord) return;
     if (!turn.terminalEmitted) {
-      turn.terminalEmitted = true;
       const dispatched = await dispatch(
         this.sink,
         turnEvent({
@@ -559,9 +573,10 @@ export class Runner {
         }),
       );
       if (!dispatched) return;
+      turn.terminalEmitted = true;
     }
-    await this.markQueuedTurnTerminal(turn, "turn.failed").catch((markErr) =>
-      console.error("turn queue failure mark failed:", markErr, "original:", err),
+    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("session command failure mark failed:", markErr, "original:", err),
     );
   }
 
@@ -573,40 +588,36 @@ export class Runner {
 
   private async enqueueWakeup(req: WakeupRequest): Promise<void> {
     const delayMs = Math.max(0, req.delayMs);
-    await this.turnQueue.enqueueDelayed({
+    await this.commandBus.enqueueDelayed({
       prompt: req.prompt,
       clientNonce: `schedule_wakeup-${randomUUID()}`,
       availableAt: new Date(Date.now() + delayMs).toISOString(),
     });
   }
 
-  private async finalizeQueuedRecordIfAlreadyTerminal(
-    record: TurnRecord,
+  private async finalizeCommandIfAlreadyTerminal(
+    record: SessionCommandRecord,
     clientNonce: string,
   ): Promise<boolean> {
     const terminal = await this.sink.findTurnTerminal(turnIDForClientNonce(clientNonce));
     if (!terminal) return false;
-    if (terminal.type === "turn.completed") {
-      await this.turnQueue.markCompleted(record);
-    } else {
-      await this.turnQueue.markFailed(record, new Error(String(terminal.type)));
-    }
+    await this.commandBus.markCompleted(record);
     return true;
   }
 
-  private async failQueuedRecord(record: TurnRecord, err: unknown): Promise<void> {
+  private async failCommandRecord(record: SessionCommandRecord, err: unknown): Promise<void> {
+    const prompt = String(record.prompt ?? "").trim();
     const pendingTurn = await this.recordUserSubmission(
-      record.prompt,
-      { role: "user", content: record.prompt },
-      turnClientNonce(record),
+      prompt,
+      { role: "user", content: prompt },
+      commandClientNonce(record),
       record,
     );
     if (!pendingTurn) {
-      await this.turnQueue.markFailed(record, err);
+      await this.commandBus.markFailed(record, err);
       return;
     }
-    pendingTurn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(record);
-    pendingTurn.terminalEmitted = true;
+    pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
     const dispatched = await dispatch(
       this.sink,
       turnEvent({
@@ -615,27 +626,13 @@ export class Runner {
         clientNonce: pendingTurn.clientNonce,
         source: "claude",
         type: "turn.failed",
-        reason: "turn_queue_attempts_exceeded",
+        reason: "session_command_attempts_exceeded",
         error: err instanceof Error ? err.message : String(err),
       }),
     );
     if (dispatched) {
-      await this.markQueuedTurnTerminal(pendingTurn, "turn.failed");
+      pendingTurn.terminalEmitted = true;
+      await this.markCommandTerminal(pendingTurn, "turn.failed");
     }
   }
-}
-
-function sleep(ms: number, signal: AbortSignal, stopped: () => boolean): Promise<void> {
-  if (signal.aborted || stopped()) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, Math.max(100, ms));
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }

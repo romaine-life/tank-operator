@@ -1,5 +1,5 @@
 // Runtime config sourced from env vars. Mirrors agent-runner/src/config.ts:
-// same downward-API + scoped Cosmos plumbing, different SDK underneath.
+// same downward-API + scoped event ledger plumbing, different SDK underneath.
 //
 // Auth path: codex-sdk wraps the codex CLI subprocess, which reads
 // ~/.codex/auth.json. The launcher writes a placeholder chatgptAuthTokens
@@ -10,13 +10,11 @@ export interface Config {
   sessionId: string;
   sessionStorageKey: string;
   ownerEmail: string;
-  cosmosEndpoint: string;
-  cosmosDatabase: string;
-  sessionEventsContainer: string;
-  turnQueueContainer: string;
+  natsURL: string;
+  natsToken: string;
+  natsStream: string;
   operatorInternalURL: string;
   operatorTokenPath: string;
-  turnQueuePollMs: number;
   workspace: string;
 }
 
@@ -27,26 +25,19 @@ export function loadConfig(): Config {
       "SESSION_ID is required (set from downward API: metadata.labels['tank-operator/session-id'])",
     );
   }
-  const cosmosEndpoint = (process.env.COSMOS_ENDPOINT ?? "").trim();
-  if (!cosmosEndpoint) {
-    throw new Error("COSMOS_ENDPOINT is required");
+  const natsURL = (process.env.NATS_URL ?? "").trim();
+  if (!natsURL) {
+    throw new Error("NATS_URL is required");
   }
   return {
     sessionId,
     sessionStorageKey: process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
     ownerEmail: (process.env.POD_OWNER_EMAIL ?? "").trim().toLowerCase(),
-    cosmosEndpoint,
-    cosmosDatabase: process.env.COSMOS_DATABASE?.trim() || "tank-operator",
-    sessionEventsContainer:
-      process.env.COSMOS_SESSION_EVENTS_CONTAINER?.trim() || "session-events",
-    turnQueueContainer:
-      process.env.COSMOS_TURN_QUEUE_CONTAINER?.trim() || "turn-queue",
+    natsURL,
+    natsToken: process.env.NATS_TOKEN?.trim() || "",
+    natsStream: process.env.NATS_STREAM?.trim() || "TANK_SESSION_BUS",
     operatorInternalURL: process.env.TANK_OPERATOR_INTERNAL_URL?.trim() || "",
     operatorTokenPath: process.env.TANK_OPERATOR_TOKEN_PATH?.trim() || "",
-    turnQueuePollMs: parseInt(
-      process.env.TURN_QUEUE_POLL_MS?.trim() || "1000",
-      10,
-    ),
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
   };
 }

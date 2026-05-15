@@ -5,9 +5,10 @@ import {
   dispatch,
   dispatchCreate,
   interruptTargetMatchesTurn,
+  Runner,
   takePendingInterruptForTurn,
 } from "./runner.js";
-import { isCanonical, nextSortableEventID, type CodexEvent } from "./cosmos.js";
+import { isCanonical, nextSortableEventID, type CodexEvent } from "./sessionEvents.js";
 import {
   isTankConversationEvent,
   userSubmissionEvents,
@@ -20,7 +21,7 @@ function makeSink(order: Order, opts: { throws?: Error } = {}) {
   return {
     async upsert() {
       if (opts.throws) throw opts.throws;
-      order.push("cosmos");
+      order.push("sink");
     },
   };
 }
@@ -36,6 +37,20 @@ function userMessageEvent() {
   }).userMessage;
 }
 
+function runnerConfig() {
+  return {
+    sessionId: "63",
+    sessionStorageKey: "63",
+    ownerEmail: "user@example.com",
+    natsURL: "nats://example.invalid:4222",
+    natsToken: "",
+    natsStream: "TANK_SESSION_BUS",
+    operatorInternalURL: "",
+    operatorTokenPath: "",
+    workspace: "/workspace",
+  };
+}
+
 function assertTankEventFixture(event: TankConversationEvent, label = event.type) {
   assert.equal(isTankConversationEvent(event), true, `${label} should satisfy the Tank envelope`);
 }
@@ -49,32 +64,32 @@ function assertStampedTankEvent(event: TankConversationEvent & { order_key?: unk
   );
 }
 
-test("canonical events are written to Cosmos", async () => {
+test("canonical events are written to event ledger", async () => {
   const order: Order = [];
   const ok = await dispatch(makeSink(order), {
     type: "item.completed",
     item: { id: "i1", type: "agent_message" },
   } as CodexEvent);
   assert.equal(ok, true);
-  assert.deepEqual(order, ["cosmos"]);
+  assert.deepEqual(order, ["sink"]);
 });
 
-test("dispatch stamps Tank ordering metadata before the Cosmos write", async () => {
-  let cosmosEvent: any;
+test("dispatch stamps Tank ordering metadata before the session-bus publish", async () => {
+  let sinkEvent: any;
   const ok = await dispatch(
     {
       async upsert(event) {
-        cosmosEvent = event;
+        sinkEvent = event;
       },
     },
     { type: "item.completed", item: { id: "i1" } } as CodexEvent,
   );
   assert.equal(ok, true);
-  assert.equal(typeof cosmosEvent.uuid, "string");
-  assert.equal(typeof cosmosEvent.written_at, "string");
+  assert.equal(typeof sinkEvent.uuid, "string");
+  assert.equal(typeof sinkEvent.written_at, "string");
 });
 
-test("canonical Cosmos failure returns false", async () => {
+test("canonical session-bus publish failure returns false", async () => {
   const order: Order = [];
   const ok = await dispatch(
     makeSink(order, { throws: new Error("boom") }),
@@ -85,25 +100,25 @@ test("canonical Cosmos failure returns false", async () => {
 });
 
 test("dispatchCreate uses event_id as the durable id for canonical Tank events", async () => {
-  let cosmosEvent: any;
+  let sinkEvent: any;
   const ok = await dispatchCreate(
     {
       async upsert() {
         throw new Error("upsert should not be used for create path");
       },
       async create(event) {
-        cosmosEvent = event;
+        sinkEvent = event;
         return "created";
       },
     },
     userMessageEvent(),
   );
   assert.equal(ok, "created");
-  assert.equal(cosmosEvent.uuid, "turn_run-123:user_message.created");
-  assert.equal(cosmosEvent.event_id, cosmosEvent.uuid);
-  assert.equal(typeof cosmosEvent.order_key, "string");
-  assert.equal(typeof cosmosEvent.sequence, "number");
-  assertStampedTankEvent(cosmosEvent);
+  assert.equal(sinkEvent.uuid, "turn_run-123:user_message.created");
+  assert.equal(sinkEvent.event_id, sinkEvent.uuid);
+  assert.equal(typeof sinkEvent.order_key, "string");
+  assert.equal(typeof sinkEvent.sequence, "number");
+  assertStampedTankEvent(sinkEvent);
 });
 
 test("dispatchCreate suppresses duplicate client_nonce submissions", async () => {
@@ -142,30 +157,30 @@ test("dispatchCreate rejects malformed Tank-owned events before create", async (
   assert.equal(createCalled, false);
 });
 
-test("non-canonical turn.started is not written to Cosmos", async () => {
+test("non-canonical turn.started is not written to event ledger", async () => {
   const order: Order = [];
   const ok = await dispatch(makeSink(order), { type: "turn.started" } as CodexEvent);
   assert.equal(ok, true);
   assert.deepEqual(order, []);
 });
 
-test("non-canonical item.started and item.updated bypass Cosmos", async () => {
+test("non-canonical item.started and item.updated bypass event ledger", async () => {
   for (const type of ["item.started", "item.updated"]) {
-    let cosmosCalled = false;
+    let sinkCalled = false;
     const sink = {
       async upsert() {
-        cosmosCalled = true;
+        sinkCalled = true;
       },
     };
     await dispatch(sink, { type, item: {} } as CodexEvent);
-    assert.equal(cosmosCalled, false, `${type} should not write to cosmos`);
+    assert.equal(sinkCalled, false, `${type} should not write to sink`);
   }
 });
 
 test("error events ARE canonical", async () => {
   const order: Order = [];
   await dispatch(makeSink(order), { type: "error", message: "x" } as CodexEvent);
-  assert.deepEqual(order, ["cosmos"]);
+  assert.deepEqual(order, ["sink"]);
 });
 
 test("tank.user_message is canonical so replay preserves user bubbles", () => {
@@ -193,7 +208,7 @@ test("pending interrupt targets match either turn id or client nonce", () => {
   assert.equal(interruptTargetMatchesTurn("other-turn", turn), false);
 });
 
-test("queued Codex interrupts are consumed when their turn becomes current", () => {
+test("pending Codex interrupts are consumed when their turn becomes current", () => {
   const pendingInterrupts = [
     { target_turn_id: "client-123", client_nonce: "client-123" },
     { target_turn_id: "client-other", client_nonce: "client-other" },
@@ -211,4 +226,30 @@ test("queued Codex interrupts are consumed when their turn becomes current", () 
     { target_turn_id: "client-other", client_nonce: "client-other" },
   ]);
   assert.equal(takePendingInterruptForTurn(pendingInterrupts, turn), null);
+});
+
+test("terminal Codex interrupts ack submit and interrupt commands after publish", async () => {
+  const runner = new Runner(runnerConfig()) as any;
+  const calls: string[] = [];
+  runner.commandBus = {
+    async markCompleted(record: { kind?: string }) {
+      calls.push(`ack:${record.kind}`);
+    },
+    async markFailed(record: { kind?: string }) {
+      calls.push(`fail:${record.kind}`);
+    },
+  };
+
+  const turn = {
+    commandRecord: { kind: "submit" },
+    interruptRecords: [{ kind: "interrupt" }],
+    stopCommandHeartbeat: () => calls.push("stop-heartbeat"),
+  };
+
+  await runner.markCommandTerminal(turn, "turn.interrupted");
+
+  assert.deepEqual(calls, ["stop-heartbeat", "ack:submit", "ack:interrupt"]);
+  assert.equal(turn.commandRecord, undefined);
+  assert.equal(turn.interruptRecords, undefined);
+  assert.equal(turn.stopCommandHeartbeat, undefined);
 });
