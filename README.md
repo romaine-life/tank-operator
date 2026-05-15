@@ -139,6 +139,20 @@ backend artifacts and `/var/run/tank-operator-static-override` for frontend
 assets. Production keeps the normal `/app/tank-operator-go` command and image
 rollout path.
 
+Operational notes:
+
+- Test slots mount `/var/run/tank-operator-static-override` read-write in the
+  app container; write static overrides through the `tank-operator` container.
+  Older slots may still include a `static-writer` sidecar, but the sidecar is
+  not required for hot-swap.
+- `/app/tank-supervisor` does not watch the hot backend artifact. After copying
+  a new backend binary to `/var/run/tank-operator-hot/tank-operator-go`, send
+  `SIGHUP` to PID 1 in the `tank-operator` container. Do not kill the child
+  `tank-operator-go` process directly; the supervisor treats child exit as
+  terminal and exits the container.
+- Hot-swap every ready app pod unless you intentionally scaled the deployment
+  down for a one-off diagnostic.
+
 Project metadata for Glimmung:
 
 ```json

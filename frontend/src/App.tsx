@@ -104,6 +104,7 @@ import {
   type TankConversationEvent,
 } from "./tankConversation";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
+import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
 
 type SessionMode =
   | "api_key"
@@ -1411,19 +1412,20 @@ function DemoLanding() {
               const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
+              const avatar = getSessionAvatar(s.id);
               return (
                 <li
                   key={s.id}
                   className={isActive ? "is-open" : ""}
                   onClick={() => setActiveDemoSession(s.id)}
                 >
+                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <span
                       className={statusDotClass}
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
-                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
@@ -2788,14 +2790,14 @@ const RunContext = createContext<{
 
 function RunMessageBubble({
   entry,
-  provider,
+  avatar,
   showTimestamps,
   showDuration,
   onQuote,
   onFork,
 }: {
   entry: TranscriptEntry;
-  provider: Provider;
+  avatar: AgentAvatar;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
@@ -2832,7 +2834,7 @@ function RunMessageBubble({
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
-          <ProviderIcon provider={provider} className="run-msg-ai-icon" />
+          <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
       )}
       <div
@@ -3357,7 +3359,7 @@ function RunToolGroup({
 
 function RunMessages({
   entries,
-  provider,
+  avatar,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -3366,7 +3368,7 @@ function RunMessages({
   onFork,
 }: {
   entries: TranscriptEntry[];
-  provider: Provider;
+  avatar: AgentAvatar;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -3403,7 +3405,7 @@ function RunMessages({
           <RunMessageBubble
             key={g.entry.id}
             entry={g.entry}
-            provider={provider}
+            avatar={avatar}
             showTimestamps={showTimestamps}
             showDuration={showDuration}
             onQuote={onQuote}
@@ -5039,6 +5041,7 @@ function ChatPane({
         : undefined;
 
   const provider: Provider = isClaude ? "anthropic" : "codex";
+  const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
   const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
@@ -5646,7 +5649,7 @@ function ChatPane({
             )}
             <RunMessages
               entries={entries}
-              provider={provider}
+              avatar={sessionAvatar}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               showTimestamps={runPrefs.showTimestamps}
@@ -5678,7 +5681,7 @@ function ChatPane({
           aria-live="polite"
         >
           <span className="run-status-icon">
-            <ProviderIcon provider={provider} />
+            <AgentAvatarIcon avatar={sessionAvatar} className="run-status-avatar" />
           </span>
           <span className="run-status-text">
             <span className="run-status-verb">{running ? verb : lastStatusText}</span>
@@ -7086,6 +7089,7 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
+              const avatar = getSessionAvatar(s.id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const activityChips = sessionActivityChips(sessionActivities[s.id]);
@@ -7105,13 +7109,13 @@ export function App() {
                   onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
+                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <span
                       className={statusDotClass}
                       title={statusLabel}
                       aria-label={`status: ${statusLabel}`}
                     />
-                    <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="session-provider-icon" />
                     {isEditing ? (
                       <input
                         className="session-name-input"

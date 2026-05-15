@@ -32,6 +32,32 @@ roleRef:
   kind: Role
   name: tank-operator-sessions-mgr
 ---
+# Orchestrator-local scratch state. Keep this narrow: the server uses it for
+# the styleguide element-selection handoff between browser and agent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tank-operator-design-selection
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tank-operator-design-selection
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tank-operator.orchestratorServiceAccount" . }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tank-operator-design-selection
+---
 # Orchestrator SA needs auth-delegator so internal endpoints can call
 # TokenReview for audience-scoped service-account tokens.
 apiVersion: rbac.authorization.k8s.io/v1
