@@ -3,74 +3,54 @@ package profiles
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net/http"
 	"strings"
-	"time"
-
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 )
 
-// readRawDoc fetches the existing profile doc as an untyped map so a
-// caller can splice fields into it without clobbering unrelated keys.
-// Returns an empty map when the doc doesn't exist yet — the caller is
-// responsible for seeding `id` and `email`.
-//
-// We have to go through a raw map because the Profile struct only types
-// the fields the orchestrator knows about today. The doc may carry
-// future fields (or fields a newer SPA wrote that this build doesn't
-// know about); a read-decode-write round-trip on the typed struct would
-// drop them. The merge pattern here is the same one Discord/Slack-style
-// settings APIs use: never overwrite the whole doc, splice the delta.
-func (s *CosmosStore) readRawDoc(ctx context.Context, email string) (map[string]any, error) {
-	pk := azcosmos.NewPartitionKeyString(email)
-	response, err := s.container.ReadItem(ctx, pk, email, nil)
-	if err != nil {
-		var responseErr *azcore.ResponseError
-		if errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound {
-			return map[string]any{}, nil
-		}
-		return nil, err
-	}
-	out := map[string]any{}
-	if err := json.Unmarshal(response.Value, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// UpdateInstallation upserts the GitHub installation_id (and optionally github_login)
-// on the profile row for the given email. Other fields on the doc (e.g. run_prefs)
-// are preserved via the readRawDoc merge.
-func (s *CosmosStore) UpdateInstallation(ctx context.Context, email string, installationID int64, githubLogin *string) (Profile, error) {
+// UpdateInstallation upserts the GitHub installation_id (and optionally
+// github_login) on the profile row for the given email. Other columns on the
+// row are preserved by listing only the touched columns in the UPDATE clause.
+func (s *PostgresStore) UpdateInstallation(ctx context.Context, email string, installationID int64, githubLogin *string) (Profile, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" {
 		return Profile{}, nil
 	}
-
-	doc, err := s.readRawDoc(ctx, normalized)
-	if err != nil {
+	const q = `
+		INSERT INTO profiles (email, github_login, installation_id, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (email) DO UPDATE
+		SET installation_id = EXCLUDED.installation_id,
+			github_login    = COALESCE(EXCLUDED.github_login, profiles.github_login),
+			updated_at      = now()
+		RETURNING email, github_login, installation_id, run_prefs
+	`
+	var (
+		gotEmail string
+		login    *string
+		instID   *int64
+		prefsRaw []byte
+	)
+	if err := s.pool.QueryRow(ctx, q, normalized, githubLogin, installationID).
+		Scan(&gotEmail, &login, &instID, &prefsRaw); err != nil {
 		return Profile{}, err
 	}
-	doc["id"] = normalized
-	doc["email"] = normalized
-	doc["installation_id"] = installationID
-	doc["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	if githubLogin != nil {
-		doc["github_login"] = *githubLogin
+	p := Profile{
+		Email:          gotEmail,
+		GitHubLogin:    login,
+		InstallationID: instID,
 	}
-
-	if err := s.upsertDoc(ctx, normalized, doc); err != nil {
-		return Profile{}, err
+	if len(prefsRaw) > 0 {
+		var prefs map[string]any
+		if err := json.Unmarshal(prefsRaw, &prefs); err != nil {
+			return Profile{}, err
+		}
+		p.RunPrefs = prefs
 	}
-	return profileFromMap(doc), nil
+	return p, nil
 }
 
-// UpdatePrefs upserts the SPA's run-pane preferences. The body is opaque
-// on the orchestrator side — see RunPrefs in the SPA for the shape. Other
-// fields on the doc are preserved.
-func (s *CosmosStore) UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (Profile, error) {
+// UpdatePrefs upserts the SPA's run-pane preferences. The body is opaque on
+// the orchestrator side — see RunPrefs in the SPA for the shape.
+func (s *PostgresStore) UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (Profile, error) {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" {
 		return Profile{}, nil
@@ -78,55 +58,41 @@ func (s *CosmosStore) UpdatePrefs(ctx context.Context, email string, prefs map[s
 	if prefs == nil {
 		prefs = map[string]any{}
 	}
-
-	doc, err := s.readRawDoc(ctx, normalized)
+	prefsJSON, err := json.Marshal(prefs)
 	if err != nil {
 		return Profile{}, err
 	}
-	doc["id"] = normalized
-	doc["email"] = normalized
-	doc["run_prefs"] = prefs
-	doc["updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-
-	if err := s.upsertDoc(ctx, normalized, doc); err != nil {
+	const q = `
+		INSERT INTO profiles (email, run_prefs, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (email) DO UPDATE
+		SET run_prefs  = EXCLUDED.run_prefs,
+			updated_at = now()
+		RETURNING email, github_login, installation_id, run_prefs
+	`
+	var (
+		gotEmail   string
+		login      *string
+		instID     *int64
+		gotPrefsJS []byte
+	)
+	if err := s.pool.QueryRow(ctx, q, normalized, prefsJSON).
+		Scan(&gotEmail, &login, &instID, &gotPrefsJS); err != nil {
 		return Profile{}, err
 	}
-	return profileFromMap(doc), nil
-}
-
-func (s *CosmosStore) upsertDoc(ctx context.Context, partitionEmail string, doc map[string]any) error {
-	raw, err := json.Marshal(doc)
-	if err != nil {
-		return err
+	p := Profile{
+		Email:          gotEmail,
+		GitHubLogin:    login,
+		InstallationID: instID,
 	}
-	_, err = s.container.UpsertItem(ctx, azcosmos.NewPartitionKeyString(partitionEmail), raw, nil)
-	return err
-}
-
-func profileFromMap(doc map[string]any) Profile {
-	p := Profile{}
-	if v, ok := doc["email"].(string); ok {
-		p.Email = v
+	if len(gotPrefsJS) > 0 {
+		var gotPrefs map[string]any
+		if err := json.Unmarshal(gotPrefsJS, &gotPrefs); err != nil {
+			return Profile{}, err
+		}
+		p.RunPrefs = gotPrefs
 	}
-	if v, ok := doc["github_login"].(string); ok {
-		login := v
-		p.GitHubLogin = &login
-	}
-	switch v := doc["installation_id"].(type) {
-	case float64:
-		id := int64(v)
-		p.InstallationID = &id
-	case int64:
-		id := v
-		p.InstallationID = &id
-	case int:
-		id := int64(v)
-		p.InstallationID = &id
-	}
-	if v, ok := doc["run_prefs"].(map[string]any); ok {
-		p.RunPrefs = v
-	}
-	return p
+	return p, nil
 }
 
 // UpdateInstallation is a no-op for StubStore.
@@ -138,8 +104,8 @@ func (StubStore) UpdateInstallation(_ context.Context, email string, installatio
 	}, nil
 }
 
-// UpdatePrefs is a no-op for StubStore — the SPA falls back to
-// localStorage when the orchestrator runs without Cosmos configured.
+// UpdatePrefs is a no-op for StubStore — the SPA falls back to localStorage
+// when the orchestrator runs without Postgres configured.
 func (StubStore) UpdatePrefs(_ context.Context, email string, prefs map[string]any) (Profile, error) {
 	return Profile{
 		Email:    strings.ToLower(strings.TrimSpace(email)),

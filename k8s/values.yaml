@@ -146,18 +146,20 @@ credentialRefresher:
   kvClientIdKey: claude-credentials-refresher-mi-client-id
   kvTenantIdKey: mcp-tenant-id
 
-# Cosmos DB: per-user profile store plus the app-managed session-events
-# ledger. Provisioned by infra/cosmos.tf; same workload-identity auth path as
-# the KV writer above (the `claude-credentials-refresher-identity` UAMI carries
-# both roles).
-# Account name is a tofu variable defaulting to `tank-operator-romaine`;
-# update `endpoint` here if you set TF_VAR_cosmos_account_name to something
-# else.
-cosmos:
-  endpoint: https://tank-operator-romaine.documents.azure.com:443/
+# Azure Database for PostgreSQL — Flexible Server. Replaces the prior Cosmos
+# account as the durable history layer (profiles, session registry, session
+# events ledger, conversation read state). Provisioned by infra/postgres.tf;
+# same workload-identity auth path as the KV writer above — the orchestrator
+# pod's credential_refresher UAMI is the AAD admin on the server and exchanges
+# its federated SA token for a Postgres connection password at dial time.
+#
+# Host pinned to the server FQDN tofu emits; database name matches the
+# `azurerm_postgresql_flexible_server_database` resource.
+postgres:
+  host: tank-operator-db.postgres.database.azure.com
   database: tank-operator
-  profilesContainer: profiles
-  sessionEventsContainer: session-events
+  # AAD-issued Postgres role name; equals the UAMI's display name.
+  user: claude-credentials-refresher-identity
 
 sessionBus:
   stream: TANK_SESSION_BUS

@@ -2,201 +2,139 @@ package sessionregistry
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
-
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 )
 
-// counterPartitionKey is the partition value for the session-counter document.
-// The profiles container is partitioned on /email; the counter has no real
-// owner, so we stamp this sentinel as both the partition value and the doc's
-// email field. Must match the prior Python backend's value so the existing
-// counter row continues to advance monotonically across the rewrite.
-const counterPartitionKey = "__tank_operator_system__"
-
-// NextSessionID returns the next monotonic session ID, allocated from a
-// per-scope counter document. Doc shape matches the Python implementation that
-// previously owned this counter: id=session-counter[:scope], partition value
-// __tank_operator_system__, field next_session_number is the value to return
-// on the NEXT call (i.e. the doc stores "next", not "last allocated").
-func (s *CosmosStore) NextSessionID(ctx context.Context) (string, error) {
-	counterID := compat.SessionCounterDocID(s.scope)
-	pk := azcosmos.NewPartitionKeyString(counterPartitionKey)
-
-	for attempt := 0; attempt < 20; attempt++ {
-		resp, readErr := s.container.ReadItem(ctx, pk, counterID, nil)
-
-		var next int64
-		var etag string
-		exists := false
-		if readErr == nil {
-			var existing struct {
-				NextSessionNumber int64 `json:"next_session_number"`
-			}
-			if err := json.Unmarshal(resp.Value, &existing); err != nil {
-				return "", fmt.Errorf("decode session counter: %w", err)
-			}
-			next = existing.NextSessionNumber
-			if next < 1 {
-				next = 1
-			}
-			etag = string(resp.ETag)
-			exists = true
-		} else if !isNotFound(readErr) {
-			return "", fmt.Errorf("read session counter: %w", readErr)
-		} else {
-			next = 1
-		}
-
-		now := time.Now().UTC().Format(time.RFC3339)
-		doc := buildCounterDoc(s.scope, next, exists, now)
-		raw, err := json.Marshal(doc)
-		if err != nil {
-			return "", err
-		}
-
-		var writeErr error
-		if exists {
-			opts := &azcosmos.ItemOptions{IfMatchEtag: (*azcore.ETag)(&etag)}
-			_, writeErr = s.container.ReplaceItem(ctx, pk, counterID, raw, opts)
-		} else {
-			_, writeErr = s.container.CreateItem(ctx, pk, raw, nil)
-		}
-		if writeErr == nil {
-			return fmt.Sprintf("%d", next), nil
-		}
-		if isConflict(writeErr) {
-			continue
-		}
-		return "", fmt.Errorf("allocate session id: %w", writeErr)
+// NextSessionID atomically allocates the next monotonic session id for this
+// scope. One UPSERT increments and returns in a single statement; no retry
+// loop or advisory lock is needed because the row-level conflict resolution
+// is serial inside Postgres.
+//
+// The returned value matches the value the Cosmos impl returned: the number
+// allocated by THIS call (i.e. the row's `next_session_number` is incremented
+// to N+1 for the next caller, and we return N).
+func (s *Store) NextSessionID(ctx context.Context) (string, error) {
+	const q = `
+		INSERT INTO session_counters (session_scope, next_session_number, updated_at)
+		VALUES ($1, 2, now())
+		ON CONFLICT (session_scope) DO UPDATE
+		SET next_session_number = session_counters.next_session_number + 1,
+			updated_at = now()
+		RETURNING next_session_number - 1
+	`
+	var allocated int64
+	if err := s.pool.QueryRow(ctx, q, s.scope).Scan(&allocated); err != nil {
+		return "", fmt.Errorf("allocate session id: %w", err)
 	}
-	return "", fmt.Errorf("could not allocate session ID after 20 retries")
+	return fmt.Sprintf("%d", allocated), nil
 }
 
-// buildCounterDoc returns the Cosmos document body for the session counter.
-// The email field MUST equal counterPartitionKey because the profiles container
-// is partitioned on /email; a mismatch is a 400 BadRequest on every write.
-func buildCounterDoc(scope string, currentNext int64, exists bool, now string) map[string]any {
-	doc := map[string]any{
-		"id":                  compat.SessionCounterDocID(scope),
-		"type":                "session_counter",
-		"email":               counterPartitionKey,
-		"session_scope":       scope,
-		"next_session_number": currentNext + 1,
-		"updated_at":          now,
-	}
-	if !exists {
-		doc["created_at"] = now
-	}
-	return doc
-}
-
-func isNotFound(err error) bool {
-	var respErr *azcore.ResponseError
-	return errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound
-}
-
-func isConflict(err error) bool {
-	var respErr *azcore.ResponseError
-	if !errors.As(err, &respErr) {
-		return false
-	}
-	return respErr.StatusCode == http.StatusConflict ||
-		respErr.StatusCode == http.StatusPreconditionFailed
-}
-
-// Upsert writes or overwrites a session record in the registry.
-func (s *CosmosStore) Upsert(ctx context.Context, record compat.SessionRecord) error {
+// Upsert writes or overwrites a session record. created_at/updated_at default
+// to now() on insert; on conflict (same primary key) we keep the existing
+// created_at and only advance updated_at.
+func (s *Store) Upsert(ctx context.Context, record compat.SessionRecord) error {
 	normalized := strings.ToLower(record.Email)
 	scope := record.Scope
 	if scope == "" {
 		scope = s.scope
 	}
-	record.Email = normalized
-	record.Scope = scope
-	now := time.Now().UTC().Format(time.RFC3339)
-	if record.UpdatedAt == "" {
-		record.UpdatedAt = now
+	mode := record.Mode
+	if mode == "" {
+		mode = compat.DefaultSessionMode
 	}
-	if record.CreatedAt == "" {
-		record.CreatedAt = now
+	now := time.Now().UTC()
+	requestedAt := parseTimestamp(record.RequestedAt)
+	createdAt := parseTimestamp(record.CreatedAt)
+	updatedAt := parseTimestamp(record.UpdatedAt)
+	if updatedAt.IsZero() {
+		updatedAt = now
 	}
-	doc := compat.SessionDoc(record)
-	raw, err := json.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	pk := azcosmos.NewPartitionKeyString(normalized)
-	_, err = s.container.UpsertItem(ctx, pk, raw, nil)
+	// Determine the effective visible value (default true if unset).
+	visible := record.Visible
+
+	const q = `
+		INSERT INTO sessions (
+			email, session_scope, session_id,
+			mode, pod_name, name, visible,
+			requested_at, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, COALESCE($9, now()), $10
+		)
+		ON CONFLICT (email, session_scope, session_id) DO UPDATE
+		SET mode         = EXCLUDED.mode,
+			pod_name     = EXCLUDED.pod_name,
+			name         = EXCLUDED.name,
+			visible      = EXCLUDED.visible,
+			requested_at = COALESCE(EXCLUDED.requested_at, sessions.requested_at),
+			updated_at   = EXCLUDED.updated_at
+	`
+	_, err := s.pool.Exec(ctx, q,
+		normalized,
+		scope,
+		record.ID,
+		mode,
+		record.PodName,
+		record.Name,
+		visible,
+		nullableTimestamp(requestedAt),
+		nullableTimestamp(createdAt),
+		updatedAt,
+	)
 	return err
 }
 
-// SetName updates the display name for a session.
-func (s *CosmosStore) SetName(ctx context.Context, email, sessionID string, name *string) error {
-	normalized := strings.ToLower(email)
-	pk := azcosmos.NewPartitionKeyString(normalized)
-
-	resp, docID, err := s.readSessionDoc(ctx, pk, sessionID)
-	if err != nil {
-		return nil // not found → no-op
+// SetName updates the display name. Missing-session is a no-op (matches the
+// previous Cosmos impl, which swallowed not-found there).
+func (s *Store) SetName(ctx context.Context, email, sessionID string, name *string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(resp.Value, &doc); err != nil {
-		return err
-	}
-	if name == nil {
-		doc["name"] = nil
-	} else {
-		doc["name"] = *name
-	}
-	doc["updated_at"] = time.Now().UTC().Format(time.RFC3339)
-	raw, err := json.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	_, err = s.container.ReplaceItem(ctx, pk, docID, raw, nil)
+	const q = `
+		UPDATE sessions
+		SET name = $4, updated_at = now()
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, name)
 	return err
 }
 
-// MarkDeleted sets visible=false on the session registry record.
-func (s *CosmosStore) MarkDeleted(ctx context.Context, email, sessionID string) error {
-	normalized := strings.ToLower(email)
-	pk := azcosmos.NewPartitionKeyString(normalized)
-
-	resp, docID, err := s.readSessionDoc(ctx, pk, sessionID)
-	if err != nil {
-		return nil // not found → no-op
+// MarkDeleted sets visible=false. Missing-session is a no-op.
+func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(resp.Value, &doc); err != nil {
-		return err
-	}
-	doc["visible"] = false
-	doc["updated_at"] = time.Now().UTC().Format(time.RFC3339)
-	raw, err := json.Marshal(doc)
-	if err != nil {
-		return err
-	}
-	_, err = s.container.ReplaceItem(ctx, pk, docID, raw, nil)
+	const q = `
+		UPDATE sessions
+		SET visible = false, updated_at = now()
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID)
 	return err
 }
 
-func (s *CosmosStore) readSessionDoc(ctx context.Context, pk azcosmos.PartitionKey, sessionID string) (azcosmos.ItemResponse, string, error) {
-	docID := compat.SessionDocID(s.scope, sessionID)
-	resp, err := s.container.ReadItem(ctx, pk, docID, nil)
-	if err != nil {
-		if isNotFound(err) {
-			return azcosmos.ItemResponse{}, "", fmt.Errorf("session not found")
+func parseTimestamp(s string) time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t.UTC()
 		}
-		return azcosmos.ItemResponse{}, "", err
 	}
-	return resp, docID, nil
+	return time.Time{}
+}
+
+func nullableTimestamp(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
 }

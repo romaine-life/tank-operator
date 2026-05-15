@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
@@ -47,22 +49,37 @@ func main() {
 		slog.Warn("azure credential failed, some features may be degraded", "error", err)
 	}
 
-	// 3. Init profile store.
-	profileStore := buildProfileStore(azCred)
+	// 3. Init Postgres pool + schema. Replaces the prior per-store Cosmos
+	// client construction. When POSTGRES_HOST is unset (local dev), pool is
+	// nil and the build* helpers below fall back to in-memory stubs.
+	pgPool := buildPostgresPool(azCred)
+	if pgPool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := pgstore.RunMigrations(ctx, pgPool); err != nil {
+			cancel()
+			slog.Error("postgres schema migration failed", "error", err)
+			os.Exit(1)
+		}
+		cancel()
+		defer pgPool.Close()
+	}
+
+	// 4. Init profile store.
+	profileStore := buildProfileStore(pgPool)
 
 	sessionScope := envDefault("SESSION_REGISTRY_SCOPE", "default")
 
-	// 4. Init session registry.
-	sessionReg := buildSessionRegistry(azCred, sessionScope)
+	// 5. Init session registry.
+	sessionReg := buildSessionRegistry(pgPool, sessionScope)
 
-	// 5. Init session events store for the SDK runners' canonical stream.
-	sessionEventsStore := buildSessionEventStore(azCred, sessionScope)
+	// 6. Init session events store for the SDK runners' canonical stream.
+	sessionEventsStore := buildSessionEventStore(pgPool, sessionScope)
 
-	// 6. Init NATS JetStream session bus for SDK commands/events.
+	// 7. Init NATS JetStream session bus for SDK commands/events.
 	sessionBus := buildSessionBus(sessionScope)
 
-	// 7. Init per-user SDK conversation read-state store.
-	readStateStore := buildConversationReadStateStore(azCred, sessionScope)
+	// 8. Init per-user SDK conversation read-state store.
+	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -204,79 +221,65 @@ func buildJWTSigner(azCred *azidentity.DefaultAzureCredential) (*auth.KeyVaultJW
 	return auth.NewKeyVaultJWT(vaultURL, keyName, azCred)
 }
 
-func buildProfileStore(azCred *azidentity.DefaultAzureCredential) profilesStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
+// buildPostgresPool constructs the shared Postgres connection pool the
+// orchestrator's durable stores all share. Returns nil when POSTGRES_HOST is
+// unset (local-dev paths fall back to in-memory stubs in the build* helpers
+// below). Fails loud on any other configuration error — silently degrading
+// hides the bug where the orchestrator runs against stubs in production.
+func buildPostgresPool(azCred *azidentity.DefaultAzureCredential) *pgxpool.Pool {
+	host := strings.TrimSpace(os.Getenv("POSTGRES_HOST"))
+	if host == "" {
+		slog.Warn("POSTGRES_HOST unset; durable stores will use in-memory stubs")
+		return nil
+	}
+	if azCred == nil {
+		slog.Error("POSTGRES_HOST set but Azure credential unavailable")
+		os.Exit(1)
+	}
+	username := envDefault("POSTGRES_USER", "claude-credentials-refresher-identity")
+	database := envDefault("POSTGRES_DATABASE", "tank-operator")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := pgstore.NewPool(ctx, pgstore.Config{
+		Host:       host,
+		Database:   database,
+		Username:   username,
+		Credential: azCred,
+	})
+	if err != nil {
+		slog.Error("postgres pool init failed", "error", err)
+		os.Exit(1)
+	}
+	return pool
+}
+
+func buildProfileStore(pool *pgxpool.Pool) profilesStore {
+	if pool == nil {
 		return profiles.StubStore{}
 	}
-	store, err := profiles.NewCosmosStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("profile store disabled", "error", err)
-		return profiles.StubStore{}
-	}
-	return store
+	return profiles.NewPostgresStore(pool)
 }
 
-func buildSessionRegistry(azCred *azidentity.DefaultAzureCredential, scope string) sessions.SessionRegistry {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
+func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {
+	if pool == nil {
 		return &stubSessionRegistry{}
 	}
-	s, err := sessionregistry.NewCosmosStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
-		scope,
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("session registry disabled, using stub", "error", err)
-		return &stubSessionRegistry{}
-	}
-	return &cosmosSessionRegistryAdapter{s}
+	return &sessionRegistryAdapter{sessionregistry.NewPostgresStore(pool, scope)}
 }
 
-func buildSessionEventStore(azCred *azidentity.DefaultAzureCredential, scope string) store.SessionEventStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
+func buildSessionEventStore(pool *pgxpool.Pool, scope string) store.SessionEventStore {
+	if pool == nil {
 		return store.StubSessionEventStore{}
 	}
-	s, err := store.NewCosmosSessionEventStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
-		scope,
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("session events store disabled", "error", err)
-		return store.StubSessionEventStore{}
-	}
-	return s
+	return store.NewPostgresSessionEventStore(pool, scope)
 }
 
-func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential, scope string) store.ConversationReadStateStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
+func buildConversationReadStateStore(pool *pgxpool.Pool, scope string) store.ConversationReadStateStore {
+	if pool == nil {
 		return store.NewStubConversationReadStateStore()
 	}
-	s, err := store.NewCosmosConversationReadStateStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_PROFILES_CONTAINER", "profiles"),
-		scope,
-		azCred,
-	)
-	if err != nil {
-		slog.Warn("conversation read-state store disabled", "error", err)
-		return store.NewStubConversationReadStateStore()
-	}
-	return s
+	return store.NewPostgresConversationReadStateStore(pool, scope)
 }
 
 func buildSessionBus(scope string) *sessionbus.Bus {
@@ -326,9 +329,12 @@ type profilesPrefsStore interface {
 	UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (profiles.Profile, error)
 }
 
-// cosmosSessionRegistryAdapter wraps CosmosStore to satisfy sessions.SessionRegistry.
-type cosmosSessionRegistryAdapter struct {
-	*sessionregistry.CosmosStore
+// sessionRegistryAdapter wraps the Postgres-backed sessionregistry.Store so it
+// satisfies sessions.SessionRegistry. The interface methods live on the embedded
+// store; this adapter exists so swapping in a different backing impl (e.g. the
+// in-memory stub below) is just a constructor change.
+type sessionRegistryAdapter struct {
+	*sessionregistry.Store
 }
 
 // stubSessionRegistry is an in-memory stub satisfying sessions.SessionRegistry.
