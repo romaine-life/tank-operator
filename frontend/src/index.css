@@ -1064,7 +1064,7 @@ button:disabled {
   gap: var(--space-2);
   min-width: 0;
   position: relative;
-  padding-left: 54px;
+  padding-left: 62px;
   padding-right: 68px;
   z-index: 1;
 }
@@ -1073,7 +1073,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-left: 54px;
+  padding-left: 62px;
   padding-right: 28px;
   z-index: 1;
 }
@@ -1358,11 +1358,11 @@ button:disabled {
 .session-avatar {
   display: block;
   position: absolute;
-  left: 27px;
-  top: 6px;
+  left: 11px;
+  top: 50%;
   width: 42px;
   height: 42px;
-  transform: translateX(-50%);
+  transform: translateY(-50%);
   flex-shrink: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.07);
