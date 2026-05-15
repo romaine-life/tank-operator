@@ -2,11 +2,11 @@
   "name": "tank-codex-runner",
   "private": true,
   "version": "0.1.0",
-  "description": "Long-lived pod-side runner that drives @openai/codex-sdk and persists canonical events to Cosmos.",
+  "description": "Long-lived pod-side runner that drives @openai/codex-sdk and publishes canonical events to the session bus.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "start": "node dist/index.js",
     "test": "node --test dist/**/*.test.js"
   },
@@ -14,8 +14,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@azure/cosmos": "^4.5.1",
-    "@azure/identity": "^4.7.0",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@openai/codex-sdk": "^0.130.0"
   },
   "devDependencies": {

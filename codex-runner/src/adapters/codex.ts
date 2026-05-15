@@ -1,5 +1,5 @@
 import type { Config } from "../config.js";
-import type { CodexEvent } from "../cosmos.js";
+import type { CodexEvent } from "../sessionEvents.js";
 import { itemEvent, turnEvent, type TankConversationEvent } from "../conversation.js";
 
 export interface CodexAdapterTurn {

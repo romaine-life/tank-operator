@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -53,11 +55,11 @@ func main() {
 	// 4. Init session registry.
 	sessionReg := buildSessionRegistry(azCred, sessionScope)
 
-	// 5. Init turn queue store for durable SDK submissions.
-	turnQueueStore := buildTurnQueueStore(azCred, sessionScope)
-
-	// 6. Init session events store for the SDK runners' canonical stream.
+	// 5. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(azCred, sessionScope)
+
+	// 6. Init NATS JetStream session bus for SDK commands/events.
+	sessionBus := buildSessionBus(sessionScope)
 
 	// 7. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(azCred, sessionScope)
@@ -93,25 +95,19 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, eventBus, sessions.ManagerOptions{
 		ManifestOpts: compat.ManifestOptions{
-			SessionsNamespace:        namespace,
-			SessionServiceAccount:    sessionServiceAccount,
-			SessionConfigMap:         envDefault("SESSION_CONFIGMAP", compat.SessionConfigMap),
-			ArgoCDTrackingApp:        envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:             sessionImage,
-			CodexSessionImage:        codexSessionImage,
-			PiSessionImage:           piSessionImage,
-			SessionScope:             sessionScope,
-			TankOperatorInternalURL:  tankOperatorInternalURL,
-			GitHubAppSecret:          envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
-			SessionAzureConfigSecret: envDefault("SESSION_AZURE_CONFIG_SECRET", compat.DefaultSessionAzureConfigSecret),
-			// Pass the orchestrator's Cosmos config through to the pod's
-			// agent-runner via env vars — same endpoint, same database,
-			// the runner authenticates with its own UAMI (federated to
-			// claude-session SA, see infra/tank_session_identity.tf).
-			CosmosEndpoint:               envDefault("COSMOS_ENDPOINT", ""),
-			CosmosDatabase:               envDefault("COSMOS_DATABASE", "tank-operator"),
-			CosmosSessionEventsContainer: envDefault("COSMOS_SESSION_EVENTS_CONTAINER", "session-events"),
-			CosmosTurnQueueContainer:     envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
+			SessionsNamespace:       namespace,
+			SessionServiceAccount:   sessionServiceAccount,
+			SessionConfigMap:        envDefault("SESSION_CONFIGMAP", compat.SessionConfigMap),
+			ArgoCDTrackingApp:       envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:            sessionImage,
+			CodexSessionImage:       codexSessionImage,
+			PiSessionImage:          piSessionImage,
+			SessionScope:            sessionScope,
+			TankOperatorInternalURL: tankOperatorInternalURL,
+			GitHubAppSecret:         envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
+			NATSURL:                 envDefault("NATS_URL", ""),
+			NATSStream:              envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSAuthSecret:          envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
 		},
 		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
@@ -131,6 +127,13 @@ func main() {
 	// 11. Start reaper.
 	ctx := context.Background()
 	mgr.StartReaper(ctx)
+	if sessionBus != nil {
+		go func() {
+			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore); err != nil {
+				slog.Error("session bus event persister stopped", "error", err)
+			}
+		}()
+	}
 
 	// 12. Parse internal allowed subjects.
 	// Accepts both "ns/name=email" and plain "ns/name" entries.
@@ -145,9 +148,8 @@ func main() {
 		restCfg:                  restCfg,
 		mgr:                      mgr,
 		profiles:                 profileStore,
-		turnQueue:                turnQueueStore,
 		sessionEvents:            sessionEventsStore,
-		eventBroker:              newSessionEventBroker(),
+		sessionBus:               sessionBus,
 		readStates:               readStateStore,
 		eventBus:                 eventBus,
 		verifier:                 verifier,
@@ -279,23 +281,32 @@ func buildConversationReadStateStore(azCred *azidentity.DefaultAzureCredential, 
 	return s
 }
 
-func buildTurnQueueStore(azCred *azidentity.DefaultAzureCredential, scope string) store.TurnQueueStore {
-	endpoint := strings.TrimSpace(os.Getenv("COSMOS_ENDPOINT"))
-	if endpoint == "" || azCred == nil {
-		return store.StubTurnQueueStore{}
+func buildSessionBus(scope string) *sessionbus.Bus {
+	url := strings.TrimSpace(os.Getenv("NATS_URL"))
+	if url == "" {
+		slog.Warn("session bus disabled; NATS_URL is unset")
+		return nil
 	}
-	s, err := store.NewCosmosTurnQueueStore(
-		endpoint,
-		envDefault("COSMOS_DATABASE", "tank-operator"),
-		envDefault("COSMOS_TURN_QUEUE_CONTAINER", "turn-queue"),
-		scope,
-		azCred,
-	)
+	replicas := 2
+	if raw := strings.TrimSpace(os.Getenv("NATS_STREAM_REPLICAS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			replicas = parsed
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	bus, err := sessionbus.Connect(ctx, sessionbus.Config{
+		URL:      url,
+		Token:    os.Getenv("NATS_TOKEN"),
+		Stream:   envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+		Scope:    scope,
+		Replicas: replicas,
+	})
 	if err != nil {
-		slog.Warn("turn queue store disabled", "error", err)
-		return store.StubTurnQueueStore{}
+		slog.Error("session bus unavailable", "error", err)
+		os.Exit(1)
 	}
-	return s
+	return bus
 }
 
 // profilesStore is the interface satisfied by both CosmosStore and StubStore.

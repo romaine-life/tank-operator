@@ -15,7 +15,6 @@ import (
 
 const (
 	sessionEventStreamPageLimit = 100
-	sessionEventStreamSweep     = 30 * time.Second
 	sessionEventStreamHeartbeat = 15 * time.Second
 )
 
@@ -40,9 +39,11 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 
 	cursor := sessionEventCursorFromRequest(r)
 	if ok, err := s.sessionEventCursorExists(r.Context(), sessionID, cursor); err != nil {
+		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if !ok {
+		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusConflict, "event cursor not found; reload timeline")
 		return
 	}
@@ -60,11 +61,13 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 	}
 	page, err := eventStore.ListBySession(r.Context(), sessionID, cursor, limit)
 	if err != nil {
+		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	readState, err := s.getSessionReadState(r, user.Email, sessionID)
 	if err != nil {
+		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -116,6 +119,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 
 	cursor := sessionEventCursorFromRequest(r)
 	if ok, err := s.sessionEventCursorExists(r.Context(), sessionID, cursor); err != nil {
+		recordSessionEventStreamError()
 		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 			"reason": "cursor_check_failed",
 			"detail": err.Error(),
@@ -123,6 +127,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 		return
 	} else if !ok {
+		sessionEventStreamResyncTotal.Add(1)
 		slog.Warn("session event stream resync required",
 			"session_id", sessionID,
 			"email", user.Email,
@@ -141,12 +146,34 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		"last_order_key": cursor.AfterOrderKey,
 	})
 	flusher.Flush()
+	sessionEventStreamOpenTotal.Add(1)
+	if cursor.AfterOrderKey != "" {
+		sessionEventStreamReconnectTotal.Add(1)
+	}
 
-	notify := (<-chan struct{})(nil)
+	notify := make(<-chan struct{})
 	unsubscribe := func() {}
-	if s.eventBroker != nil {
-		notify, unsubscribe = s.eventBroker.Subscribe(sessionID)
+	if s.sessionBus != nil {
+		var err error
+		notify, unsubscribe, err = s.sessionBus.SubscribeWakes(r.Context(), sessionID)
+		if err != nil {
+			sessionEventWakeSubscribeFailures.Add(1)
+			recordSessionEventStreamError()
+			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+				"reason": "event_wake_subscribe_failed",
+				"detail": err.Error(),
+			})
+			flusher.Flush()
+			return
+		}
 		defer unsubscribe()
+	} else {
+		recordSessionEventStreamError()
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+			"reason": "session_bus_unavailable",
+		})
+		flusher.Flush()
+		return
 	}
 	slog.Info("session event stream open",
 		"session_id", sessionID,
@@ -159,14 +186,13 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		"email", user.Email,
 	)
 
-	sweep := time.NewTicker(sessionEventStreamSweep)
-	defer sweep.Stop()
 	heartbeat := time.NewTicker(sessionEventStreamHeartbeat)
 	defer heartbeat.Stop()
 
 	for {
 		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor)
 		if err != nil {
+			recordSessionEventStreamError()
 			slog.Warn("session event stream page failed",
 				"session_id", sessionID,
 				"email", user.Email,
@@ -197,12 +223,8 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		case <-r.Context().Done():
 			return
 		case <-notify:
-		case <-sweep.C:
-			slog.Debug("session event stream sweep",
-				"session_id", sessionID,
-				"last_order_key", cursor.AfterOrderKey,
-			)
 		case <-heartbeat.C:
+			sessionEventStreamHeartbeatTotal.Add(1)
 			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
@@ -224,9 +246,11 @@ func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.Resp
 		if orderKey == "" {
 			continue
 		}
+		recordSessionEventLag(event)
 		writeSSEJSONEvent(w, "tank-event", orderKey, event)
 		cursor.AfterOrderKey = orderKey
 		count++
+		sessionEventStreamEmittedTotal.Add(1)
 	}
 	if page.NextOrderKey != "" {
 		cursor.AfterOrderKey = page.NextOrderKey

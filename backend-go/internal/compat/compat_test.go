@@ -182,7 +182,7 @@ func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 	assertVolumeMount(t, codexRunner, "oauth-gateway-ca")
 }
 
-func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
+func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	tests := map[string]string{
 		ClaudeGUIMode: "agent-runner",
 		CodexGUIMode:  "codex-runner",
@@ -190,32 +190,32 @@ func TestPodManifestSDKRunnersReceiveTurnQueueEnv(t *testing.T) {
 	for mode, runnerName := range tests {
 		t.Run(mode, func(t *testing.T) {
 			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
-				SessionImage:                 "claude-image",
-				CodexSessionImage:            "codex-image",
-				SessionScope:                 "slot-a",
-				CosmosEndpoint:               "https://cosmos.example",
-				CosmosDatabase:               "tank-db",
-				CosmosSessionEventsContainer: "events",
-				CosmosTurnQueueContainer:     "turns",
-				TankOperatorInternalURL:      "http://tank-operator.tank-operator.svc.cluster.local",
+				SessionImage:            "claude-image",
+				CodexSessionImage:       "codex-image",
+				SessionScope:            "slot-a",
+				NATSURL:                 "nats://tank-nats.tank-operator.svc.cluster.local:4222",
+				NATSStream:              "TANK_SESSION_BUS",
+				NATSAuthSecret:          "tank-nats-auth",
+				TankOperatorInternalURL: "http://tank-operator.tank-operator.svc.cluster.local",
 			})
 			spec := manifest["spec"].(map[string]any)
 			containers := spec["containers"].([]any)
 			env := containerEnv(findContainer(t, containers, runnerName))
-			if got, want := env["COSMOS_ENDPOINT"], "https://cosmos.example"; got != want {
-				t.Fatalf("COSMOS_ENDPOINT = %v, want %q", got, want)
+			if got, want := env["NATS_URL"], "nats://tank-nats.tank-operator.svc.cluster.local:4222"; got != want {
+				t.Fatalf("NATS_URL = %v, want %q", got, want)
 			}
-			if got, want := env["COSMOS_DATABASE"], "tank-db"; got != want {
-				t.Fatalf("COSMOS_DATABASE = %v, want %q", got, want)
-			}
-			if got, want := env["COSMOS_SESSION_EVENTS_CONTAINER"], "events"; got != want {
-				t.Fatalf("COSMOS_SESSION_EVENTS_CONTAINER = %v, want %q", got, want)
-			}
-			if got, want := env["COSMOS_TURN_QUEUE_CONTAINER"], "turns"; got != want {
-				t.Fatalf("COSMOS_TURN_QUEUE_CONTAINER = %v, want %q", got, want)
+			if got, want := env["NATS_STREAM"], "TANK_SESSION_BUS"; got != want {
+				t.Fatalf("NATS_STREAM = %v, want %q", got, want)
 			}
 			if got, want := env["TANK_SESSION_STORAGE_KEY"], "slot-a:12"; got != want {
 				t.Fatalf("TANK_SESSION_STORAGE_KEY = %v, want %q", got, want)
+			}
+			tokenRef := env["NATS_TOKEN"].(map[string]any)["secretKeyRef"].(map[string]any)
+			if got, want := tokenRef["name"], "tank-nats-auth"; got != want {
+				t.Fatalf("NATS_TOKEN secret name = %v, want %q", got, want)
+			}
+			if got, want := tokenRef["key"], "token"; got != want {
+				t.Fatalf("NATS_TOKEN secret key = %v, want %q", got, want)
 			}
 			if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.tank-operator.svc.cluster.local"; got != want {
 				t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
@@ -428,7 +428,11 @@ func containerEnv(container map[string]any) map[string]any {
 	out := map[string]any{}
 	for _, envItem := range container["env"].([]any) {
 		env := envItem.(map[string]any)
-		out[env["name"].(string)] = env["value"]
+		if value, ok := env["value"]; ok {
+			out[env["name"].(string)] = value
+		} else {
+			out[env["name"].(string)] = env["valueFrom"]
+		}
 	}
 	return out
 }

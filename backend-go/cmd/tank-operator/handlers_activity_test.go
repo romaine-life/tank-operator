@@ -178,6 +178,10 @@ type activityEventStore struct {
 	events map[string][]map[string]any
 }
 
+func (s activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
+	return nil
+}
+
 func (s activityEventStore) ListBySession(_ context.Context, sessionID string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
 	if cursor.AfterOrderKey != "" {
 		return store.SessionEventPage{Events: []map[string]any{}}, nil
@@ -200,6 +204,18 @@ func (s activityEventStore) HasOrderKey(_ context.Context, sessionID, orderKey s
 		}
 	}
 	return false, nil
+}
+
+func (s activityEventStore) FindTurnTerminal(_ context.Context, sessionID, turnID string) (map[string]any, error) {
+	for _, event := range s.events[sessionID] {
+		if event["turn_id"] == turnID {
+			switch event["type"] {
+			case "turn.completed", "turn.failed", "turn.interrupted":
+				return event, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func activityEvent(eventID, eventType, orderKey, actor string, fields map[string]any) map[string]any {

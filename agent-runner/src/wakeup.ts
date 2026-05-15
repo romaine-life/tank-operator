@@ -1,6 +1,6 @@
 // ScheduleWakeup detection in SDK events. The pod-side runner detects
-// the agent's tool_use call and persists the wakeup prompt as a delayed
-// turn-queue row. The same live pod runner claims it when available.
+// the agent's tool_use call and publishes the wakeup prompt as a delayed
+// JetStream session command. The same live pod runner consumes it when due.
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 

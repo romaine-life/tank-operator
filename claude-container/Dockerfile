@@ -135,7 +135,7 @@ COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
 # Long-lived pod-side process that drives @anthropic-ai/claude-agent-sdk
-# and writes canonical conversation events to Cosmos.
+# and publishes canonical conversation events to the session bus.
 # Entrypoint: `node /opt/agent-runner/dist/index.js`.
 COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
 COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
@@ -146,7 +146,7 @@ COPY runner-shared /opt/runner-shared
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
 # Baked into all three session images so the build is symmetric; only
 # the codex pod spec invokes it as a sidecar. It follows the same
-# turn-queue and durable event ledger contract as the Claude runner.
+# session-command and durable event-ledger contract as the Claude runner.
 COPY --from=codex-runner-build /src/codex-runner/dist /opt/codex-runner/dist
 COPY --from=codex-runner-build /src/codex-runner/node_modules /opt/codex-runner/node_modules
 COPY --from=codex-runner-build /src/codex-runner/package.json /opt/codex-runner/package.json

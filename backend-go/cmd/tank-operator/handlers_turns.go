@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -82,26 +85,30 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "session mode does not support app chat turns")
 		return
 	}
-	if s.turnQueue == nil {
-		writeError(w, http.StatusServiceUnavailable, "turn queue unavailable")
+	if s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
 		return
 	}
 
-	if err := s.turnQueue.Enqueue(r.Context(), store.TurnRecord{
-		TurnID:       "interrupt_" + auth.RandomHex(12),
-		SessionID:    sessionID,
-		Email:        user.Email,
-		Provider:     provider,
-		Source:       "interrupt",
-		ClientNonce:  targetTurnID,
-		TargetTurnID: targetTurnID,
-		Status:       store.TurnPending,
+	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
+		CommandID:         "interrupt:" + targetTurnID + ":" + auth.RandomHex(12),
+		Type:              sessionbus.CommandInterrupt,
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             user.Email,
+		Provider:          provider,
+		Source:            "interrupt",
+		TurnID:            "interrupt_" + auth.RandomHex(12),
+		ClientNonce:       targetTurnID,
+		TargetTurnID:      targetTurnID,
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "enqueue interrupt: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "publish interrupt: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":         "queued",
+		"status":         "accepted",
 		"target_turn_id": targetTurnID,
 	})
 }
@@ -152,30 +159,34 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI sessions")
 		return
 	}
-	if s.turnQueue == nil {
-		writeError(w, http.StatusServiceUnavailable, "turn queue unavailable")
+	if s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
 		return
 	}
 
-	if err := s.turnQueue.Enqueue(r.Context(), store.TurnRecord{
-		TurnID:               "input_reply_" + auth.RandomHex(12),
+	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
+		CommandID:            "input-reply:" + targetTurnID + ":" + auth.RandomHex(12),
+		Type:                 sessionbus.CommandInputReply,
 		SessionID:            sessionID,
+		SessionStorageKey:    storageKey,
 		Email:                user.Email,
 		Provider:             "claude",
 		Source:               "input-reply",
+		TurnID:               "input_reply_" + auth.RandomHex(12),
 		ClientNonce:          targetTurnID,
 		TargetTurnID:         targetTurnID,
 		TargetItemID:         timelineID,
 		TargetProviderItemID: providerItemID,
 		InputReply:           text,
 		Prompt:               text,
-		Status:               store.TurnPending,
+		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "enqueue input reply: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "publish input reply: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":                  "queued",
+		"status":                  "accepted",
 		"target_turn_id":          targetTurnID,
 		"target_item_id":          timelineID,
 		"target_provider_item_id": providerItemID,
@@ -239,28 +250,58 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		return nil, http.StatusBadRequest, "session pod has no SDK runner container"
 	}
 
-	if s.turnQueue == nil {
-		return nil, http.StatusServiceUnavailable, "turn queue unavailable"
+	if s.sessionBus == nil {
+		return nil, http.StatusServiceUnavailable, "session bus unavailable"
 	}
-	if err := s.turnQueue.Enqueue(ctx, store.TurnRecord{
-		TurnID:         clientNonce,
-		SessionID:      sessionID,
-		Email:          email,
-		Provider:       provider,
-		Source:         "sdk",
-		ClientNonce:    clientNonce,
-		Prompt:         prompt,
-		Model:          validateTurnArg(req.Model),
-		PermissionMode: validateTurnArg(req.PermissionMode),
-		SkillName:      skillName,
-		FollowUp:       req.FollowUp,
-	}); err != nil {
-		return nil, http.StatusInternalServerError, "enqueue turn: " + err.Error()
+	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	turnID, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             email,
+		ClientNonce:       clientNonce,
+		Text:              prompt,
+		Message:           map[string]any{"role": "user", "content": prompt},
+		Runtime:           provider,
+		SkillName:         skillName,
+		Now:               time.Now().UTC(),
+	})
+	if err != nil {
+		return nil, http.StatusBadRequest, err.Error()
+	}
+	command := sessionbus.Command{
+		CommandID:         "turn:" + clientNonce,
+		Type:              sessionbus.CommandSubmitTurn,
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             email,
+		Provider:          provider,
+		Source:            "sdk",
+		TurnID:            turnID,
+		ClientNonce:       clientNonce,
+		Prompt:            prompt,
+		Model:             validateTurnArg(req.Model),
+		PermissionMode:    validateTurnArg(req.PermissionMode),
+		SkillName:         skillName,
+		FollowUp:          req.FollowUp,
+		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := s.sessionBus.PublishCommand(ctx, command); err != nil {
+		return nil, http.StatusInternalServerError, "publish turn: " + err.Error()
+	}
+	for _, event := range events {
+		if err := s.sessionBus.PublishEvent(ctx, storageKey, event); err != nil {
+			slog.Warn("submit boundary event publish failed after command accepted",
+				"session_id", sessionID,
+				"turn_id", turnID,
+				"event_type", event["type"],
+				"error", err,
+			)
+		}
 	}
 
 	return map[string]string{
-		"status":       "queued",
-		"turn_id":      clientNonce,
+		"status":       "accepted",
+		"turn_id":      turnID,
 		"client_nonce": clientNonce,
 		"provider":     provider,
 	}, 0, ""

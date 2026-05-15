@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { Config } from "../config.js";
-import type { RunnerEvent } from "../cosmos.js";
+import type { RunnerEvent } from "../sessionEvents.js";
 import { itemEvent, turnEvent, type TankConversationEvent } from "../conversation.js";
 
 export interface ClaudeTurnContext {

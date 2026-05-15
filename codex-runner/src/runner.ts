@@ -3,7 +3,7 @@
 // with a different inner loop shape:
 //
 //   claude SDK: query() iterates an AsyncIterable of user messages,
-//               yielding events forever. We push to a queue; one
+//               yielding events forever. We push session commands into it; one
 //               long-running iteration handles everything.
 //   codex SDK:  thread.runStreamed(input) processes ONE turn and
 //               returns. We pull a user message off the queue, await
@@ -16,7 +16,7 @@
 // is terminal and out of scope.
 //
 // Output contract:
-//   1. For every canonical event, stamp a uuid and write to Cosmos
+//   1. For every canonical event, stamp a uuid and publish to the session bus
 // On error: log and keep accepting new user messages. Single-turn
 // failures shouldn't kill the runner.
 
@@ -28,11 +28,11 @@ import {
 } from "./adapters/codex.js";
 import type { Config } from "./config.js";
 import {
-  CosmosSink,
+  SessionEventSink,
   isCanonical,
   stampEventID,
   type CodexEvent,
-} from "./cosmos.js";
+} from "./sessionEvents.js";
 import {
   normalizeClientNonce,
   isTankConversationEvent,
@@ -41,14 +41,14 @@ import {
   userSubmissionEvents,
 } from "./conversation.js";
 import {
-  TurnQueue,
-  isInputReplyRecord,
-  isInterruptRecord,
-  turnClientNonce,
-  type TurnRecord,
-} from "./turnQueue.js";
+  SessionCommandBus,
+  isInputReplyCommand,
+  isInterruptCommand,
+  commandClientNonce,
+  type SessionCommandRecord,
+} from "./sessionCommands.js";
 
-// AsyncQueue — one writer, one consumer. Claimed turn-queue rows push; the
+// AsyncQueue — one writer, one consumer. Session commands push; the
 // run loop awaits the next value. Same shape as agent-runner's queue.
 class AsyncQueue<T> {
   private readonly items: T[] = [];
@@ -80,7 +80,7 @@ class AsyncQueue<T> {
   }
 }
 
-// Pull the per-event dispatch out as a free function so the Cosmos write
+// Pull the per-event dispatch out as a free function so the session-bus publish
 // contract is testable without spinning up a Runner.
 //
 // Returns true on a successful end-to-end dispatch; false when the
@@ -102,7 +102,7 @@ export async function dispatch(
     try {
       await sink.upsert(stamped);
     } catch (err) {
-      console.error("cosmos upsert failed:", err);
+      console.error("session bus publish failed:", err);
       // Don't broadcast a live event we couldn't persist — the SPA's
       // history-replay would then disagree with what it saw live.
       return false;
@@ -127,7 +127,7 @@ export async function dispatchCreate(
       : (await sink.upsert(stamped), "created");
     if (result === "exists") return "exists";
   } catch (err) {
-    console.error("cosmos create failed:", err);
+    console.error("session bus create failed:", err);
     return "failed";
   }
   return "created";
@@ -152,8 +152,9 @@ function isAbortError(err: unknown): boolean {
 }
 
 export type AcceptedTurn = CodexAdapterTurn & {
-  queueRecord?: TurnRecord;
-  stopLeaseRenewal?: () => void;
+  commandRecord?: SessionCommandRecord;
+  interruptRecords?: SessionCommandRecord[];
+  stopCommandHeartbeat?: () => void;
 };
 
 export function interruptTargetMatchesTurn(
@@ -168,9 +169,9 @@ export function interruptTargetMatchesTurn(
 }
 
 export function takePendingInterruptForTurn(
-  pendingInterrupts: Array<Pick<TurnRecord, "target_turn_id" | "client_nonce">>,
+  pendingInterrupts: Array<Pick<SessionCommandRecord, "target_turn_id" | "client_nonce">>,
   turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
-): Pick<TurnRecord, "target_turn_id" | "client_nonce"> | null {
+): Pick<SessionCommandRecord, "target_turn_id" | "client_nonce"> | null {
   const index = pendingInterrupts.findIndex((record) =>
     interruptTargetMatchesTurn(
       record.target_turn_id || record.client_nonce || "",
@@ -182,12 +183,12 @@ export function takePendingInterruptForTurn(
 }
 
 export class Runner {
-  private readonly sink: CosmosSink;
-  private readonly turnQueue: TurnQueue;
+  private readonly sink: SessionEventSink;
+  private readonly commandBus: SessionCommandBus;
   private readonly userQueue = new AsyncQueue<{
     text: string;
     clientNonce?: string;
-    queueRecord?: TurnRecord;
+    commandRecord?: SessionCommandRecord;
   }>();
   private readonly codex: Codex;
   private readonly codexAdapter: CodexTankEventAdapter;
@@ -195,13 +196,13 @@ export class Runner {
   private currentAbort: AbortController | null = null;
   private currentTurn: AcceptedTurn | null = null;
   private interruptRequested = false;
-  private readonly pendingInterrupts: TurnRecord[] = [];
-  private readonly pendingQueuedTurnTargets = new Set<string>();
+  private readonly pendingInterrupts: SessionCommandRecord[] = [];
+  private readonly pendingCommandTurnTargets = new Set<string>();
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
-    this.sink = new CosmosSink(cfg);
-    this.turnQueue = new TurnQueue(cfg, "codex");
+    this.sink = new SessionEventSink(cfg);
+    this.commandBus = new SessionCommandBus(cfg, "codex");
 
     // Codex SDK spawns the codex CLI subprocess; the CLI reads
     // ~/.codex/auth.json. The launcher writes placeholder subscription
@@ -215,7 +216,7 @@ export class Runner {
   // message, runs one turn, drains its events. The thread persists
   // across iterations so codex sees the full conversation context.
   async run(signal: AbortSignal): Promise<void> {
-    const stopPolling = this.startTurnQueuePolling(signal);
+    const stopConsumer = this.startCommandConsumer(signal);
     const onAbort = () => {
       this.userQueue.close();
       this.currentAbort?.abort();
@@ -235,49 +236,49 @@ export class Runner {
       while (!signal.aborted) {
         const next = await this.userQueue.next();
         if (next.done) break;
-        const { text: input, clientNonce, queueRecord } = next.value;
+        const { text: input, clientNonce, commandRecord } = next.value;
         const turnSeq = ++this.turnSeq;
         if (
-          queueRecord &&
+          commandRecord &&
           clientNonce &&
-          (await this.finalizeQueuedRecordIfAlreadyTerminal(
-            queueRecord,
+          (await this.finalizeCommandIfAlreadyTerminal(
+            commandRecord,
             clientNonce,
           ))
         ) {
-          this.clearQueuedTurnTarget(clientNonce);
+          this.clearCommandTurnTarget(clientNonce);
           continue;
         }
-        if (queueRecord && this.turnQueue.attemptsExceeded(queueRecord)) {
-          await this.failQueuedRecord(
+        if (commandRecord && this.commandBus.attemptsExceeded(commandRecord)) {
+          await this.failCommandRecord(
             input,
             clientNonce,
             turnSeq,
-            queueRecord,
+            commandRecord,
             new Error(
-              `turn queue exceeded ${queueRecord.attempt_count ?? "unknown"} claim attempts`,
+              `session command exceeded ${commandRecord.attempt_count ?? "unknown"} claim attempts`,
             ),
           );
-          this.clearQueuedTurnTarget(clientNonce);
+          this.clearCommandTurnTarget(clientNonce);
           continue;
         }
         const turn = await this.recordUserSubmission(
           input,
           clientNonce,
           turnSeq,
-          queueRecord,
+          commandRecord,
         );
         if (!turn) {
-          if (queueRecord)
-            await this.turnQueue.markFailed(
-              queueRecord,
-              new Error("queued turn was not accepted"),
+          if (commandRecord)
+            await this.commandBus.markFailed(
+              commandRecord,
+              new Error("session command was not accepted"),
             );
-          this.clearQueuedTurnTarget(clientNonce);
+          this.clearCommandTurnTarget(clientNonce);
           continue;
         }
-        if (queueRecord) {
-          turn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(queueRecord);
+        if (commandRecord) {
+          turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
         }
 
         await dispatch(
@@ -293,15 +294,15 @@ export class Runner {
 
         this.currentAbort = new AbortController();
         this.currentTurn = turn;
-        this.clearQueuedTurnTarget(turn.clientNonce);
+        this.clearCommandTurnTarget(turn.clientNonce);
         const pendingInterrupt = takePendingInterruptForTurn(
           this.pendingInterrupts,
           turn,
         );
         if (pendingInterrupt) {
           this.interruptRequested = true;
+          turn.interruptRecords = [pendingInterrupt as SessionCommandRecord];
           this.currentAbort.abort();
-          await this.turnQueue.markCompleted(pendingInterrupt as TurnRecord);
         }
         // If the outer signal aborts mid-turn, also abort the in-flight
         // codex subprocess. AbortSignal.any-style propagation done manually
@@ -334,7 +335,7 @@ export class Runner {
                   canonicalEvent.type === "turn.failed" ||
                   canonicalEvent.type === "turn.interrupted")
               ) {
-                await this.markQueuedTurnTerminal(turn, canonicalEvent.type);
+                await this.markCommandTerminal(turn, canonicalEvent.type);
               }
             }
           }
@@ -356,7 +357,7 @@ export class Runner {
               tank_turn_seq: turnSeq,
             } as CodexEvent);
             if (dispatched) {
-              await this.markQueuedTurnTerminal(turn, "turn.interrupted");
+              await this.markCommandTerminal(turn, "turn.interrupted");
             }
             console.info("codex turn interrupted");
             continue;
@@ -378,7 +379,7 @@ export class Runner {
             }),
           );
           if (dispatched) {
-            await this.markQueuedTurnTerminal(turn, "turn.failed");
+            await this.markCommandTerminal(turn, "turn.failed");
           }
           await dispatch(this.sink, {
             type: "error",
@@ -388,8 +389,8 @@ export class Runner {
           console.error("codex turn failed:", err);
         } finally {
           signal.removeEventListener("abort", onOuterAbort);
-          turn.stopLeaseRenewal?.();
-          turn.stopLeaseRenewal = undefined;
+          turn.stopCommandHeartbeat?.();
+          turn.stopCommandHeartbeat = undefined;
           this.currentAbort = null;
           this.currentTurn = null;
           await this.completeStalePendingInterrupts(turn);
@@ -398,83 +399,82 @@ export class Runner {
       }
     } finally {
       signal.removeEventListener("abort", onAbort);
-      stopPolling();
+      stopConsumer();
       this.userQueue.close();
     }
   }
 
-  private startTurnQueuePolling(signal: AbortSignal): () => void {
-    let stopped = false;
-    const stop = () => {
-      stopped = true;
-    };
-    void (async () => {
-      while (!stopped && !signal.aborted) {
-        try {
-          const record = await this.turnQueue.claimNext();
-          if (record) {
-            if (isInputReplyRecord(record)) {
-              await this.turnQueue.markFailed(
-                record,
-                new Error("input replies are not supported by codex"),
-              );
-              continue;
-            }
-            if (isInterruptRecord(record)) {
-              await this.acceptInterrupt(record);
-              continue;
-            }
-            const clientNonce = turnClientNonce(record);
-            this.trackQueuedTurnTarget(clientNonce);
-            this.userQueue.push({
-              text: record.prompt,
-              clientNonce,
-              queueRecord: record,
-            });
-            continue;
-          }
-        } catch (err) {
-          console.error("turn queue poll failed:", err);
+  private startCommandConsumer(signal: AbortSignal): () => void {
+    let stopConsumer: (() => Promise<void>) | null = null;
+    void this.commandBus
+      .startCommandConsumer(async (record) => {
+        if (isInputReplyCommand(record)) {
+          await this.commandBus.markFailed(
+            record,
+            new Error("input replies are not supported by codex"),
+          );
+          return;
         }
-        await sleep(this.cfg.turnQueuePollMs, signal, () => stopped);
-      }
-    })().catch((err) => console.error("turn queue poller crashed:", err));
-    return stop;
+        if (isInterruptCommand(record)) {
+          await this.acceptInterrupt(record);
+          return;
+        }
+        const clientNonce = commandClientNonce(record);
+        const prompt = String(record.prompt ?? "").trim();
+        if (!prompt) {
+          await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
+          return;
+        }
+        this.trackCommandTurnTarget(clientNonce);
+        this.userQueue.push({
+          text: prompt,
+          clientNonce,
+          commandRecord: record,
+        });
+      }, signal)
+      .then((stop) => {
+        stopConsumer = stop;
+      })
+      .catch((err) => console.error("session bus command consumer crashed:", err));
+    return () => {
+      void stopConsumer?.();
+    };
   }
 
-  private async acceptInterrupt(record: TurnRecord): Promise<void> {
+  private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
     const targetTurnID = record.target_turn_id || record.client_nonce || "";
     if (
       this.currentTurn &&
       interruptTargetMatchesTurn(targetTurnID, this.currentTurn)
     ) {
       this.interruptRequested = true;
+      this.currentTurn.interruptRecords ??= [];
+      this.currentTurn.interruptRecords.push(record);
       this.currentAbort?.abort();
-      await this.turnQueue.markCompleted(record);
       return;
     }
-    if (targetTurnID && this.pendingQueuedTurnTargets.has(targetTurnID)) {
+    if (targetTurnID && this.pendingCommandTurnTargets.has(targetTurnID)) {
       this.addPendingInterrupt(record);
       return;
     }
-    await this.turnQueue.markCompleted(record);
+    await this.commandBus.markCompleted(record);
   }
 
-  private trackQueuedTurnTarget(clientNonce: string | undefined): void {
+  private trackCommandTurnTarget(clientNonce: string | undefined): void {
     const normalized = normalizeClientNonce(clientNonce);
     if (!normalized) return;
-    this.pendingQueuedTurnTargets.add(normalized);
-    this.pendingQueuedTurnTargets.add(turnIDForClientNonce(normalized));
+    this.pendingCommandTurnTargets.add(normalized);
+    this.pendingCommandTurnTargets.add(turnIDForClientNonce(normalized));
   }
 
-  private clearQueuedTurnTarget(clientNonce: string | undefined): void {
+  private clearCommandTurnTarget(clientNonce: string | undefined): void {
     const normalized = normalizeClientNonce(clientNonce);
     if (!normalized) return;
-    this.pendingQueuedTurnTargets.delete(normalized);
-    this.pendingQueuedTurnTargets.delete(turnIDForClientNonce(normalized));
+    this.pendingCommandTurnTargets.delete(normalized);
+    this.pendingCommandTurnTargets.delete(turnIDForClientNonce(normalized));
   }
 
-  private addPendingInterrupt(record: TurnRecord): void {
+  private addPendingInterrupt(record: SessionCommandRecord): void {
     if (!this.pendingInterrupts.some((candidate) => candidate.id === record.id)) {
       this.pendingInterrupts.push(record);
     }
@@ -489,7 +489,7 @@ export class Runner {
         turn,
       );
       if (!pendingInterrupt) return;
-      await this.turnQueue.markCompleted(pendingInterrupt as TurnRecord);
+      await this.commandBus.markCompleted(pendingInterrupt as SessionCommandRecord);
     }
   }
 
@@ -497,7 +497,7 @@ export class Runner {
     text: string,
     rawClientNonce: unknown,
     turnSeq: number,
-    queueRecord?: TurnRecord,
+    commandRecord?: SessionCommandRecord,
   ): Promise<AcceptedTurn | null> {
     const clientNonce = normalizeClientNonce(rawClientNonce);
     if (!clientNonce) {
@@ -514,7 +514,7 @@ export class Runner {
       text,
       message: { role: "user", content: text },
       runtime: "codex",
-      skillName: queueRecord?.skill_name,
+      skillName: commandRecord?.skill_name,
     });
     const userResult = await dispatchCreate(this.sink, {
       ...userMessage,
@@ -526,69 +526,71 @@ export class Runner {
       tank_turn_seq: turnSeq,
     });
     if (submittedResult === "failed") return null;
-    if (submittedResult === "exists" && !queueRecord) return null;
+    if (submittedResult === "exists" && !commandRecord) return null;
     return {
       turnID,
       clientNonce,
       turnSeq,
-      ...(queueRecord ? { queueRecord } : {}),
+      ...(commandRecord ? { commandRecord } : {}),
     };
   }
 
-  private async markQueuedTurnTerminal(
+  private async markCommandTerminal(
     turn: AcceptedTurn,
     type: "turn.completed" | "turn.failed" | "turn.interrupted",
   ): Promise<void> {
-    if (!turn.queueRecord) return;
-    const record = turn.queueRecord;
-    turn.stopLeaseRenewal?.();
-    turn.stopLeaseRenewal = undefined;
-    turn.queueRecord = undefined;
-    try {
-      if (type === "turn.completed") {
-        await this.turnQueue.markCompleted(record);
-      } else {
-        await this.turnQueue.markFailed(record, new Error(type));
+    turn.stopCommandHeartbeat?.();
+    turn.stopCommandHeartbeat = undefined;
+    if (turn.commandRecord) {
+      const record = turn.commandRecord;
+      turn.commandRecord = undefined;
+      try {
+        await this.commandBus.markCompleted(record);
+      } catch (err) {
+        console.error("session command terminal mark failed:", err);
       }
-    } catch (err) {
-      console.error("turn queue terminal mark failed:", err);
+    }
+    const interruptRecords = turn.interruptRecords ?? [];
+    turn.interruptRecords = undefined;
+    for (const interruptRecord of interruptRecords) {
+      try {
+        await this.commandBus.markCompleted(interruptRecord);
+      } catch (err) {
+        console.error("interrupt command terminal mark failed:", err);
+      }
     }
   }
 
-  private async finalizeQueuedRecordIfAlreadyTerminal(
-    record: TurnRecord,
+  private async finalizeCommandIfAlreadyTerminal(
+    record: SessionCommandRecord,
     clientNonce: string,
   ): Promise<boolean> {
     const terminal = await this.sink.findTurnTerminal(
       turnIDForClientNonce(clientNonce),
     );
     if (!terminal) return false;
-    if (terminal.type === "turn.completed") {
-      await this.turnQueue.markCompleted(record);
-    } else {
-      await this.turnQueue.markFailed(record, new Error(String(terminal.type)));
-    }
+    await this.commandBus.markCompleted(record);
     return true;
   }
 
-  private async failQueuedRecord(
+  private async failCommandRecord(
     text: string,
     clientNonce: string | undefined,
     turnSeq: number,
-    queueRecord: TurnRecord,
+    commandRecord: SessionCommandRecord,
     err: unknown,
   ): Promise<void> {
     const turn = await this.recordUserSubmission(
       text,
       clientNonce,
       turnSeq,
-      queueRecord,
+      commandRecord,
     );
     if (!turn) {
-      await this.turnQueue.markFailed(queueRecord, err);
+      await this.commandBus.markFailed(commandRecord, err);
       return;
     }
-    turn.stopLeaseRenewal = this.turnQueue.startLeaseRenewal(queueRecord);
+    turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
     const dispatched = await dispatch(
       this.sink,
       turnEvent({
@@ -597,31 +599,12 @@ export class Runner {
         clientNonce: turn.clientNonce,
         source: "codex",
         type: "turn.failed",
-        reason: "turn_queue_attempts_exceeded",
+        reason: "session_command_attempts_exceeded",
         error: err instanceof Error ? err.message : String(err),
       }),
     );
     if (dispatched) {
-      await this.markQueuedTurnTerminal(turn, "turn.failed");
+      await this.markCommandTerminal(turn, "turn.failed");
     }
   }
-}
-
-function sleep(
-  ms: number,
-  signal: AbortSignal,
-  stopped: () => boolean,
-): Promise<void> {
-  if (signal.aborted || stopped()) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timeout = setTimeout(resolve, Math.max(100, ms));
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      { once: true },
-    );
-  });
 }

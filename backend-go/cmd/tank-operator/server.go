@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"expvar"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -28,9 +31,8 @@ type appServer struct {
 	restCfg                  *rest.Config
 	mgr                      *sessions.Manager
 	profiles                 profilesStore
-	turnQueue                store.TurnQueueStore
 	sessionEvents            store.SessionEventStore
-	eventBroker              *sessionEventBroker
+	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
 	eventBus                 *sessions.EventBus
 	verifier                 *auth.Verifier
@@ -47,9 +49,16 @@ type appServer struct {
 	internalAllowedSubjects map[string]string
 }
 
+type sessionCommandBus interface {
+	PublishCommand(context.Context, sessionbus.Command) error
+	PublishEvent(context.Context, string, map[string]any) error
+	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
+}
+
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Health / config.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.Handle("GET /debug/vars", expvar.Handler())
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/design/selection/latest", s.handleGetLatestDesignSelection)
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)
@@ -113,7 +122,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/events/notify", s.handleInternalSessionEventsNotify)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)

@@ -13,6 +13,10 @@ type fakeSessionEventStore struct {
 	pages map[string]store.SessionEventPage
 }
 
+func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error {
+	return nil
+}
+
 func (s fakeSessionEventStore) ListBySession(_ context.Context, _ string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
 	return s.pages[cursor.AfterOrderKey], nil
 }
@@ -29,6 +33,21 @@ func (s fakeSessionEventStore) HasOrderKey(_ context.Context, _ string, orderKey
 		}
 	}
 	return false, nil
+}
+
+func (s fakeSessionEventStore) FindTurnTerminal(_ context.Context, _ string, turnID string) (map[string]any, error) {
+	for _, page := range s.pages {
+		for _, event := range page.Events {
+			if event["turn_id"] != turnID {
+				continue
+			}
+			switch event["type"] {
+			case "turn.completed", "turn.failed", "turn.interrupted":
+				return event, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {

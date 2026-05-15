@@ -66,8 +66,6 @@ spec:
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
-            - name: SESSION_AZURE_CONFIG_SECRET
-              value: {{ include "tank-operator.sessionAzureConfigSecret" . | quote }}
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -129,8 +127,19 @@ spec:
               value: {{ .Values.cosmos.profilesContainer | quote }}
             - name: COSMOS_SESSION_EVENTS_CONTAINER
               value: {{ .Values.cosmos.sessionEventsContainer | quote }}
-            - name: COSMOS_TURN_QUEUE_CONTAINER
-              value: {{ .Values.cosmos.turnQueueContainer | quote }}
+            - name: NATS_URL
+              value: {{ .Values.sessionBus.url | quote }}
+            - name: NATS_STREAM
+              value: {{ .Values.sessionBus.stream | quote }}
+            - name: NATS_STREAM_REPLICAS
+              value: {{ .Values.sessionBus.streamReplicas | quote }}
+            - name: NATS_AUTH_SECRET
+              value: {{ .Values.sessionBus.authSecret | quote }}
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sessionBus.authSecret | quote }}
+                  key: token
             # GitHub App slug used to build the install URL in the
             # onboarding flow (#57 stage 2). The App's Setup URL in the
             # GitHub UI must point at /api/github/install/callback for

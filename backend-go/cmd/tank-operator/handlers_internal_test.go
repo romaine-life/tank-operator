@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	authv1 "k8s.io/api/authentication/v1"
@@ -20,6 +18,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 func TestRequireInternalCallerUsesTankOperatorAudience(t *testing.T) {
@@ -209,49 +208,52 @@ func TestHandleInternalGitHubAttestationRejectsUnboundSAToken(t *testing.T) {
 	}
 }
 
-func TestHandleInternalSessionEventsNotifyWakesMatchingSession(t *testing.T) {
-	server := internalSessionEventsNotifyServer(t, "12")
-	ch, unsubscribe := server.eventBroker.Subscribe("12")
-	defer unsubscribe()
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/12/events/notify", strings.NewReader(`{"last_order_key":"001"}`))
+func TestHandleInternalSessionTurnTerminalReturnsTerminalEvent(t *testing.T) {
+	server := internalSessionRuntimeServer(t, "12")
+	server.sessionEvents = terminalEventStore{event: map[string]any{
+		"type":     "turn.interrupted",
+		"turn_id":  "turn-active",
+		"event_id": "turn-active:turn.interrupted:client_interrupt",
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/12/turns/turn-active/terminal", nil)
 	req.SetPathValue("session_id", "12")
+	req.SetPathValue("turn_id", "turn-active")
 	req.Header.Set("Authorization", "Bearer session-token")
 	rec := httptest.NewRecorder()
 
-	server.handleInternalSessionEventsNotify(rec, req)
+	server.handleInternalSessionTurnTerminal(rec, req)
 
-	if rec.Code != http.StatusAccepted {
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	select {
-	case <-ch:
-	case <-time.After(time.Second):
-		t.Fatal("session event stream was not notified")
+	var body struct {
+		Terminal bool           `json:"terminal"`
+		Event    map[string]any `json:"event"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Terminal || body.Event["type"] != "turn.interrupted" {
+		t.Fatalf("terminal response = %#v", body)
 	}
 }
 
-func TestHandleInternalSessionEventsNotifyRejectsOtherSession(t *testing.T) {
-	server := internalSessionEventsNotifyServer(t, "12")
-	ch, unsubscribe := server.eventBroker.Subscribe("12")
-	defer unsubscribe()
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/13/events/notify", strings.NewReader(`{}`))
+func TestHandleInternalSessionTurnTerminalRejectsOtherSession(t *testing.T) {
+	server := internalSessionRuntimeServer(t, "12")
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/13/turns/turn-active/terminal", nil)
 	req.SetPathValue("session_id", "13")
+	req.SetPathValue("turn_id", "turn-active")
 	req.Header.Set("Authorization", "Bearer session-token")
 	rec := httptest.NewRecorder()
 
-	server.handleInternalSessionEventsNotify(rec, req)
+	server.handleInternalSessionTurnTerminal(rec, req)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	select {
-	case <-ch:
-		t.Fatal("event stream should not be notified for a mismatched session")
-	default:
-	}
 }
 
-func internalSessionEventsNotifyServer(t *testing.T, sessionID string) *appServer {
+func internalSessionRuntimeServer(t *testing.T, sessionID string) *appServer {
 	t.Helper()
 	k8s := fake.NewSimpleClientset(&corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -292,8 +294,17 @@ func internalSessionEventsNotifyServer(t *testing.T, sessionID string) *appServe
 		namespace:             "tank-operator-sessions",
 		sessionScope:          "slot-a",
 		sessionServiceAccount: "claude-session",
-		eventBroker:           newSessionEventBroker(),
+		sessionEvents:         store.StubSessionEventStore{},
 	}
+}
+
+type terminalEventStore struct {
+	store.StubSessionEventStore
+	event map[string]any
+}
+
+func (s terminalEventStore) FindTurnTerminal(context.Context, string, string) (map[string]any, error) {
+	return s.event, nil
 }
 
 type testProfilesStore map[string]profiles.Profile

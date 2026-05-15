@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import type { Config } from "../config.js";
-import type { CodexEvent } from "../cosmos.js";
+import type { CodexEvent } from "../sessionEvents.js";
 import { isTankConversationEvent } from "../conversation.js";
 import {
   CodexTankEventAdapter,
@@ -15,13 +15,11 @@ function cfg(): Config {
     sessionId: "63",
     sessionStorageKey: "63",
     ownerEmail: "user@example.com",
-    cosmosEndpoint: "https://example.invalid",
-    cosmosDatabase: "tank-operator",
-    sessionEventsContainer: "session-events",
-    turnQueueContainer: "turn-queue",
+    natsURL: "nats://example.invalid:4222",
+    natsToken: "",
+    natsStream: "TANK_SESSION_BUS",
     operatorInternalURL: "",
     operatorTokenPath: "",
-    turnQueuePollMs: 1000,
     workspace: "/workspace",
   };
 }

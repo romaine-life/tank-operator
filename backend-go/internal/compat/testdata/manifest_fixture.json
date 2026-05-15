@@ -48,7 +48,6 @@
       "labels": {
         "app.kubernetes.io/instance": "tank-operator-sessions",
         "app.kubernetes.io/managed-by": "tank-operator",
-        "azure.workload.identity/use": "true",
         "tank-operator/mode": "codex_gui",
         "tank-operator/owner": "u-db1458e0eb6e9e75",
         "tank-operator/session-id": "12",

@@ -33,10 +33,9 @@ const (
 	// pin every session pod to whichever stale image happened to carry
 	// that tag — which is exactly what bricked claude_gui session creation
 	// for the 15h between the Go cutover and the env-var wiring.
-	DefaultGitHubAppSecret          = "github-app-creds"
-	DefaultOAuthGatewayCA           = "claude-oauth-ca"
-	DefaultSessionAzureConfigSecret = "tank-session-azure-config"
-	SessionConfigDirMount           = "/opt/tank/session-config"
+	DefaultGitHubAppSecret = "github-app-creds"
+	DefaultOAuthGatewayCA  = "claude-oauth-ca"
+	SessionConfigDirMount  = "/opt/tank/session-config"
 )
 
 var (
@@ -104,16 +103,10 @@ type ManifestOptions struct {
 	OAuthGatewayCAConfigMap string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
-	// Secret name for pod-side Azure workload-identity config
-	// (AZURE_CLIENT_ID + AZURE_TENANT_ID). envFrom on the claude container
-	// so SDK runners can talk to Cosmos via federated SA token. May be empty
-	// in test envs where the ExternalSecret isn't wired.
-	SessionAzureConfigSecret string
-	// SDK runners need Cosmos config for session-events and the turn queue.
-	CosmosEndpoint               string
-	CosmosDatabase               string
-	CosmosSessionEventsContainer string
-	CosmosTurnQueueContainer     string
+	// SDK runners use NATS JetStream for durable command/event delivery.
+	NATSURL        string
+	NATSStream     string
+	NATSAuthSecret string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 }
@@ -314,17 +307,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
-	// envFrom on the claude container. GitHub App for git auth; session-azure
-	// config provides AZURE_CLIENT_ID + AZURE_TENANT_ID so DefaultAzureCredential
-	// can mint a federated Cosmos token from the projected SA token (the WI
-	// webhook injects AZURE_FEDERATED_TOKEN_FILE via the pod's
-	// azure.workload.identity/use=true label).
+	// envFrom on the claude container. GitHub App is used for git auth.
 	envFrom := []any{}
 	if opts.GitHubAppSecret != "" {
 		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.GitHubAppSecret}})
-	}
-	if opts.SessionAzureConfigSecret != "" {
-		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.SessionAzureConfigSecret}})
 	}
 
 	claudeContainer := map[string]any{
@@ -369,8 +355,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// with the claude container via the emptyDir above so the agent's
 	// edits show up in the terminal pane. Same image (binary baked in
 	// via the Dockerfile multi-stage build); different command + env.
-	// The runner claims durable turn-queue rows and writes durable transcript
-	// events to Cosmos for the orchestrator SSE stream.
+	// The runner consumes durable session commands and publishes canonical
+	// transcript events to the session bus.
 	if wantAgentRunner {
 		runnerVolumeMounts := append([]any{}, configMounts...)
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
@@ -400,10 +386,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 			},
-			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
-			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
-			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
-			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
+			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
+			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{
+				"name": "NATS_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": opts.NATSAuthSecret,
+						"key":  "token",
+					},
+				},
+			},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
@@ -438,7 +431,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	// Codex-runner sidecar — codex_gui only. Sibling of agent-runner:
-	// same workspace mount and same Cosmos-backed turn/event contract
+	// same workspace mount and same session-bus command/event contract
 	// (only one runner per pod, never both). Different SDK underneath. Auth is
 	// a pod-local placeholder auth.json plus codex-api-proxy injection;
 	// the runner never mounts the real codex-credentials Secret.
@@ -478,10 +471,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					},
 				},
 			},
-			map[string]any{"name": "COSMOS_ENDPOINT", "value": opts.CosmosEndpoint},
-			map[string]any{"name": "COSMOS_DATABASE", "value": opts.CosmosDatabase},
-			map[string]any{"name": "COSMOS_SESSION_EVENTS_CONTAINER", "value": opts.CosmosSessionEventsContainer},
-			map[string]any{"name": "COSMOS_TURN_QUEUE_CONTAINER", "value": opts.CosmosTurnQueueContainer},
+			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
+			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{
+				"name": "NATS_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": opts.NATSAuthSecret,
+						"key":  "token",
+					},
+				},
+			},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
@@ -542,7 +542,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"tank-operator/session-id":     sessionID,
 				"tank-operator/session-scope":  opts.SessionScope,
 				"tank-operator/mode":           mode,
-				"azure.workload.identity/use":  "true",
 			},
 			"annotations": annotations,
 		},
@@ -616,17 +615,11 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	if opts.GitHubAppSecret == "" {
 		opts.GitHubAppSecret = DefaultGitHubAppSecret
 	}
-	if opts.SessionAzureConfigSecret == "" {
-		opts.SessionAzureConfigSecret = DefaultSessionAzureConfigSecret
+	if opts.NATSStream == "" {
+		opts.NATSStream = "TANK_SESSION_BUS"
 	}
-	if opts.CosmosDatabase == "" {
-		opts.CosmosDatabase = "tank-operator"
-	}
-	if opts.CosmosSessionEventsContainer == "" {
-		opts.CosmosSessionEventsContainer = "session-events"
-	}
-	if opts.CosmosTurnQueueContainer == "" {
-		opts.CosmosTurnQueueContainer = "turn-queue"
+	if opts.NATSAuthSecret == "" {
+		opts.NATSAuthSecret = "tank-nats-auth"
 	}
 	return opts
 }
