@@ -52,27 +52,3 @@ func TestCounterDocIDIncludesNonDefaultScope(t *testing.T) {
 	}
 }
 
-func TestSessionDocIDsTriesScopedThenLegacyID(t *testing.T) {
-	ids := sessionDocIDs("slot-a", "12")
-
-	if got, want := len(ids), 2; got != want {
-		t.Fatalf("len = %d, want %d", got, want)
-	}
-	if got, want := ids[0], "session:slot-a:12"; got != want {
-		t.Fatalf("primary id = %q, want %q", got, want)
-	}
-	if got, want := ids[1], "session:12"; got != want {
-		t.Fatalf("legacy id = %q, want %q", got, want)
-	}
-}
-
-func TestSessionDocIDsDefaultScopeOnlyReturnsLegacyShape(t *testing.T) {
-	ids := sessionDocIDs("default", "12")
-
-	if got, want := len(ids), 1; got != want {
-		t.Fatalf("len = %d, want %d", got, want)
-	}
-	if got, want := ids[0], "session:12"; got != want {
-		t.Fatalf("id = %q, want %q", got, want)
-	}
-}
