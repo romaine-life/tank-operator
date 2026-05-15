@@ -65,23 +65,18 @@ export class SharedSessionBus {
         });
         return ack.duplicate ? "exists" : "created";
     }
-    async enqueueDelayed(args) {
+    async enqueueWakeupCommand(args) {
         await this.ensureConnected();
-        const command = buildDelayedCommand({
+        const command = buildScheduleWakeupCommand({
             sessionID: this.cfg.sessionId,
             sessionStorageKey: this.sessionStorageKey,
             email: this.cfg.ownerEmail,
             provider: this.provider,
             prompt: args.prompt,
             clientNonce: args.clientNonce,
-            availableAt: args.availableAt,
         });
-        await this.js.publish(scheduleSubject(this.sessionStorageKey, this.provider), encodeJSON(command), {
+        await this.js.publish(commandSubject(this.sessionStorageKey, this.provider), encodeJSON(command), {
             msgID: command.command_id,
-            schedule: {
-                specification: new Date(args.availableAt),
-                target: commandSubject(this.sessionStorageKey, this.provider),
-            },
         });
         return command;
     }
@@ -225,7 +220,7 @@ export class SessionCommandRecord {
     }
 }
 
-export function buildDelayedCommand(args) {
+export function buildScheduleWakeupCommand(args) {
     const now = new Date().toISOString();
     return {
         schema_version: 1,
@@ -240,7 +235,6 @@ export function buildDelayedCommand(args) {
         client_nonce: args.clientNonce,
         prompt: args.prompt,
         created_at: now,
-        available_at: args.availableAt,
     };
 }
 
@@ -266,10 +260,6 @@ function commandSubject(sessionStorageKey, provider) {
 
 function eventSubject(sessionStorageKey) {
     return `tank.session.${storageToken(sessionStorageKey)}.events`;
-}
-
-function scheduleSubject(sessionStorageKey, provider) {
-    return `tank.session.${storageToken(sessionStorageKey)}.schedules.${sanitizeSubjectToken(provider)}`;
 }
 
 function storageToken(value) {

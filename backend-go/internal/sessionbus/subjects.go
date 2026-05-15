@@ -28,10 +28,6 @@ func CommandSubject(sessionStorageKey, provider string) string {
 	return fmt.Sprintf("%s.%s.commands.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
 }
 
-func ScheduleSubject(sessionStorageKey, provider string) string {
-	return fmt.Sprintf("%s.%s.schedules.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
-}
-
 func EventSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.events", subjectRoot, StorageToken(sessionStorageKey))
 }

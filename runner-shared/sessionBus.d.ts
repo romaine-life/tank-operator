@@ -89,10 +89,9 @@ export class SharedSessionBus {
     signal?: AbortSignal,
   ): Promise<() => Promise<void>>;
   publishEvent(event: Record<string, unknown>): Promise<"created" | "exists">;
-  enqueueDelayed(args: {
+  enqueueWakeupCommand(args: {
     prompt: string;
     clientNonce: string;
-    availableAt: string;
   }): Promise<SessionCommand>;
   findTurnTerminal(turnID: string): Promise<Record<string, unknown> | null>;
   markCompleted(record: SessionCommandRecord): Promise<boolean>;
@@ -102,14 +101,13 @@ export class SharedSessionBus {
   close(): Promise<void>;
 }
 
-export function buildDelayedCommand(args: {
+export function buildScheduleWakeupCommand(args: {
   sessionID: string;
   sessionStorageKey?: string;
   email: string;
   provider: "claude" | "codex" | string;
   prompt: string;
   clientNonce: string;
-  availableAt: string;
 }): SessionCommand;
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;

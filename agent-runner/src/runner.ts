@@ -581,18 +581,15 @@ export class Runner {
   }
 
   private scheduleWakeup(req: WakeupRequest): void {
-    void this.enqueueWakeup(req).catch((err) =>
-      console.error("schedule wakeup failed:", err),
-    );
-  }
-
-  private async enqueueWakeup(req: WakeupRequest): Promise<void> {
     const delayMs = Math.max(0, req.delayMs);
-    await this.commandBus.enqueueDelayed({
-      prompt: req.prompt,
-      clientNonce: `schedule_wakeup-${randomUUID()}`,
-      availableAt: new Date(Date.now() + delayMs).toISOString(),
-    });
+    setTimeout(() => {
+      void this.commandBus
+        .enqueueWakeupCommand({
+          prompt: req.prompt,
+          clientNonce: `schedule_wakeup-${randomUUID()}`,
+        })
+        .catch((err) => console.error("schedule wakeup fire failed:", err));
+    }, delayMs);
   }
 
   private async finalizeCommandIfAlreadyTerminal(
