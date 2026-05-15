@@ -325,8 +325,12 @@ publishes a durable JetStream `submit_turn` command keyed by `client_nonce`.
 The runner consumes commands through a durable per-session/per-provider
 consumer and calls JetStream `working()` while a long turn is in flight.
 Command ack happens only after the corresponding durable terminal event is
-published. Claude `ScheduleWakeup` publishes a delayed JetStream command with
-`source=schedule-wakeup`.
+published. Claude `ScheduleWakeup` is handled pod-side: the agent-runner extracts
+the tool_use, holds a `setTimeout` for `delaySeconds`, and at fire time publishes
+a normal `submit_turn` command (`source=schedule-wakeup`) to the command subject.
+The scheduler is in-process state inside the runner; it does not survive runner-
+process death and does not need to, per the durability boundary in
+docs/product-inspirations.md (the pod owns runtime scheduler state, not Cosmos).
 
 The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
