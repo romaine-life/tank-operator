@@ -18,6 +18,7 @@ export const TANK_EVENT_TYPES = [
   "turn.started",
   "turn.completed",
   "turn.failed",
+  "turn.command_failed",
   "turn.interrupted",
   "item.started",
   "item.delta",
