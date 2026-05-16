@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -32,6 +33,7 @@ type appServer struct {
 	mgr                      *sessions.Manager
 	profiles                 profilesStore
 	sessionEvents            store.SessionEventStore
+	lifecycleEvents          lifecycleevents.Store
 	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
 	verifier                 *auth.Verifier
@@ -52,8 +54,8 @@ type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
 	PublishSessionEventWake(context.Context, string) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
-	PublishSessionListWake(context.Context, string) error
-	SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error)
+	PublishSessionListEvent(context.Context, string, []byte) error
+	SubscribeSessionListEvents(context.Context, string) (<-chan []byte, func(), error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -79,8 +81,13 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
-	mux.HandleFunc("GET /api/sessions/activity", s.handleSessionActivity)
+	// /api/sessions/events streams typed session_lifecycle_events to the
+	// SPA sidebar (per-owner cursor-resumable SSE). /api/sessions/timeline
+	// returns the same ledger as a paginated REST snapshot for initial
+	// load + resync. Together they replace the deleted activity polling
+	// endpoint and the prior wake-and-refetch SSE shape.
 	mux.HandleFunc("GET /api/sessions/events", s.handleSessionsEvents)
+	mux.HandleFunc("GET /api/sessions/timeline", s.handleSessionListTimeline)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)

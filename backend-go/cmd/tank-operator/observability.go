@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
+	"github.com/nelsong6/tank-operator/backend-go/internal/podinformer"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 )
 
@@ -116,21 +117,138 @@ var (
 	})
 
 	// Wake-publish failures. The bus records here before returning the
-	// error to the caller, which keeps the silent
-	// `_ = m.waker.PublishSessionListWake(...)` pattern in Manager
-	// mutations visible. Steady-state expectation: zero on both. A non-
-	// zero value means NATS is unreachable / overloaded, in which case
-	// SSE clients won't notice changes until the next heartbeat (15s for
-	// per-session events, 30s for the per-owner session list).
+	// error to the caller. Per-session wakes drive the chat-window SSE;
+	// per-owner session-list events drive the sidebar SSE (replaced
+	// the prior opaque wake subject in tank-operator#83). Steady-state
+	// expectation is zero on both — a non-zero value means NATS is
+	// unreachable, and SSE clients catch up from the durable Postgres
+	// ledger on reconnect.
 	sessionEventWakePublishFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_wake_publish_failure_total",
 		Help: "Per-session SSE wake publishes that failed against NATS.",
 	})
-	sessionListWakePublishFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "tank_session_list_wake_publish_failure_total",
-		Help: "Per-owner session-list-change wake publishes that failed against NATS.",
+	sessionListEventPublishFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_event_publish_failure_total",
+		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
 )
+
+// --- Session-list (sidebar) stream metrics --- the matching names for
+// the chat-side counters above so dashboards can render both ledgers
+// side-by-side. Same shape: open/reconnect/resync/error/emitted/heartbeat.
+
+var (
+	sessionListStreamOpenTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_open_total",
+		Help: "Times the per-owner sidebar SSE stream opened (durable session-list replay).",
+	})
+	sessionListStreamReconnectTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_reconnect_total",
+		Help: "Times a sidebar SSE stream reconnected with a resumable cursor.",
+	})
+	sessionListStreamResyncTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_resync_required_total",
+		Help: "Times a sidebar SSE stream required full resync (cursor not found in the lifecycle ledger).",
+	})
+	sessionListStreamErrorTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_error_total",
+		Help: "Errors emitted while serving the per-owner sidebar SSE stream.",
+	})
+	sessionListStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_emitted_total",
+		Help: "Typed session-events emitted to a connected sidebar SSE consumer (post-filter).",
+	})
+	sessionListStreamHeartbeatTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_heartbeat_total",
+		Help: "Heartbeat frames written on idle sidebar SSE streams.",
+	})
+)
+
+// --- Pod-informer producer metrics. ---
+
+var (
+	// sessionLifecycleEventWritesTotal counts every durable ledger write
+	// (whether by Manager, the persister-driven lifecycleEmitter, or the
+	// pod-informer leader). The type label is bounded by the small fixed
+	// set of EventType constants — cardinality budget is fine.
+	sessionLifecycleEventWritesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_lifecycle_event_writes_total",
+		Help: "Durable session_lifecycle_events rows written, labeled by event type.",
+	}, []string{"type"})
+	sessionPodInformerLagSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_session_pod_informer_lag_seconds",
+		Help:    "End-to-end lag between an observed pod transition and the lifecycle ledger row insert.",
+		Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+	})
+	// sessionPodInformerLeaderHeld is the single-writer health signal.
+	// 1 on the replica currently holding the lease, 0 elsewhere. If the
+	// SUM across replicas is 0 for an extended window the alert fires.
+	sessionPodInformerLeaderHeld = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_pod_informer_leader_held",
+		Help: "1 when this replica currently holds the pod-informer Lease; 0 otherwise.",
+	})
+	// sessionLifecycleActivityEmitTotal: emitted-or-skipped breakdown of
+	// the persister-driven session.activity_changed deltas. The "skipped"
+	// counter dominates in steady state (most chat events are turn-status
+	// indicator no-ops); a sudden surge in "emitted" without a matching
+	// pattern in user activity is a regression signal.
+	sessionLifecycleActivityEmitTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_lifecycle_activity_emit_total",
+		Help: "Persister activity-summary delta decisions, labeled by outcome (emitted/skipped).",
+	}, []string{"outcome"})
+	sessionLifecycleActivityFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_lifecycle_activity_failure_total",
+		Help: "Persister activity-summary delta derivation failures (store/publish errors).",
+	})
+)
+
+// recordSessionListStreamError centralizes the sidebar SSE error counter
+// bump so handler call sites don't import the metric symbol directly.
+func recordSessionListStreamError() {
+	sessionListStreamErrorTotal.Inc()
+}
+
+// promPodInformerMetrics satisfies podinformer.Metrics so the informer
+// can record transitions, leadership state, and producer lag without
+// importing prometheus.
+type promPodInformerMetrics struct{}
+
+func (promPodInformerMetrics) RecordTransition(eventType string) {
+	sessionLifecycleEventWritesTotal.WithLabelValues(eventType).Inc()
+}
+
+func (promPodInformerMetrics) RecordLag(seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+	sessionPodInformerLagSeconds.Observe(seconds)
+}
+
+func (promPodInformerMetrics) RecordLeaderStatus(isLeader bool) {
+	if isLeader {
+		sessionPodInformerLeaderHeld.Set(1)
+		return
+	}
+	sessionPodInformerLeaderHeld.Set(0)
+}
+
+// promLifecycleEmitterMetrics satisfies lifecycleEmitterMetrics for the
+// chat→activity_changed bridge. Emitted=true increments
+// {outcome="emitted"}, false → {outcome="skipped"}.
+type promLifecycleEmitterMetrics struct{}
+
+func (promLifecycleEmitterMetrics) RecordActivityDelta(emitted bool) {
+	outcome := "skipped"
+	if emitted {
+		outcome = "emitted"
+		sessionLifecycleEventWritesTotal.WithLabelValues("session.activity_changed").Inc()
+	}
+	sessionLifecycleActivityEmitTotal.WithLabelValues(outcome).Inc()
+}
+
+func (promLifecycleEmitterMetrics) RecordActivityFailure() {
+	sessionLifecycleActivityFailureTotal.Inc()
+}
 
 // --- Postgres query tracer metrics ---
 
@@ -202,15 +320,15 @@ func (promPersisterMetrics) RecordTransientFailure() {
 }
 
 // promWakeMetrics satisfies sessionbus.WakeMetrics so the bus can increment
-// wake-publish failure counters without importing prometheus directly.
+// wake/event-publish failure counters without importing prometheus directly.
 type promWakeMetrics struct{}
 
 func (promWakeMetrics) RecordSessionEventWakePublishFailed() {
 	sessionEventWakePublishFailureTotal.Inc()
 }
 
-func (promWakeMetrics) RecordSessionListWakePublishFailed() {
-	sessionListWakePublishFailureTotal.Inc()
+func (promWakeMetrics) RecordSessionListEventPublishFailed() {
+	sessionListEventPublishFailureTotal.Inc()
 }
 
 // promNATSConnectionMetrics satisfies sessionbus.ConnectionMetrics so the
@@ -232,13 +350,15 @@ func (promPGMetrics) RecordQuery(operation, outcome string, duration time.Durati
 }
 
 // Compile-time interface conformance checks. If a future refactor renames
-// a method on the sessionbus / pgstore interfaces, this won't silently
-// fall back to "no metrics emitted" — it will fail to build.
+// a method on the sessionbus / pgstore / podinformer interfaces, this
+// won't silently fall back to "no metrics emitted" — it will fail to build.
 var (
 	_ sessionbus.PersisterMetrics  = promPersisterMetrics{}
 	_ sessionbus.WakeMetrics       = promWakeMetrics{}
 	_ sessionbus.ConnectionMetrics = promNATSConnectionMetrics{}
 	_ pgstore.SQLMetrics           = promPGMetrics{}
+	_ podinformer.Metrics          = promPodInformerMetrics{}
+	_ lifecycleEmitterMetrics      = promLifecycleEmitterMetrics{}
 )
 
 func recordSessionEventLag(event map[string]any) {

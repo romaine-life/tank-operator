@@ -2,9 +2,12 @@ package sessionregistry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -102,6 +105,38 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, name)
 	return err
+}
+
+// OwnerForSession returns the owner email associated with the given
+// session id in this scope, or empty when no such session is registered.
+// Used by the lifecycleEmitter to resolve which per-owner SSE subject a
+// chat-derived activity delta should land on — the chat event payload
+// itself carries only `session_id`, not the email, since `tank_session_id`
+// is the durable routing key on the event bus.
+func (s *Store) OwnerForSession(ctx context.Context, scope, sessionID string) (string, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", nil
+	}
+	const q = `
+		SELECT email
+		FROM sessions
+		WHERE session_scope = $1 AND session_id = $2
+		LIMIT 1
+	`
+	var email string
+	switch err := s.pool.QueryRow(ctx, q, scope, sessionID).Scan(&email); {
+	case err == nil:
+		return strings.ToLower(strings.TrimSpace(email)), nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", nil
+	default:
+		return "", err
+	}
 }
 
 // MarkDeleted sets visible=false. Missing-session is a no-op.
