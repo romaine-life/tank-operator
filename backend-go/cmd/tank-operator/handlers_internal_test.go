@@ -21,68 +21,14 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-func TestRequireInternalCallerUsesTankOperatorAudience(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-	k8s.Fake.PrependReactor("create", "tokenreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
-		review := action.(ktesting.CreateAction).GetObject().(*authv1.TokenReview)
-		if len(review.Spec.Audiences) != 1 || review.Spec.Audiences[0] != "tank-operator" {
-			t.Fatalf("audiences=%#v, want tank-operator audience", review.Spec.Audiences)
-		}
-		return true, &authv1.TokenReview{
-			Status: authv1.TokenReviewStatus{
-				Authenticated: true,
-				User: authv1.UserInfo{
-					Username: "system:serviceaccount:mcp-glimmung:mcp-glimmung",
-				},
-			},
-		}, nil
-	})
-
-	handler := requireInternalCaller(
-		k8s,
-		map[string]string{"mcp-glimmung/mcp-glimmung": "mcp-glimmung"},
-	)(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/1/test-state", nil)
-	req.Header.Set("Authorization", "Bearer caller-token")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-func TestRequireInternalCallerRejectsDefaultServiceAccountAudience(t *testing.T) {
-	k8s := fake.NewSimpleClientset()
-	k8s.Fake.PrependReactor("create", "tokenreviews", func(action ktesting.Action) (bool, runtime.Object, error) {
-		review := action.(ktesting.CreateAction).GetObject().(*authv1.TokenReview)
-		if len(review.Spec.Audiences) != 1 || review.Spec.Audiences[0] != "tank-operator" {
-			t.Fatalf("audiences=%#v, want tank-operator audience", review.Spec.Audiences)
-		}
-		return true, &authv1.TokenReview{
-			Status: authv1.TokenReviewStatus{Authenticated: false},
-		}, nil
-	})
-
-	handler := requireInternalCaller(
-		k8s,
-		map[string]string{"mcp-glimmung/mcp-glimmung": "mcp-glimmung"},
-	)(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/1/test-state", nil)
-	req.Header.Set("Authorization", "Bearer caller-token")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-}
+// Pre-#486 the /api/internal/sessions/* surface used a raw SA-TokenReview
+// middleware (removed; see migration guard) gated by an (ns, sa) allowlist
+// plus X-Forwarded-For-derived pod-IP identity. Stage 4 retired both in
+// favor of auth.romaine.life service-principal JWTs — see
+// TestRequireServicePrincipal_RejectionPaths below. The TokenReview-fixture
+// tests for the old gate were deleted in the same migration; regression
+// guard against re-introducing the legacy patterns lives in
+// scripts/check-removed-chat-runtime.mjs.
 
 func TestHandleInternalGitHubAttestationMintsTankJWT(t *testing.T) {
 	t.Setenv("HOST_EMAIL", "host@example.test")

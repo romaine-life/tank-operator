@@ -154,10 +154,6 @@ spec:
             # behavior in MCP servers. Empty uses HOST_EMAIL.
             - name: SUPER_ADMIN_EMAILS
               value: {{ .Values.superAdmins.emails | quote }}
-            # Comma-separated "namespace/serviceaccount" pairs allowed to call
-            # the general /api/internal/session endpoints.
-            - name: INTERNAL_API_ALLOWED_SUBJECTS
-              value: {{ .Values.internalApi.allowedSubjects | quote }}
             # Public hostname the orchestrator uses to build session URLs in
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
