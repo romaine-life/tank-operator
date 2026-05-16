@@ -253,10 +253,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		// Second projected SA token, audience-pinned to auth.romaine.life.
 		// In-pod code POSTs this token to auth.romaine.life's
 		// /api/auth/exchange/k8s to receive an auth.romaine.life JWT with
-		// role=service that tank-operator's /api/internal/sessions/spawn
-		// accepts. Distinct audience (and distinct file path) from the
-		// tank-operator token above so a stolen token cannot be replayed
-		// across services. See nelsong6/tank-operator#486.
+		// role=service that tank-operator's /api/internal/sessions/*
+		// handlers accept. Distinct audience (and distinct file path) from
+		// the tank-operator token above so a stolen token cannot be
+		// replayed across services. See nelsong6/tank-operator#486.
 		map[string]any{
 			"name": "auth-romaine-sa-token",
 			"projected": map[string]any{

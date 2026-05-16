@@ -260,6 +260,14 @@ const blocked = [
   { name: "removed INTERNAL_API_ALLOWED_SUBJECTS env var", pattern: /\bINTERNAL_API_ALLOWED_SUBJECTS\b/ },
   { name: "removed parseInternalSubjects helper", pattern: /\bparseInternalSubjects\b/ },
   { name: "removed internalAllowedSubjects field", pattern: /\binternalAllowedSubjects\b/ },
+  // /api/internal/sessions/spawn was an alias of POST /api/internal/sessions
+  // during the #486 Stage 4 cutover. Both endpoints had identical semantics
+  // post-cutover; the alias was retired in the API-cleanup follow-up. POST
+  // /api/internal/sessions is now the canonical service-principal
+  // session-create endpoint. Block reintroduction of the alias so a future
+  // PR can't quietly resurrect the parallel surface.
+  { name: "removed handleInternalSpawnSession alias", pattern: /\bhandleInternalSpawnSession\b/ },
+  { name: "removed /api/internal/sessions/spawn URL", pattern: /\/api\/internal\/sessions\/spawn\b/ },
 ];
 
 const failures = [];
