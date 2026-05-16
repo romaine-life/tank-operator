@@ -228,6 +228,62 @@ func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	}
 }
 
+// Every container in a session pod must carry a memory request so the pod's
+// QoS class is Burstable instead of BestEffort. A single requests==0 container
+// drops the whole pod back to BestEffort and puts it at the front of the
+// kubelet's eviction queue under node memory pressure — which is what reaped
+// the "sort files" session in #487's incident. Per-container expectations:
+//
+//	mcp-auth-proxy, claude          → SidecarMemoryRequest
+//	agent-runner (claude_gui)       → RunnerMemoryRequest
+//	codex-runner (codex_gui)        → RunnerMemoryRequest
+func TestPodManifestContainersHaveMemoryRequests(t *testing.T) {
+	tests := map[string]map[string]string{
+		ClaudeGUIMode: {
+			"mcp-auth-proxy": SidecarMemoryRequest,
+			"claude":         SidecarMemoryRequest,
+			"agent-runner":   RunnerMemoryRequest,
+		},
+		CodexGUIMode: {
+			"mcp-auth-proxy": SidecarMemoryRequest,
+			"claude":         SidecarMemoryRequest,
+			"codex-runner":   RunnerMemoryRequest,
+		},
+		ClaudeCLIMode: {
+			"mcp-auth-proxy": SidecarMemoryRequest,
+			"claude":         SidecarMemoryRequest,
+		},
+	}
+	for mode, want := range tests {
+		t.Run(mode, func(t *testing.T) {
+			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
+				SessionImage:      "claude-image",
+				CodexSessionImage: "codex-image",
+				PiSessionImage:    "pi-image",
+			})
+			spec := manifest["spec"].(map[string]any)
+			containers := spec["containers"].([]any)
+			if got := len(containers); got != len(want) {
+				t.Fatalf("container count = %d, want %d", got, len(want))
+			}
+			for name, wantMem := range want {
+				c := findContainer(t, containers, name)
+				resources, ok := c["resources"].(map[string]any)
+				if !ok {
+					t.Fatalf("%s: resources missing — pod would be BestEffort, top of eviction queue", name)
+				}
+				requests, ok := resources["requests"].(map[string]any)
+				if !ok {
+					t.Fatalf("%s: resources.requests missing", name)
+				}
+				if got := requests["memory"]; got != wantMem {
+					t.Fatalf("%s: memory request = %v, want %q", name, got, wantMem)
+				}
+			}
+		})
+	}
+}
+
 func TestManifestFixture(t *testing.T) {
 	fixture := loadFixture(t)
 

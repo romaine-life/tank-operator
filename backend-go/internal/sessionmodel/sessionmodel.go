@@ -42,6 +42,21 @@ const (
 	MCPAuthProxyMetricsPort = 9990
 	AgentRunnerMetricsPort  = 9095
 	CodexRunnerMetricsPort  = 9096
+	// Per-container memory requests. Sized to graduate session pods out of
+	// BestEffort QoS without overcommitting: under node memory pressure the
+	// kubelet evicts BestEffort pods first, which is what reaped the
+	// "sort files" claude_gui session in #487's incident (agent-runner had
+	// burst to ~777 MiB during a `go build`; sidecars stayed under 30 MiB,
+	// but with requests==0 the whole pod was top of the eviction queue).
+	// Setting requests on every container in the pod is the requirement —
+	// a single requests==0 container drops the pod back to BestEffort.
+	// No memory limits intentionally: a hard cap would OOM-kill legitimate
+	// bursts (npm install, go build, jq over a large transcript). Burstable
+	// + reservation gives the safety net (scheduler honors the reservation,
+	// pod is no longer top of the eviction list) without the cap. No CPU
+	// request — CPU contention isn't the failure mode we're solving.
+	SidecarMemoryRequest = "64Mi"  // mcp-auth-proxy, claude (sandbox-agent)
+	RunnerMemoryRequest  = "512Mi" // agent-runner, codex-runner
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -343,6 +358,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"ports":        []any{map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort}},
 		"env":          env,
 		"volumeMounts": claudeVolumeMounts,
+		"resources":    sessionContainerResources(SidecarMemoryRequest),
 	}
 	if len(envFrom) > 0 {
 		claudeContainer["envFrom"] = envFrom
@@ -374,6 +390,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "metrics", "containerPort": MCPAuthProxyMetricsPort},
 			},
 			"volumeMounts": mcpProxyVolumeMounts,
+			"resources":    sessionContainerResources(SidecarMemoryRequest),
 		},
 		claudeContainer,
 	}
@@ -456,6 +473,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": AgentRunnerMetricsPort},
 			},
+			"resources": sessionContainerResources(RunnerMemoryRequest),
 		}
 		if len(envFrom) > 0 {
 			runnerContainer["envFrom"] = envFrom
@@ -538,6 +556,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
 			},
+			"resources": sessionContainerResources(RunnerMemoryRequest),
 		}
 		if len(envFrom) > 0 {
 			codexRunnerContainer["envFrom"] = envFrom
@@ -585,6 +604,18 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"annotations": annotations,
 		},
 		"spec": spec,
+	}
+}
+
+// sessionContainerResources returns a `resources` map suitable for inlining
+// into a session-pod container spec. Returns a fresh map per call so callers
+// never share mutable state. See SidecarMemoryRequest / RunnerMemoryRequest
+// for the sizing rationale.
+func sessionContainerResources(memory string) map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"memory": memory,
+		},
 	}
 }
 
