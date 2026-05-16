@@ -30,8 +30,7 @@ const (
 type Visibility string
 
 const (
-	VisibilityDurable  Visibility = "durable"
-	VisibilityLiveOnly Visibility = "live-only"
+	VisibilityDurable Visibility = "durable"
 )
 
 type EventType string
@@ -45,7 +44,6 @@ const (
 	EventTurnCommandFailed  EventType = "turn.command_failed"
 	EventTurnInterrupted    EventType = "turn.interrupted"
 	EventItemStarted        EventType = "item.started"
-	EventItemDelta          EventType = "item.delta"
 	EventItemCompleted      EventType = "item.completed"
 	EventItemFailed         EventType = "item.failed"
 	EventApprovalRequested  EventType = "tool.approval_requested"
@@ -83,7 +81,7 @@ var skillNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // SchemaError wraps a permanent ValidateEventMap failure. The persister
 // matches against this with errors.As to route schema rejections through a
-// terminal NAK path (instead of the retry path used for transient Cosmos /
+// terminal NAK path (instead of the retry path used for transient Postgres /
 // network failures). Steady-state expectation: zero SchemaErrors on the
 // session bus; non-zero indicates a producer is emitting non-Tank events.
 type SchemaError struct {
@@ -172,7 +170,7 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("turn.command_failed must be actor=system source=tank")
 		}
 		return requirePayloadString(event, "reason")
-	case EventItemStarted, EventItemDelta, EventItemCompleted, EventItemFailed:
+	case EventItemStarted, EventItemCompleted, EventItemFailed:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
 		}
@@ -278,12 +276,7 @@ func validSource(source Source) bool {
 }
 
 func validVisibility(visibility Visibility) bool {
-	switch visibility {
-	case VisibilityDurable, VisibilityLiveOnly:
-		return true
-	default:
-		return false
-	}
+	return visibility == VisibilityDurable
 }
 
 func validEventType(eventType EventType) bool {
@@ -296,7 +289,6 @@ func validEventType(eventType EventType) bool {
 		EventTurnCommandFailed,
 		EventTurnInterrupted,
 		EventItemStarted,
-		EventItemDelta,
 		EventItemCompleted,
 		EventItemFailed,
 		EventApprovalRequested,

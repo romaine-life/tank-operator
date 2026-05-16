@@ -511,7 +511,7 @@ export class Runner {
     const delayMs = Math.max(0, req.delayMs);
     setTimeout(() => {
       void this.commandBus
-        .enqueueWakeupCommand({
+        .enqueueWakeupSubmitTurn({
           prompt: req.prompt,
           clientNonce: `schedule_wakeup-${randomUUID()}`,
         })

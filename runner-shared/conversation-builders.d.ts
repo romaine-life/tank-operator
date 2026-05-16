@@ -1,7 +1,6 @@
 import type {
   TankActor,
   TankConversationEvent,
-  TankVisibility,
 } from "./conversation.js";
 
 export function turnIDForClientNonce(clientNonce: string): string;
@@ -46,7 +45,6 @@ export interface ItemEventArgs {
   source: "claude" | "codex";
   type:
     | "item.started"
-    | "item.delta"
     | "item.completed"
     | "item.failed"
     | "tool.approval_requested"
@@ -54,7 +52,6 @@ export interface ItemEventArgs {
   providerItemID: string;
   parentID?: string;
   actor: TankActor;
-  visibility?: TankVisibility;
   providerEventID?: string;
   payload?: Record<string, unknown>;
 }

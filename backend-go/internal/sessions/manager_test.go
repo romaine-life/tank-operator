@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // Earlier orchestrators created session pods named "session-<hash>" rather
@@ -20,7 +20,7 @@ func TestManagerResolvesHashSuffixedPodNameForSessionInteractions(t *testing.T) 
 	pod := sessionPod("8", "nelson@romaine.life", corev1.PodRunning, true)
 	pod.Name = "session-189268a4e4"
 	client := fake.NewSimpleClientset(pod)
-	mgr := &Manager{client: client, namespace: compat.SessionsNamespace}
+	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace}
 
 	t.Run("GetPodName returns the actual pod name, not the computed one", func(t *testing.T) {
 		got, err := mgr.GetPodName(context.Background(), "nelson@romaine.life", "8")
@@ -35,15 +35,15 @@ func TestManagerResolvesHashSuffixedPodNameForSessionInteractions(t *testing.T) 
 	t.Run("GetTerminalEndpoint returns endpoint for the resolved pod", func(t *testing.T) {
 		updated := pod.DeepCopy()
 		updated.Status.PodIP = "10.0.0.42"
-		if _, err := client.CoreV1().Pods(compat.SessionsNamespace).UpdateStatus(context.Background(), updated, metav1.UpdateOptions{}); err != nil {
+		if _, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).UpdateStatus(context.Background(), updated, metav1.UpdateOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		ip, port, err := mgr.GetTerminalEndpoint(context.Background(), "nelson@romaine.life", "8")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ip != "10.0.0.42" || port != compat.SandboxAgentPort {
-			t.Fatalf("endpoint = %s:%d, want 10.0.0.42:%d", ip, port, compat.SandboxAgentPort)
+		if ip != "10.0.0.42" || port != sessionmodel.SandboxAgentPort {
+			t.Fatalf("endpoint = %s:%d, want 10.0.0.42:%d", ip, port, sessionmodel.SandboxAgentPort)
 		}
 	})
 }
@@ -52,7 +52,7 @@ func TestManagerFindPodRejectsWrongOwner(t *testing.T) {
 	pod := sessionPod("8", "someone-else@example.com", corev1.PodRunning, true)
 	pod.Name = "session-189268a4e4"
 	client := fake.NewSimpleClientset(pod)
-	mgr := &Manager{client: client, namespace: compat.SessionsNamespace}
+	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace}
 
 	_, err := mgr.findPodBySessionID(context.Background(), "nelson@romaine.life", "8")
 	if !errors.Is(err, ErrNotOwned) {
@@ -62,7 +62,7 @@ func TestManagerFindPodRejectsWrongOwner(t *testing.T) {
 
 func TestManagerFindPodReturnsNotFoundWhenAbsent(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	mgr := &Manager{client: client, namespace: compat.SessionsNamespace}
+	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace}
 
 	_, err := mgr.findPodBySessionID(context.Background(), "nelson@romaine.life", "999")
 	if !errors.Is(err, ErrNotFound) {
@@ -75,14 +75,14 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 
 	client := fake.NewSimpleClientset()
 	mgr := NewManager(client, nil, slotNamespace, nil, nil, ManagerOptions{
-		ManifestOpts: compat.ManifestOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:      "claude-image",
 			CodexSessionImage: "codex-image",
 			PiSessionImage:    "pi-image",
 		},
 	})
 
-	info, err := mgr.Create(context.Background(), "nelson@romaine.life", compat.ClaudeCLIMode, nil, "")
+	info, err := mgr.Create(context.Background(), "nelson@romaine.life", sessionmodel.ClaudeCLIMode, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

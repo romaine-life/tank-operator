@@ -65,9 +65,9 @@ export class SharedSessionBus {
         });
         return ack.duplicate ? "exists" : "created";
     }
-    async enqueueWakeupCommand(args) {
+    async enqueueWakeupSubmitTurn(args) {
         await this.ensureConnected();
-        const command = buildScheduleWakeupCommand({
+        const command = buildWakeupSubmitTurnCommand({
             sessionID: this.cfg.sessionId,
             sessionStorageKey: this.sessionStorageKey,
             email: this.cfg.ownerEmail,
@@ -220,7 +220,7 @@ export class SessionCommandRecord {
     }
 }
 
-export function buildScheduleWakeupCommand(args) {
+export function buildWakeupSubmitTurnCommand(args) {
     const now = new Date().toISOString();
     return {
         schema_version: 1,

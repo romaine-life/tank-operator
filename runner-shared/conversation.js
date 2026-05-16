@@ -15,7 +15,10 @@ export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"];
 
 export const TANK_EVENT_SOURCES = ["tank", "claude", "codex"];
 
-export const TANK_VISIBILITIES = ["durable", "live-only"];
+// Tank events are durable-by-design; `live-only` was retired once the
+// producer-side live channel never landed. The enum stays single-valued so
+// callers still tag durability explicitly rather than infer it.
+export const TANK_VISIBILITIES = ["durable"];
 
 export const TANK_EVENT_TYPES = [
   "user_message.created",
@@ -26,7 +29,6 @@ export const TANK_EVENT_TYPES = [
   "turn.command_failed",
   "turn.interrupted",
   "item.started",
-  "item.delta",
   "item.completed",
   "item.failed",
   "tool.approval_requested",
@@ -61,7 +63,10 @@ export function isTankConversationEvent(event) {
 }
 
 export function isDurableTankConversationEvent(event) {
-  return isTankConversationEvent(event) && event.visibility !== "live-only";
+  // All Tank events are durable now (the `live-only` visibility was
+  // retired); the predicate is kept for call-site clarity but is now a
+  // synonym for `isTankConversationEvent`.
+  return isTankConversationEvent(event);
 }
 
 export function normalizeClientNonce(value) {
@@ -93,7 +98,6 @@ function isValidEventByType(event) {
         hasStrings(event, ["turn_id"]) &&
         isStringPayload(event.payload, "reason");
     case "item.started":
-    case "item.delta":
     case "item.completed":
     case "item.failed":
       return hasStrings(event, ["turn_id", "timeline_id"]) && isStringPayload(event.payload, "kind");

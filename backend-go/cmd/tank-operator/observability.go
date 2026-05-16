@@ -23,11 +23,22 @@ var (
 	// non-zero value means a producer is emitting non-Tank events to the
 	// bus and the cutover guard in conversation-contract.yml missed it.
 	sessionEventPersistSchemaRejectedTotal = expvar.NewInt("tank_session_event_persist_schema_rejected_total")
-	// Transient persister failures (Cosmos throttling, network blips). These
-	// are retried up to the JetStream MaxDeliver bound; the counter helps
-	// distinguish them from schema rejections so alerts on the rejection
-	// counter aren't masked by infrastructure noise.
+	// Transient persister failures (Postgres connection blips, network
+	// hiccups, etc.). These are retried up to the JetStream MaxDeliver
+	// bound; the counter helps distinguish them from schema rejections
+	// so alerts on the rejection counter aren't masked by infrastructure
+	// noise.
 	sessionEventPersistTransientFailureTotal = expvar.NewInt("tank_session_event_persist_transient_failure_total")
+
+	// Wake-publish failures. The bus records here before returning the
+	// error to the caller, which keeps the silent
+	// `_ = m.waker.PublishSessionListWake(...)` pattern in Manager
+	// mutations visible. Steady-state expectation: zero on both. A non-
+	// zero value means NATS is unreachable / overloaded, in which case
+	// SSE clients won't notice changes until the next heartbeat (15s for
+	// per-session events, 30s for the per-owner session list).
+	sessionEventWakePublishFailureTotal = expvar.NewInt("tank_session_event_wake_publish_failure_total")
+	sessionListWakePublishFailureTotal  = expvar.NewInt("tank_session_list_wake_publish_failure_total")
 )
 
 func recordSessionEventStreamError() {
@@ -58,6 +69,19 @@ func (expvarPersisterMetrics) RecordSchemaRejected() {
 
 func (expvarPersisterMetrics) RecordTransientFailure() {
 	recordSessionEventPersistTransientFailure()
+}
+
+// expvarWakeMetrics wires sessionbus.WakeMetrics into the package-level
+// expvar counters above so the bus can record wake-publish failures
+// without importing expvar directly.
+type expvarWakeMetrics struct{}
+
+func (expvarWakeMetrics) RecordSessionEventWakePublishFailed() {
+	sessionEventWakePublishFailureTotal.Add(1)
+}
+
+func (expvarWakeMetrics) RecordSessionListWakePublishFailed() {
+	sessionListWakePublishFailureTotal.Add(1)
 }
 
 func recordSessionEventLag(event map[string]any) {

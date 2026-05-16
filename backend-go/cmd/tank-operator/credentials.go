@@ -8,9 +8,9 @@ import (
 	"os"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/keyvault"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // doSaveCredentials harvests credentials from the pod and stores them in Key Vault.
@@ -28,7 +28,7 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 	)
 
 	switch mode {
-	case compat.CodexConfigMode:
+	case sessionmodel.CodexConfigMode:
 		execCmd = []string{"sh", "-c", "cat $HOME/.codex/auth.json"}
 		kvKeyEnv = "CODEX_CREDENTIALS_KV_KEY"
 		kvDefault = "codex-credentials"

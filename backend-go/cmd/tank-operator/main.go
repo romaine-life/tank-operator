@@ -19,10 +19,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -84,8 +84,8 @@ func main() {
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
 	// in-process EventBus.
-	namespace := envDefault("SESSIONS_NAMESPACE", compat.SessionsNamespace)
-	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", compat.SessionServiceAccount)
+	namespace := envDefault("SESSIONS_NAMESPACE", sessionmodel.SessionsNamespace)
+	sessionServiceAccount := envDefault("SESSION_SERVICE_ACCOUNT", sessionmodel.SessionServiceAccount)
 	tankOperatorInternalURL := envDefault("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local")
 	designSelectionNamespace := envDefault("DESIGN_SELECTION_NAMESPACE", currentPodNamespace())
 
@@ -110,17 +110,17 @@ func main() {
 	}
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, sessionBus, sessions.ManagerOptions{
-		ManifestOpts: compat.ManifestOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionsNamespace:       namespace,
 			SessionServiceAccount:   sessionServiceAccount,
-			SessionConfigMap:        envDefault("SESSION_CONFIGMAP", compat.SessionConfigMap),
+			SessionConfigMap:        envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
 			ArgoCDTrackingApp:       envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
 			SessionImage:            sessionImage,
 			CodexSessionImage:       codexSessionImage,
 			PiSessionImage:          piSessionImage,
 			SessionScope:            sessionScope,
 			TankOperatorInternalURL: tankOperatorInternalURL,
-			GitHubAppSecret:         envDefault("GITHUB_APP_SECRET", compat.DefaultGitHubAppSecret),
+			GitHubAppSecret:         envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
 			NATSURL:                 envDefault("NATS_URL", ""),
 			NATSStream:              envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:          envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
@@ -297,11 +297,12 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	bus, err := sessionbus.Connect(ctx, sessionbus.Config{
-		URL:      url,
-		Token:    os.Getenv("NATS_TOKEN"),
-		Stream:   envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-		Scope:    scope,
-		Replicas: replicas,
+		URL:         url,
+		Token:       os.Getenv("NATS_TOKEN"),
+		Stream:      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+		Scope:       scope,
+		Replicas:    replicas,
+		WakeMetrics: expvarWakeMetrics{},
 	})
 	if err != nil {
 		slog.Error("session bus unavailable", "error", err)
@@ -310,7 +311,9 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 	return bus
 }
 
-// profilesStore is the interface satisfied by both CosmosStore and StubStore.
+// profilesStore is the interface satisfied by both the Postgres-backed
+// profiles.Store and the in-memory StubStore (for local dev without
+// POSTGRES_HOST set).
 type profilesStore interface {
 	GetOrCreate(ctx context.Context, email string) (profiles.Profile, error)
 }
@@ -322,8 +325,9 @@ type profilesUpdateStore interface {
 }
 
 // profilesPrefsStore is an optional interface for the SPA's run-pref
-// sync (Phase E). Implemented by CosmosStore and StubStore. The handler
-// surfaces a 503 when the backing store doesn't satisfy it.
+// sync (Phase E). Implemented by the Postgres-backed profiles.Store and
+// StubStore. The handler surfaces a 503 when the backing store doesn't
+// satisfy it.
 type profilesPrefsStore interface {
 	profilesStore
 	UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (profiles.Profile, error)
@@ -343,7 +347,7 @@ type stubSessionRegistry struct {
 	counter int64
 }
 
-func (r *stubSessionRegistry) List(_ context.Context, _ string) ([]compat.SessionRecord, error) {
+func (r *stubSessionRegistry) List(_ context.Context, _ string) ([]sessionmodel.SessionRecord, error) {
 	return nil, nil
 }
 func (r *stubSessionRegistry) NextSessionID(_ context.Context) (string, error) {
@@ -352,7 +356,9 @@ func (r *stubSessionRegistry) NextSessionID(_ context.Context) (string, error) {
 	r.counter++
 	return fmt.Sprintf("%d", r.counter), nil
 }
-func (r *stubSessionRegistry) Upsert(_ context.Context, _ compat.SessionRecord) error  { return nil }
+func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRecord) error {
+	return nil
+}
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error        { return nil }
 

@@ -84,8 +84,7 @@ func (StubStore) GetOrCreate(_ context.Context, email string) (Profile, error) {
 }
 
 // profileFromMap rehydrates a Profile from an untyped map. Used by the
-// update path when an upsert returns the merged row to the caller, and by
-// the Cosmos→Postgres migration script.
+// update path when an upsert returns the merged row to the caller.
 func profileFromMap(doc map[string]any) Profile {
 	p := Profile{}
 	if v, ok := doc["email"].(string); ok {

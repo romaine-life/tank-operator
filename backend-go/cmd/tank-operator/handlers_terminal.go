@@ -9,7 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // handleCLIProcess creates a process through the pod-local sandbox-agent API.
@@ -32,7 +32,7 @@ func (s *appServer) handleCLIProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentURL := fmt.Sprintf("http://%s:%d/v1/processes", podIP, compat.SandboxAgentPort)
+	agentURL := fmt.Sprintf("http://%s:%d/v1/processes", podIP, sessionmodel.SandboxAgentPort)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, agentURL, bytes.NewReader(body))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -75,7 +75,7 @@ func (s *appServer) handleSandboxTerminalProxy(w http.ResponseWriter, r *http.Re
 	}
 	defer browser.Close(websocket.StatusNormalClosure, "")
 
-	agentURL := fmt.Sprintf("ws://%s:%d/v1/processes/%s/terminal/ws", podIP, compat.SandboxAgentPort, processID)
+	agentURL := fmt.Sprintf("ws://%s:%d/v1/processes/%s/terminal/ws", podIP, sessionmodel.SandboxAgentPort, processID)
 	agentCtx := r.Context()
 
 	agent, _, dialErr := websocket.Dial(agentCtx, agentURL, nil)

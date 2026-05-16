@@ -110,27 +110,6 @@ test("Tool lifecycle replays to a completed tool item", () => {
   ]);
 });
 
-test("Item deltas append delta payload text", () => {
-  const state = reduceConversationEvents([
-    ev("1", "item.started", {
-      actor: "assistant",
-      source: "codex",
-      timeline_id: "msg-1",
-      payload: { kind: "agent_message", text: "Hel" },
-    }),
-    ev("2", "item.delta", {
-      actor: "assistant",
-      source: "codex",
-      timeline_id: "msg-1",
-      payload: { delta: "lo" },
-    }),
-  ]);
-
-  assert.equal(state.items.length, 1);
-  assert.equal(state.items[0]?.text, "Hello");
-  assert.equal(state.items[0]?.status, "streaming");
-});
-
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {
@@ -241,9 +220,9 @@ test("contract guard rejects malformed per-type events", () => {
     turn_id: "turn-1",
     actor: "assistant",
     source: "claude",
-    type: "item.delta",
+    type: "item.completed",
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
-    payload: { kind: "message", delta: "x" },
+    payload: { kind: "message" },
   }), false);
 });

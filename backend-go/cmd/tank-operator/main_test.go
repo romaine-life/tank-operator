@@ -261,7 +261,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 }
 
 // Verifies the response shape also tolerates an empty profile (e.g. a
-// first-time login where the Cosmos doc doesn't exist yet). All profile-
+// first-time login where the profiles row doesn't exist yet). All profile-
 // derived fields should serialize as JSON null — not be missing — so the
 // SPA reads them as `null` and renders the install-CTA branch correctly
 // instead of dead-ending on an undefined field access. Asserting on the

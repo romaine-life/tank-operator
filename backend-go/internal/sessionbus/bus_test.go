@@ -42,11 +42,11 @@ type stubMsg struct {
 	termRsn  string
 }
 
-func (s *stubMsg) Subject() string                          { return s.subject }
-func (s *stubMsg) Data() []byte                             { return s.data }
-func (s *stubMsg) Ack() error                               { s.acked++; return nil }
-func (s *stubMsg) NakWithDelay(d time.Duration) error       { s.naked++; s.nakDelay = d; return nil }
-func (s *stubMsg) TermWithReason(reason string) error       { s.termed++; s.termRsn = reason; return nil }
+func (s *stubMsg) Subject() string                    { return s.subject }
+func (s *stubMsg) Data() []byte                       { return s.data }
+func (s *stubMsg) Ack() error                         { s.acked++; return nil }
+func (s *stubMsg) NakWithDelay(d time.Duration) error { s.naked++; s.nakDelay = d; return nil }
+func (s *stubMsg) TermWithReason(reason string) error { s.termed++; s.termRsn = reason; return nil }
 
 func TestPersistMessageAcksValidEvent(t *testing.T) {
 	bus := &Bus{scope: "default"}
@@ -116,7 +116,7 @@ func TestPersistMessageTerminatesSchemaRejected(t *testing.T) {
 func TestPersistMessageRetriesTransientFailures(t *testing.T) {
 	bus := &Bus{scope: "default"}
 	store := &recordingStore{
-		err: errors.New("cosmos throttled"),
+		err: errors.New("postgres connection refused"),
 	}
 	metrics := &recordingMetrics{}
 	raw, _ := json.Marshal(map[string]any{

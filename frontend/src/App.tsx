@@ -3698,7 +3698,7 @@ function ChatPane({
     serverEvents: TankConversationEvent[],
     expectedCursor: string | null,
   ): boolean {
-    // Cosmos writes are the durable source, but a replay query can still
+    // Postgres writes are the durable source, but a replay query can still
     // return behind the tab's SSE cursor. Keep local entries until replay can
     // replace them without reducing the visible message transcript.
     const serverCursor = serverEvents.reduce<string | null>(
@@ -3801,7 +3801,6 @@ function ChatPane({
   function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    if (event.visibility === "live-only") return;
     if (!sdkServerEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
       sdkServerEventsRef.current = orderedConversationEvents([
         ...sdkServerEventsRef.current,
@@ -4025,7 +4024,7 @@ function ChatPane({
       for (const ev of events) {
         if (isTankConversationEvent(ev)) {
           advanceSdkTimelineCursor(ev);
-          if (ev.visibility !== "live-only") canonicalEvents.push(ev);
+          canonicalEvents.push(ev);
         }
       }
       const terminal = clientNonce
@@ -6310,7 +6309,7 @@ export function App() {
   const [active, setActive] = useState<string | null>(null);
   // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
   // sync immediately, while localStorage keeps them across reloads/windows.
-  // Phase E: also persisted to the Cosmos profile row so prefs ride across
+  // Phase E: also persisted to the Postgres profiles row so prefs ride across
   // devices. The localStorage write stays as the offline fallback.
   const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
   const prefsWriteTimer = useRef<number | null>(null);

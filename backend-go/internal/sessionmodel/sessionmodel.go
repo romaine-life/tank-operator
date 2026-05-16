@@ -1,4 +1,12 @@
-package compat
+// Package sessionmodel owns the shared session-pod data shape used by the
+// orchestrator, the bus, the stores, and the session registry: mode
+// constants, the SessionRecord row, manifest-option struct, normalize
+// helpers, and the PodManifest builder. Originally landed during the
+// Python → Go orchestrator rewrite (#373) under the name `compat`; the
+// name was retired by docs/migration-policy.md (compat is a deletion
+// target) once the package became the real shared model, not a Python
+// shape-mirroring layer.
+package sessionmodel
 
 import (
 	"crypto/sha256"
@@ -65,7 +73,9 @@ type SessionRecord struct {
 	UpdatedAt   string
 }
 
-// sessionConfigMounts mirrors Python's SESSION_CONFIG_MOUNTS + the dir mount.
+// sessionConfigMounts is the canonical list of files mounted into every
+// session pod from the tank-session-config ConfigMap. Adding to this list
+// surfaces a new in-pod file at the listed mountPath.
 var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"mcp.json", "/workspace/.mcp.json"},
 	{"default-claude.md", "/workspace/CLAUDE.md"},
@@ -549,8 +559,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 }
 
-// buildConfigMounts returns the volumeMount entries for the session ConfigMap,
-// matching Python's _session_config_mounts().
+// buildConfigMounts returns the volumeMount entries for the session ConfigMap.
 func buildConfigMounts(configMapName string) []any {
 	_ = configMapName // name is in the volume declaration, not the mount
 	mounts := make([]any, 0, len(sessionConfigMounts)+1)

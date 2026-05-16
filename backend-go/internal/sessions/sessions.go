@@ -12,11 +12,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const (
-	defaultNamespace       = compat.SessionsNamespace
+	defaultNamespace       = sessionmodel.SessionsNamespace
 	nameAnnotation         = "tank-operator/display-name"
 	testStateAnnotation    = "tank-operator/test-state"
 	rolloutStateAnnotation = "tank-operator/rollout-state"
@@ -48,7 +48,7 @@ type Reader struct {
 }
 
 type Registry interface {
-	List(ctx context.Context, owner string) ([]compat.SessionRecord, error)
+	List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error)
 }
 
 func NewReader(client kubernetes.Interface, namespace string) *Reader {
@@ -63,7 +63,7 @@ func NewReaderWithRegistry(client kubernetes.Interface, namespace string, regist
 }
 
 func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
-	ownerLabel := compat.OwnerLabel(owner)
+	ownerLabel := sessionmodel.OwnerLabel(owner)
 	pods, err := r.client.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "tank-operator/owner=" + ownerLabel,
 	})
@@ -128,17 +128,17 @@ func (r *Reader) Get(ctx context.Context, owner, sessionID string) (Info, error)
 	if err != nil {
 		return Info{}, err
 	}
-	if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
+	if pod.Labels["tank-operator/owner"] != sessionmodel.OwnerLabel(owner) {
 		return Info{}, ErrNotOwned
 	}
 	return infoFromPod(owner, pod), nil
 }
 
-func infoFromRecord(owner string, record compat.SessionRecord, pod *corev1.Pod) Info {
+func infoFromRecord(owner string, record sessionmodel.SessionRecord, pod *corev1.Pod) Info {
 	if pod != nil {
 		info := infoFromPod(owner, pod)
 		info.ID = record.ID
-		info.Mode = compat.NormalizeSessionMode(record.Mode)
+		info.Mode = sessionmodel.NormalizeSessionMode(record.Mode)
 		info.RequestedAt = firstString(record.RequestedAt, record.CreatedAt, valueString(info.RequestedAt))
 		info.CreatedAt = firstString(record.CreatedAt, valueString(info.CreatedAt))
 		info.Name = record.Name
@@ -149,7 +149,7 @@ func infoFromRecord(owner string, record compat.SessionRecord, pod *corev1.Pod) 
 		PodName:     optionalString(record.PodName),
 		Owner:       owner,
 		Status:      "Failed",
-		Mode:        compat.NormalizeSessionMode(record.Mode),
+		Mode:        sessionmodel.NormalizeSessionMode(record.Mode),
 		RequestedAt: firstString(record.RequestedAt, record.CreatedAt),
 		CreatedAt:   optionalString(record.CreatedAt),
 		ReadyAt:     nil,
@@ -167,7 +167,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		PodName:      &podName,
 		Owner:        owner,
 		Status:       podStatus(pod),
-		Mode:         compat.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
+		Mode:         sessionmodel.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
 		RequestedAt:  createdAt,
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,

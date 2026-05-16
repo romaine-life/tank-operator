@@ -67,8 +67,10 @@ func (s *appServer) handleSessionActivity(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		// Unread count is a separate Cosmos COUNT query — O(1) RU
-		// regardless of how much output the session has produced.
+		// Unread count is a separate Postgres COUNT(DISTINCT ...) query
+		// against the partial index on (tank_session_id, order_key), so it
+		// stays bounded per session regardless of how much output the
+		// session has produced.
 		unread, err := eventStore.UnreadOutputCount(r.Context(), info.ID, readOrderKey)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -167,9 +169,6 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 
 func isDurableLifecycleEvent(event map[string]any) bool {
 	if err := conversation.ValidateEventMap(event); err != nil {
-		return false
-	}
-	if visibility, _ := event["visibility"].(string); visibility == "live-only" {
 		return false
 	}
 	t := activityEventType(event)

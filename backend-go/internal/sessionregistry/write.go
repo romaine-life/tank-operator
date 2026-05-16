@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // NextSessionID atomically allocates the next monotonic session id for this
@@ -36,7 +36,7 @@ func (s *Store) NextSessionID(ctx context.Context) (string, error) {
 // Upsert writes or overwrites a session record. created_at/updated_at default
 // to now() on insert; on conflict (same primary key) we keep the existing
 // created_at and only advance updated_at.
-func (s *Store) Upsert(ctx context.Context, record compat.SessionRecord) error {
+func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) error {
 	normalized := strings.ToLower(record.Email)
 	scope := record.Scope
 	if scope == "" {
@@ -44,7 +44,7 @@ func (s *Store) Upsert(ctx context.Context, record compat.SessionRecord) error {
 	}
 	mode := record.Mode
 	if mode == "" {
-		mode = compat.DefaultSessionMode
+		mode = sessionmodel.DefaultSessionMode
 	}
 	now := time.Now().UTC()
 	requestedAt := parseTimestamp(record.RequestedAt)

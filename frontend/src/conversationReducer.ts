@@ -8,7 +8,7 @@ export type ConversationRunStatus =
   | "stopped"
   | "error";
 
-export type ConversationItemStatus = "started" | "streaming" | "completed" | "failed";
+export type ConversationItemStatus = "started" | "completed" | "failed";
 
 export interface ConversationMessage {
   id: string;
@@ -143,8 +143,6 @@ export function conversationReducer(
       };
     case "item.started":
       return upsertItem(next, event, "started");
-    case "item.delta":
-      return upsertItem(next, event, "streaming", true);
     case "item.completed":
       return upsertItem(
         { ...next, activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId },
@@ -228,12 +226,11 @@ function upsertItem(
   state: ConversationReducerState,
   event: TankConversationEvent,
   status: ConversationItemStatus,
-  appendDelta = false,
 ): ConversationReducerState {
   if (!event.timeline_id || !event.turn_id) return state;
   const id = event.timeline_id;
   const existing = state.items.find((item) => item.id === id);
-  const text = stringPayload(event, appendDelta ? "delta" : "text");
+  const text = stringPayload(event, "text");
   const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
   const item: ConversationItem = {
     id,
@@ -244,7 +241,7 @@ function upsertItem(
     kind: stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
     status,
     title: stringPayload(event, "title") ?? existing?.title,
-    text: appendDelta ? [existing?.text, text].filter(Boolean).join("") : (text ?? existing?.text),
+    text: text ?? existing?.text,
     payload,
     orderKey: event.order_key ?? existing?.orderKey,
     sourceEventId: event.event_id,
@@ -256,7 +253,7 @@ function upsertItem(
   return {
     ...state,
     items,
-    activeItemId: status === "started" || status === "streaming" ? id : state.activeItemId,
+    activeItemId: status === "started" ? id : state.activeItemId,
   };
 }
 

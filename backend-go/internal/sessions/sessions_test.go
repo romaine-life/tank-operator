@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
@@ -20,7 +20,7 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, false),
 		sessionPod("14", "other@example.com", corev1.PodRunning, true),
 	)
-	reader := NewReader(client, compat.SessionsNamespace)
+	reader := NewReader(client, sessionmodel.SessionsNamespace)
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -36,8 +36,8 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 	if session.Status != "Active" {
 		t.Fatalf("session status = %q, want Active", session.Status)
 	}
-	if session.Mode != compat.CodexGUIMode {
-		t.Fatalf("session mode = %q, want %q", session.Mode, compat.CodexGUIMode)
+	if session.Mode != sessionmodel.CodexGUIMode {
+		t.Fatalf("session mode = %q, want %q", session.Mode, sessionmodel.CodexGUIMode)
 	}
 	if session.PodName == nil || *session.PodName != "session-12" {
 		t.Fatalf("pod name = %#v, want session-12", session.PodName)
@@ -63,7 +63,7 @@ func TestGetFallsBackToSessionIDLabel(t *testing.T) {
 	pod := sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true)
 	pod.Name = "session-hash-abc"
 	client := fake.NewSimpleClientset(pod)
-	reader := NewReader(client, compat.SessionsNamespace)
+	reader := NewReader(client, sessionmodel.SessionsNamespace)
 
 	got, err := reader.Get(context.Background(), "nelson@romaine.life", "12")
 	if err != nil {
@@ -76,7 +76,7 @@ func TestGetFallsBackToSessionIDLabel(t *testing.T) {
 
 func TestGetRejectsWrongOwner(t *testing.T) {
 	client := fake.NewSimpleClientset(sessionPod("12", "other@example.com", corev1.PodRunning, true))
-	reader := NewReader(client, compat.SessionsNamespace)
+	reader := NewReader(client, sessionmodel.SessionsNamespace)
 
 	_, err := reader.Get(context.Background(), "nelson@romaine.life", "12")
 	if !errors.Is(err, ErrNotOwned) {
@@ -94,7 +94,7 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 		{
 			ID:          "12",
 			Email:       "nelson@romaine.life",
-			Mode:        compat.CodexGUIMode,
+			Mode:        sessionmodel.CodexGUIMode,
 			PodName:     "session-12",
 			Name:        &recordedName,
 			RequestedAt: "2026-05-11T00:00:00+00:00",
@@ -104,14 +104,14 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 		{
 			ID:          "15",
 			Email:       "nelson@romaine.life",
-			Mode:        compat.ClaudeCLIMode,
+			Mode:        sessionmodel.ClaudeCLIMode,
 			PodName:     "session-15",
 			RequestedAt: "2026-05-10T00:00:00+00:00",
 			CreatedAt:   "2026-05-10T00:00:01+00:00",
 			Visible:     true,
 		},
 	}
-	reader := NewReaderWithRegistry(client, compat.SessionsNamespace, registry)
+	reader := NewReaderWithRegistry(client, sessionmodel.SessionsNamespace, registry)
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -135,7 +135,7 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 	if got[0].RequestedAt == nil || *got[0].RequestedAt != "2026-05-11T00:00:00+00:00" {
 		t.Fatalf("merged requested_at = %#v", got[0].RequestedAt)
 	}
-	if got[1].ID != "15" || got[1].Status != "Failed" || got[1].Mode != compat.ClaudeCLIMode {
+	if got[1].ID != "15" || got[1].Status != "Failed" || got[1].Mode != sessionmodel.ClaudeCLIMode {
 		t.Fatalf("registry-only session = %#v", got[1])
 	}
 	if got[2].ID != "16" || got[2].Status != "Active" {
@@ -162,10 +162,10 @@ func TestPodStatusCompatibility(t *testing.T) {
 	}
 }
 
-type registryRecords []compat.SessionRecord
+type registryRecords []sessionmodel.SessionRecord
 
-func (r registryRecords) List(context.Context, string) ([]compat.SessionRecord, error) {
-	return []compat.SessionRecord(r), nil
+func (r registryRecords) List(context.Context, string) ([]sessionmodel.SessionRecord, error) {
+	return []sessionmodel.SessionRecord(r), nil
 }
 
 func sessionPod(id, owner string, phase corev1.PodPhase, sandboxAgent bool) *corev1.Pod {
@@ -178,12 +178,12 @@ func sessionPod(id, owner string, phase corev1.PodPhase, sandboxAgent bool) *cor
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "session-" + id,
-			Namespace:         compat.SessionsNamespace,
+			Namespace:         sessionmodel.SessionsNamespace,
 			CreationTimestamp: created,
 			Labels: map[string]string{
-				"tank-operator/owner":      compat.OwnerLabel(owner),
+				"tank-operator/owner":      sessionmodel.OwnerLabel(owner),
 				"tank-operator/session-id": id,
-				"tank-operator/mode":       compat.CodexGUIMode,
+				"tank-operator/mode":       sessionmodel.CodexGUIMode,
 			},
 			Annotations: map[string]string{
 				nameAnnotation:         "Workbench",

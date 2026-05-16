@@ -68,7 +68,31 @@ export class CodexTankEventAdapter {
         }),
       ];
     }
-    if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") {
+    // Codex `item.updated` provider events were the per-token typewriter
+    // stream. They were always emitted as Tank `item.delta` with
+    // visibility=live-only, then dropped at the runner sink — no consumer
+    // ever subscribed. The visibility distinction has been retired
+    // alongside the producer; if/when a future live channel for partial
+    // tokens lands, restore both the `item.delta` Tank event type and the
+    // `live-only` visibility together.
+    //
+    // We still observe the frames here (no Tank event emitted) so the
+    // running text is accumulated — Codex sometimes finalizes with
+    // `item.completed` carrying no text, expecting the consumer to have
+    // captured it via the prior `item.updated` frames.
+    if (event.type === "item.updated") {
+      const item = event.item;
+      if (item && typeof item === "object") {
+        const itemRecord = item as Record<string, unknown>;
+        const providerItemID =
+          typeof itemRecord.id === "string" && itemRecord.id
+            ? itemRecord.id
+            : `${turn.turnID}:item:${providerID ?? event.type}`;
+        this.rememberItemText(providerItemID, codexItemText(itemRecord));
+      }
+      return [];
+    }
+    if (event.type !== "item.started" && event.type !== "item.completed") {
       return [];
     }
     const item = event.item;
@@ -81,13 +105,10 @@ export class CodexTankEventAdapter {
     const type =
       event.type === "item.started"
         ? "item.started"
-        : event.type === "item.updated"
-          ? "item.delta"
-          : itemFailed
-            ? "item.failed"
-            : "item.completed";
+        : itemFailed
+          ? "item.failed"
+          : "item.completed";
     const payload = this.codexItemPayload(providerItemID, itemRecord, {
-      delta: event.type === "item.updated",
       fallbackText: event.type === "item.completed" ? this.itemTextByID.get(providerItemID) : undefined,
     });
     if (event.type === "item.started") this.rememberItemText(providerItemID, codexItemText(itemRecord));
@@ -101,16 +122,15 @@ export class CodexTankEventAdapter {
         providerItemID,
         actor,
         providerEventID: providerID,
-        visibility: event.type === "item.updated" ? "live-only" : "durable",
         payload,
       }),
     ];
   }
 
   private codexItemPayload(
-    providerItemID: string,
+    _providerItemID: string,
     item: Record<string, unknown>,
-    opts: { delta?: boolean; fallbackText?: string } = {},
+    opts: { fallbackText?: string } = {},
   ): Record<string, unknown> {
     const text = codexItemText(item) ?? opts.fallbackText;
     return {
@@ -123,7 +143,7 @@ export class CodexTankEventAdapter {
             : typeof item.type === "string"
               ? item.type
               : "item",
-      ...(opts.delta ? { delta: this.deltaForItemText(providerItemID, text) } : { text }),
+      text,
       command: item.command,
       arguments: item.arguments,
       result: item.result,
@@ -134,13 +154,6 @@ export class CodexTankEventAdapter {
 
   private rememberItemText(providerItemID: string, text: string | undefined): void {
     if (text !== undefined) this.itemTextByID.set(providerItemID, text);
-  }
-
-  private deltaForItemText(providerItemID: string, text: string | undefined): string | undefined {
-    if (text === undefined) return undefined;
-    const previous = this.itemTextByID.get(providerItemID) ?? "";
-    this.itemTextByID.set(providerItemID, text);
-    return previous && text.startsWith(previous) ? text.slice(previous.length) : text;
   }
 }
 
