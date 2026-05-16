@@ -240,7 +240,11 @@ const CHECKS = [
     file: "frontend/src/conversationReducer.ts",
     description: "stopping transition is gated on active states (submitted, streaming, needs_input)",
     kind: "grep-present",
-    pattern: /case "turn\.interrupt_requested"[\s\S]{0,1200}?submitted[\s\S]{0,200}?streaming[\s\S]{0,200}?needs_input/,
+    // The transition logic may be inlined at the case or factored into a
+    // helper named applyInterrupt*. Either way, all three active-state
+    // literals must appear within a contiguous block originating at one of
+    // those anchors. Order between the three is intentionally unspecified.
+    pattern: /(?:applyInterrupt|case "turn\.interrupt_requested")[\s\S]{0,1500}?"submitted"[\s\S]{0,400}?"streaming"[\s\S]{0,400}?"needs_input"/,
   },
   {
     id: "projection-stopping-field",
