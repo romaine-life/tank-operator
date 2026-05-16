@@ -1,8 +1,25 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
-import { StyleguideAvatars } from "./StyleguideAvatars";
-import { StyleguideView } from "./StyleguideView";
+import { StyleguideAvatars } from "./styleguide/avatars";
+import { StyleguideBootState } from "./styleguide/boot-state";
+import { StyleguideButtons } from "./styleguide/buttons";
+import { StyleguideColors } from "./styleguide/colors";
+import { StyleguideErrorPill } from "./styleguide/error-pill";
+import { StyleguideIndex } from "./styleguide/index";
+import { StyleguideMcpIcon } from "./styleguide/mcp-icon";
+import { StyleguideModeChip } from "./styleguide/mode-chip";
+import { StyleguideModeDropdown } from "./styleguide/mode-dropdown";
+import { StyleguideNewSessionRow } from "./styleguide/new-session-row";
+import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding";
+import { StyleguidePortfolioWorkspace } from "./styleguide/portfolio-workspace";
+import { StyleguideRunHeaderTabs } from "./styleguide/run-header-tabs";
+import { StyleguideSessionRow } from "./styleguide/session-row";
+import { StyleguideSpacing } from "./styleguide/spacing";
+import { StyleguideStatusDot } from "./styleguide/status-dot";
+import { StyleguideToolIcons } from "./styleguide/tool-icons";
+import { StyleguideType } from "./styleguide/type";
+import { StyleguideWelcomeCard } from "./styleguide/welcome-card";
 import "./fonts.css";
 import "./index.css";
 
@@ -57,11 +74,32 @@ if (typeof window !== "undefined") {
 // pool — stateful pickers want their own scroll context and viewport).
 // Anything else falls through to the main app. No react-router; the
 // branching is shallow enough to read inline.
+const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
+  "/_styleguide": () => <StyleguideIndex />,
+  "/_styleguide/colors": () => <StyleguideColors />,
+  "/_styleguide/type": () => <StyleguideType />,
+  "/_styleguide/spacing": () => <StyleguideSpacing />,
+  "/_styleguide/buttons": () => <StyleguideButtons />,
+  "/_styleguide/new-session-row": () => <StyleguideNewSessionRow />,
+  "/_styleguide/status-dot": () => <StyleguideStatusDot />,
+  "/_styleguide/mode-chip": () => <StyleguideModeChip />,
+  "/_styleguide/tool-icons": () => <StyleguideToolIcons />,
+  "/_styleguide/mcp-icon": () => <StyleguideMcpIcon />,
+  "/_styleguide/run-header-tabs": () => <StyleguideRunHeaderTabs />,
+  "/_styleguide/session-row": () => <StyleguideSessionRow />,
+  "/_styleguide/mode-dropdown": () => <StyleguideModeDropdown />,
+  "/_styleguide/welcome-card": () => <StyleguideWelcomeCard />,
+  "/_styleguide/error-pill": () => <StyleguideErrorPill />,
+  "/_styleguide/portfolio-workspace": () => <StyleguidePortfolioWorkspace />,
+  "/_styleguide/portfolio-onboarding": () => <StyleguidePortfolioOnboarding />,
+  "/_styleguide/boot-state": () => <StyleguideBootState />,
+  "/_styleguide/avatars": () => <StyleguideAvatars />,
+};
+
 function Root() {
   if (typeof window !== "undefined") {
-    const path = window.location.pathname;
-    if (path === "/_styleguide") return <StyleguideView />;
-    if (path === "/_styleguide/avatars") return <StyleguideAvatars />;
+    const render = STYLEGUIDE_ROUTES[window.location.pathname];
+    if (render) return render();
   }
   return <App />;
 }

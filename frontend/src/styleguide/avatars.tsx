@@ -12,14 +12,16 @@
 // at once.
 
 import { useState } from "react";
-import { ProviderIcon } from "./providerIcons";
-import { AGENT_AVATARS, AgentAvatarIcon } from "./sessionAvatars";
+import { ProviderIcon } from "../providerIcons";
+import { AGENT_AVATARS, AgentAvatarIcon } from "../sessionAvatars";
 import {
+  BackLink,
   captionStyle,
   headStyle,
+  pageTitleStyle,
   sectionStyle,
   styleguideShellStyle,
-} from "./StyleguideView";
+} from "./shared";
 
 export function StyleguideAvatars() {
   const [selectedAvatarId, setSelectedAvatarId] = useState<string>(
@@ -31,29 +33,8 @@ export function StyleguideAvatars() {
   return (
     <div style={styleguideShellStyle}>
       <div style={{ maxWidth: 880 }}>
-        <p style={{ ...captionStyle, marginBottom: 4 }}>
-          <a
-            href="/_styleguide"
-            style={{
-              color: "var(--accent-fg)",
-              textDecoration: "none",
-            }}
-          >
-            ← tank-operator — styleguide
-          </a>
-        </p>
-        <h1
-          style={{
-            fontSize: "var(--text-xs)",
-            fontWeight: 400,
-            color: "var(--text-muted)",
-            textTransform: "uppercase",
-            letterSpacing: "1.4px",
-            margin: "0 0 4px 0",
-          }}
-        >
-          agent avatar pool
-        </h1>
+        <BackLink />
+        <h1 style={pageTitleStyle}>agent avatar pool</h1>
         <p style={{ ...captionStyle, marginBottom: 24 }}>
           {AGENT_AVATARS.length} entries in <code>AGENT_AVATARS</code>;
           assigned to a session by a stable hash of <code>session_id</code>{" "}
