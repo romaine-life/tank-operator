@@ -42,7 +42,7 @@ func requestMetaFrom(ctx context.Context) *requestMeta {
 // request. requireAuth calls this once it has decoded the JWT. The
 // middleware reads it after the handler returns so 5xx logs include the
 // email of the caller who saw the failure — the missing context that
-// made "/api/sessions/activity returned 500" undebuggable.
+// made the retired activity-polling endpoint's 500s undebuggable.
 func attachAuthToRequest(r *http.Request, user auth.User) {
 	if rm := requestMetaFrom(r.Context()); rm != nil {
 		rm.email = user.Email

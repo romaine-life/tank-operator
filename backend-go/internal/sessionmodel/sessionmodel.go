@@ -364,6 +364,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"ports":        []any{map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort}},
 		"env":          env,
 		"volumeMounts": claudeVolumeMounts,
+		"resources":    sandboxAgentResources(),
 	}
 	if len(envFrom) > 0 {
 		claudeContainer["envFrom"] = envFrom
@@ -400,6 +401,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "metrics", "containerPort": MCPAuthProxyMetricsPort},
 			},
 			"volumeMounts": mcpProxyVolumeMounts,
+			"resources":    mcpAuthProxyResources(),
 		},
 		claudeContainer,
 	}
@@ -487,6 +489,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": AgentRunnerMetricsPort},
 			},
+			"resources": agentRunnerResources(),
 		}
 		if len(envFrom) > 0 {
 			runnerContainer["envFrom"] = envFrom
@@ -574,6 +577,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
 			},
+			"resources": agentRunnerResources(),
 		}
 		if len(envFrom) > 0 {
 			codexRunnerContainer["envFrom"] = envFrom
@@ -696,6 +700,61 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 		opts.NATSAuthSecret = "tank-nats-auth"
 	}
 	return opts
+}
+
+// Per-container resource budgets for session pods. Session pods were
+// previously BestEffort (no requests, no limits), which made them the
+// first eviction target whenever the node hit memory pressure — the
+// concrete failure that brought down session 21 in
+// tank-operator#83. Adding requests upgrades the pod to Burstable QoS,
+// so the kubelet has to find a true BestEffort victim before reaping
+// it; limits cap a runaway runner at the agreed budget so one
+// misbehaving session can't blast its noisy neighbors.
+//
+// Budgets are calibrated against observed steady-state usage from the
+// 7-day sample around the eviction (agent-runner at ~150-300 MiB
+// steady, ~795 MiB at the failure point; claude/sandbox-agent at
+// ~14 MiB; mcp-auth-proxy at ~27 MiB). Limits leave 4-5x headroom on
+// every container so normal-but-bursty sessions don't OOMKill.
+//
+// CPU intentionally has requests but no limits: limits cause CFS
+// throttling that creates the appearance of latency bugs in agent
+// streaming, and the node-level CPU budget is enforced by the
+// scheduler's request packing.
+func agentRunnerResources() map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"cpu":    "100m",
+			"memory": "512Mi",
+		},
+		"limits": map[string]any{
+			"memory": "1536Mi",
+		},
+	}
+}
+
+func sandboxAgentResources() map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"cpu":    "50m",
+			"memory": "64Mi",
+		},
+		"limits": map[string]any{
+			"memory": "256Mi",
+		},
+	}
+}
+
+func mcpAuthProxyResources() map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"cpu":    "25m",
+			"memory": "64Mi",
+		},
+		"limits": map[string]any{
+			"memory": "256Mi",
+		},
+	}
 }
 
 func itoa(n int) string {

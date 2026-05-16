@@ -641,3 +641,4 @@ func (s *appServer) handleInternalSpawnSession(w http.ResponseWriter, r *http.Re
 	recordServiceRoleRequest(route, "ok")
 	writeJSON(w, http.StatusCreated, info)
 }
+

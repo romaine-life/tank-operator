@@ -71,6 +71,29 @@ const blocked = [
   { name: "retired Tank event sequence storage name", pattern: /\btank_event_seq\b/ },
   { name: "retired frontend activity poll interval", pattern: /\bPOLL_INTERVAL_MS\b/ },
   { name: "retired frontend activity polling loop", pattern: /setInterval\(\s*refreshSessionActivity/ },
+  // tank-operator#83 — sidebar session-list moved from wake-and-refetch
+  // polling onto a durable typed-event ledger + cursor-resumable SSE.
+  // Block reintroduction of every name that participated in the prior
+  // path so the next refactor can't quietly rebuild the parallel
+  // architecture. The activity polling endpoint, its frontend twin,
+  // the 1.5s pending-session loop, the visibility/focus refetch handlers,
+  // the bus's opaque wake subject + helpers, the live-pod podStatus()
+  // helper, and the prior SSE event name are all in the deletion set.
+  { name: "removed session list wake subject", pattern: /\bSessionListWakeSubject\b/ },
+  { name: "removed session list wake publisher", pattern: /\bPublishSessionListWake\b/ },
+  { name: "removed session list wake subscriber", pattern: /\bSubscribeSessionListWake\b/ },
+  { name: "removed session list wake counter", pattern: /\btank_session_list_wake_publish_failure_total\b/ },
+  { name: "removed session list wake adapter method", pattern: /\bRecordSessionListWakePublishFailed\b/ },
+  { name: "removed legacy sessions-changed SSE event", pattern: /["']sessions-changed["']/ },
+  { name: "removed /api/sessions/activity HTTP route", pattern: /\/api\/sessions\/activity\b/ },
+  { name: "removed handleSessionActivity backend handler", pattern: /\bhandleSessionActivity\b/ },
+  { name: "removed frontend refreshSessionActivity helper", pattern: /\brefreshSessionActivity\b/ },
+  { name: "removed pending-session polling constant", pattern: /\bPENDING_SESSION_REFRESH_INTERVAL_MS\b/ },
+  { name: "removed live-pod status helper", pattern: /\bfunc podStatus\(/ },
+  // Glob-broad: bare references to /api/sessions/activity in YAML/MD
+  // docs would also re-introduce the contract. (Match the path
+  // including trailing word-boundary so /api/sessions/activity/foo
+  // still trips the guard for any future regression.)
   { name: "retired internal session event notify route", pattern: /\/events\/notify\b/ },
   { name: "retired in-memory session event broker", pattern: /\bsessionEventBroker\b/ },
   { name: "retired session event notifier", pattern: /\bSessionEventNotifier\b/ },

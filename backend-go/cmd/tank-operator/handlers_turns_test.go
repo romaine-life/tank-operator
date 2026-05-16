@@ -60,10 +60,17 @@ func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan stru
 	return make(chan struct{}), func() {}, nil
 }
 
-func (*recordingSessionBus) PublishSessionListWake(context.Context, string) error { return nil }
+// PublishSessionListEvent + SubscribeSessionListEvents are the typed-event
+// successors of the prior opaque wake publish/subscribe pair retired in
+// tank-operator#83. Tests don't drive the sidebar SSE so the recorder
+// no-ops both; replace these stubs with capturing variants in dedicated
+// session-list tests when those land.
+func (*recordingSessionBus) PublishSessionListEvent(context.Context, string, []byte) error {
+	return nil
+}
 
-func (*recordingSessionBus) SubscribeSessionListWake(context.Context, string) (<-chan struct{}, func(), error) {
-	return make(chan struct{}), func() {}, nil
+func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string) (<-chan []byte, func(), error) {
+	return make(chan []byte), func() {}, nil
 }
 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
@@ -306,7 +313,7 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 	ns := sessionmodel.SessionsNamespace
 	return &appServer{
 		k8s:           k8s,
-		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
+		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, nil, sessions.ManagerOptions{}),
 		sessionBus:    bus,
 		sessionEvents: &recordingSessionEventStore{},
 		verifier:      auth.NewVerifier(testJWT(t)),

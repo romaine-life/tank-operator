@@ -201,10 +201,15 @@ Tool and approval lifecycle:
 - `tool.approval_requested`
 - `tool.approval_resolved`
 
-Session activity (`/api/sessions/activity`) and per-conversation read state
-(`/api/sessions/{id}/read_state`) are computed server-side from the durable
-event ledger and exposed via their own REST endpoints. They are not Tank
-event types — adding one is a schema change, not a derived projection.
+Session activity is computed server-side by the lifecycle emitter as
+sessions evolve and published as `session.activity_changed` rows in the
+durable session-list lifecycle ledger
+(`session_lifecycle_events`); the same payload is delivered over the
+sidebar SSE stream (`GET /api/sessions/events`) and joined into
+`GET /api/sessions` for initial-state hydration. Per-conversation read
+state lives at `/api/sessions/{id}/read_state` and is also derived from
+the durable event ledger. Neither is a Tank chat event type — adding one
+is a schema change, not a derived projection.
 
 ## State Machine
 
@@ -338,10 +343,10 @@ The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
 `order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
 produce `resync_required`; clients reload `/timeline` instead of silently
-skipping a gap. Open SSE streams do not poll `GET /api/sessions/activity`.
-The backend event persister wakes SSE streams through NATS only after the
-Cosmos `session-events` write commits. There is no ledger sweep or browser
-polling fallback for live transcript delivery.
+skipping a gap. Open SSE streams do not poll any side endpoint for
+indicator state. The backend event persister wakes SSE streams through
+NATS only after the Postgres `session_events` write commits. There is no
+ledger sweep or browser polling fallback for live transcript delivery.
 
 Durable turn interruption:
 
@@ -385,14 +390,22 @@ the session pod itself is still live. Session-pod deletion or death is terminal
 for the session and its `emptyDir` workspace; recovering a dead session pod is
 an explicit non-goal for this protocol.
 
-Activity summary:
+Activity summary (per-session sidebar indicators):
 
-`GET /api/sessions/activity`
+Activity summaries are durable rows of type `session.activity_changed`
+in the per-owner `session_lifecycle_events` ledger. The lifecycle emitter
+folds chat events into a summary (status, active_turn_id, needs_input,
+failed, unread_count) on each chat event upsert and emits a new row only
+when an indicator-visible field changes. The sidebar consumes the same
+payload two ways:
 
-Returns per-session activity summaries for the sidebar so unopened sessions can
-show running, unread, failed, and needs-input states. This endpoint is a
-snapshot API for session lists and initial paint; it is not a transcript-live
-polling fallback for an open session.
+- Initial state: the latest `session.activity_changed` payload per
+  session is joined into `GET /api/sessions` as the `activity` field.
+- Live updates: the typed-event SSE stream on `GET /api/sessions/events`
+  delivers each new row to the sidebar in real time.
+
+`GET /api/sessions/timeline` returns a paginated, cursor-resumable slice
+of the ledger for post-resync recovery.
 
 Storage:
 

@@ -32,13 +32,18 @@ func WakeSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.wake", liveRoot, StorageToken(sessionStorageKey))
 }
 
-// SessionListWakeSubject names the per-owner wake subject that signals
-// the user's /api/sessions list has changed. SSE subscribers listen on
-// this subject; Manager mutations (Upsert, MarkDeleted, SetName, etc.)
-// publish here so the in-process EventBus is no longer needed.
-func SessionListWakeSubject(email string) string {
+// SessionListEventSubject names the per-owner typed-event subject that
+// carries session_lifecycle_events Append payloads to the sidebar SSE
+// handlers. Replaces the prior opaque wake subject (an empty-payload
+// resync trigger) per tank-operator#83 — see
+// docs/product-inspirations.md "Work delivery should use a real
+// command/event fabric. Browser polling, process memory fanout, and
+// database polling are not the normal live path for app-managed GUI
+// chat." The wire payload is one lifecycleevents.Event JSON document;
+// SSE handlers forward it to clients verbatim.
+func SessionListEventSubject(email string) string {
 	normalized := strings.TrimSpace(strings.ToLower(email))
-	return fmt.Sprintf("%s.sessions.%s.wake", liveRoot, base64.RawURLEncoding.EncodeToString([]byte(normalized)))
+	return fmt.Sprintf("%s.sessions.%s.events", liveRoot, base64.RawURLEncoding.EncodeToString([]byte(normalized)))
 }
 
 func sanitizeSubjectToken(value string) string {

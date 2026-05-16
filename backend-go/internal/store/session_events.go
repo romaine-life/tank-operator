@@ -25,8 +25,9 @@ type SessionEventStore interface {
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
 	// (turn.*, item.failed, tool.approval_*) for a session in ascending
-	// order_key. Bounded read used by /api/sessions/activity instead of
-	// folding the full ledger.
+	// order_key. Bounded read used by the lifecycle emitter
+	// (chat→sidebar activity-delta bridge) instead of folding the full
+	// ledger.
 	LatestLifecycleEvents(ctx context.Context, tankSessionID string, limit int) ([]map[string]any, error)
 	// UnreadOutputCount returns the number of distinct timeline_id /
 	// turn_id markers that count as "unread output" strictly after the
