@@ -53,7 +53,7 @@ func TestSummarizeSessionActivityFoldsLifecycleEventsToStatus(t *testing.T) {
 func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 	client := fake.NewSimpleClientset(activitySessionPod("63", "user@example.com"))
 	app := &appServer{
-		verifier: auth.NewVerifier(testJWT(t), "user@example.com"),
+		verifier: auth.NewVerifier(testJWT(t)),
 		mgr: sessions.NewManager(
 			client,
 			nil,
@@ -100,7 +100,7 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &appServer{
-		verifier: auth.NewVerifier(testJWT(t), "user@example.com"),
+		verifier: auth.NewVerifier(testJWT(t)),
 		mgr: sessions.NewManager(
 			client,
 			nil,

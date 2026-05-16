@@ -13,8 +13,8 @@ import (
 
 func TestVerifierAcceptsBearerToken(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	verifier := NewVerifier(jwtKey, "USER@example.com")
-	token := signedTestToken(t, jwtKey, "user@example.com", nil)
+	verifier := NewVerifier(jwtKey)
+	token := signedTestToken(t, jwtKey, "user@example.com", "user", nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 
@@ -22,16 +22,16 @@ func TestVerifierAcceptsBearerToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentUser returned error: %v", err)
 	}
-	if user.Email != "user@example.com" || user.Sub != "sub-1" || user.Name != "User" {
+	if user.Email != "user@example.com" || user.Sub != "sub-1" || user.Name != "User" || user.Role != "user" {
 		t.Fatalf("user = %#v", user)
 	}
 }
 
 func TestVerifierAcceptsCookie(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	verifier := NewVerifier(jwtKey, "user@example.com")
+	verifier := NewVerifier(jwtKey)
 	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
-	request.AddCookie(&http.Cookie{Name: CookieName, Value: signedTestToken(t, jwtKey, "user@example.com", nil)})
+	request.AddCookie(&http.Cookie{Name: CookieName, Value: signedTestToken(t, jwtKey, "user@example.com", "user", nil)})
 
 	if _, err := verifier.CurrentUser(request); err != nil {
 		t.Fatalf("CurrentUser returned error: %v", err)
@@ -39,27 +39,52 @@ func TestVerifierAcceptsCookie(t *testing.T) {
 }
 
 func TestVerifierRejectsMissingAuthentication(t *testing.T) {
-	verifier := NewVerifier(newTestJWT(t), "user@example.com")
+	verifier := NewVerifier(newTestJWT(t))
 	_, err := verifier.CurrentUser(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil))
 	if err == nil || ErrorStatus(err) != http.StatusUnauthorized || !strings.Contains(err.Error(), "missing authentication") {
 		t.Fatalf("err = %v, status = %d", err, ErrorStatus(err))
 	}
 }
 
-func TestVerifierRejectsDisallowedEmail(t *testing.T) {
+func TestVerifierRejectsPendingRole(t *testing.T) {
+	// auth.romaine.life mints role=pending by default for fresh Microsoft
+	// sign-ins. Tank-operator must refuse those tokens — the upstream
+	// admin promotion via /admin is the gate.
 	jwtKey := newTestJWT(t)
-	verifier := NewVerifier(jwtKey, "allowed@example.com")
-	_, err := verifier.Decode(signedTestToken(t, jwtKey, "other@example.com", nil))
+	verifier := NewVerifier(jwtKey)
+	_, err := verifier.Decode(signedTestToken(t, jwtKey, "user@example.com", "pending", nil))
 	if err == nil || ErrorStatus(err) != http.StatusForbidden {
 		t.Fatalf("err = %v, status = %d", err, ErrorStatus(err))
 	}
 }
 
+func TestVerifierRejectsMissingRole(t *testing.T) {
+	jwtKey := newTestJWT(t)
+	verifier := NewVerifier(jwtKey)
+	_, err := verifier.Decode(signedTestToken(t, jwtKey, "user@example.com", "", nil))
+	if err == nil || ErrorStatus(err) != http.StatusForbidden {
+		t.Fatalf("err = %v, status = %d", err, ErrorStatus(err))
+	}
+}
+
+func TestVerifierAcceptsAdminRole(t *testing.T) {
+	jwtKey := newTestJWT(t)
+	verifier := NewVerifier(jwtKey)
+	user, err := verifier.Decode(signedTestToken(t, jwtKey, "user@example.com", "admin", nil))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if user.Role != "admin" {
+		t.Fatalf("role = %q, want admin", user.Role)
+	}
+}
+
 func TestVerifierRejectsHS256Tokens(t *testing.T) {
-	verifier := NewVerifier(newTestJWT(t), "user@example.com")
+	verifier := NewVerifier(newTestJWT(t))
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   "sub-1",
 		"email": "user@example.com",
+		"role":  "user",
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})
@@ -74,24 +99,24 @@ func TestVerifierRejectsHS256Tokens(t *testing.T) {
 
 func TestMinterIssuesVerifiableSession(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey, "user@example.com")
-	tok, err := minter.MintSession("sub-1", "user@example.com", "User")
+	minter := NewMinter(jwtKey, jwtKey)
+	tok, err := minter.MintSession("sub-1", "user@example.com", "User", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := NewVerifier(jwtKey, "user@example.com")
+	verifier := NewVerifier(jwtKey)
 	got, err := verifier.Decode(tok)
 	if err != nil {
 		t.Fatalf("minted token did not verify: %v", err)
 	}
-	if got.Email != "user@example.com" || got.Sub != "sub-1" {
+	if got.Email != "user@example.com" || got.Sub != "sub-1" || got.Role != "user" {
 		t.Fatalf("user = %#v", got)
 	}
 }
 
 func TestMinterIssuesGitHubMCPAttestation(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey, "user@example.com")
+	minter := NewMinter(jwtKey, jwtKey)
 	installationID := int64(42)
 	tok, expiresAt, err := minter.MintGitHubMCPAttestation(GitHubMCPAttestationSubject{
 		Email:          "USER@example.com",
@@ -129,7 +154,7 @@ func TestMinterIssuesGitHubMCPAttestation(t *testing.T) {
 
 func TestMinterPublishesJWKS(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey, "user@example.com")
+	minter := NewMinter(jwtKey, jwtKey)
 	jwks, err := minter.PublicJWKS(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +170,7 @@ func TestMinterPublishesJWKS(t *testing.T) {
 
 func TestInstallStateRoundtrips(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey, "user@example.com")
+	minter := NewMinter(jwtKey, jwtKey)
 	tok, err := minter.MintInstallState("user@example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -161,8 +186,8 @@ func TestInstallStateRoundtrips(t *testing.T) {
 
 func TestInstallStateRejectsSessionTokenWithDifferentAudience(t *testing.T) {
 	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey, "user@example.com")
-	sessionTok, err := minter.MintSession("sub-1", "user@example.com", "User")
+	minter := NewMinter(jwtKey, jwtKey)
+	sessionTok, err := minter.MintSession("sub-1", "user@example.com", "User", "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,12 +213,13 @@ func newTestJWT(t *testing.T) *InMemoryJWT {
 	return j
 }
 
-func signedTestToken(t *testing.T, jwtKey *InMemoryJWT, email string, extra jwt.MapClaims) string {
+func signedTestToken(t *testing.T, jwtKey *InMemoryJWT, email, role string, extra jwt.MapClaims) string {
 	t.Helper()
 	claims := jwt.MapClaims{
 		"sub":   "sub-1",
 		"email": email,
 		"name":  "User",
+		"role":  role,
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	}

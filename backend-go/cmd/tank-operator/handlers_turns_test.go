@@ -309,7 +309,7 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
 		sessionBus:    bus,
 		sessionEvents: &recordingSessionEventStore{},
-		verifier:      auth.NewVerifier(testJWT(t), "user@example.com"),
+		verifier:      auth.NewVerifier(testJWT(t)),
 		namespace:     ns,
 		sessionScope:  "default",
 	}

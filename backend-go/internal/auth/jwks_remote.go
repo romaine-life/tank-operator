@@ -140,18 +140,12 @@ func rsaPublicKey(nB64, eB64 string) (*rsa.PublicKey, error) {
 }
 
 // ExchangeRomaineLifeToken verifies a JWT issued by auth.romaine.life and
-// returns the user identity. The allowedEmails check is the tank-operator-
-// specific access gate: auth.romaine.life mints tokens for any user it has
-// onboarded; this service decides which of those users may use it.
-func ExchangeRomaineLifeToken(ctx context.Context, tokenString, allowedEmails string) (email, name, sub string, err error) {
-	allowed := map[string]struct{}{}
-	for _, e := range strings.Split(allowedEmails, ",") {
-		normalized := strings.ToLower(strings.TrimSpace(e))
-		if normalized != "" {
-			allowed[normalized] = struct{}{}
-		}
-	}
-
+// returns the user identity plus the platform role claim. Gating is done
+// solely on the role: auth.romaine.life mints `role: pending` for any fresh
+// Microsoft sign-in and an admin must promote the user via auth.romaine.life's
+// /admin console before they become useful here. Only `admin` and `user` are
+// accepted; everything else (including the empty string) is a 403.
+func ExchangeRomaineLifeToken(ctx context.Context, tokenString string) (email, name, sub, role string, err error) {
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
 		if t.Method.Alg() != "RS256" {
@@ -167,24 +161,25 @@ func ExchangeRomaineLifeToken(ctx context.Context, tokenString, allowedEmails st
 		if err == nil {
 			err = errors.New("invalid token")
 		}
-		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid auth.romaine.life token: " + err.Error()}
+		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid auth.romaine.life token: " + err.Error()}
 	}
 
 	iss, _ := claims["iss"].(string)
 	if iss != authRomaineLifeIssuer {
-		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "unexpected issuer: " + iss}
+		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "unexpected issuer: " + iss}
 	}
 
 	rawEmail, _ := claims["email"].(string)
 	rawEmail = strings.ToLower(strings.TrimSpace(rawEmail))
 	if rawEmail == "" {
-		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "token missing email claim"}
+		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "token missing email claim"}
 	}
-	if _, ok := allowed[rawEmail]; !ok {
-		return "", "", "", errHTTP{status: http.StatusForbidden, message: "email not in tank-operator allowlist"}
+	rawRole, _ := claims["role"].(string)
+	if _, ok := allowedRoles[rawRole]; !ok {
+		return "", "", "", "", errHTTP{status: http.StatusForbidden, message: "role not approved by auth.romaine.life: " + rawRole}
 	}
 
 	rawName, _ := claims["name"].(string)
 	rawSub, _ := claims["sub"].(string)
-	return rawEmail, rawName, rawSub, nil
+	return rawEmail, rawName, rawSub, rawRole, nil
 }

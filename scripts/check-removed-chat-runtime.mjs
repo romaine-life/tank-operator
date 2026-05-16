@@ -195,6 +195,12 @@ const blocked = [
   { name: "removed desktop-auth IPC channel", pattern: /\bdesktop-auth:microsoft-login\b/ },
   { name: "removed tankOperatorDesktop window bridge", pattern: /\btankOperatorDesktop\b/ },
   { name: "removed tank-operator:// custom protocol", pattern: /\btank-operator:\/\/auth\b/ },
+  // ALLOWED_EMAILS allowlist retired in favor of the auth.romaine.life
+  // role claim. Block reintroduction of the env var, KV mount, and
+  // emails-list constructor signature so a future PR can't quietly bring
+  // the per-app gate back.
+  { name: "removed ALLOWED_EMAILS env var", pattern: /\bALLOWED_EMAILS\b/ },
+  { name: "removed romaine-life-admin-emails KV mount", pattern: /\bromaine-life-admin-emails\b/ },
 ];
 
 const failures = [];

@@ -27,28 +27,20 @@ const (
 // in prod, in-memory in tests). Holds the verifier's KeyResolver too so it
 // can validate the install-state tokens it issued.
 type Minter struct {
-	signer        Signer
-	resolver      KeyResolver
-	allowedEmails map[string]struct{}
+	signer   Signer
+	resolver KeyResolver
 }
 
-func NewMinter(signer Signer, resolver KeyResolver, allowedEmails string) *Minter {
-	allowed := map[string]struct{}{}
-	for _, e := range strings.Split(allowedEmails, ",") {
-		normalized := strings.ToLower(strings.TrimSpace(e))
-		if normalized != "" {
-			allowed[normalized] = struct{}{}
-		}
-	}
-	return &Minter{signer: signer, resolver: resolver, allowedEmails: allowed}
+func NewMinter(signer Signer, resolver KeyResolver) *Minter {
+	return &Minter{signer: signer, resolver: resolver}
 }
 
-func (m *Minter) IsAllowed(email string) bool {
-	_, ok := m.allowedEmails[strings.ToLower(strings.TrimSpace(email))]
-	return ok
-}
-
-func (m *Minter) MintSession(sub, email, name string) (string, error) {
+// MintSession stamps a tank-operator session JWT. Role rides along so every
+// protected endpoint can verify against this service's signing key alone —
+// no round-trip to auth.romaine.life on the read path. Exchange is what
+// pulls the role from the upstream JWT once; from then on the local key is
+// authoritative for the session window.
+func (m *Minter) MintSession(sub, email, name, role string) (string, error) {
 	if m.signer == nil {
 		return "", fmt.Errorf("JWT signer not configured")
 	}
@@ -57,6 +49,7 @@ func (m *Minter) MintSession(sub, email, name string) (string, error) {
 		"sub":   sub,
 		"email": strings.ToLower(strings.TrimSpace(email)),
 		"name":  name,
+		"role":  role,
 		"iat":   now.Unix(),
 		"exp":   now.Add(SessionTTL).Unix(),
 	}

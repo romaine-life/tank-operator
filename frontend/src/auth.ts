@@ -21,6 +21,10 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
+  /** Platform role from the auth.romaine.life JWT. `admin` bypasses the
+   *  GitHub install wall (the host installation covers their MCP-github
+   *  access). `user` is the standard signed-in caller. */
+  role: "admin" | "user";
   avatar_url: string;
   github_login: string | null;
   installation_id: number | null;
