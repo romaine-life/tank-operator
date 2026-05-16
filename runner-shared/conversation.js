@@ -27,6 +27,7 @@ export const TANK_EVENT_TYPES = [
   "turn.completed",
   "turn.failed",
   "turn.command_failed",
+  "turn.interrupt_requested",
   "turn.interrupted",
   "item.started",
   "item.completed",
@@ -97,6 +98,10 @@ function isValidEventByType(event) {
         event.source === "tank" &&
         hasStrings(event, ["turn_id"]) &&
         isStringPayload(event.payload, "reason");
+    case "turn.interrupt_requested":
+      return event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["turn_id"]);
     case "item.started":
     case "item.completed":
     case "item.failed":

@@ -203,6 +203,27 @@
       }
     },
     {
+      "name": "turn interrupt requested",
+      "event": {
+        "event_id": "turn_contract:turn.interrupt_requested",
+        "order_key": "order-0007b",
+        "sequence": 7,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "system",
+        "source": "tank",
+        "type": "turn.interrupt_requested",
+        "created_at": "2026-05-12T00:00:06.750Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable"
+      }
+    },
+    {
       "name": "turn interrupted",
       "event": {
         "event_id": "turn_contract:turn.interrupted:client_interrupt",
