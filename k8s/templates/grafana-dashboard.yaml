@@ -230,6 +230,83 @@ data:
               "legendFormat": "{{`{{ mode }}`}} {{`{{ kind }}`}} {{`{{ result }}`}}"
             }
           ]
+        },
+        {
+          "id": 14,
+          "title": "Session pod spawn p50 / p95 (24h trailing)",
+          "description": "Time from pod creation to ContainersReady across session pods created in the trailing 24h. Backed by recording rules tank:session_pod_spawn_seconds:p50_24h and :p95_24h. The alert TankSessionSpawnSlowMedian fires when p50 > 5s for 1h — that signature means every spawn is paying cold-pull cost (image distribution is broken).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "tank:session_pod_spawn_seconds:p50_24h",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "tank:session_pod_spawn_seconds:p95_24h",
+              "legendFormat": "p95"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "title": "Per-pod spawn duration (recent)",
+          "description": "Per-session-pod time from creation to ContainersReady. One series per session pod observed by kube-state-metrics; series age out when the pod is deleted. Bimodal distribution is expected — fast spawns (~3s) hit the node's image cache, slow spawns (~30s) are cold pulls of the ~712MB claude-container image. Anything materially above the cold-pull baseline is the diagnostic signal to chase.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}",
+              "legendFormat": "{{`{{ pod }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 16,
+          "title": "Big-image pull rate by node (1h)",
+          "description": "Per-node count of image pulls in the 500MB-1GB size bucket from kubelet_image_pull_duration_seconds_count. The three session images (claude-container, codex-container, pi-container) all land in this bucket, so a non-zero rate on a node almost always means kubelet pulled a session image. After an image tag rotation a spike across nodes is expected; sustained activity on a single node indicates that node is repeatedly missing the cache (autoscale churn, image GC eviction, or node being the only one hosting session pods).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (node) (increase(kubelet_image_pull_duration_seconds_count{image_size_in_bytes=\"500MB-1GB\"}[1h]))",
+              "legendFormat": "{{`{{ node }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 17,
+          "title": "Inferred warm-spawn ratio (24h)",
+          "description": "Fraction of session pods spawned in the last 24h that completed in under 10s. Bimodal-distribution proxy for cache hits: warm pulls cluster at 2-3s, cold pulls at 27-33s, the 10s threshold sits in the empty middle. Drift downward suggests nodes are losing the image cache more often. Drift upward suggests cache distribution is improving (e.g. after a pre-pull DaemonSet ships).",
+          "type": "stat",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "orange", "value": 0.5 },
+                  { "color": "green", "value": 0.8 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(((kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}) < bool 10) and on(pod, namespace) (time() - kube_pod_created{namespace=\"tank-operator-sessions\"} < 86400)) / count((kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}) and on(pod, namespace) (time() - kube_pod_created{namespace=\"tank-operator-sessions\"} < 86400))",
+              "legendFormat": "warm-spawn ratio"
+            }
+          ]
         }
       ]
     }

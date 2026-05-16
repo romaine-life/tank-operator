@@ -100,6 +100,16 @@ declares one rule group per subsystem:
   failures (any non-success result).
 - **mcp-auth-proxy**: SA token read failures, MCP upstream 5xx rate.
 - **Runners**: provider error rate, pending wakeup queue depth.
+- **Session spawn**: median spawn time across the trailing 24h (image
+  distribution health), and any single-spawn outlier above 60s in the
+  trailing hour. Backed by recording rules
+  `tank:session_pod_spawn_seconds:p50_24h`,
+  `tank:session_pod_spawn_seconds:p95_24h`, and
+  `tank:session_pod_spawn_seconds:max_1h`, derived from
+  `kube_pod_status_container_ready_time - kube_pod_created` on session-namespace pods.
+  Recording rules collapse the per-pod series to single scalars so the
+  forbidden-labels rule above is respected for stored series; the
+  per-pod dashboard panel renders the same primitive on-demand.
 
 Severity is `info` for "diagnostic-only, page nobody", `warning` for
 "a user feature is degraded", `critical` for "user-trust is on the line"
@@ -115,6 +125,15 @@ Postgres rate/latency, session-event persister failures, NATS
 connection events, api-proxy refresh outcomes + 401 rate,
 mcp-auth-proxy request rate + SA token failures + GitHub attestation,
 runner turn duration + commands consumed.
+
+The "Session spawn" row at the bottom of the dashboard is the
+diagnostic surface for "why did my session take N seconds to start."
+Four panels: aggregate p50/p95 over 24h, per-pod spawn duration (one
+line per recent session pod), big-image pull rate by node (kubelet
+metric, 500MB-1GB bucket — the three session images all land in that
+bucket), and an inferred warm-spawn ratio stat (fraction of recent
+spawns under 10s, which sits between the warm-cache cluster at 2-3s
+and the cold-pull cluster at 27-33s).
 
 The dashboard is hand-built JSON. If panel count grows past ~20 we
 should migrate to grafonnet — out of scope today.
