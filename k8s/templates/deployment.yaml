@@ -171,8 +171,6 @@ spec:
               value: {{ .Values.jwt.kvKeyName | quote }}
           envFrom:
             - secretRef:
-                name: {{ include "tank-operator.authSecret" . }}
-            - secretRef:
                 name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
           volumeMounts:
             - name: oauth-gateway-tls

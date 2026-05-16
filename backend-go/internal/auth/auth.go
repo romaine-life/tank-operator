@@ -24,22 +24,32 @@ type User struct {
 	Sub   string
 	Email string
 	Name  string
+	// Role is the platform-wide claim carried in the tank-operator session JWT,
+	// copied from the auth.romaine.life upstream token at exchange time.
+	// "admin" gets bypasses (e.g. OnboardingWall); "user" is the standard
+	// signed-in caller. Any other value (including the empty string) is
+	// rejected by Decode — that's how a "pending" auth.romaine.life user
+	// who hasn't been promoted by an admin gets kept out of tank-operator.
+	Role string
+}
+
+// allowedRoles is the closed set of roles this service accepts on its own
+// session JWT. auth.romaine.life mints `pending` by default for any fresh
+// Microsoft sign-in; an admin promotes via auth.romaine.life's /admin console
+// before the user becomes useful here. We never re-mint a session for a
+// `pending` (or otherwise unknown) role, so seeing one here means tampering or
+// a stale token after a downgrade.
+var allowedRoles = map[string]struct{}{
+	"admin": {},
+	"user":  {},
 }
 
 type Verifier struct {
-	resolver      KeyResolver
-	allowedEmails map[string]struct{}
+	resolver KeyResolver
 }
 
-func NewVerifier(resolver KeyResolver, allowedEmails string) *Verifier {
-	allowed := map[string]struct{}{}
-	for _, email := range strings.Split(allowedEmails, ",") {
-		normalized := strings.ToLower(strings.TrimSpace(email))
-		if normalized != "" {
-			allowed[normalized] = struct{}{}
-		}
-	}
-	return &Verifier{resolver: resolver, allowedEmails: allowed}
+func NewVerifier(resolver KeyResolver) *Verifier {
+	return &Verifier{resolver: resolver}
 }
 
 func (v *Verifier) CurrentUser(r *http.Request) (User, error) {
@@ -78,13 +88,15 @@ func (v *Verifier) Decode(tokenString string) (User, error) {
 	if email == "" {
 		return User{}, errHTTP{status: http.StatusUnauthorized, message: "invalid session token: missing email"}
 	}
-	if _, ok := v.allowedEmails[email]; !ok {
-		return User{}, errHTTP{status: http.StatusForbidden, message: "email no longer allowed"}
+	role := stringClaim(claims, "role")
+	if _, ok := allowedRoles[role]; !ok {
+		return User{}, errHTTP{status: http.StatusForbidden, message: "role not accepted: " + role}
 	}
 	return User{
 		Sub:   stringClaim(claims, "sub"),
 		Email: email,
 		Name:  stringClaim(claims, "name"),
+		Role:  role,
 	}, nil
 }
 

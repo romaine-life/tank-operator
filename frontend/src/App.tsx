@@ -722,6 +722,13 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
+  // Platform role carried in the tank-operator session JWT, copied at exchange
+  // time from the auth.romaine.life upstream token. `admin` bypasses the
+  // OnboardingWall (the host installation of the GitHub App covers them);
+  // `user` is the standard signed-in caller. auth.romaine.life mints
+  // `pending` by default but tank-operator's exchange rejects that before
+  // a session JWT is ever issued, so this side only sees admin or user.
+  role: "admin" | "user";
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -6944,7 +6951,11 @@ export function App() {
     return <DemoLanding />;
   }
 
-  if (user.installation_id == null) {
+  // Admins bypass the wall: the host installation of the GitHub App covers
+  // their MCP-github access (see CLAUDE.md "Two GitHub Apps live alongside
+  // each other") so they don't need to install on their own GitHub account
+  // before the orchestrator becomes useful.
+  if (user.installation_id == null && user.role !== "admin") {
     return <OnboardingWall user={user} onLogout={logout} />;
   }
 

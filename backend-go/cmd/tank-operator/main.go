@@ -136,9 +136,11 @@ func main() {
 		slog.Error("JWT signing key failed", "error", err)
 		os.Exit(1)
 	}
-	allowedEmails := os.Getenv("ALLOWED_EMAILS")
-	verifier := auth.NewVerifier(jwtKey, allowedEmails)
-	minter := auth.NewMinter(jwtKey, jwtKey, allowedEmails)
+	// Access gate is the role claim on the auth.romaine.life JWT (verified at
+	// exchange time and stamped onto the tank-operator session JWT). The
+	// Verifier just checks role ∈ {admin, user}; no per-tank email allowlist.
+	verifier := auth.NewVerifier(jwtKey)
+	minter := auth.NewMinter(jwtKey, jwtKey)
 
 	// 11. Start reaper.
 	ctx := context.Background()

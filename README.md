@@ -187,5 +187,8 @@ against auth.romaine.life/api/auth/jwks and mints its own session JWT
 signed by a Key Vault Key (private bytes never leave KV; see
 [backend-go/internal/auth/](backend-go/internal/auth/) and
 [infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped
-by SHA-256 of the signed-in user's email. Allowlist is the comma-separated
-`ALLOWED_EMAILS` env var, sourced from KV via ExternalSecret.
+by SHA-256 of the signed-in user's email. The access gate is the `role`
+claim on the auth.romaine.life JWT: only `admin` and `user` are accepted,
+`pending` (auth.romaine.life's default for fresh Microsoft sign-ups) gets
+a 403 until an admin promotes the user via auth.romaine.life's /admin
+console. No per-tank email allowlist.

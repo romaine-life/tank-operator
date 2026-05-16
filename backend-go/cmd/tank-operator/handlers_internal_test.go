@@ -134,7 +134,7 @@ func TestHandleInternalGitHubAttestationMintsTankJWT(t *testing.T) {
 		profiles: testProfilesStore{
 			"owner@example.test": {InstallationID: &installationID},
 		},
-		minter: auth.NewMinter(jwtKey, jwtKey, "owner@example.test"),
+		minter: auth.NewMinter(jwtKey, jwtKey),
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/github/attestation", nil)
 	req.Header.Set("Authorization", "Bearer session-token")
@@ -195,7 +195,7 @@ func TestHandleInternalGitHubAttestationRejectsUnboundSAToken(t *testing.T) {
 		sessionScope:          "slot-a",
 		sessionServiceAccount: "claude-session",
 		profiles:              testProfilesStore{},
-		minter:                auth.NewMinter(jwtKey, jwtKey, ""),
+		minter:                auth.NewMinter(jwtKey, jwtKey),
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/internal/github/attestation", nil)
 	req.Header.Set("Authorization", "Bearer session-token")

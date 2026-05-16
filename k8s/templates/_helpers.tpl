@@ -83,10 +83,6 @@ claude-code-credentials
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-claude-code-credentials" .Release.Name }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.authSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-auth" .Release.Name }}{{- else -}}{{ .Values.externalSecret.auth.secretName }}{{- end -}}
-{{- end -}}
-
 {{- define "tank-operator.credentialRefresherConfigSecret" -}}
 {{- if .Values.testEnv.enabled -}}{{ printf "%s-credentials-refresher-config" .Release.Name }}{{- else -}}{{ .Values.credentialRefresher.configSecret }}{{- end -}}
 {{- end -}}

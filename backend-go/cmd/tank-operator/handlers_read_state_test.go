@@ -75,7 +75,7 @@ func readStateTestServer(t *testing.T, readStates store.ConversationReadStateSto
 	t.Helper()
 	client := fake.NewSimpleClientset(activitySessionPod("63", "user@example.com"))
 	return &appServer{
-		verifier: auth.NewVerifier(testJWT(t), "user@example.com"),
+		verifier: auth.NewVerifier(testJWT(t)),
 		mgr: sessions.NewManager(
 			client,
 			nil,

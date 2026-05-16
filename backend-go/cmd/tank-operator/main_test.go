@@ -111,7 +111,7 @@ func TestParseEmailSetNormalizesAndSkipsEmptyEntries(t *testing.T) {
 
 func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{listOut: []sessions.Info{{ID: "1", Owner: "user@example.com"}}}
-	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
+	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t)), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	response := httptest.NewRecorder()
@@ -135,7 +135,7 @@ func TestAuthenticatedListSessionsUsesTokenEmail(t *testing.T) {
 
 func TestAuthenticatedGetSessionUsesTokenEmail(t *testing.T) {
 	reader := &fakeSessionReader{getOut: sessions.Info{ID: "2", Owner: "user@example.com"}}
-	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
+	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t)), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/2", nil)
 	request.SetPathValue("session_id", "2")
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
@@ -153,7 +153,7 @@ func TestAuthenticatedGetSessionUsesTokenEmail(t *testing.T) {
 
 func TestAuthenticatedGetSessionHidesNotOwned(t *testing.T) {
 	reader := &fakeSessionReader{getErr: sessions.ErrNotOwned}
-	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t), "user@example.com"), reader)
+	handler := authenticatedGetSession(auth.NewVerifier(testJWT(t)), reader)
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/2", nil)
 	request.SetPathValue("session_id", "2")
 	request.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
@@ -167,7 +167,7 @@ func TestAuthenticatedGetSessionHidesNotOwned(t *testing.T) {
 }
 
 func TestAuthenticatedListSessionsRejectsUnauthenticated(t *testing.T) {
-	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t), "user@example.com"), &fakeSessionReader{})
+	handler := authenticatedListSessions(auth.NewVerifier(testJWT(t)), &fakeSessionReader{})
 	response := httptest.NewRecorder()
 
 	handler(response, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
@@ -180,7 +180,7 @@ func TestAuthenticatedListSessionsRejectsUnauthenticated(t *testing.T) {
 func TestMe(t *testing.T) {
 	login := "octocat"
 	installationID := int64(123)
-	verifier := auth.NewVerifier(testJWT(t), "user@example.com")
+	verifier := auth.NewVerifier(testJWT(t))
 	handler := me(verifier, fakeProfileStore{profile: profiles.Profile{
 		Email:          "user@example.com",
 		GitHubLogin:    &login,
@@ -209,7 +209,7 @@ func TestMe(t *testing.T) {
 
 func TestMeReturnsProfileError(t *testing.T) {
 	handler := me(
-		auth.NewVerifier(testJWT(t), "user@example.com"),
+		auth.NewVerifier(testJWT(t)),
 		fakeProfileStore{err: errors.New("profile failed")},
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
@@ -224,7 +224,7 @@ func TestMeReturnsProfileError(t *testing.T) {
 }
 
 func TestMeRejectsUnauthenticated(t *testing.T) {
-	handler := me(auth.NewVerifier(testJWT(t), "user@example.com"), profiles.StubStore{})
+	handler := me(auth.NewVerifier(testJWT(t)), profiles.StubStore{})
 	response := httptest.NewRecorder()
 
 	handler(response, httptest.NewRequest(http.MethodGet, "/api/auth/me", nil))
@@ -246,7 +246,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	installationID := int64(42)
 	prefs := map[string]any{"chatFontScale": 1.25}
 
-	body := userResponseBody("sub-1", "user@example.com", "User Name", profiles.Profile{
+	body := userResponseBody("sub-1", "user@example.com", "User Name", "admin", profiles.Profile{
 		Email:          "user@example.com",
 		GitHubLogin:    &login,
 		InstallationID: &installationID,
@@ -264,7 +264,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	if got, _ := body["run_prefs"].(map[string]any); got == nil || got["chatFontScale"] != 1.25 {
 		t.Fatalf("run_prefs = %#v", body["run_prefs"])
 	}
-	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" {
+	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" || body["role"] != "admin" {
 		t.Fatalf("body = %#v", body)
 	}
 	if got, _ := body["avatar_url"].(string); got == "" {
@@ -281,7 +281,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 // semantics make (*int64)(nil) != nil for `==` purposes, but both
 // marshal to JSON null. The SPA only sees the JSON.
 func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
-	body := userResponseBody("sub-1", "user@example.com", "User Name", profiles.Profile{})
+	body := userResponseBody("sub-1", "user@example.com", "User Name", "user", profiles.Profile{})
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -323,6 +323,7 @@ func signedMainToken(t *testing.T, _ /*unused secret arg*/, email string) string
 		"sub":   "sub-1",
 		"email": email,
 		"name":  "User",
+		"role":  "user",
 		"iat":   time.Now().Unix(),
 		"exp":   time.Now().Add(time.Hour).Unix(),
 	})

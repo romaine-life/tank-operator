@@ -21,13 +21,18 @@ import (
 // undefined → undefined == null in JS → the OnboardingWall renders even
 // for users with the GitHub App installed.
 //
+// `role` rides along so the SPA's OnboardingWall can skip itself for
+// admins (the host installation covers their MCP-github access; they
+// don't need to install the App on their own GitHub account).
+//
 // Keep this the single source of truth so the shape can't drift
 // between the two paths again.
-func userResponseBody(sub, email, name string, profile profiles.Profile) map[string]any {
+func userResponseBody(sub, email, name, role string, profile profiles.Profile) map[string]any {
 	return map[string]any{
 		"sub":             sub,
 		"email":           email,
 		"name":            name,
+		"role":            role,
 		"avatar_url":      auth.GravatarURL(email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
@@ -42,6 +47,12 @@ func userResponseBody(sub, email, name string, profile profiles.Profile) map[str
 // We verify the upstream signature against auth.romaine.life/api/auth/jwks
 // and mint our own tank-operator-signed session JWT so all downstream
 // verifier / minter / MCP-attestation plumbing stays on our KV signer.
+//
+// The access gate is the upstream role claim: ExchangeRomaineLifeToken
+// rejects anything other than `admin`/`user` (in particular, the default
+// `pending` for fresh Microsoft sign-ups). Tank-operator no longer
+// maintains its own email allowlist — admin promotion via the
+// auth.romaine.life /admin console is the single source of truth.
 func (s *appServer) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AuthJWT string `json:"auth_jwt"`
@@ -51,15 +62,13 @@ func (s *appServer) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allowedEmails := os.Getenv("ALLOWED_EMAILS")
-
-	email, name, sub, err := auth.ExchangeRomaineLifeToken(r.Context(), body.AuthJWT, allowedEmails)
+	email, name, sub, role, err := auth.ExchangeRomaineLifeToken(r.Context(), body.AuthJWT)
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return
 	}
 
-	token, err := s.minter.MintSession(sub, email, name)
+	token, err := s.minter.MintSession(sub, email, name, role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mint token: "+err.Error())
 		return
@@ -93,7 +102,7 @@ func (s *appServer) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"token": token,
-		"user":  userResponseBody(sub, email, name, profile),
+		"user":  userResponseBody(sub, email, name, role, profile),
 	})
 }
 
@@ -123,7 +132,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, profile))
+	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, profile))
 }
 
 // handleUpdatePrefs persists the SPA's run-pane preferences (chat font
@@ -181,7 +190,12 @@ func (s *appServer) handleK8sAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.minter.MintSession(subject.Qualified(), email, "")
+	// K8s-SA exchanges are platform-internal callers (currently the
+	// mcp-github sidecar minting a tank-operator session to call back
+	// for installation_id resolution). Stamp role=user so the resulting
+	// JWT passes the verifier's role check; SA-bound endpoints do their
+	// own authorization layer on top of authentication.
+	token, err := s.minter.MintSession(subject.Qualified(), email, "", "user")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mint token")
 		return
