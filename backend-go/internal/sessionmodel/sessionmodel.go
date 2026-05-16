@@ -128,6 +128,16 @@ type ManifestOptions struct {
 	NATSAuthSecret string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
+	// HotSwapAgentRunner gates the test-slot hot-swap surface on the
+	// agent-runner container. When true, PodManifest attaches a writable
+	// emptyDir at /var/run/agent-runner-hot, mounts it on the agent-runner
+	// container, and sets GLIMMUNG_SUPERVISOR_CHILD/HOT_ARTIFACT env vars
+	// so the launch script execs tank-supervisor (instead of node) as PID 1.
+	// Default false; the orchestrator's deployment.yaml sets this to true
+	// only when .Values.testEnv.enabled is on. Production sessions see no
+	// behavioral change. See scripts/check-session-pod-hot-swap-migration.mjs
+	// for the completion contract.
+	HotSwapAgentRunner bool
 }
 
 func NormalizeSessionMode(mode string) string {
@@ -479,6 +489,38 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		runnerEnv = append(runnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AgentRunnerMetricsPort),
 		})
+
+		// Test-slot agent-runner hot-swap wiring. Gated on
+		// opts.HotSwapAgentRunner so production session pods see no
+		// behavioral change. When enabled:
+		//   - GLIMMUNG_SUPERVISOR_CHILD points at the baked launch shim
+		//     (/app/agent-runner-launch-binary.sh) which exec node from
+		//     the baked /opt/agent-runner/dist path.
+		//   - GLIMMUNG_SUPERVISOR_HOT_ARTIFACT points at the writable
+		//     shim path; the hot-swap operator writes a sibling shim and
+		//     the new dist to /var/run/agent-runner-hot/. The supervisor's
+		//     existing "hot-if-present, baked-if-missing" resolution
+		//     picks the right shim with zero supervisor code change.
+		//   - The agent-runner-launch.sh script branches on the env var
+		//     and exec's /app/tank-supervisor instead of node, putting
+		//     the supervisor at PID 1 in the container.
+		// See scripts/check-session-pod-hot-swap-migration.mjs.
+		if opts.HotSwapAgentRunner {
+			volumes = append(volumes, map[string]any{
+				"name":     "agent-runner-hot",
+				"emptyDir": map[string]any{},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "agent-runner-hot",
+				"mountPath": "/var/run/agent-runner-hot",
+			})
+			runnerEnv = append(runnerEnv,
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/agent-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/agent-runner-hot/agent-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
+			)
+		}
+
 		runnerContainer := map[string]any{
 			"name":            "agent-runner",
 			"image":           sessionImage,

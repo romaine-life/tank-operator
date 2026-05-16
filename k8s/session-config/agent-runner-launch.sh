@@ -77,6 +77,16 @@ if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
   sh /opt/tank/session-config/install-tank-skills.sh || true
 fi
 
-# Hand off to the runner. Node is PID 1 from this point — SIGTERM goes
-# straight to it, which handles graceful shutdown of the SDK subprocess.
+# Hand off to the runner. In test-slot mode (orchestrator sets
+# GLIMMUNG_SUPERVISOR_CHILD on the container), exec tank-supervisor as
+# PID 1 so the agent-runner code can be hot-swapped via SIGHUP re-exec.
+# In production, GLIMMUNG_SUPERVISOR_CHILD is unset — the supervisor
+# binary is dormant and node runs as PID 1 directly, exactly as before.
+# See scripts/check-session-pod-hot-swap-migration.mjs for the
+# completion contract; checkbox 2 of that manifest pins this fallback
+# behavior. SIGTERM goes straight to whichever process is PID 1, which
+# handles graceful shutdown of the SDK subprocess.
+if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
+  exec /app/tank-supervisor
+fi
 exec node /opt/agent-runner/dist/index.js

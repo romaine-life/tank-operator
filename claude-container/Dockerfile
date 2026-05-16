@@ -1,3 +1,18 @@
+# Stage 0: build tank-supervisor for in-pod test-slot hot-swap.
+# The supervisor is the same Go binary the orchestrator pod uses (see
+# backend-go/cmd/tank-supervisor/). It runs as PID 1 in the agent-runner
+# container only when the chart enables test-slot mode; production sessions
+# don't invoke it. Building from source here (rather than COPY --from a
+# separately-built image) keeps the build self-contained — no cross-image
+# layer dependencies. Source intentionally unchanged from main; this
+# Dockerfile just bakes it into a second image.
+FROM golang:1.26-alpine AS tank-supervisor-build
+WORKDIR /src
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN go mod download
+COPY backend-go/cmd/tank-supervisor ./cmd/tank-supervisor
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
+
 # Stage 1: build the pod-side Phase B agent-runner from agent-runner/.
 # TypeScript compiled to JS; production node_modules baked into the
 # runtime image. Source at /repo/agent-runner/, build context is repo
@@ -138,6 +153,18 @@ COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/
 COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
 
 COPY runner-shared /opt/runner-shared
+
+# tank-supervisor + baked launch shim for test-slot agent-runner hot-swap.
+# The supervisor runs as PID 1 in the agent-runner container only when the
+# orchestrator sets GLIMMUNG_SUPERVISOR_CHILD on the container (see
+# k8s/session-config/agent-runner-launch.sh's conditional exec). In
+# production, both files are dormant: the supervisor binary is never invoked,
+# the shim is never resolved. Image gains ~5MB of dead weight in prod; the
+# tradeoff is "the same image works for both prod and test-slot iteration."
+COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
+RUN printf '%s\n%s\n' '#!/bin/sh' 'exec node /opt/agent-runner/dist/index.js' \
+        > /app/agent-runner-launch-binary.sh \
+    && chmod 0755 /app/agent-runner-launch-binary.sh
 
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
 # Baked into all three session images so the build is symmetric; only

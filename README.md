@@ -174,6 +174,16 @@ Project metadata for Glimmung:
       "artifact": "/tmp/tank-operator-go",
       "target": "/var/run/tank-operator-hot/tank-operator-go",
       "health_path": "/healthz"
+    },
+    "agent_runner": {
+      "enabled": true,
+      "strategy": "supervisor",
+      "build_command": "cd agent-runner && npm run build",
+      "source": "agent-runner/dist",
+      "target": "/var/run/agent-runner-hot/dist",
+      "restart": "SIGHUP",
+      "container": "agent-runner",
+      "pod_selector": "tank-operator/session-id"
     }
   }
 }
