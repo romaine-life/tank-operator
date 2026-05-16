@@ -116,7 +116,15 @@ export function StyleguideAvatars() {
                     type="button"
                     role="radio"
                     aria-checked={isSelected}
-                    onClick={() => setSelectedAvatarId(avatar.id)}
+                    onClick={() => {
+                      setSelectedAvatarId(avatar.id);
+                      // Stale "copied" feedback from a prior selection
+                      // would otherwise read as "copied <new name>"
+                      // even though only the prior name was actually
+                      // written. Reset so the next copy click stands
+                      // on its own.
+                      setCopyState("idle");
+                    }}
                     title={`${avatar.name} (${avatar.id})`}
                     data-design-component="AvatarPickerSwatch"
                     data-design-state={isSelected ? "selected" : "rest"}
