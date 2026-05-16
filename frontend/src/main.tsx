@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { StyleguideAvatars } from "./StyleguideAvatars";
 import { StyleguideView } from "./StyleguideView";
 import "./fonts.css";
 import "./index.css";
@@ -50,12 +51,17 @@ if (typeof window !== "undefined") {
   }
 }
 
-// Tiny path-based routing — the only route we mount that isn't App is
-// the glimmung styleguide pilot's /_styleguide visual catalog. Avoids
-// pulling in react-router for this single split.
+// Tiny path-based routing. The styleguide ecosystem has a few routes:
+// `/_styleguide` is the catalog/landing page; `/_styleguide/<feature>`
+// is a per-feature focused page (e.g. /avatars for the agent avatar
+// pool — stateful pickers want their own scroll context and viewport).
+// Anything else falls through to the main app. No react-router; the
+// branching is shallow enough to read inline.
 function Root() {
-  if (typeof window !== "undefined" && window.location.pathname === "/_styleguide") {
-    return <StyleguideView />;
+  if (typeof window !== "undefined") {
+    const path = window.location.pathname;
+    if (path === "/_styleguide") return <StyleguideView />;
+    if (path === "/_styleguide/avatars") return <StyleguideAvatars />;
   }
   return <App />;
 }

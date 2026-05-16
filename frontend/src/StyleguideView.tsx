@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
-import { AGENT_AVATARS, AgentAvatarIcon, getSessionAvatar } from "./sessionAvatars";
+import { AgentAvatarIcon, getSessionAvatar } from "./sessionAvatars";
 
 const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
 const MODE_LABELS: Record<(typeof MODES)[number], string> = {
@@ -238,24 +238,26 @@ function TankIcon({ className }: { className?: string }) {
   );
 }
 
-const sectionStyle: React.CSSProperties = {
+// Shared with feature-page components (e.g. StyleguideAvatars) so the
+// catalog index and the focused feature pages stay visually consistent.
+export const sectionStyle: React.CSSProperties = {
   padding: "32px 0 24px",
   borderTop: "1px solid var(--border-subtle)",
 };
-const headStyle: React.CSSProperties = {
+export const headStyle: React.CSSProperties = {
   fontSize: "var(--text-xs)",
   textTransform: "uppercase",
   letterSpacing: "1.2px",
   color: "var(--text-muted)",
   margin: "0 0 4px 0",
 };
-const captionStyle: React.CSSProperties = {
+export const captionStyle: React.CSSProperties = {
   fontSize: "var(--text-xs)",
   color: "var(--text-faint)",
   margin: "0 0 14px 0",
   maxWidth: "60ch",
 };
-const rowStyle: React.CSSProperties = {
+export const rowStyle: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   gap: "12px",
@@ -266,6 +268,20 @@ const showcaseFrameStyle: React.CSSProperties = {
   borderRadius: "var(--radius-md)",
   background: "var(--bg-base)",
   overflow: "hidden",
+};
+
+// The styleguide chrome — used as the outer `<div style>` on the index and
+// each feature page. height:100% + overflow:auto carves a scroll context
+// out of the global `html, body, #root { overflow: hidden }` invariant
+// that the main app relies on, so the styleguide is actually scrollable
+// while the rest of the app keeps its locked viewport.
+export const styleguideShellStyle: React.CSSProperties = {
+  height: "100%",
+  overflow: "auto",
+  background: "var(--bg-app)",
+  color: "var(--text-body)",
+  fontFamily: "var(--font-primary)",
+  padding: "32px 48px 64px",
 };
 const portfolioFrameStyle: React.CSSProperties = {
   ...showcaseFrameStyle,
@@ -517,12 +533,6 @@ export function StyleguideView() {
   const [selectedBox, setSelectedBox] = useState<InspectBox | null>(null);
   const [selection, setSelection] = useState<DesignSelection | null>(null);
   const [selectionStatus, setSelectionStatus] = useState("no selection yet");
-  // Avatar-picker state for the agent-avatar-pool section. The picker
-  // swaps the live avatar across all three render contexts at once so
-  // the circle-crop on .session-avatar can be vetted per slug.
-  const [selectedAvatarId, setSelectedAvatarId] = useState<string>(AGENT_AVATARS[0]?.id ?? "");
-  const selectedAvatar =
-    AGENT_AVATARS.find((a) => a.id === selectedAvatarId) ?? AGENT_AVATARS[0];
 
   function handleInspectMove(event: React.MouseEvent<HTMLDivElement>) {
     if (!inspectMode || !(event.target instanceof HTMLElement)) return;
@@ -567,13 +577,7 @@ export function StyleguideView() {
       onMouseMove={handleInspectMove}
       onMouseLeave={() => setHoverBox(null)}
       onClickCapture={handleInspectClick}
-      style={{
-        minHeight: "100vh",
-        background: "var(--bg-app)",
-        color: "var(--text-body)",
-        fontFamily: "var(--font-primary)",
-        padding: "32px 48px 64px",
-      }}
+      style={styleguideShellStyle}
     >
       <div style={{ maxWidth: 880 }}>
         <h1
@@ -655,6 +659,61 @@ export function StyleguideView() {
               </pre>
             )}
           </div>
+        </section>
+
+        {/* === features === */}
+        <section style={sectionStyle}>
+          <h2 style={headStyle}>features</h2>
+          <p style={captionStyle}>
+            Stateful preview pages that don't fit a single-row catalog entry.
+            Each gets its own route + viewport so the picker and the live
+            render stay anchored together while you iterate.
+          </p>
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+              gap: 8,
+            }}
+          >
+            <li>
+              <a
+                href="/_styleguide/avatars"
+                style={{
+                  display: "block",
+                  padding: "12px 14px",
+                  border: "1px solid var(--border-soft)",
+                  borderRadius: "var(--radius-md)",
+                  color: "var(--text-body)",
+                  textDecoration: "none",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: "var(--text-sm)",
+                    color: "var(--accent-fg)",
+                  }}
+                >
+                  agent avatar pool →
+                </span>
+                <span
+                  style={{
+                    display: "block",
+                    fontSize: "var(--text-xs)",
+                    color: "var(--text-faint)",
+                    marginTop: 2,
+                  }}
+                >
+                  picker + circle-cropped sidebar + 2 square contexts
+                </span>
+              </a>
+            </li>
+          </ul>
         </section>
 
         {/* === foundations: colors === */}
@@ -1074,186 +1133,6 @@ export function StyleguideView() {
               </div>
             </li>
           </ul>
-        </section>
-
-        {/* === agent avatar pool === */}
-        <section style={sectionStyle}>
-          <h2 style={headStyle}>agent avatar pool</h2>
-          <p style={captionStyle}>
-            {AGENT_AVATARS.length} entries in <code>AGENT_AVATARS</code>;
-            assigned to a session by a stable hash of <code>session_id</code>{" "}
-            (<code>getSessionAvatar</code>). Sources live under{" "}
-            <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
-            render contexts ship: <code>.session-avatar</code> in the sidebar
-            (42px, circle-cropped, translucent backdrop),{" "}
-            <code>.run-msg-ai-icon</code> on transcript messages (~22px
-            square), <code>.run-status-avatar</code> in the run-status pill
-            (~18px square). The picker swaps all three live so the
-            circle-crop on the sidebar surface — the only one that eats
-            corners — can be vetted per slug.
-          </p>
-          {selectedAvatar && (
-            <>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(56px, 64px))",
-                  gap: 8,
-                  marginBottom: 18,
-                }}
-                role="radiogroup"
-                aria-label="avatar picker"
-              >
-                {AGENT_AVATARS.map((avatar) => {
-                  const isSelected = avatar.id === selectedAvatar.id;
-                  return (
-                    <button
-                      key={avatar.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={isSelected}
-                      onClick={() => setSelectedAvatarId(avatar.id)}
-                      title={`${avatar.name} (${avatar.id})`}
-                      data-design-component="AvatarPickerSwatch"
-                      data-design-state={isSelected ? "selected" : "rest"}
-                      style={{
-                        width: 64,
-                        height: 64,
-                        padding: 0,
-                        borderRadius: "var(--radius-sm)",
-                        border: isSelected
-                          ? "2px solid var(--accent-fg)"
-                          : "1px solid var(--border-soft)",
-                        background: "transparent",
-                        cursor: "pointer",
-                        overflow: "hidden",
-                        outline: "none",
-                      }}
-                    >
-                      <img
-                        src={avatar.src}
-                        alt={avatar.name}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
-                          display: "block",
-                        }}
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 28, alignItems: "flex-start" }}>
-                {/* sidebar — the only circle-cropped surface */}
-                <div style={{ flex: "1 1 320px", minWidth: 280 }}>
-                  <div
-                    style={{
-                      fontSize: "var(--text-xs)",
-                      color: "var(--text-muted)",
-                      marginBottom: 6,
-                    }}
-                  >
-                    sidebar · <code>.session-avatar</code> · 42px · circle
-                  </div>
-                  <ul
-                    className="sessions"
-                    style={{ listStyle: "none", padding: 0, margin: 0, maxWidth: 320 }}
-                  >
-                    <li>
-                      <AgentAvatarIcon
-                        avatar={selectedAvatar}
-                        className="session-avatar"
-                      />
-                      <div className="session-row-top">
-                        <span
-                          className="status-dot status-active"
-                          aria-label="status active"
-                        />
-                        <button className="session-open" type="button">
-                          <span className="session-id">{selectedAvatar.name}</span>
-                        </button>
-                      </div>
-                      <div className="session-row-bottom">
-                        <span
-                          className="mode mode-claude_cli mode-icon-only"
-                          title="Claude CLI"
-                          aria-label="Claude CLI"
-                        >
-                          <ProviderIcon
-                            provider="anthropic"
-                            className="mode-provider-icon"
-                          />
-                          <span className="sr-only">claude-cli</span>
-                        </span>
-                      </div>
-                    </li>
-                  </ul>
-                </div>
-
-                {/* transcript message header — square */}
-                <div style={{ flex: "0 0 auto" }}>
-                  <div
-                    style={{
-                      fontSize: "var(--text-xs)",
-                      color: "var(--text-muted)",
-                      marginBottom: 6,
-                    }}
-                  >
-                    transcript · <code>.run-msg-ai-icon</code> · ~22px · square
-                  </div>
-                  <div
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "10px 14px",
-                      background: "var(--bg-elevated)",
-                      border: "1px solid var(--border-soft)",
-                      borderRadius: "var(--radius-md)",
-                    }}
-                  >
-                    <AgentAvatarIcon
-                      avatar={selectedAvatar}
-                      className="run-msg-ai-icon"
-                    />
-                    <span style={{ color: "var(--text-faint)", fontSize: "var(--text-sm)" }}>
-                      Done — Edit · 4 changes
-                    </span>
-                  </div>
-                </div>
-
-                {/* run-status pill — square */}
-                <div style={{ flex: "0 0 auto" }}>
-                  <div
-                    style={{
-                      fontSize: "var(--text-xs)",
-                      color: "var(--text-muted)",
-                      marginBottom: 6,
-                    }}
-                  >
-                    status pill · <code>.run-status-avatar</code> · ~18px · square
-                  </div>
-                  <div
-                    className="run-status-bar run-status-bar-idle"
-                    role="status"
-                    style={{ display: "inline-flex", alignItems: "center" }}
-                  >
-                    <span className="run-status-icon">
-                      <AgentAvatarIcon
-                        avatar={selectedAvatar}
-                        className="run-status-avatar"
-                      />
-                    </span>
-                    <span className="run-status-text">
-                      <span className="run-status-verb">Done</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
         </section>
 
         {/* === dropdown === */}
