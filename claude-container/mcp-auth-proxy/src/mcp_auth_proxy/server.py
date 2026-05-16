@@ -330,11 +330,11 @@ def _make_handler(
     `extra_header_provider`, when supplied, is awaited per request to
     obtain an additional header value injected on the way out (today:
     X-Auth-Romaine-Token for mcp-tank-operator). A None return skips
-    injection so the upstream sees the request without the extra header
-    — used during the additive Stage 2/3 period when service-principal
-    auth is optional. An exception in the provider is logged but does
-    NOT fail the request — the upstream still receives the normal
-    Bearer-authed call and can fall back to its legacy auth path. See
+    injection so the upstream sees the request without the extra header.
+    An exception in the provider is logged at INFO but does NOT fail
+    the request — the upstream still receives the normal Bearer-authed
+    call, will reject any service-principal-gated route with 401, and
+    the caller surfaces the error end-to-end. See
     nelsong6/tank-operator#486.
     """
     upstream = upstream.rstrip("/")
@@ -357,11 +357,13 @@ def _make_handler(
             try:
                 name, value = await extra_header_provider()
             except Exception:
-                # Non-fatal: the upstream can still serve the legacy
-                # IP-tail path. Logged at INFO because the deny-rate is
-                # tracked via the dedicated counter (auth.romaine.life
-                # exchange), and an exception spam at WARN would
-                # double-count visibility.
+                # Non-fatal: the upstream will reject any service-
+                # principal-gated route with 401 (post-#486 there is no
+                # acceptance shape other than the auth.romaine.life
+                # service JWT this header carries). Logged at INFO
+                # because the exchange failure rate is already tracked
+                # via the dedicated counter (auth.romaine.life
+                # exchange) and a duplicate WARN here would just spam.
                 log.info(
                     "extra-header provider failed for %s; forwarding without it",
                     upstream,
