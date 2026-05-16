@@ -718,6 +718,95 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// ---- HTTP error → banner -------------------------------------------------
+//
+// The sidebar `error` banner is a narrow sliver of chrome — there isn't
+// room to render the orchestrator's full `detail` body inline without
+// blowing up the layout. Instead we keep the visible label terse (the same
+// "<op> failed: <status>" shape callers used before), drop the full detail
+// into a hover `title=`, and make the banner a click-through to the exact
+// matching orchestrator log row in Grafana/Loki.
+//
+// The middleware in `backend-go/cmd/tank-operator/middleware_http.go`
+// already slogs every 5xx with `email` and the response body's `detail`
+// field, so the FE can hand-build a precise Loki query off the response
+// alone — no request-id round-trip needed.
+
+interface BannerError {
+  short: string;
+  detail?: string;
+  grafanaUrl?: string;
+}
+
+class HttpFailError extends Error {
+  readonly short: string;
+  readonly detail: string;
+  readonly grafanaUrl: string;
+  constructor(short: string, detail: string, grafanaUrl: string) {
+    super(short);
+    this.name = "HttpFailError";
+    this.short = short;
+    this.detail = detail;
+    this.grafanaUrl = grafanaUrl;
+  }
+}
+
+const GRAFANA_BASE_URL = "https://grafana.romaine.life";
+
+// Deep-link to the orchestrator's `http server error` slog row that matches
+// this failure. `email` + the first line of `detail` together identify a
+// row uniquely in practice; both attrs are written by logServerError on
+// every 5xx so the query lands without server-side changes.
+function buildOrchestratorErrorLink(opts: { email?: string; detail?: string }): string {
+  const filters: string[] = ['{namespace="tank-operator"}', '|= "http server error"'];
+  if (opts.email) filters.push(`|= ${JSON.stringify(opts.email)}`);
+  if (opts.detail) {
+    const firstLine = opts.detail.split("\n", 1)[0].slice(0, 200);
+    if (firstLine) filters.push(`|= ${JSON.stringify(firstLine)}`);
+  }
+  const expr = filters.join(" ");
+  const left = JSON.stringify({
+    datasource: "Loki",
+    queries: [{ refId: "A", expr, queryType: "range" }],
+    range: { from: "now-30m", to: "now" },
+  });
+  return `${GRAFANA_BASE_URL}/explore?orgId=1&left=${encodeURIComponent(left)}`;
+}
+
+// Replaces the `if (!res.ok) throw new Error(\`X failed: ${res.status}\`)`
+// idiom that previously discarded the JSON `detail` body. On non-2xx,
+// reads the body, builds a Grafana link, and throws a HttpFailError that
+// the banner catch block can render rich.
+async function throwIfHttpError(res: Response, op: string, email?: string): Promise<void> {
+  if (res.ok) return;
+  let detail = "";
+  try {
+    const body = (await res.clone().json()) as { detail?: unknown };
+    if (typeof body.detail === "string") detail = body.detail;
+  } catch {
+    /* non-JSON body: leave detail empty, banner will skip the tooltip */
+  }
+  throw new HttpFailError(
+    `${op} failed: ${res.status}`,
+    detail,
+    buildOrchestratorErrorLink({ email, detail }),
+  );
+}
+
+// Normalize whatever a `catch (e)` saw into the banner state shape. HTTP
+// failures carry full detail + a Grafana link; everything else falls back
+// to a plain short label.
+function toBannerError(e: unknown): BannerError {
+  if (e instanceof HttpFailError) {
+    return {
+      short: `Error: ${e.short}`,
+      detail: e.detail || undefined,
+      grafanaUrl: e.grafanaUrl,
+    };
+  }
+  return { short: String(e) };
+}
+
 interface SessionUser {
   sub: string;
   email: string;
@@ -6321,7 +6410,7 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<BannerError | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
@@ -6457,7 +6546,7 @@ export function App() {
   async function refresh() {
     try {
       const res = await authedFetch("/api/sessions");
-      if (!res.ok) throw new Error(`list failed: ${res.status}`);
+      await throwIfHttpError(res, "list", user?.email);
       const listed: Session[] = (await res.json()).map(normalizeSession);
       setSessions((prev) => {
         const previousById = new Map(prev.map((session) => [session.id, session]));
@@ -6468,14 +6557,14 @@ export function App() {
       });
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     }
   }
 
   async function refreshSessionActivity() {
     try {
       const res = await authedFetch("/api/sessions/activity");
-      if (!res.ok) throw new Error(`activity failed: ${res.status}`);
+      await throwIfHttpError(res, "activity", user?.email);
       const body = (await res.json()) as { sessions?: unknown[] };
       const next: Record<string, SessionActivitySummary> = {};
       if (Array.isArray(body.sessions)) {
@@ -6486,7 +6575,7 @@ export function App() {
       }
       setSessionActivities(next);
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     }
   }
 
@@ -6529,7 +6618,7 @@ export function App() {
             mode: defaultSessionMode,
           }),
         });
-        if (!res.ok) throw new Error(`glimmung launch failed: ${res.status}`);
+        await throwIfHttpError(res, "glimmung launch", user?.email);
         const created = await res.json();
         clearGlimmungLaunchContext();
         const session: Session = created.session;
@@ -6537,7 +6626,7 @@ export function App() {
         activate(session.id);
       } catch (e) {
         glimmungLaunchContext.current = context;
-        setError(String(e));
+        setError(toBannerError(e));
       } finally {
         setBusy(false);
       }
@@ -6731,7 +6820,7 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
       });
-      if (!res.ok) throw new Error(`create failed: ${res.status}`);
+      await throwIfHttpError(res, "create", user?.email);
       const created: Session = normalizeSession(await res.json());
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
@@ -6741,7 +6830,7 @@ export function App() {
       activate(created.id);
       startEditing(created.id, created.name);
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     } finally {
       setBusy(false);
     }
@@ -6806,7 +6895,7 @@ export function App() {
       }
       await refreshSessionActivity();
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     } finally {
       setBusy(false);
     }
@@ -6862,13 +6951,13 @@ export function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: nextName }),
       });
-      if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+      await throwIfHttpError(res, "rename", user?.email);
       const updated: Session = normalizeSession(await res.json());
       setSessions((prev) =>
         prev.map((s) => (s.id === id ? { ...s, name: updated.name ?? null } : s))
       );
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     }
   }
 
@@ -6921,7 +7010,7 @@ export function App() {
     });
     try {
       const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+      await throwIfHttpError(res, "delete", user?.email);
       await refresh();
       await refreshSessionActivity();
     } catch (e) {
@@ -6930,7 +7019,7 @@ export function App() {
         next.delete(id);
         return next;
       });
-      setError(String(e));
+      setError(toBannerError(e));
     }
   }
 
@@ -6947,7 +7036,7 @@ export function App() {
       }
       await deleteSession(id);
     } catch (e) {
-      setError(String(e));
+      setError(toBannerError(e));
     } finally {
       setBusy(false);
     }
@@ -7110,7 +7199,37 @@ export function App() {
           </div>
         </div>
 
-        {error && <pre className="error">{error}</pre>}
+        {error && (
+          // Terse label (no room for full detail inline), full message in
+          // the hover tooltip, click → matching Grafana/Loki log line.
+          // Non-HTTP errors (`setError(toBannerError(e))` on a plain Error)
+          // skip the link and render as plain text.
+          <div className="error error-rich">
+            {error.grafanaUrl ? (
+              <a
+                className="error-link"
+                href={error.grafanaUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={error.detail || error.short}
+              >
+                {error.short}
+              </a>
+            ) : (
+              <span className="error-text" title={error.detail || error.short}>
+                {error.short}
+              </span>
+            )}
+            <button
+              type="button"
+              className="error-dismiss"
+              onClick={() => setError(null)}
+              aria-label="dismiss error"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <div className="sidebar-list">
           <div className="sidebar-section-label">Sessions</div>
