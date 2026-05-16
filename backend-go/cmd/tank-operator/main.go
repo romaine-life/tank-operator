@@ -200,13 +200,9 @@ func main() {
 		}()
 	}
 
-	// 12. Parse internal allowed subjects.
-	// Accepts both "ns/name=email" and plain "ns/name" entries.
-	internalSubjects := parseInternalSubjects(
-		envDefault("INTERNAL_API_ALLOWED_SUBJECTS", "mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"),
-	)
-
-	// 13. Register all routes.
+	// 12. Register all routes. Internal session handlers authenticate via
+	// the auth.romaine.life service-principal JWT path (#486 Stage 4); the
+	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
 		k8s:                      k8sClient,
@@ -223,7 +219,7 @@ func main() {
 		sessionScope:             sessionScope,
 		sessionServiceAccount:    sessionServiceAccount,
 		designSelectionNamespace: designSelectionNamespace,
-		internalAllowedSubjects:  internalSubjects,
+		spawnQuota:               NewSpawnQuotaTracker(),
 	}
 	srv.registerRoutes(mux)
 
@@ -476,26 +472,3 @@ func parseEmailSet(raw string) map[string]bool {
 	return m
 }
 
-// parseInternalSubjects parses a comma-separated list of "ns/name" or "ns/name=email" entries
-// into a map[qualified]email. Plain entries without "=" are mapped to "".
-func parseInternalSubjects(raw string) map[string]string {
-	m := map[string]string{}
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		idx := strings.IndexByte(entry, '=')
-		if idx > 0 {
-			subj := strings.TrimSpace(entry[:idx])
-			email := strings.ToLower(strings.TrimSpace(entry[idx+1:]))
-			if subj != "" {
-				m[subj] = email
-			}
-		} else {
-			// Plain "ns/name" without email.
-			m[entry] = ""
-		}
-	}
-	return m
-}

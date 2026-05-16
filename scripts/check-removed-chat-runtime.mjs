@@ -244,6 +244,22 @@ const blocked = [
   { name: "removed /debug/vars HTTP route", pattern: /\/debug\/vars\b/ },
   { name: "removed expvarPersisterMetrics type", pattern: /\bexpvarPersisterMetrics\b/ },
   { name: "removed expvarWakeMetrics type", pattern: /\bexpvarWakeMetrics\b/ },
+  // /api/internal/sessions/* identity was migrated from raw SA-TokenReview
+  // + caller_pod_ip (IP-tail lookup against pod annotations) to the
+  // auth.romaine.life service-principal JWT path in nelsong6/tank-operator#486
+  // Stage 4. Both the gate function and every adjacent helper were deleted
+  // in the same migration; block reintroduction so a future refactor
+  // can't quietly rebuild the parallel auth path. The legacy env var
+  // INTERNAL_API_ALLOWED_SUBJECTS that fed the (ns, sa) allowlist is
+  // also retired. mcp-tank-operator's caller_pod_ip query param was the
+  // only consumer; both ends were cut over in the same release.
+  { name: "removed requireInternalCaller gate", pattern: /\brequireInternalCaller\b/ },
+  { name: "removed resolveCallerEmail helper", pattern: /\bresolveCallerEmail\b/ },
+  { name: "removed FindPodByIP identity lookup", pattern: /\bFindPodByIP\b/ },
+  { name: "removed caller_pod_ip query param", pattern: /\bcaller_pod_ip\b/ },
+  { name: "removed INTERNAL_API_ALLOWED_SUBJECTS env var", pattern: /\bINTERNAL_API_ALLOWED_SUBJECTS\b/ },
+  { name: "removed parseInternalSubjects helper", pattern: /\bparseInternalSubjects\b/ },
+  { name: "removed internalAllowedSubjects field", pattern: /\binternalAllowedSubjects\b/ },
 ];
 
 const failures = [];

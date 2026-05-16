@@ -9,7 +9,6 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
@@ -46,33 +45,6 @@ var builtinSlashCommands = []menuCommandEntry{
 	{Name: "/review", Desc: "Review the pending changes", Source: "builtin"},
 	{Name: "/security-review", Desc: "Run a security review", Source: "builtin"},
 	{Name: "/usage", Desc: "Show token / billing usage", Source: "builtin"},
-}
-
-// requireInternalCaller validates the Bearer SA token and checks that the
-// caller's namespace/name is in the allowedSubjects map.
-func requireInternalCaller(k8s kubernetes.Interface, allowedSubjects map[string]string) func(http.HandlerFunc) http.HandlerFunc {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			token, err := auth.ParseSAToken(r)
-			if err != nil {
-				writeError(w, auth.ErrorStatus(err), err.Error())
-				return
-			}
-			// Internal callers must present a token minted for tank-operator.
-			// The exact service-account allowlist gates access after TokenReview
-			// succeeds.
-			subject, err := auth.ValidateSAToken(r.Context(), k8s, token, []string{"tank-operator"})
-			if err != nil {
-				writeError(w, auth.ErrorStatus(err), err.Error())
-				return
-			}
-			if _, ok := allowedSubjects[subject.Qualified()]; !ok {
-				writeError(w, http.StatusForbidden, "caller not in allowed subjects: "+subject.Qualified())
-				return
-			}
-			next(w, r)
-		}
-	}
 }
 
 func (s *appServer) handleInternalJWKS(w http.ResponseWriter, r *http.Request) {
@@ -183,21 +155,14 @@ func (s *appServer) handleInternalGitHubAttestation(w http.ResponseWriter, r *ht
 	})
 }
 
-// handleInternalListSessions lists sessions for the caller's email.
+// handleInternalListSessions lists sessions for the caller's actor_email.
 func (s *appServer) handleInternalListSessions(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalListSessions)(w, r)
-}
-
-func (s *appServer) doInternalListSessions(w http.ResponseWriter, r *http.Request) {
-	email, callerPodName := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email (missing caller_pod_ip or pod not found)")
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions")
+	if user == nil {
 		return
 	}
-	_ = callerPodName
 
-	infos, err := s.mgr.ListSessions(r.Context(), email)
+	infos, err := s.mgr.ListSessions(r.Context(), user.ActorEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -218,28 +183,33 @@ func (s *appServer) doInternalListSessions(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleInternalCreateSession creates a new session for the caller.
+// handleInternalCreateSession creates a new session for the caller's actor_email.
+//
+// Identical operation to handleInternalSpawnSession (POST
+// /api/internal/sessions/spawn) — they expose the same behavior at two
+// URLs. The /spawn endpoint stays as the canonical name for in-pod
+// scripts that want a clear verb; mcp-tank-operator's create_session
+// tool calls this route. Both are coalesced into a single endpoint as
+// part of post-#486 API cleanup.
 func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalCreateSession)(w, r)
-}
-
-func (s *appServer) doInternalCreateSession(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions")
+	if user == nil {
+		return
+	}
+	if !s.gateSpawnQuota(w, r, user) {
 		return
 	}
 
 	var body struct {
 		Mode            string         `json:"mode"`
 		GlimmungContext map[string]any `json:"glimmung_context"`
+		Name            string         `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
 
-	info, err := s.mgr.Create(r.Context(), email, body.Mode, body.GlimmungContext, "")
+	info, err := s.mgr.Create(r.Context(), user.ActorEmail, body.Mode, body.GlimmungContext, body.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -247,20 +217,35 @@ func (s *appServer) doInternalCreateSession(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusCreated, info)
 }
 
-// handleInternalDeleteSession deletes a session.
-func (s *appServer) handleInternalDeleteSession(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalDeleteSession)(w, r)
+// gateSpawnQuota enforces the per-`sub` rate limit and per-`actor_email`
+// concurrent cap before a session-creation handler hits the manager.
+// Returns true to proceed, false when one of the caps fired (the
+// response has been written, including the throttle counter).
+func (s *appServer) gateSpawnQuota(w http.ResponseWriter, r *http.Request, user *auth.User) bool {
+	if s.spawnQuota != nil && !s.spawnQuota.CheckRate(user.Sub, serviceSpawnRatePerMin()) {
+		writeError(w, http.StatusTooManyRequests, "spawn rate limit exceeded for this service-principal sub")
+		return false
+	}
+	ok, err := CheckConcurrentCap(r.Context(), s.mgr, user.ActorEmail, serviceSpawnConcurrentPerActor())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not check active session count: "+err.Error())
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, "actor has reached the concurrent active session cap")
+		return false
+	}
+	return true
 }
 
-func (s *appServer) doInternalDeleteSession(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+// handleInternalDeleteSession deletes a session owned by the caller's actor_email.
+func (s *appServer) handleInternalDeleteSession(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "DELETE /api/internal/sessions/{session_id}")
+	if user == nil {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	if err := s.mgr.Delete(r.Context(), email, sessionID); err != nil {
+	if err := s.mgr.Delete(r.Context(), user.ActorEmail, sessionID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -269,14 +254,8 @@ func (s *appServer) doInternalDeleteSession(w http.ResponseWriter, r *http.Reque
 
 // handleInternalPatchSession updates a session's name.
 func (s *appServer) handleInternalPatchSession(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalPatchSession)(w, r)
-}
-
-func (s *appServer) doInternalPatchSession(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	user := s.requireServicePrincipal(w, r, "PATCH /api/internal/sessions/{session_id}")
+	if user == nil {
 		return
 	}
 	sessionID := r.PathValue("session_id")
@@ -287,7 +266,7 @@ func (s *appServer) doInternalPatchSession(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetName(r.Context(), email, sessionID, body.Name)
+	info, err := s.mgr.SetName(r.Context(), user.ActorEmail, sessionID, body.Name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -297,12 +276,14 @@ func (s *appServer) doInternalPatchSession(w http.ResponseWriter, r *http.Reques
 
 // handleInternalSessionCapabilities returns the skills and MCP tools visible inside a session pod.
 func (s *appServer) handleInternalSessionCapabilities(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalSessionCapabilities)(w, r)
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/capabilities")
+	if user == nil {
+		return
+	}
+	s.doInternalSessionCapabilities(w, r, user.ActorEmail)
 }
 
-func (s *appServer) doInternalSessionCapabilities(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
+func (s *appServer) doInternalSessionCapabilities(w http.ResponseWriter, r *http.Request, email string) {
 	if email == "" {
 		writeError(w, http.StatusBadRequest, "could not resolve caller email")
 		return
@@ -508,14 +489,8 @@ func sessionMenus(skills []skillEntryResponse, mcpServers []mcpServerEntry) sess
 
 // handleInternalSetTestState sets the test state for a session.
 func (s *appServer) handleInternalSetTestState(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalSetTestState)(w, r)
-}
-
-func (s *appServer) doInternalSetTestState(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/test-state")
+	if user == nil {
 		return
 	}
 	sessionID := r.PathValue("session_id")
@@ -528,7 +503,7 @@ func (s *appServer) doInternalSetTestState(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetTestState(r.Context(), email, sessionID, body.Active, body.SlotIndex, body.URL)
+	info, err := s.mgr.SetTestState(r.Context(), user.ActorEmail, sessionID, body.Active, body.SlotIndex, body.URL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -538,14 +513,8 @@ func (s *appServer) doInternalSetTestState(w http.ResponseWriter, r *http.Reques
 
 // handleInternalSetRolloutState sets the rollout state for a session.
 func (s *appServer) handleInternalSetRolloutState(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalSetRolloutState)(w, r)
-}
-
-func (s *appServer) doInternalSetRolloutState(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/rollout-state")
+	if user == nil {
 		return
 	}
 	sessionID := r.PathValue("session_id")
@@ -556,7 +525,7 @@ func (s *appServer) doInternalSetRolloutState(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetRolloutState(r.Context(), email, sessionID, body.Active)
+	info, err := s.mgr.SetRolloutState(r.Context(), user.ActorEmail, sessionID, body.Active)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -566,14 +535,8 @@ func (s *appServer) doInternalSetRolloutState(w http.ResponseWriter, r *http.Req
 
 // handleInternalSendMessage enqueues a follow-up turn to a chat-capable session.
 func (s *appServer) handleInternalSendMessage(w http.ResponseWriter, r *http.Request) {
-	protect := requireInternalCaller(s.k8s, s.internalAllowedSubjects)
-	protect(s.doInternalSendMessage)(w, r)
-}
-
-func (s *appServer) doInternalSendMessage(w http.ResponseWriter, r *http.Request) {
-	email, _ := s.resolveCallerEmail(r)
-	if email == "" {
-		writeError(w, http.StatusBadRequest, "could not resolve caller email")
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/messages")
+	if user == nil {
 		return
 	}
 	sessionID := r.PathValue("session_id")
@@ -588,7 +551,7 @@ func (s *appServer) doInternalSendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, status, detail := s.enqueueSDKTurn(r.Context(), email, sessionID, sdkTurnRequest{
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.ActorEmail, sessionID, sdkTurnRequest{
 		Prompt:         body.Prompt,
 		Model:          body.Model,
 		PermissionMode: body.PermissionMode,
@@ -602,25 +565,10 @@ func (s *appServer) doInternalSendMessage(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
-// resolveCallerEmail resolves the caller's email from caller_pod_ip query param.
-func (s *appServer) resolveCallerEmail(r *http.Request) (email, podName string) {
-	callerPodIP := r.URL.Query().Get("caller_pod_ip")
-	if callerPodIP == "" {
-		return "", ""
-	}
-	email, podName, err := s.mgr.FindPodByIP(r.Context(), callerPodIP)
-	if err != nil {
-		return "", ""
-	}
-	return email, podName
-}
-
 // requireServicePrincipal validates an inbound auth.romaine.life JWT and
-// returns the verified User iff the role claim is `service`. Used by the
-// service-principal session-creation surface (see
-// nelsong6/tank-operator#486). Distinct from `requireInternalCaller`
-// (raw SA TokenReview, IP-tail identity) — both surfaces coexist during
-// the Stage 2 additive period; the legacy path is retired in Stage 4.
+// returns the verified User iff the role claim is `service`. The
+// canonical authentication path for every /api/internal/sessions/*
+// handler post-#486 Stage 4.
 //
 // On rejection, writes the structured error response and increments the
 // observability counter with the labeled reason so the deny-rate is
@@ -655,20 +603,19 @@ func (s *appServer) requireServicePrincipal(w http.ResponseWriter, r *http.Reque
 	return &user
 }
 
-// handleInternalSpawnSession is the service-principal entry point for
-// creating a new session. Authenticated by the caller's auth.romaine.life
-// service JWT (role=service); the new session is owned by the JWT's
-// `actor_email` claim — i.e. the human whose pod made the call. A pod
-// cannot spawn sessions for any other actor by construction.
-//
-// Lives alongside the legacy `POST /api/internal/sessions` during Stage
-// 2 — that legacy route still uses requireInternalCaller (SA TokenReview
-// + caller_pod_ip identity). Stage 4 retires the legacy path. See
-// nelsong6/tank-operator#486.
+// handleInternalSpawnSession is an alias of handleInternalCreateSession
+// (POST /api/internal/sessions) kept for API stability — mcp-tank-operator's
+// `spawn_service_session` tool wires to this URL. Both endpoints have
+// identical semantics post-#486 Stage 4: service-JWT auth, owner is the
+// JWT's `actor_email` claim. Coalesce into a single endpoint in a
+// post-#486 API cleanup PR.
 func (s *appServer) handleInternalSpawnSession(w http.ResponseWriter, r *http.Request) {
 	const route = "POST /api/internal/sessions/spawn"
 	user := s.requireServicePrincipal(w, r, route)
 	if user == nil {
+		return
+	}
+	if !s.gateSpawnQuota(w, r, user) {
 		return
 	}
 
@@ -694,3 +641,4 @@ func (s *appServer) handleInternalSpawnSession(w http.ResponseWriter, r *http.Re
 	recordServiceRoleRequest(route, "ok")
 	writeJSON(w, http.StatusCreated, info)
 }
+

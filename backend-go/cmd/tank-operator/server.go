@@ -46,8 +46,11 @@ type appServer struct {
 	designSelectionMu     sync.Mutex
 	latestDesignSelection map[string]any
 
-	// internalAllowedSubjects maps "namespace/serviceaccount" → email for internal SA auth.
-	internalAllowedSubjects map[string]string
+	// spawnQuota enforces per-`sub` rate limits on the service-principal
+	// spawn surface. Per-`actor_email` concurrent caps are checked via
+	// the session manager directly (CheckConcurrentCap in quota.go).
+	// See nelsong6/tank-operator#486 stage 6.
+	spawnQuota *SpawnQuotaTracker
 }
 
 type sessionCommandBus interface {

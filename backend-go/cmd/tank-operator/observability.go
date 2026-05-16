@@ -156,7 +156,6 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
-
 // --- Session-list (sidebar) stream metrics --- the matching names for
 // the chat-side counters above so dashboards can render both ledgers
 // side-by-side. Same shape: open/reconnect/resync/error/emitted/heartbeat.

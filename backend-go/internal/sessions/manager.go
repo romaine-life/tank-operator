@@ -592,23 +592,6 @@ func (m *Manager) findPodBySessionID(ctx context.Context, owner, sessionID strin
 	return pod, nil
 }
 
-// FindPodByIP returns the owner email and pod name for a session pod with the given IP.
-func (m *Manager) FindPodByIP(ctx context.Context, podIP string) (ownerEmail, podName string, err error) {
-	pods, err := m.client.CoreV1().Pods(m.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/managed-by=tank-operator",
-	})
-	if err != nil {
-		return "", "", err
-	}
-	for _, pod := range pods.Items {
-		if pod.Status.PodIP == podIP {
-			email := pod.Annotations["tank-operator/owner-email"]
-			return email, pod.Name, nil
-		}
-	}
-	return "", "", fmt.Errorf("no session pod with IP %s", podIP)
-}
-
 func (m *Manager) nextSessionID(ctx context.Context) (string, error) {
 	if m.registry != nil {
 		return m.registry.NextSessionID(ctx)

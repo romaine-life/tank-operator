@@ -190,12 +190,11 @@ host:
 superAdmins:
   emails: nelson@romaine.life
 
-# Comma-separated "namespace/serviceaccount" pairs that may call the
-# general /api/internal/session endpoints. mcp-github receives Tank session
-# attestations instead of calling these endpoints directly.
+# Internal-API config. The pre-#486 allowlist (allowedSubjects) was
+# retired when /api/internal/sessions/* moved to auth.romaine.life
+# service-principal JWT auth; remaining setting is just the public
+# hostname used to build session URLs returned by internal endpoints.
 internalApi:
-  allowedSubjects: "mcp-tank-operator/mcp-tank-operator,mcp-glimmung/mcp-glimmung"
-  # Public hostname used to build session URLs returned by internal session endpoints.
   tankUiHost: "https://tank.romaine.life"
 
 externalSecret:
