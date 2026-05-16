@@ -32,6 +32,10 @@ const ignoredFiles = new Set([
 const ignoredRelativePaths = new Set([
   "scripts/check-removed-chat-runtime.mjs",
   "scripts/check-tank-conversation-contract.mjs",
+  // The stop-request migration's completion manifest catalogues the
+  // retired symbols as grep targets. Excluded so this guard doesn't
+  // fire on its sibling guard's expectations.
+  "scripts/check-stop-request-migration.mjs",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
   // The observability test asserts /debug/vars returns 404 (the negative
@@ -268,6 +272,17 @@ const blocked = [
   // PR can't quietly resurrect the parallel surface.
   { name: "removed handleInternalSpawnSession alias", pattern: /\bhandleInternalSpawnSession\b/ },
   { name: "removed /api/internal/sessions/spawn URL", pattern: /\/api\/internal\/sessions\/spawn\b/ },
+  // UI-local stop optimism retired in the turn.interrupt_requested
+  // migration. `stopping` is now a projection-driven run status sourced
+  // from the durable turn.interrupt_requested event; the local flag and
+  // its paired ref were the UI mirror that contradicted durable state
+  // (the smell named in docs/quality-timeframes.md's review heuristics).
+  // The literal setRunStatus("stopping") imperative call is allowed in
+  // applySdkProjectionToUi (projection-driven) but forbidden in cancelRun
+  // — that boundary is pinned by frontend/src/migrationPolicy.test.ts,
+  // which has finer-grained function-body awareness than this script.
+  { name: "retired local stop-request flag", pattern: /\bstopRequested\b/ },
+  { name: "retired stopping-target ref",     pattern: /\bstoppingTargetRef\b/ },
 ];
 
 const failures = [];
