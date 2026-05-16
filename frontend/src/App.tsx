@@ -1924,9 +1924,11 @@ type RunTab = "chat" | "files" | "settings" | "help";
 interface ComposerAttachment {
   id: string; // local-only id for keying
   name: string;
-  /** Path relative to /workspace, e.g. ".attachments/1715..-foo.png". */
+  /** Path relative to /workspace. Images land in `screenshots/<n>.<ext>`
+   *  (server picks the next free id atomically); other uploads land in
+   *  `.attachments/<unix-ns>-<sanitized-name>`. Server-decided either way. */
   path: string;
-  /** Full path inside the pod, e.g. "/workspace/.attachments/...". */
+  /** Full path inside the pod, e.g. "/workspace/screenshots/3.png". */
   absPath: string;
   size: number;
   /** Browser blob URL for the thumbnail (if image). */
