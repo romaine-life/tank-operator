@@ -1,6 +1,6 @@
 # Avatar Assets
 
-Tank Operator's assistant avatar pool is the JP1 cast (6 dinos + 7 humans).
+Tank Operator's assistant avatar pool is the JP1 cast (2 dinos + 7 humans).
 Files are named `jp1-<slug>.png`; the slug matches the `id` field in
 `frontend/src/sessionAvatars.tsx → AGENT_AVATARS`.
 

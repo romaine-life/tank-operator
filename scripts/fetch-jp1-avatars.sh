@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run from inside the tank-operator repo on the jp1-avatars branch.
-# Downloads the 13 JP1 avatar source images into
+# Downloads the 9 JP1 avatar source images into
 # frontend/public/assets/avatars/jp1-<slug>.png.
 #
 # Sources: Jurassic Park Fandom wiki (static.wikia.nocookie.net). These
@@ -25,14 +25,13 @@ UA="Mozilla/5.0 (compatible; tank-operator-personal-app/1.0)"
 
 declare -A URLS=(
   # Dinos
-  [jp1-trex]="https://static.wikia.nocookie.net/jurassicpark/images/a/aa/Rexy.jpg/revision/latest?cb=20200605165953"
   [jp1-raptor]="https://static.wikia.nocookie.net/jurassicpark/images/7/72/BigOne04.jpg/revision/latest?cb=20120804203143"
   [jp1-brachiosaurus]="https://static.wikia.nocookie.net/jurassicpark/images/e/e9/JP-Brachiosaur.jpg/revision/latest?cb=20090416060101"
-  [jp1-dilophosaurus]="https://static.wikia.nocookie.net/jurassicpark/images/a/a7/Dilophosaurus_Open_Frills.png/revision/latest?cb=20240214114411"
-  [jp1-triceratops]="https://static.wikia.nocookie.net/jurassicpark/images/e/ed/JPI_Triceratops.png/revision/latest?cb=20200525233206"
-  [jp1-gallimimus]="https://static.wikia.nocookie.net/jurassicpark/images/8/86/Trexkillinggallijp1.jpg/revision/latest?cb=20160514230213"
   # Humans
-  [jp1-grant]="https://static.wikia.nocookie.net/jurassicpark/images/7/79/Alan_Grant_1993.png/revision/latest?cb=20241117015123"
+  # Iconic scene: Alan Grant in the rain after the T-rex breakout — wide-
+  # brim hat, denim jacket, looking off frame-right. Staged locally; the
+  # wiki only has the bare Alan_Grant_1993.png profile shot.
+  [jp1-grant]="local:scripts/sources/jp1-grant-source.png"
   [jp1-sattler]="https://static.wikia.nocookie.net/jurassicpark/images/1/1f/Ellie_Sattler_1993.jpg/revision/latest?cb=20241117015654"
   [jp1-malcolm]="https://static.wikia.nocookie.net/jurassicpark/images/3/3c/Ian_Malcolm_1993.png/revision/latest?cb=20240123021856"
   [jp1-hammond]="https://static.wikia.nocookie.net/jurassicpark/images/2/29/John_Hammond_1993.jpg/revision/latest?cb=20240209055500"
