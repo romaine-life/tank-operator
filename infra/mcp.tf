@@ -96,3 +96,27 @@ module "mcp_tank_operator" {
 
   role_assignments = {}
 }
+
+# ----------------------------------------------------------------------------
+# Per-server: auth
+# ----------------------------------------------------------------------------
+# Admin MCP for auth.romaine.life user management — list/promote/enroll
+# users from a tank-operator session pod instead of clicking through the
+# /admin console. Like mcp_tank_operator, this server's only outbound work
+# is HTTP against auth.romaine.life's admin endpoints, so no Azure
+# role_assignments. The UAMI exists so CI federation + the kv-published
+# client ID land before the mcp-auth chart needs them.
+
+module "mcp_auth" {
+  source = "./mcp-server"
+
+  name                     = "auth"
+  resource_group_name      = data.azurerm_resource_group.main.name
+  resource_group_location  = data.azurerm_resource_group.main.location
+  key_vault_id             = data.azurerm_key_vault.main.id
+  aks_oidc_issuer_url      = local.aks_oidc_issuer_url
+  aks_namespace            = "mcp-auth"
+  aks_service_account_name = "mcp-auth"
+
+  role_assignments = {}
+}
