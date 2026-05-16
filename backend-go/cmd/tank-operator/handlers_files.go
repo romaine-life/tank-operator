@@ -102,7 +102,7 @@ import sys
 p = sys.argv[1]
 rel_path = sys.argv[2]
 entries = []
-for name in sorted(os.listdir(p), key=lambda s: s.lower()):
+for name in os.listdir(p):
     full = os.path.join(p, name)
     try:
         st = os.lstat(full)
@@ -123,6 +123,9 @@ for name in sorted(os.listdir(p), key=lambda s: s.lower()):
         "size": 0 if typ == "dir" else st.st_size,
         "github_url": None,
     })
+# Sort: directories first (alphabetical, case-insensitive), then everything
+# else (alphabetical, case-insensitive). Matches GitHub / VS Code / Finder.
+entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
 print(json.dumps({"path": rel_path, "entries": entries}))
 PY`,
 		shellQuote(absPath),
