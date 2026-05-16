@@ -46,7 +46,7 @@ AskUserQuestion replies are also durable session commands: Stop is not
 considered complete until the runner publishes `turn.interrupted`, and
 AskUserQuestion answers flow through `input_reply` commands instead of a
 browser-runner socket. The backend session-bus persister writes runner events
-to the Cosmos `session-events` ledger and wakes open SSE streams only after
+to the Postgres `session_events` ledger and wakes open SSE streams only after
 that write commits, so live delivery is a notification layer over persisted
 history rather than browser polling.
 
@@ -59,13 +59,13 @@ session lifecycle goal changes.
 ## Repo layout
 
 ```
-backend-go/                   Go orchestrator (Cosmos + KV + k8s exec)
+backend-go/                   Go orchestrator (Postgres + KV + k8s exec)
 frontend/                     Vite + React UI
 api-proxy/                    Envoy ext_proc (Python): injects provider OAuth, refreshes on 401
 agent-container/              Long-lived pod-side runner (Go) — in progress, see CLAUDE.md
 claude-container/             Claude session image bootstrap + Dockerfile
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret
-infra/                        Tofu — Cosmos, KV, UAMI, role assignments
+infra/                        Tofu — Postgres, KV, UAMI, role assignments
 Dockerfile                    multi-stage: vite build → go build → alpine runtime
 .github/workflows/build.yml   OIDC az login → build → push to ACR
 ```
