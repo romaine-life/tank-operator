@@ -19,7 +19,7 @@ type sessionReader interface {
 	Get(ctx context.Context, owner, sessionID string) (sessions.Info, error)
 }
 
-// config returns the public configuration (entra client ID, authority).
+// config returns the public configuration (auth.romaine.life URL etc.).
 // Standalone version for tests.
 func config(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, publicConfig())

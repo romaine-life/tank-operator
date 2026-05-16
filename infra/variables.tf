@@ -26,8 +26,3 @@ variable "key_vault_resource_group" {
   default     = "infra"
 }
 
-variable "hostname" {
-  description = "Public hostname of the tank-operator frontend; the MSAL.js redirect URI is derived from this."
-  type        = string
-  default     = "tank.romaine.life"
-}

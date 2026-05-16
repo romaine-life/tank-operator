@@ -5,11 +5,11 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,13 +17,15 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// auth.romaine.life is the single upstream identity provider. Its Better
+// Auth JWT plugin publishes RS256 keys at /api/auth/jwks; the issuer claim
+// is the service's baseURL.
 const (
-	entraJWKSURL  = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
-	jwksCacheTTL  = 10 * time.Minute
-	clientTimeout = 10 * time.Second
+	authRomaineLifeJWKSURL = "https://auth.romaine.life/api/auth/jwks"
+	authRomaineLifeIssuer  = "https://auth.romaine.life"
+	jwksCacheTTL           = 10 * time.Minute
+	jwksHTTPTimeout        = 10 * time.Second
 )
-
-var issuerPattern = regexp.MustCompile(`^https://login\.microsoftonline\.com/.+/v2\.0$`)
 
 type jwksKey struct {
 	Kid string `json:"kid"`
@@ -43,11 +45,11 @@ type jwksCache struct {
 	httpClient *http.Client
 }
 
-var globalJWKS = &jwksCache{
-	httpClient: &http.Client{Timeout: clientTimeout},
+var romaineLifeJWKS = &jwksCache{
+	httpClient: &http.Client{Timeout: jwksHTTPTimeout},
 }
 
-func (c *jwksCache) getKey(kid string) (*rsa.PublicKey, error) {
+func (c *jwksCache) getKey(ctx context.Context, url, kid string) (*rsa.PublicKey, error) {
 	c.mu.RLock()
 	if time.Since(c.fetchedAt) < jwksCacheTTL {
 		if key, ok := c.keys[kid]; ok {
@@ -67,7 +69,7 @@ func (c *jwksCache) getKey(kid string) (*rsa.PublicKey, error) {
 		}
 		return nil, fmt.Errorf("unknown kid %q", kid)
 	}
-	if err := c.refresh(); err != nil {
+	if err := c.refresh(ctx, url); err != nil {
 		return nil, err
 	}
 	if key, ok := c.keys[kid]; ok {
@@ -76,8 +78,12 @@ func (c *jwksCache) getKey(kid string) (*rsa.PublicKey, error) {
 	return nil, fmt.Errorf("unknown kid %q after refresh", kid)
 }
 
-func (c *jwksCache) refresh() error {
-	resp, err := c.httpClient.Get(entraJWKSURL)
+func (c *jwksCache) refresh(ctx context.Context, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("JWKS request: %w", err)
+	}
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("JWKS fetch: %w", err)
 	}
@@ -133,9 +139,11 @@ func rsaPublicKey(nB64, eB64 string) (*rsa.PublicKey, error) {
 	return &rsa.PublicKey{N: new(big.Int).SetBytes(nb), E: eVal}, nil
 }
 
-// ExchangeEntraToken validates an Entra ID token and returns (email, name, sub) or an error.
-// clientID is used as the expected audience.
-func ExchangeEntraToken(ctx context.Context, idToken, clientID, allowedEmails string) (email, name, sub string, err error) {
+// ExchangeRomaineLifeToken verifies a JWT issued by auth.romaine.life and
+// returns the user identity. The allowedEmails check is the tank-operator-
+// specific access gate: auth.romaine.life mints tokens for any user it has
+// onboarded; this service decides which of those users may use it.
+func ExchangeRomaineLifeToken(ctx context.Context, tokenString, allowedEmails string) (email, name, sub string, err error) {
 	allowed := map[string]struct{}{}
 	for _, e := range strings.Split(allowedEmails, ",") {
 		normalized := strings.ToLower(strings.TrimSpace(e))
@@ -145,38 +153,35 @@ func ExchangeEntraToken(ctx context.Context, idToken, clientID, allowedEmails st
 	}
 
 	claims := jwt.MapClaims{}
-	token, err := jwt.ParseWithClaims(idToken, claims, func(t *jwt.Token) (any, error) {
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
 		if t.Method.Alg() != "RS256" {
 			return nil, fmt.Errorf("unexpected alg: %s", t.Method.Alg())
 		}
 		kid, _ := t.Header["kid"].(string)
-		return globalJWKS.getKey(kid)
+		if kid == "" {
+			return nil, errors.New("token missing kid")
+		}
+		return romaineLifeJWKS.getKey(ctx, authRomaineLifeJWKSURL, kid)
 	}, jwt.WithLeeway(60*time.Second))
 	if err != nil || !token.Valid {
 		if err == nil {
-			err = fmt.Errorf("invalid token")
+			err = errors.New("invalid token")
 		}
-		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid Entra token: " + err.Error()}
+		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid auth.romaine.life token: " + err.Error()}
 	}
 
-	// Validate issuer
 	iss, _ := claims["iss"].(string)
-	if !issuerPattern.MatchString(iss) {
-		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid issuer: " + iss}
+	if iss != authRomaineLifeIssuer {
+		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "unexpected issuer: " + iss}
 	}
 
-	// Extract email
 	rawEmail, _ := claims["email"].(string)
-	if rawEmail == "" {
-		rawEmail, _ = claims["preferred_username"].(string)
-	}
 	rawEmail = strings.ToLower(strings.TrimSpace(rawEmail))
 	if rawEmail == "" {
 		return "", "", "", errHTTP{status: http.StatusUnauthorized, message: "token missing email claim"}
 	}
-
 	if _, ok := allowed[rawEmail]; !ok {
-		return "", "", "", errHTTP{status: http.StatusForbidden, message: "email not in allowlist"}
+		return "", "", "", errHTTP{status: http.StatusForbidden, message: "email not in tank-operator allowlist"}
 	}
 
 	rawName, _ := claims["name"].(string)

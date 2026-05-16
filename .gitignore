@@ -8,6 +8,7 @@ __pycache__/
 .vite/
 
 .claude/settings.local.json
+.claude/worktrees/
 
 # Tofu
 .terraform/

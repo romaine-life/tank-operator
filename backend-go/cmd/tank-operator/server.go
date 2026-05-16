@@ -65,7 +65,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)
 
 	// Auth.
-	mux.HandleFunc("POST /api/auth/microsoft/login", s.handleMicrosoftLogin)
+	mux.HandleFunc("POST /api/auth/exchange", s.handleAuthExchange)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
 	mux.HandleFunc("PUT /api/auth/prefs", s.handleUpdatePrefs)
@@ -155,8 +155,10 @@ func (s *appServer) handleConfig(w http.ResponseWriter, _ *http.Request) {
 
 func publicConfig() map[string]string {
 	return map[string]string{
-		"entra_client_id": os.Getenv("ENTRA_CLIENT_ID"),
-		"entra_authority": "https://login.microsoftonline.com/common",
+		// Where the SPA redirects users for sign-in. Microsoft auth happens
+		// at auth.romaine.life; tank-operator verifies the JWT it hands back
+		// and mints its own session JWT.
+		"auth_url": envDefault("AUTH_URL", "https://auth.romaine.life"),
 		"fork_session_prompt_template": readOptionalFile(
 			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),
 			defaultForkSessionPromptTemplate,
