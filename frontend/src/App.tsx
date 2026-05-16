@@ -942,6 +942,16 @@ function clearGlimmungLaunchContext(): void {
 }
 
 const PENDING_SESSION_REFRESH_INTERVAL_MS = 1500;
+// Two cadences for the shared `nowMs` clock:
+//   - BOOT: 1s while any session is Pending, so the sidebar ↓ boot label
+//     (second-resolution via formatBootTime) visibly counts up second by
+//     second during pod launch. A coarser interval here makes the counter
+//     look frozen and only "post an update when it's done loading."
+//   - IDLE: 30s once nothing is booting, since the ↑ runtime label is
+//     minute-resolution (formatRuntime returns "<1m" / "Nm" / "Nh" / "Nd")
+//     and doesn't need second-grain ticks — pod uptime lasts minutes-to-
+//     hours, so a slow tick is enough to catch minute boundaries.
+const SESSION_BOOT_TICK_MS = 1_000;
 const SESSION_RUNTIME_TICK_MS = 30_000;
 
 function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
@@ -6486,11 +6496,20 @@ export function App() {
     void refreshSessionActivity();
   }, [user]);
 
+  // While a pod is booting we need a 1s tick so the ↓ boot label counts up
+  // second by second. Once nothing's booting, fall back to the slow tick —
+  // the ↑ runtime label is minute-resolution and re-rendering the sidebar
+  // every second for hours of idle uptime would be wasted work.
+  const hasPendingSession = useMemo(
+    () => sessions.some((s) => s.status === "Pending"),
+    [sessions],
+  );
   useEffect(() => {
     if (!user) return;
-    const t = setInterval(() => setNowMs(Date.now()), SESSION_RUNTIME_TICK_MS);
+    const tickMs = hasPendingSession ? SESSION_BOOT_TICK_MS : SESSION_RUNTIME_TICK_MS;
+    const t = setInterval(() => setNowMs(Date.now()), tickMs);
     return () => clearInterval(t);
-  }, [user]);
+  }, [user, hasPendingSession]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
