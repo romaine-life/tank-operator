@@ -198,7 +198,6 @@ gets a 403 until an admin promotes the user via auth.romaine.life's
 /admin console. No per-tank email allowlist.
 
 Service-role tokens carry an `actor_email` claim with the human owner
-of the calling pod's session. The service-principal session-creation
-surface `POST /api/internal/sessions/spawn` (added in stage 2 of #486)
-uses this claim to scope creation to the actor's session tree — a pod
-cannot spawn sessions for any other actor.
+of the calling pod's session. Every `/api/internal/sessions/*` handler
+gates on this claim to scope writes to the actor's session tree — a
+pod cannot create or mutate sessions for any other actor.

@@ -183,14 +183,10 @@ func (s *appServer) handleInternalListSessions(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, out)
 }
 
-// handleInternalCreateSession creates a new session for the caller's actor_email.
-//
-// Identical operation to handleInternalSpawnSession (POST
-// /api/internal/sessions/spawn) — they expose the same behavior at two
-// URLs. The /spawn endpoint stays as the canonical name for in-pod
-// scripts that want a clear verb; mcp-tank-operator's create_session
-// tool calls this route. Both are coalesced into a single endpoint as
-// part of post-#486 API cleanup.
+// handleInternalCreateSession creates a new session for the caller's
+// actor_email. Canonical service-principal session-create endpoint
+// after the post-#486 API cleanup that retired the parallel `/spawn`
+// alias on this surface.
 func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions")
 	if user == nil {
@@ -603,42 +599,4 @@ func (s *appServer) requireServicePrincipal(w http.ResponseWriter, r *http.Reque
 	return &user
 }
 
-// handleInternalSpawnSession is an alias of handleInternalCreateSession
-// (POST /api/internal/sessions) kept for API stability — mcp-tank-operator's
-// `spawn_service_session` tool wires to this URL. Both endpoints have
-// identical semantics post-#486 Stage 4: service-JWT auth, owner is the
-// JWT's `actor_email` claim. Coalesce into a single endpoint in a
-// post-#486 API cleanup PR.
-func (s *appServer) handleInternalSpawnSession(w http.ResponseWriter, r *http.Request) {
-	const route = "POST /api/internal/sessions/spawn"
-	user := s.requireServicePrincipal(w, r, route)
-	if user == nil {
-		return
-	}
-	if !s.gateSpawnQuota(w, r, user) {
-		return
-	}
-
-	var body struct {
-		Mode            string         `json:"mode"`
-		GlimmungContext map[string]any `json:"glimmung_context"`
-		// Name is set on the spawned session as its display label
-		// (mirrors the human flow's optional name). Empty → manager
-		// picks a default.
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		// Empty body is acceptable — fall through with zero values.
-		body.Mode = ""
-	}
-
-	info, err := s.mgr.Create(r.Context(), user.ActorEmail, body.Mode, body.GlimmungContext, body.Name)
-	if err != nil {
-		recordServiceRoleRequest(route, "error_create_failed")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	recordServiceRoleRequest(route, "ok")
-	writeJSON(w, http.StatusCreated, info)
-}
 

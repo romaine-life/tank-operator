@@ -440,8 +440,8 @@ async def run() -> None:
                 token_provider = ServiceAccountTokenProvider()
 
             # mcp-tank-operator gets the auth.romaine.life service JWT
-            # forwarded so its spawn_service_session tool can authenticate
-            # to /api/internal/sessions/spawn. Other MCPs are unaffected.
+            # forwarded so its session-management tools can authenticate
+            # to /api/internal/sessions/* . Other MCPs are unaffected.
             extra_header_provider = None
             if port == TANK_OPERATOR_MCP_PORT:
                 async def _provide_auth_romaine_header(

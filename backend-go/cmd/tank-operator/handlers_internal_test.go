@@ -245,9 +245,9 @@ func internalSessionRuntimeServer(t *testing.T, sessionID string) *appServer {
 }
 
 // TestRequireServicePrincipal_RejectionPaths exercises the auth-gate
-// portion of /api/internal/sessions/spawn without requiring a real
-// session manager. Each rejection path is a distinct telemetry reason
-// (see observability.go → tank_service_role_requests_total).
+// shared by every /api/internal/sessions/* handler without requiring a
+// real session manager. Each rejection path is a distinct telemetry
+// reason (see observability.go → tank_service_role_requests_total).
 func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
 	if err != nil {
@@ -275,7 +275,7 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	}
 
 	t.Run("missing bearer → 401", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", nil)
 		rec := httptest.NewRecorder()
 		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
 			t.Fatalf("expected nil user; got %+v", user)
@@ -286,7 +286,7 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	})
 
 	t.Run("role=user → 403", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", nil)
 		req.Header.Set("Authorization", "Bearer "+mint(t, "user", nil))
 		rec := httptest.NewRecorder()
 		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
@@ -298,7 +298,7 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	})
 
 	t.Run("role=service with actor_email → accepted", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", nil)
 		req.Header.Set("Authorization", "Bearer "+mint(t, "service", jwt.MapClaims{
 			"actor_email": "owner@example.com",
 		}))
@@ -316,7 +316,7 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	})
 
 	t.Run("role=service missing actor_email → 401", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", nil)
 		req.Header.Set("Authorization", "Bearer "+mint(t, "service", nil))
 		rec := httptest.NewRecorder()
 		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
