@@ -82,6 +82,7 @@ func readStateTestServer(t *testing.T, readStates store.ConversationReadStateSto
 			sessionmodel.SessionsNamespace,
 			nil,
 			nil,
+			nil,
 			sessions.ManagerOptions{},
 		),
 		sessionEvents: store.StubSessionEventStore{},

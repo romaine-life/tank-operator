@@ -150,13 +150,57 @@ spec:
 
         - alert: TankSessionEventWakePublishFailures
           expr: rate(tank_session_event_wake_publish_failure_total[10m]) > 0
-            or on() rate(tank_session_list_wake_publish_failure_total[10m]) > 0
+            or on() rate(tank_session_list_event_publish_failure_total[10m]) > 0
           for: 10m
           labels:
             severity: warning
           annotations:
-            summary: "tank-operator wake publishes to NATS are failing"
-            runbook: "SSE clients will lag behind durable state until the next heartbeat. Check NATS health in the nats namespace."
+            summary: "tank-operator wake/event publishes to NATS are failing"
+            runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
+
+    - name: tank-operator.session-lifecycle
+      rules:
+        # Pod-informer producer is leader-elected. The lease should be held
+        # by exactly one orchestrator replica at all times; sum across
+        # replicas should be 1. Zero for an extended window means the
+        # lease never got re-acquired after a roll, and pod transitions
+        # are no longer producing lifecycle rows — the sidebar will go
+        # silent on pod_failed/pod_ready events. Critical.
+        - alert: TankPodInformerLeaderMissing
+          expr: sum(tank_session_pod_informer_leader_held) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "no replica is holding the pod-informer lease — sidebar SSE will stop reflecting pod transitions"
+            runbook: |
+              The leader-elected pod-informer that writes session_lifecycle_events
+              rows on Kubernetes pod transitions is not running on any
+              orchestrator replica. Pod evictions, readiness flips, and pod
+              deletions will not propagate to the sidebar until the lease is
+              re-acquired. Inspect orchestrator logs for `podinformer:
+              started leading` / `podinformer: leader run failed`; verify the
+              `tank-operator-pod-informer` Lease in the orchestrator namespace
+              and the `coordination.k8s.io/leases` RoleBinding.
+
+        # Activity-delta emitter is the chat→sidebar bridge. A non-zero
+        # failure rate means something between the chat-event persister
+        # and the lifecycle ledger is broken — chat sessions will still
+        # work end-to-end (the per-session SSE remains durable) but the
+        # sidebar's status/unread indicators will go stale.
+        - alert: TankLifecycleActivityEmitterFailing
+          expr: rate(tank_session_lifecycle_activity_failure_total[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "chat→sidebar activity-delta emitter is failing"
+            runbook: |
+              The persister hook that turns chat events into
+              session.activity_changed lifecycle rows is hitting store or
+              publish errors. The sidebar's run-status / needs-input /
+              unread-count indicators will lag actual chat state. Inspect
+              orchestrator logs for `lifecycle emitter:` lines.
 
     - name: tank-operator.nats
       rules:
