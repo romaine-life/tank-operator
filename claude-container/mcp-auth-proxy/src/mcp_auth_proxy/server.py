@@ -46,6 +46,7 @@ from pathlib import Path
 from aiohttp import ClientSession, ClientTimeout, web
 
 from .metrics import (
+    record_auth_romaine_exchange,
     record_github_attestation,
     record_proxy_request,
     record_sa_token_read,
@@ -64,6 +65,26 @@ TANK_ATTESTATION_TOKEN_PATH = Path(
 )
 TANK_OPERATOR_INTERNAL_URL = os.environ.get("TANK_OPERATOR_INTERNAL_URL", "").rstrip("/")
 GITHUB_MCP_PORT = 9992
+TANK_OPERATOR_MCP_PORT = 9996
+
+# auth.romaine.life service-principal exchange (see
+# nelsong6/tank-operator#486). The session pod mounts a projected SA
+# token with `audience: https://auth.romaine.life` at this path; this
+# sidecar POSTs it to AUTH_ROMAINE_EXCHANGE_URL and receives a JWT with
+# role=service that downstream tank-operator endpoints accept.
+AUTH_ROMAINE_SA_TOKEN_PATH = Path(
+    os.environ.get(
+        "AUTH_ROMAINE_SA_TOKEN_PATH",
+        "/var/run/secrets/auth.romaine.life/token",
+    )
+)
+AUTH_ROMAINE_EXCHANGE_URL = os.environ.get(
+    "AUTH_ROMAINE_EXCHANGE_URL",
+    "https://auth.romaine.life/api/auth/exchange/k8s",
+).rstrip("/")
+# Header name shared with mcp-tank-operator's CallerIdentityMiddleware.
+# Changing it requires a cross-repo coordinated deploy.
+AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
@@ -175,6 +196,77 @@ class TankGitHubAttestationProvider:
             return token
 
 
+class AuthRomaineServiceProvider:
+    """Exchanges the pod's auth.romaine.life-audience projected SA token
+    for a `role=service` JWT via auth.romaine.life's
+    /api/auth/exchange/k8s. Caches the JWT until ~30s before expiry.
+
+    Used to inject the X-Auth-Romaine-Token header on outbound calls to
+    mcp-tank-operator (port 9996), enabling its spawn_service_session
+    tool. See nelsong6/tank-operator#486.
+    """
+
+    def __init__(
+        self,
+        http: ClientSession,
+        *,
+        exchange_url: str = AUTH_ROMAINE_EXCHANGE_URL,
+        token_path: Path = AUTH_ROMAINE_SA_TOKEN_PATH,
+        refresh_skew_seconds: float = 30.0,
+    ) -> None:
+        self._http = http
+        self._exchange_url = exchange_url
+        self._token_path = token_path
+        self._refresh_skew_seconds = refresh_skew_seconds
+        self._cached_token = ""
+        self._expires_at = 0.0
+        self._lock = asyncio.Lock()
+
+    async def token(self) -> str:
+        now = time.time()
+        if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+            record_auth_romaine_exchange("cache_hit")
+            return self._cached_token
+        async with self._lock:
+            now = time.time()
+            if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+                record_auth_romaine_exchange("cache_hit")
+                return self._cached_token
+            if not self._exchange_url:
+                record_auth_romaine_exchange("exception")
+                raise RuntimeError(
+                    "AUTH_ROMAINE_EXCHANGE_URL is required for auth.romaine.life exchange"
+                )
+            try:
+                sa_token = _read_token(self._token_path)
+                async with self._http.post(
+                    self._exchange_url,
+                    headers={"Authorization": f"Bearer {sa_token}"},
+                    json={},
+                ) as response:
+                    if response.status != 200:
+                        detail = (await response.text())[:300]
+                        record_auth_romaine_exchange("http_error")
+                        raise RuntimeError(
+                            f"auth.romaine.life exchange returned {response.status}: {detail}"
+                        )
+                    body = await response.json()
+            except RuntimeError:
+                raise
+            except Exception:
+                record_auth_romaine_exchange("exception")
+                raise
+            token = str(body.get("token") or "")
+            expires_at = _parse_expires_at(body.get("expires_at"))
+            if not token or expires_at <= time.time():
+                record_auth_romaine_exchange("invalid_response")
+                raise RuntimeError("auth.romaine.life exchange response was invalid")
+            self._cached_token = token
+            self._expires_at = expires_at
+            record_auth_romaine_exchange("success")
+            return token
+
+
 def _parse_expires_at(value: object) -> float:
     if isinstance(value, (int, float)):
         return float(value)
@@ -226,7 +318,25 @@ def _mcp_server_label(upstream: str) -> str:
     return name or host or "unknown"
 
 
-def _make_handler(upstream: str, http: ClientSession, token_provider):
+def _make_handler(
+    upstream: str,
+    http: ClientSession,
+    token_provider,
+    *,
+    extra_header_provider=None,
+):
+    """Build the request handler for an MCP upstream.
+
+    `extra_header_provider`, when supplied, is awaited per request to
+    obtain an additional header value injected on the way out (today:
+    X-Auth-Romaine-Token for mcp-tank-operator). A None return skips
+    injection so the upstream sees the request without the extra header
+    — used during the additive Stage 2/3 period when service-principal
+    auth is optional. An exception in the provider is logged but does
+    NOT fail the request — the upstream still receives the normal
+    Bearer-authed call and can fall back to its legacy auth path. See
+    nelsong6/tank-operator#486.
+    """
     upstream = upstream.rstrip("/")
     mcp_label = _mcp_server_label(upstream)
 
@@ -242,6 +352,24 @@ def _make_handler(upstream: str, http: ClientSession, token_provider):
             k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS
         }
         forwarded_headers["Authorization"] = f"Bearer {token}"
+
+        if extra_header_provider is not None:
+            try:
+                name, value = await extra_header_provider()
+            except Exception:
+                # Non-fatal: the upstream can still serve the legacy
+                # IP-tail path. Logged at INFO because the deny-rate is
+                # tracked via the dedicated counter (auth.romaine.life
+                # exchange), and an exception spam at WARN would
+                # double-count visibility.
+                log.info(
+                    "extra-header provider failed for %s; forwarding without it",
+                    upstream,
+                    exc_info=True,
+                )
+            else:
+                if name and value:
+                    forwarded_headers[name] = value
 
         body = await request.read()
         url = upstream + request.path_qs
@@ -294,6 +422,10 @@ async def run() -> None:
     metrics_port = int(os.environ.get("MCP_AUTH_PROXY_METRICS_PORT", "9990"))
     metrics_runner = await start_metrics_server(metrics_port)
     runners.append(metrics_runner)
+    # Shared across mcp-tank-operator's outbound calls so the cached
+    # JWT (15-min TTL) is reused across many tool calls in a session.
+    auth_romaine_provider = AuthRomaineServiceProvider(http)
+
     try:
         for port, upstream in LISTENERS:
             app = web.Application()
@@ -306,10 +438,27 @@ async def run() -> None:
                 token_provider = TankGitHubAttestationProvider(http)
             else:
                 token_provider = ServiceAccountTokenProvider()
+
+            # mcp-tank-operator gets the auth.romaine.life service JWT
+            # forwarded so its spawn_service_session tool can authenticate
+            # to /api/internal/sessions/spawn. Other MCPs are unaffected.
+            extra_header_provider = None
+            if port == TANK_OPERATOR_MCP_PORT:
+                async def _provide_auth_romaine_header(
+                    provider=auth_romaine_provider,
+                ) -> tuple[str, str]:
+                    return AUTH_ROMAINE_FORWARD_HEADER, await provider.token()
+                extra_header_provider = _provide_auth_romaine_header
+
             app.router.add_route(
                 "*",
                 "/{tail:.*}",
-                _make_handler(upstream, http, token_provider),
+                _make_handler(
+                    upstream,
+                    http,
+                    token_provider,
+                    extra_header_provider=extra_header_provider,
+                ),
             )
             runner = web.AppRunner(app)
             await runner.setup()
