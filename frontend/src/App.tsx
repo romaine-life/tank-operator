@@ -3608,10 +3608,12 @@ function ChatPane({
     permissionMode: string;
     turnStart: number;
     submitAccepted: boolean;
-    stopRequested: boolean;
   } | null>(null);
+  // Mirror of the durable projection's active turn — read, not written.
+  // Run status itself comes from the projection (see applySdkProjectionToUi
+  // and the turn.interrupt_requested handling in conversationReducer), not
+  // from a local flag.
   const activeInterruptTargetRef = useRef<string | null>(null);
-  const stoppingTargetRef = useRef<string | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3684,7 +3686,8 @@ function ChatPane({
     const sdkActive =
       projection.runStatus === "submitted" ||
       projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input";
+      projection.runStatus === "needs_input" ||
+      projection.runStatus === "stopping";
     activeInterruptTargetRef.current = sdkActive
       ? projection.activeClientNonce ?? projection.activeTurnId
       : null;
@@ -3696,25 +3699,20 @@ function ChatPane({
 
     if (currentRunRef.current) {
       if (sdkActive) {
-        setRunStatus(
-          currentRunRef.current.stopRequested || stoppingTargetRef.current
-            ? "stopping"
-            : "running",
-        );
+        setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
         setRunning(true);
       }
       return;
     }
 
     if (sdkActive) {
-      setRunStatus(stoppingTargetRef.current ? "stopping" : "running");
+      setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
       setRunning(true);
       setRunStartedAt((startedAt) => startedAt ?? Date.now());
       setNow(Date.now());
       return;
     }
 
-    stoppingTargetRef.current = null;
     setRunning(false);
     if (projection.runStatus === "error") {
       setRunStatus("error");
@@ -4369,7 +4367,6 @@ function ChatPane({
     sdkTimelineCursorRef.current = null;
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
-    stoppingTargetRef.current = null;
     setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
@@ -4693,9 +4690,14 @@ function ChatPane({
   }
 
   function cancelRun() {
-    const run = currentRunRef.current;
-    if (run?.stopRequested || stoppingTargetRef.current) return;
-    const interruptTarget = run?.id ?? activeInterruptTargetRef.current;
+    // Stop is a durable boundary: cancelRun POSTs and the projection
+    // transitions runStatus → "stopping" off the resulting durable
+    // turn.interrupt_requested event. cancelRun does not set runStatus
+    // imperatively — see frontend/src/migrationPolicy.test.ts for the
+    // gate that pins this invariant.
+    const currentStatus = sdkConversationStateRef.current.runStatus;
+    if (currentStatus === "stopping" || currentStatus === "stopped") return;
+    const interruptTarget = activeInterruptTargetRef.current;
     if (!interruptTarget) {
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
@@ -4706,32 +4708,13 @@ function ChatPane({
       );
       return;
     }
-    if (run) {
-      run.stopRequested = true;
-    }
-    stoppingTargetRef.current = interruptTarget;
-    setLastStatusText(null);
-    setRunStatus("stopping");
-    setRunning(true);
-    if (run && !run.submitAccepted) return;
-    void requestSdkInterrupt(interruptTarget, run);
+    void requestSdkInterrupt(interruptTarget);
   }
 
-  async function requestSdkInterrupt(
-    turnID: string,
-    run: NonNullable<typeof currentRunRef.current> | null,
-  ): Promise<void> {
+  async function requestSdkInterrupt(turnID: string): Promise<void> {
     try {
       await interruptSdkTurn(turnID);
     } catch (err) {
-      if (run && currentRunRef.current?.id === run.id) {
-        run.stopRequested = false;
-      }
-      if (stoppingTargetRef.current === turnID) {
-        stoppingTargetRef.current = null;
-      }
-      setRunStatus("running");
-      setRunning(true);
       setLastStatusText("Stop failed");
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
@@ -4916,7 +4899,6 @@ function ChatPane({
       permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
-      stopRequested: false,
     };
     currentRunRef.current = run;
     const optimisticTime = nowIso();
@@ -4951,18 +4933,11 @@ function ChatPane({
       .then(() => {
         if (currentRunRef.current?.id !== run.id) return;
         run.submitAccepted = true;
-        if (run.stopRequested) {
-          void requestSdkInterrupt(run.id, run);
-          return;
-        }
         setSdkConnectionState("connected");
       })
       .catch((err) => {
         if (currentRunRef.current?.id !== run.id) return;
         currentRunRef.current = null;
-        if (stoppingTargetRef.current === run.id) {
-          stoppingTargetRef.current = null;
-        }
         setRunning(false);
         setRunStatus("error");
         setSdkConnectionState("idle");
@@ -4989,9 +4964,6 @@ function ChatPane({
   ): void {
     if (currentRunRef.current?.id !== run.id) return;
     currentRunRef.current = null;
-    if (stoppingTargetRef.current === run.id) {
-      stoppingTargetRef.current = null;
-    }
     const durationMs = Date.now() - run.turnStart;
     updateSdkLastAssistantDuration(durationMs);
     if (terminal.status === "done") {
@@ -6239,6 +6211,7 @@ function ChatPane({
                 className="run-submit-btn"
                 status={submitStatus}
                 onStop={cancelRun}
+                isStopping={runStatus === "stopping"}
                 disabled={!ready}
               >
                 {/* When idle, force the cloudcli-style paper-plane icon.

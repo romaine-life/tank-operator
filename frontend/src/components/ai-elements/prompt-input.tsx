@@ -1211,6 +1211,12 @@ export const PromptInputActionMenuItem = ({
 export type PromptInputSubmitProps = ComponentProps<typeof InputGroupButton> & {
   status?: ChatStatus;
   onStop?: () => void;
+  // True while a durable turn.interrupt_requested has been recorded but the
+  // turn's terminal event has not yet arrived. The button renders disabled
+  // with a Spinner so further clicks can't trigger redundant /interrupt
+  // POSTs (those would dedupe at the Postgres UNIQUE constraint anyway,
+  // but the affordance shouldn't suggest they're useful).
+  isStopping?: boolean;
 };
 
 export const PromptInputSubmit = ({
@@ -1219,6 +1225,7 @@ export const PromptInputSubmit = ({
   size = "icon-sm",
   status,
   onStop,
+  isStopping,
   onClick,
   children,
   ...props
@@ -1227,7 +1234,9 @@ export const PromptInputSubmit = ({
 
   let Icon = <CornerDownLeftIcon className="size-4" />;
 
-  if (status === "submitted") {
+  if (isStopping) {
+    Icon = <Spinner />;
+  } else if (status === "submitted") {
     Icon = <Spinner />;
   } else if (status === "streaming") {
     Icon = <SquareIcon className="size-4" />;
@@ -1237,6 +1246,10 @@ export const PromptInputSubmit = ({
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLButtonElement>) => {
+      if (isStopping) {
+        e.preventDefault();
+        return;
+      }
       if (isGenerating && onStop) {
         e.preventDefault();
         onStop();
@@ -1244,13 +1257,16 @@ export const PromptInputSubmit = ({
       }
       onClick?.(e);
     },
-    [isGenerating, onStop, onClick]
+    [isGenerating, isStopping, onStop, onClick]
   );
+
+  const ariaLabel = isStopping ? "Stopping…" : isGenerating ? "Stop" : "Submit";
 
   return (
     <InputGroupButton
-      aria-label={isGenerating ? "Stop" : "Submit"}
+      aria-label={ariaLabel}
       className={cn(className)}
+      disabled={isStopping || props.disabled}
       onClick={handleClick}
       size={size}
       type={isGenerating && onStop ? "button" : "submit"}

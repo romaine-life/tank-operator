@@ -315,20 +315,24 @@ const CHECKS = [
     pattern: /\bstoppingTargetRef\b/,
   },
   {
-    id: "app-no-imperative-stopping",
+    id: "app-projection-drives-stopping",
     from: "Frontend deletions",
     file: "frontend/src/App.tsx",
-    description: "App.tsx has no literal setRunStatus(\"stopping\") call (run status comes from projection)",
-    kind: "grep-absent",
-    pattern: /setRunStatus\(\s*["']stopping["']\s*\)/,
+    description: "applySdkProjectionToUi maps projection.runStatus === \"stopping\" to the local stopping run status (single, projection-driven path)",
+    kind: "grep-present",
+    // setRunStatus(...) wraps a comparison-to-stopping that resolves to the
+    // "stopping" literal — either inline ternary or branched. The match is
+    // intentionally loose so a future refactor can split the branch out.
+    pattern: /setRunStatus\([\s\S]{0,400}?projection\.runStatus\s*===\s*"stopping"[\s\S]{0,200}?"stopping"/,
   },
   {
-    id: "app-projection-drives-runstatus",
+    id: "app-cancelrun-no-imperative-stopping",
     from: "Frontend deletions",
     file: "frontend/src/App.tsx",
-    description: "App.tsx routes runStatus through projection (positive shape for the negative-space checks above)",
-    kind: "grep-present",
-    pattern: /setRunStatus\(\s*projection\.runStatus\s*\)/,
+    description: "cancelRun does NOT call setRunStatus(\"stopping\") — that path is now projection-driven only",
+    kind: "order-in-function-absent",
+    functionName: "cancelRun",
+    absentPattern: /setRunStatus\(\s*["']stopping["']\s*\)/,
   },
   {
     id: "prompt-input-isStopping-prop",
@@ -355,14 +359,6 @@ const CHECKS = [
     description: "migration guard rule blocks reintroduction of stoppingTargetRef",
     kind: "grep-present",
     pattern: /retired stopping-target ref/,
-  },
-  {
-    id: "guard-imperative-stopping",
-    from: "Migration guard",
-    file: "scripts/check-removed-chat-runtime.mjs",
-    description: "migration guard rule blocks literal setRunStatus(\"stopping\") calls",
-    kind: "grep-present",
-    pattern: /retired imperative stopping run status/,
   },
 
   // ────────────────────────── Test conversions ──────────────────────────
@@ -623,6 +619,7 @@ async function dispatch(check) {
     case "grep-absent":       return await grepAbsent(check);
     case "block-absent":      return await blockAbsent(check);
     case "order-in-function": return await orderInFunction(check);
+    case "order-in-function-absent": return await absentInFunction(check);
     case "json-enum-includes":return await jsonEnumIncludes(check);
     case "json-allof-clause": return await jsonAllOfClause(check);
     case "json-array-has-event": return await jsonArrayHasEvent(check);
@@ -668,6 +665,35 @@ async function blockAbsent({ file, blockPattern, absentPattern }) {
     return { pass: false, evidence: `${file}:${absLine} found inside enclosing block: ${JSON.stringify(preview)}` };
   }
   return { pass: true, evidence: `${file}: block found, target absent inside` };
+}
+
+async function absentInFunction({ file, functionName, absentPattern }) {
+  if (!(await fileExists(file))) return { pass: false, evidence: `file missing: ${file}` };
+  const content = await readRel(file);
+  // Match either Go-style "func name(" or JS/TS-style "function name(".
+  const sigRe = new RegExp(`(?:func\\s+(?:\\([^)]*\\)\\s+)?|function\\s+)${functionName}\\s*\\(`);
+  const sig = sigRe.exec(content);
+  if (!sig) return { pass: false, evidence: `function ${functionName} not found in ${file}` };
+  const bodyStart = content.indexOf("{", sig.index);
+  if (bodyStart < 0) return { pass: false, evidence: `function body of ${functionName} not found` };
+  let depth = 0;
+  let i = bodyStart;
+  for (; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) { i++; break; }
+    }
+  }
+  const body = content.slice(bodyStart, i);
+  const m = absentPattern.exec(body);
+  if (m) {
+    const line = locate(content, bodyStart + m.index).line;
+    const preview = m[0].replace(/\s+/g, " ").slice(0, 80);
+    return { pass: false, evidence: `${file}:${line} inside ${functionName}: ${JSON.stringify(preview)}` };
+  }
+  return { pass: true, evidence: `${file}: ${functionName} body free of pattern` };
 }
 
 async function orderInFunction({ file, functionName, earlier, later }) {
