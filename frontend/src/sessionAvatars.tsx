@@ -10,9 +10,10 @@ export type AgentAvatar = {
 //
 // Render contract (see index.css .session-avatar / .run-status-avatar /
 // .run-msg-ai-icon): square frame, object-fit: contain, 24-42px display
-// size, light translucent background with inset shadow. Source PNGs should
-// be square-ish, transparent background, head-and-shoulders or silhouette
-// framing so they read at 24px.
+// size. The sidebar surface (.session-avatar) is circle-cropped and runs
+// edge-to-edge with no backdrop or padding, so the source image itself is
+// the visible shape. Source PNGs should be square-ish, transparent
+// background, head-and-shoulders or silhouette framing so they read at 24px.
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
   { id: "jp1-raptor", name: "Velociraptor", src: "/assets/avatars/jp1-raptor.png" },

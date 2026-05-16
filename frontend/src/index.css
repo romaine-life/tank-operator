@@ -1363,10 +1363,7 @@ button:disabled {
   transform: translateY(-50%);
   flex-shrink: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
   object-fit: contain;
-  padding: 6px;
-  box-shadow: var(--shadow-avatar-inset);
   pointer-events: none;
   z-index: 0;
 }

@@ -57,7 +57,7 @@ export function StyleguideAvatars() {
           (<code>getSessionAvatar</code>). Sources live under{" "}
           <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
           render contexts ship: <code>.session-avatar</code> in the sidebar
-          (42px, circle-cropped, translucent backdrop),{" "}
+          (42px, circle-cropped, edge-to-edge — no backdrop or padding),{" "}
           <code>.run-msg-ai-icon</code> on transcript messages (~22px
           square), <code>.run-status-avatar</code> in the run-status pill
           (~18px square). The picker swaps all three live so the
@@ -159,10 +159,10 @@ export function StyleguideAvatars() {
 
             <h2 style={headStyle}>live render</h2>
             <p style={captionStyle}>
-              All three contexts are driven by the picker above. Hover the
-              sidebar tile to see the circle mask + the translucent
-              backdrop — that's the surface that actually decides whether
-              a source crop survives.
+              All three contexts are driven by the picker above. The sidebar
+              tile is a 42px circle mask with no backdrop — the source PNG
+              itself is the visible shape, so a slug that doesn't fill a
+              42px circle will read as a floating silhouette there.
             </p>
             <div
               style={{
