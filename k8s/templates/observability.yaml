@@ -227,4 +227,80 @@ spec:
           annotations:
             summary: "ScheduleWakeup queue depth exceeded 50 in the last hour"
             runbook: "Pod-local setTimeout scheduler is accumulating timers. May indicate a runaway agent loop or a stuck turn."
+
+    # Session spawn observability. The user-visible latency budget for
+    # `POST /sessions` -> ContainersReady is "fast unless the chosen node
+    # has to pull a ~700MB session image." Recording rules below collapse
+    # the per-pod kube_pod_status_*_time series from kube-state-metrics
+    # into single aggregate scalars to stay within docs/observability.md's
+    # forbidden-labels list (pod, instance, etc are not allowed in stored
+    # tank_* series). The dashboard's per-pod panels render the same
+    # primitives on-demand, where cardinality is bounded by browser session.
+    #
+    # Thresholds are calibrated against the 7-day baseline observed at
+    # introduction: warm-cache spawns cluster at 2-3s, cold pulls at
+    # 27-33s, with a few partial-cache spawns in between. The 5s/60s
+    # numbers target two distinct failure modes (see runbook annotations);
+    # a single threshold percentile would either over-fire on the
+    # bimodal distribution or never catch the regression mode.
+    - name: tank-operator.session-spawn
+      rules:
+        - record: tank:session_pod_spawn_seconds:p50_24h
+          expr: |
+            quantile(0.5,
+              (kube_pod_status_container_ready_time{namespace="tank-operator-sessions"}
+                - on(pod, namespace) kube_pod_created{namespace="tank-operator-sessions"})
+              and on(pod, namespace) (time() - kube_pod_created{namespace="tank-operator-sessions"} < 86400)
+            )
+
+        - record: tank:session_pod_spawn_seconds:p95_24h
+          expr: |
+            quantile(0.95,
+              (kube_pod_status_container_ready_time{namespace="tank-operator-sessions"}
+                - on(pod, namespace) kube_pod_created{namespace="tank-operator-sessions"})
+              and on(pod, namespace) (time() - kube_pod_created{namespace="tank-operator-sessions"} < 86400)
+            )
+
+        - record: tank:session_pod_spawn_seconds:max_1h
+          expr: |
+            max(
+              (kube_pod_status_container_ready_time{namespace="tank-operator-sessions"}
+                - on(pod, namespace) kube_pod_created{namespace="tank-operator-sessions"})
+              and on(pod, namespace) (time() - kube_pod_created{namespace="tank-operator-sessions"} < 3600)
+            )
+
+        - alert: TankSessionSpawnSlowMedian
+          expr: tank:session_pod_spawn_seconds:p50_24h > 5
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Median session-pod spawn time over the last 24h exceeded 5s"
+            runbook: |
+              Every spawn appears to be paying the full image-pull cost, which means
+              session-image distribution is failing at the cluster level. Likely
+              causes in order of probability: (1) the session pool has just
+              autoscaled up and new nodes are pulling cold, (2) kubelet image GC
+              has evicted the cached image cluster-wide (check disk pressure on the
+              session pool), (3) a new image SHA was pushed and no pre-pull
+              mechanism is keeping the cache warm. Confirm via the "Big-image pull
+              rate by node" panel — if every node is pulling, distribution is the
+              problem; if only one node is, that node is the problem. Baseline at
+              introduction (2026-05): warm spawns 2-3s, cold pulls 27-33s, median 3s.
+
+        - alert: TankSessionSpawnSlowOutlier
+          expr: tank:session_pod_spawn_seconds:max_1h > 60
+          for: 0m
+          labels:
+            severity: info
+          annotations:
+            summary: "A session-pod spawn in the last hour took over 60s"
+            runbook: |
+              A single user waited more than 60s for their session, which is roughly
+              double the worst observed cold-pull baseline. Diagnostic only — does
+              not page. Use the "Per-pod spawn duration (recent)" panel to identify
+              the pod, then `kubectl describe pod <name> -n tank-operator-sessions`
+              for the event timeline (Pulling/Pulled events with their durations).
+              Common causes: registry throttling, network egress congestion from the
+              AKS node to ACR, or an oversized image bump.
 {{- end }}
