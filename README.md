@@ -188,7 +188,17 @@ signed by a Key Vault Key (private bytes never leave KV; see
 [backend-go/internal/auth/](backend-go/internal/auth/) and
 [infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped
 by SHA-256 of the signed-in user's email. The access gate is the `role`
-claim on the auth.romaine.life JWT: only `admin` and `user` are accepted,
-`pending` (auth.romaine.life's default for fresh Microsoft sign-ups) gets
-a 403 until an admin promotes the user via auth.romaine.life's /admin
-console. No per-tank email allowlist.
+claim on the auth.romaine.life JWT: `admin` and `user` are the human
+roles, `service` is reserved for k8s service principals (session pods
+that exchange their projected SA token for an auth.romaine.life JWT via
+`/api/auth/exchange/k8s` — see
+[nelsong6/tank-operator#486](https://github.com/nelsong6/tank-operator/issues/486)).
+`pending` (auth.romaine.life's default for fresh Microsoft sign-ups)
+gets a 403 until an admin promotes the user via auth.romaine.life's
+/admin console. No per-tank email allowlist.
+
+Service-role tokens carry an `actor_email` claim with the human owner
+of the calling pod's session. The service-principal session-creation
+surface `POST /api/internal/sessions/spawn` (added in stage 2 of #486)
+uses this claim to scope creation to the actor's session tree — a pod
+cannot spawn sessions for any other actor.

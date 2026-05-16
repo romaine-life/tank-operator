@@ -79,6 +79,67 @@ func TestVerifierAcceptsAdminRole(t *testing.T) {
 	}
 }
 
+func TestVerifierAcceptsServiceRoleWithActorEmail(t *testing.T) {
+	// Service principals carry the human owner's email as `actor_email`.
+	// See nelsong6/tank-operator#486.
+	jwtKey := newTestJWT(t)
+	verifier := NewVerifier(jwtKey)
+	user, err := verifier.Decode(signedTestToken(t, jwtKey,
+		"pod-session-abc@service.tank.romaine.life", RoleService,
+		jwt.MapClaims{"actor_email": "Owner@Example.com"},
+	))
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !user.IsService() {
+		t.Fatalf("IsService() = false, want true")
+	}
+	if user.IsHuman() {
+		t.Fatalf("IsHuman() = true on service role; should be false")
+	}
+	if user.ActorEmail != "owner@example.com" {
+		t.Fatalf("ActorEmail = %q, want lowercased owner@example.com", user.ActorEmail)
+	}
+	if user.Email != "pod-session-abc@service.tank.romaine.life" {
+		t.Fatalf("Email (principal) = %q, want synthetic", user.Email)
+	}
+}
+
+func TestVerifierRejectsServiceRoleWithoutActorEmail(t *testing.T) {
+	// Service-role token missing actor_email is unscoped — refuse 401.
+	jwtKey := newTestJWT(t)
+	verifier := NewVerifier(jwtKey)
+	_, err := verifier.Decode(signedTestToken(t, jwtKey,
+		"pod-session-abc@service.tank.romaine.life", RoleService, nil,
+	))
+	if err == nil || ErrorStatus(err) != http.StatusUnauthorized {
+		t.Fatalf("err = %v, status = %d; want 401", err, ErrorStatus(err))
+	}
+}
+
+func TestUser_IsHuman_IsService_ConvenienceHelpers(t *testing.T) {
+	cases := []struct {
+		role          string
+		wantIsHuman   bool
+		wantIsService bool
+	}{
+		{RoleAdmin, true, false},
+		{RoleUser, true, false},
+		{RoleService, false, true},
+		{"", false, false},
+		{"pending", false, false},
+	}
+	for _, tc := range cases {
+		u := User{Role: tc.role}
+		if got := u.IsHuman(); got != tc.wantIsHuman {
+			t.Errorf("role=%q IsHuman() = %v, want %v", tc.role, got, tc.wantIsHuman)
+		}
+		if got := u.IsService(); got != tc.wantIsService {
+			t.Errorf("role=%q IsService() = %v, want %v", tc.role, got, tc.wantIsService)
+		}
+	}
+}
+
 func TestVerifierRejectsHS256Tokens(t *testing.T) {
 	verifier := NewVerifier(newTestJWT(t))
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

@@ -614,3 +614,83 @@ func (s *appServer) resolveCallerEmail(r *http.Request) (email, podName string) 
 	}
 	return email, podName
 }
+
+// requireServicePrincipal validates an inbound auth.romaine.life JWT and
+// returns the verified User iff the role claim is `service`. Used by the
+// service-principal session-creation surface (see
+// nelsong6/tank-operator#486). Distinct from `requireInternalCaller`
+// (raw SA TokenReview, IP-tail identity) — both surfaces coexist during
+// the Stage 2 additive period; the legacy path is retired in Stage 4.
+//
+// On rejection, writes the structured error response and increments the
+// observability counter with the labeled reason so the deny-rate is
+// visible on the dashboard. Returns nil to signal "handler should
+// return immediately" — mirrors http.Handler semantics for middlewares
+// that complete the response themselves.
+func (s *appServer) requireServicePrincipal(w http.ResponseWriter, r *http.Request, route string) *auth.User {
+	if s.verifier == nil {
+		recordServiceRoleRequest(route, "error_verifier_unconfigured")
+		writeError(w, http.StatusInternalServerError, "JWT verifier not configured")
+		return nil
+	}
+	user, err := s.verifier.CurrentUser(r)
+	if err != nil {
+		recordServiceRoleRequest(route, "denied_token")
+		writeError(w, auth.ErrorStatus(err), err.Error())
+		return nil
+	}
+	if !user.IsService() {
+		recordServiceRoleRequest(route, "denied_role")
+		writeError(w, http.StatusForbidden, "route requires role=service; caller is role="+user.Role)
+		return nil
+	}
+	if user.ActorEmail == "" {
+		// Belt and suspenders — auth.Decode already enforces this for
+		// role=service, but guarding here too keeps the contract local
+		// to anything reading user.ActorEmail downstream.
+		recordServiceRoleRequest(route, "denied_actor_missing")
+		writeError(w, http.StatusUnauthorized, "service-role token missing actor_email")
+		return nil
+	}
+	return &user
+}
+
+// handleInternalSpawnSession is the service-principal entry point for
+// creating a new session. Authenticated by the caller's auth.romaine.life
+// service JWT (role=service); the new session is owned by the JWT's
+// `actor_email` claim — i.e. the human whose pod made the call. A pod
+// cannot spawn sessions for any other actor by construction.
+//
+// Lives alongside the legacy `POST /api/internal/sessions` during Stage
+// 2 — that legacy route still uses requireInternalCaller (SA TokenReview
+// + caller_pod_ip identity). Stage 4 retires the legacy path. See
+// nelsong6/tank-operator#486.
+func (s *appServer) handleInternalSpawnSession(w http.ResponseWriter, r *http.Request) {
+	const route = "POST /api/internal/sessions/spawn"
+	user := s.requireServicePrincipal(w, r, route)
+	if user == nil {
+		return
+	}
+
+	var body struct {
+		Mode            string         `json:"mode"`
+		GlimmungContext map[string]any `json:"glimmung_context"`
+		// Name is set on the spawned session as its display label
+		// (mirrors the human flow's optional name). Empty → manager
+		// picks a default.
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// Empty body is acceptable — fall through with zero values.
+		body.Mode = ""
+	}
+
+	info, err := s.mgr.Create(r.Context(), user.ActorEmail, body.Mode, body.GlimmungContext, body.Name)
+	if err != nil {
+		recordServiceRoleRequest(route, "error_create_failed")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordServiceRoleRequest(route, "ok")
+	writeJSON(w, http.StatusCreated, info)
+}

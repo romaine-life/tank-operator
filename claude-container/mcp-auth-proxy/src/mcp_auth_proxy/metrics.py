@@ -58,6 +58,17 @@ github_attestation_total = Counter(
     ["result"],
 )
 
+# auth.romaine.life service-principal exchange. Cached and refreshed by
+# the sidecar; this metric tracks the local exchange path so operators
+# can tell "spawn_service_session is broken because exchange mint
+# failed" apart from "...because tank-operator rejected the JWT". See
+# nelsong6/tank-operator#486.
+auth_romaine_exchange_total = Counter(
+    "tank_mcp_auth_proxy_auth_romaine_exchange_total",
+    "Calls to auth.romaine.life's /api/auth/exchange/k8s endpoint.",
+    ["result"],
+)
+
 
 def _status_class(status: int) -> str:
     if 200 <= status < 300:
@@ -83,6 +94,11 @@ def record_sa_token_read(result: str) -> None:
 def record_github_attestation(result: str) -> None:
     """result is one of: success, http_error, exception, invalid_response, cache_hit."""
     github_attestation_total.labels(result=result).inc()
+
+
+def record_auth_romaine_exchange(result: str) -> None:
+    """result is one of: success, http_error, exception, invalid_response, cache_hit."""
+    auth_romaine_exchange_total.labels(result=result).inc()
 
 
 @asynccontextmanager
@@ -115,6 +131,7 @@ async def start_metrics_server(port: int) -> web.AppRunner:
 
 
 __all__ = [
+    "record_auth_romaine_exchange",
     "record_github_attestation",
     "record_proxy_request",
     "record_sa_token_read",

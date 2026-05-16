@@ -127,6 +127,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/github/attestation", s.handleInternalGitHubAttestation)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
+	// Service-principal session creation. Coexists with the legacy POST
+	// above during Stage 2 (different auth shape, different identity
+	// resolution); Stage 4 retires the legacy auth path. See
+	// nelsong6/tank-operator#486.
+	mux.HandleFunc("POST /api/internal/sessions/spawn", s.handleInternalSpawnSession)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)

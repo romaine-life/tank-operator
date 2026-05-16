@@ -126,6 +126,10 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("proxy TANK_SESSION_ATTESTATION_TOKEN_PATH = %v, want %q", got, want)
 	}
 	assertVolumeMount(t, mcpProxy, "tank-operator-sa-token")
+	// Second SA token, audience-pinned to auth.romaine.life — used by
+	// in-pod code to exchange for a role=service JWT against
+	// /api/auth/exchange/k8s. See nelsong6/tank-operator#486.
+	assertVolumeMount(t, mcpProxy, "auth-romaine-sa-token")
 	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "claude"; got != want {
 		t.Fatalf("main container name = %v, want %q", got, want)
@@ -145,14 +149,18 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
 	}
 	assertVolumeMount(t, codexRunner, "tank-operator-sa-token")
+	assertVolumeMount(t, codexRunner, "auth-romaine-sa-token")
 	volumes := spec["volumes"].([]any)
-	// codex_gui adds session-config + Tank attestation token + workspace
-	// emptyDir. Codex auth is proxy-owned, so the real codex-credentials
-	// Secret is not mounted.
-	if got, want := len(volumes), 3; got != want {
+	// codex_gui adds session-config + Tank attestation token +
+	// auth.romaine.life attestation token + workspace emptyDir. Codex
+	// auth is proxy-owned, so the real codex-credentials Secret is not
+	// mounted. The auth.romaine.life token is the inbound to
+	// /api/auth/exchange/k8s — see nelsong6/tank-operator#486.
+	if got, want := len(volumes), 4; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
 	assertVolume(t, volumes, "tank-operator-sa-token")
+	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
 func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
@@ -224,6 +232,7 @@ func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 				t.Fatalf("TANK_OPERATOR_TOKEN_PATH = %v, want %q", got, want)
 			}
 			assertVolumeMount(t, findContainer(t, containers, runnerName), "tank-operator-sa-token")
+			assertVolumeMount(t, findContainer(t, containers, runnerName), "auth-romaine-sa-token")
 		})
 	}
 }

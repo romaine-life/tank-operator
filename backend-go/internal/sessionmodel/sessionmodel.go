@@ -250,6 +250,27 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				},
 			},
 		},
+		// Second projected SA token, audience-pinned to auth.romaine.life.
+		// In-pod code POSTs this token to auth.romaine.life's
+		// /api/auth/exchange/k8s to receive an auth.romaine.life JWT with
+		// role=service that tank-operator's /api/internal/sessions/spawn
+		// accepts. Distinct audience (and distinct file path) from the
+		// tank-operator token above so a stolen token cannot be replayed
+		// across services. See nelsong6/tank-operator#486.
+		map[string]any{
+			"name": "auth-romaine-sa-token",
+			"projected": map[string]any{
+				"sources": []any{
+					map[string]any{
+						"serviceAccountToken": map[string]any{
+							"audience":          "https://auth.romaine.life",
+							"expirationSeconds": 3600,
+							"path":              "token",
+						},
+					},
+				},
+			},
+		},
 	}
 
 	// Shared /workspace across the user-facing container and the
@@ -355,6 +376,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"mountPath": "/var/run/secrets/tank-operator",
 		"readOnly":  true,
 	})
+	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
+		"name":      "auth-romaine-sa-token",
+		"mountPath": "/var/run/secrets/auth.romaine.life",
+		"readOnly":  true,
+	})
 
 	containers := []any{
 		map[string]any{
@@ -395,6 +421,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 			"name":      "tank-operator-sa-token",
 			"mountPath": "/var/run/secrets/tank-operator",
+			"readOnly":  true,
+		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "auth-romaine-sa-token",
+			"mountPath": "/var/run/secrets/auth.romaine.life",
 			"readOnly":  true,
 		})
 		runnerEnv := []any{
@@ -480,6 +511,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 			"name":      "tank-operator-sa-token",
 			"mountPath": "/var/run/secrets/tank-operator",
+			"readOnly":  true,
+		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "auth-romaine-sa-token",
+			"mountPath": "/var/run/secrets/auth.romaine.life",
 			"readOnly":  true,
 		})
 		if opts.CodexAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
