@@ -170,6 +170,92 @@ test("Provider error becomes terminal error state without needs-input", () => {
   assert.equal(state.activeTurnId, null);
 });
 
+test("turn.interrupt_requested transitions streaming → stopping", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "run-1",
+      payload: { text: "long task" },
+    }),
+    ev("2", "turn.submitted", { client_nonce: "run-1" }),
+    ev("3", "turn.started", { source: "claude" }),
+    ev("4", "turn.interrupt_requested", {
+      actor: "system",
+      source: "tank",
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "stopping");
+  assert.equal(state.activeTurnId, "turn-1");
+  assert.equal(state.interruptRequests.length, 1);
+  assert.equal(state.interruptRequests[0]?.turnId, "turn-1");
+});
+
+test("turn.interrupt_requested → turn.interrupted resolves to stopped", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+    ev("3", "turn.interrupted", { source: "claude", payload: { reason: "client_interrupt" } }),
+  ]);
+
+  assert.equal(state.runStatus, "stopped");
+  assert.equal(state.activeTurnId, null);
+  assert.equal(state.interruptRequests.length, 1);
+});
+
+test("turn.interrupt_requested losing race to turn.completed resolves to ready", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+    ev("3", "turn.completed", { source: "claude" }),
+  ]);
+
+  assert.equal(state.runStatus, "ready");
+  assert.equal(state.activeTurnId, null);
+  // Chip stays as transcript evidence even though stop "lost the race."
+  assert.equal(state.interruptRequests.length, 1);
+});
+
+test("turn.interrupt_requested followed by turn.command_failed resolves to error", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+    ev("3", "turn.command_failed", {
+      actor: "system",
+      source: "tank",
+      payload: { reason: "publish_interrupt_failed" },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "error");
+  assert.equal(state.failed, true);
+  assert.equal(state.interruptRequests.length, 1);
+});
+
+test("Late turn.interrupt_requested after terminal state does NOT downgrade run status", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "turn.completed", { source: "claude" }),
+    ev("3", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+  ]);
+
+  // Stop request lands after the turn already cleanly finished. Chip is
+  // recorded for transcript transparency, but runStatus stays ready.
+  assert.equal(state.runStatus, "ready");
+  assert.equal(state.interruptRequests.length, 1);
+});
+
+test("Duplicate turn.interrupt_requested events dedupe by event_id", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("dup", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+    ev("dup", "turn.interrupt_requested", { actor: "system", source: "tank" }),
+  ]);
+
+  assert.equal(state.runStatus, "stopping");
+  assert.equal(state.interruptRequests.length, 1);
+});
+
 test("Timeline replay and SSE delivery converge through event id dedupe", () => {
   const events = [
     ev("1", "user_message.created", {

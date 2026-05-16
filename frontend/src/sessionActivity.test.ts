@@ -43,6 +43,25 @@ test("session activity drives sidebar labels and dots", () => {
   );
 });
 
+test("stopping status drives Stopping label, agent-stopping dot, and stopping chip", () => {
+  const stopping = normalizeSessionActivity({
+    session_id: "63",
+    status: "stopping",
+    unread_count: 0,
+    needs_input: false,
+    failed: false,
+    active_turn_id: "turn-1",
+  });
+
+  assert.equal(stopping?.status, "stopping");
+  assert.equal(sessionActivityDotStatus("Active", true, stopping ?? undefined), "agent-stopping");
+  assert.equal(sessionActivityStatusLabel("Active", true, stopping ?? undefined), "Stopping");
+  assert.deepEqual(
+    sessionActivityChips(stopping ?? undefined).map((chip) => ({ label: chip.label, tone: chip.tone })),
+    [{ label: "stopping", tone: "stopping" }],
+  );
+});
+
 test("non-chat sessions keep pod lifecycle status", () => {
   const activity = normalizeSessionActivity({
     session_id: "12",

@@ -101,6 +101,40 @@ func TestActivitySummariesEqualDetectsIndicatorChanges(t *testing.T) {
 	})
 }
 
+// TestDeriveActivitySummaryFoldsInterruptRequestedToStopping pins the
+// activity fold for the durable stop boundary. A turn.interrupt_requested
+// after turn.started transitions status → "stopping" while preserving
+// ActiveTurnID (the turn is still mid-flight). The subsequent terminal
+// event (turn.interrupted) resolves it to "stopped". See
+// scripts/check-stop-request-migration.mjs for the completion contract.
+func TestDeriveActivitySummaryFoldsInterruptRequestedToStopping(t *testing.T) {
+	requested := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.interrupt_requested", "turn_id": "turn-1", "order_key": "2"},
+	}, 0, false)
+	if requested.Status != "stopping" {
+		t.Fatalf("status after interrupt_requested = %q, want stopping", requested.Status)
+	}
+	if requested.ActiveTurnID == nil || *requested.ActiveTurnID != "turn-1" {
+		t.Fatalf("ActiveTurnID cleared while stopping; want turn-1, got %#v", requested.ActiveTurnID)
+	}
+	if requested.Failed {
+		t.Fatalf("Failed should not flip on stop request; got %+v", requested)
+	}
+
+	terminal := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.interrupt_requested", "turn_id": "turn-1", "order_key": "2"},
+		{"type": "turn.interrupted", "turn_id": "turn-1", "order_key": "3"},
+	}, 0, false)
+	if terminal.Status != "stopped" {
+		t.Fatalf("status after interrupted = %q, want stopped", terminal.Status)
+	}
+	if terminal.ActiveTurnID != nil {
+		t.Fatalf("ActiveTurnID not cleared after stopped; got %#v", terminal.ActiveTurnID)
+	}
+}
+
 func TestIsLifecycleChatEventTypeAllowlist(t *testing.T) {
 	for _, allowed := range LifecycleChatEventTypes {
 		if !IsLifecycleChatEventType(allowed) {

@@ -138,3 +138,40 @@ test("durable stream resumes from the last order key without duplicating transcr
   assert.equal(finalProjection.lastOrderKey, "order-007");
   assert.equal(new Set(finalProjection.entries.map((entry) => entry.id)).size, 3);
 });
+
+test("stop-then-reconnect: durable replay reconstructs the stopping projection", () => {
+  // A user pressed Stop mid-turn, the durable turn.interrupt_requested
+  // landed, then the browser disconnected before the SSE caught up. On
+  // reconnect, the timeline replay alone (no live SSE yet) must produce
+  // the same projection state the live path would have — including the
+  // "stopping" run status and the Stop requested chip.
+  const stoppingTurn = [
+    ev(1, "user_message.created", {
+      actor: "user",
+      client_nonce: "client-run-414",
+      payload: { text: "Long task" },
+    }),
+    ev(2, "turn.submitted", { client_nonce: "client-run-414" }),
+    ev(3, "turn.started", { source: "claude" }),
+    ev(4, "turn.interrupt_requested", {
+      actor: "system",
+      source: "tank",
+    }),
+  ] satisfies TankConversationEvent[];
+
+  const livePath = reduceConversationEvents(stoppingTurn);
+  const replayPath = reduceConversationEvents(stoppingTurn);
+
+  assert.deepEqual(replayPath, livePath);
+  assert.equal(replayPath.runStatus, "stopping");
+  assert.equal(replayPath.activeTurnId, "turn-414");
+  assert.equal(replayPath.interruptRequests.length, 1);
+
+  const projection = projectConversationState(replayPath);
+  const metaEntries = projection.entries.filter((entry) => entry.kind === "meta");
+  assert.equal(metaEntries.length, 1);
+  if (metaEntries[0]?.kind === "meta") {
+    assert.equal(metaEntries[0].meta.title, "Stop requested");
+  }
+  assert.equal(projection.stopping, true);
+});
