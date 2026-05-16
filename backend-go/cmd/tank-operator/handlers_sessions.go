@@ -49,10 +49,26 @@ func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, infos)
 }
 
-// handleSessionsEvents streams session list changes as SSE.
+// handleSessionsEvents streams typed session-lifecycle events over SSE
+// for the per-owner session list. Mirrors the chat-window SSE shape on
+// /api/sessions/{id}/events: `id:` = order_key, `event: ready` on open,
+// `event: session-event` per typed payload, `event: resync_required`
+// when the client's Last-Event-ID isn't in the durable ledger, and
+// `event: stream-error` on transport failures.
+//
+// Catch-up at open: any rows past the cursor are streamed from Postgres
+// before subscribing to NATS so a slow reconnect doesn't silently miss
+// events that landed during the disconnect window. Live delivery is
+// driven by NATS payloads forwarded verbatim.
 func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -61,36 +77,97 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
+	cursor := sessionListCursorFromRequest(r)
+	if s.lifecycleEvents != nil {
+		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), user.Email, cursor.AfterOrderKey); err != nil {
+			recordSessionListStreamError()
+			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+				"reason": "cursor_check_failed",
+				"detail": err.Error(),
+			})
+			flusher.Flush()
+			return
+		} else if !ok {
+			sessionListStreamResyncTotal.Inc()
+			slog.Warn("session list stream resync required",
+				"email", user.Email,
+				"last_order_key", cursor.AfterOrderKey,
+			)
+			writeSSEJSONEvent(w, "resync_required", "", map[string]any{
+				"reason":         "cursor_not_found",
+				"last_order_key": cursor.AfterOrderKey,
+			})
+			flusher.Flush()
+			return
+		}
 	}
 
-	// Send initial ready event.
-	fmt.Fprintf(w, "event: ready\ndata: {}\n\n")
+	writeSSEJSONEvent(w, "ready", "", map[string]any{
+		"last_order_key": cursor.AfterOrderKey,
+	})
 	flusher.Flush()
+	sessionListStreamOpenTotal.Inc()
+	if cursor.AfterOrderKey != "" {
+		sessionListStreamReconnectTotal.Inc()
+	}
 
-	ch, cancel, err := s.sessionBus.SubscribeSessionListWake(r.Context(), user.Email)
+	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionListEvents(r.Context(), user.Email)
 	if err != nil {
-		slog.Warn("session list wake subscribe failed", "email", user.Email, "error", err)
-		writeError(w, http.StatusInternalServerError, "session bus unavailable")
+		recordSessionListStreamError()
+		slog.Warn("session list events subscribe failed", "email", user.Email, "error", err)
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+			"reason": "subscribe_failed",
+			"detail": err.Error(),
+		})
+		flusher.Flush()
 		return
 	}
-	defer cancel()
+	defer unsubscribe()
 
-	keepalive := time.NewTicker(30 * time.Second)
+	// Catch up from Postgres for anything that landed after the cursor
+	// and before the NATS subscription was active. Pages capped at
+	// listEventStreamPageLimit; we loop until the page is short.
+	for {
+		hasMore, written, err := s.writeSessionListStreamPage(r.Context(), w, user.Email, &cursor)
+		if err != nil {
+			recordSessionListStreamError()
+			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+				"reason": "catch_up_failed",
+				"detail": err.Error(),
+			})
+			flusher.Flush()
+			return
+		}
+		flusher.Flush()
+		if written > 0 {
+			slog.Debug("session list stream catch-up emitted events",
+				"email", user.Email,
+				"count", written,
+				"last_order_key", cursor.AfterOrderKey,
+				"has_more", hasMore,
+			)
+		}
+		if !hasMore {
+			break
+		}
+	}
+
+	keepalive := time.NewTicker(sessionListStreamHeartbeat)
 	defer keepalive.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ch:
-			fmt.Fprintf(w, "event: sessions-changed\ndata: {}\n\n")
+		case payload, ok := <-natsCh:
+			if !ok {
+				return
+			}
+			s.emitSessionListPayload(w, &cursor, payload)
 			flusher.Flush()
 		case <-keepalive.C:
-			fmt.Fprintf(w, ": keep-alive\n\n")
+			sessionListStreamHeartbeatTotal.Inc()
+			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}

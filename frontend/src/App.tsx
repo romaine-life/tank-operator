@@ -99,6 +99,11 @@ import {
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
+  applySessionListEvent,
+  normalizeSessionListEvent,
+  type SessionListReducerState,
+} from "./sessionListEvents";
+import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
   type TankConversationEvent,
@@ -197,6 +202,13 @@ interface Session {
   name: string | null;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
+  // Activity is the chat-derived sidebar indicator block. Backend
+  // hydrates this from the latest session.activity_changed lifecycle
+  // event in GET /api/sessions; the durable SSE stream then keeps the
+  // separately-tracked sessionActivities map up to date. The field is
+  // here for the initial-state extraction in normalizeSession; runtime
+  // reads go through sessionActivities[id], not session.activity.
+  activity?: SessionActivitySummary | null;
 }
 
 interface TestState {
@@ -622,7 +634,16 @@ function writeSessionInteraction(id: string, interaction: SessionInteraction): v
 
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
-  return mode === session.mode ? session : { ...session, mode };
+  // The backend includes an activity block on GET /api/sessions
+  // (hydrated from the latest session.activity_changed lifecycle event);
+  // normalize through the same path snapshot poll responses use so the
+  // initial-state hydration agrees with subsequent SSE deltas.
+  const activity = session.activity
+    ? normalizeSessionActivity({ ...session.activity, session_id: session.id })
+    : null;
+  const next = mode === session.mode ? { ...session } : { ...session, mode };
+  next.activity = activity;
+  return next;
 }
 
 function sessionOrderStorageKey(user: SessionUser): string {
@@ -941,7 +962,12 @@ function clearGlimmungLaunchContext(): void {
   window.history.replaceState({}, "", url.toString());
 }
 
-const PENDING_SESSION_REFRESH_INTERVAL_MS = 1500;
+// The prior 1.5s pending-session polling constant was deleted in
+// tank-operator#83. Sidebar updates flow through the typed-SSE stream
+// on /api/sessions/events driven by the session_lifecycle_events
+// ledger; the polling loop (only active while any session was
+// non-Active) is no longer needed.
+//
 // Two cadences for the shared `nowMs` clock:
 //   - BOOT: 1s while any session is Pending, so the sidebar ↓ boot label
 //     (second-resolution via formatBootTime) visibly counts up second by
@@ -6405,6 +6431,13 @@ export function App() {
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
+  // Refs mirror the latest sessions + activities state so the SSE event
+  // reducer (which closes over the user-keyed useEffect) can read the
+  // current value without forcing a resubscribe on every render. The
+  // reducer mutates the canonical state via setState; the refs are
+  // updated by the effects below.
+  const sessionsRef = useRef<Session[]>([]);
+  const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>({});
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -6454,6 +6487,14 @@ export function App() {
     return () => document.removeEventListener("mousedown", close);
   }, [modeMenuOpen, profileMenuOpen, interactionMenuOpen]);
 
+  // refresh re-fetches the per-owner session snapshot from
+  // /api/sessions and hydrates BOTH the sessions list and the
+  // sessionActivities map from the response. The activity block lives on
+  // each Session row (server-side join against the latest
+  // session.activity_changed lifecycle event); the prior activity-poll
+  // endpoint is gone (tank-operator#83). Steady-state updates after the
+  // initial snapshot flow through the typed SSE stream; refresh() is
+  // only used for first-load and post-resync reseeding.
   async function refresh() {
     try {
       const res = await authedFetch("/api/sessions");
@@ -6466,25 +6507,14 @@ export function App() {
         );
         return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function refreshSessionActivity() {
-    try {
-      const res = await authedFetch("/api/sessions/activity");
-      if (!res.ok) throw new Error(`activity failed: ${res.status}`);
-      const body = (await res.json()) as { sessions?: unknown[] };
-      const next: Record<string, SessionActivitySummary> = {};
-      if (Array.isArray(body.sessions)) {
-        for (const raw of body.sessions) {
-          const activity = normalizeSessionActivity(raw);
-          if (activity) next[activity.session_id] = activity;
+      setSessionActivities(() => {
+        const next: Record<string, SessionActivitySummary> = {};
+        for (const session of listed) {
+          if (session.activity) next[session.id] = session.activity;
         }
-      }
-      setSessionActivities(next);
+        return next;
+      });
+      setError(null);
     } catch (e) {
       setError(String(e));
     }
@@ -6493,7 +6523,6 @@ export function App() {
   useEffect(() => {
     if (!user) return;
     void refresh();
-    void refreshSessionActivity();
   }, [user]);
 
   // While a pod is booting we need a 1s tick so the ↓ boot label counts up
@@ -6504,6 +6533,18 @@ export function App() {
     () => sessions.some((s) => s.status === "Pending"),
     [sessions],
   );
+
+  // Keep the refs that the SSE reducer reads in sync with the latest
+  // committed state. This lets the SSE useEffect close over a stable
+  // user identity instead of every render's state, avoiding constant
+  // resubscribe.
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+  useEffect(() => {
+    sessionActivitiesRef.current = sessionActivities;
+  }, [sessionActivities]);
+
   useEffect(() => {
     if (!user) return;
     const tickMs = hasPendingSession ? SESSION_BOOT_TICK_MS : SESSION_RUNTIME_TICK_MS;
@@ -6546,41 +6587,91 @@ export function App() {
     void launch();
   }, [user, defaultSessionMode]);
 
+  // Typed session-list SSE stream. Replaces the prior wake-and-refetch
+  // SSE + 1.5s pending-session polling loop + visibility/focus refetch
+  // handlers per tank-operator#83 — the durable ledger backing this
+  // stream means cursor-resume after disconnect catches up
+  // automatically; no polling is needed for any failure mode the prior
+  // path covered. Mirrors the chat-window event stream shape: tracks a
+  // ref'd cursor for Last-Event-ID reconnect, handles resync_required
+  // by re-fetching the snapshot, and reopens on connection-loss.
   useEffect(() => {
     if (!user) return;
-    const hasPending = sessions.some((s) => s.status !== "Active") || closingIds.size > 0;
-    if (!hasPending) return;
-    const t = setInterval(refresh, PENDING_SESSION_REFRESH_INTERVAL_MS);
-    return () => clearInterval(t);
-  }, [sessions, user, closingIds]);
+    const cursorRef = { current: null as string | null };
+    let source: EventSource | null = null;
+    let cancelled = false;
+    let reopenTimer: number | null = null;
 
-  useEffect(() => {
-    if (!user) return;
-    const source = new EventSource("/api/sessions/events", { withCredentials: true });
-    const refreshSessions = () => {
-      void refresh();
-      void refreshSessionActivity();
+    const open = () => {
+      if (cancelled) return;
+      const params = new URLSearchParams();
+      if (cursorRef.current) params.set("last_order_key", cursorRef.current);
+      const query = params.toString();
+      source = new EventSource(`/api/sessions/events${query ? `?${query}` : ""}`, {
+        withCredentials: true,
+      });
+      source.addEventListener("session-event", (event) => {
+        const message = event as MessageEvent;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(String(message.data));
+        } catch {
+          return;
+        }
+        const normalized = normalizeSessionListEvent(parsed);
+        if (!normalized) return;
+        cursorRef.current = normalized.order_key;
+        // Reducer mutates both the sessions list and the activities
+        // map in one pass; React batches the two setState calls into a
+        // single render.
+        const state: SessionListReducerState<Session> = {
+          sessions: sessionsRef.current,
+          activities: sessionActivitiesRef.current,
+        };
+        const next = applySessionListEvent(state, normalized);
+        if (next.sessions !== state.sessions) {
+          setSessions(
+            user
+              ? orderSessions(next.sessions, readSessionOrder(sessionOrderStorageKey(user)))
+              : next.sessions,
+          );
+        }
+        if (next.activities !== state.activities) {
+          setSessionActivities(next.activities);
+        }
+      });
+      source.addEventListener("resync_required", () => {
+        cursorRef.current = null;
+        source?.close();
+        source = null;
+        void refresh();
+        // Refresh hydrates the snapshot; open() resumes the stream
+        // from a fresh cursor on the next tick.
+        reopenTimer = window.setTimeout(open, 250);
+      });
+      source.addEventListener("stream-error", () => {
+        // Server-acknowledged error; close and let onerror restart.
+        source?.close();
+        source = null;
+      });
+      source.onerror = () => {
+        source?.close();
+        source = null;
+        if (cancelled) return;
+        reopenTimer = window.setTimeout(open, 1000);
+      };
     };
-    source.addEventListener("sessions-changed", refreshSessions);
-    return () => {
-      source.removeEventListener("sessions-changed", refreshSessions);
-      source.close();
-    };
-  }, [user]);
 
-  useEffect(() => {
-    if (!user) return;
-    const refreshIfVisible = () => {
-      if (document.visibilityState !== "visible") return;
-      void refresh();
-      void refreshSessionActivity();
-    };
-    document.addEventListener("visibilitychange", refreshIfVisible);
-    window.addEventListener("focus", refreshIfVisible);
+    open();
     return () => {
-      document.removeEventListener("visibilitychange", refreshIfVisible);
-      window.removeEventListener("focus", refreshIfVisible);
+      cancelled = true;
+      if (reopenTimer != null) window.clearTimeout(reopenTimer);
+      source?.close();
     };
+    // refresh + the ref-backed sessions/activities snapshots are
+    // intentionally stable; closing over them would resubscribe on
+    // every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   useEffect(() => {
@@ -6737,7 +6828,6 @@ export function App() {
         writeSessionInteraction(created.id, defaultInteraction);
       }
       await refresh();
-      await refreshSessionActivity();
       activate(created.id);
       startEditing(created.id, created.name);
     } catch (e) {
@@ -6780,7 +6870,6 @@ export function App() {
         writeSessionInteraction(created.id, "gui");
       }
       await refresh();
-      await refreshSessionActivity();
       activate(created.id);
       await waitForSessionReady(created.id);
       const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
@@ -6804,7 +6893,9 @@ export function App() {
         }
         throw new Error(detail);
       }
-      await refreshSessionActivity();
+      // The SSE stream on /api/sessions/events delivers the
+      // session.activity_changed delta for the new turn; no manual
+      // refresh needed.
     } catch (e) {
       setError(String(e));
     } finally {
@@ -6923,7 +7014,6 @@ export function App() {
       const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`delete failed: ${res.status}`);
       await refresh();
-      await refreshSessionActivity();
     } catch (e) {
       setClosingIds((prev) => {
         const next = new Set(prev);

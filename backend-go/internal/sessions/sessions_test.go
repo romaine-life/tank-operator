@@ -11,8 +11,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
+
+// fakeLifecycleSource is the test stand-in for the production
+// lifecycleevents.Store that drives the Reader's Status + Activity
+// hydration. Maps session_id → canned values; missing entries return
+// nil/nil so the Reader leaves the default Status alone (the legacy
+// behavior).
+type fakeLifecycleSource struct {
+	pod      map[string]*lifecycleevents.PodStatusSummary
+	activity map[string]*lifecycleevents.ActivitySummary
+}
+
+func (f fakeLifecycleSource) LatestPodStatus(_ context.Context, _, sessionID string) (*lifecycleevents.PodStatusSummary, error) {
+	return f.pod[sessionID], nil
+}
+
+func (f fakeLifecycleSource) LatestActivity(_ context.Context, _, sessionID string) (*lifecycleevents.ActivitySummary, error) {
+	return f.activity[sessionID], nil
+}
+
+// readyAtPtr / activeSummary build the fixtures the merge test expects.
+func readyAtPtr(t string) *string { v := t; return &v }
 
 func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 	client := fake.NewSimpleClientset(
@@ -20,7 +42,14 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, false),
 		sessionPod("14", "other@example.com", corev1.PodRunning, true),
 	)
-	reader := NewReader(client, sessionmodel.SessionsNamespace)
+	// Status comes from the lifecycle ledger now (tank-operator#83); seed
+	// the test source with a "ready" entry for session 12.
+	lifecycle := fakeLifecycleSource{
+		pod: map[string]*lifecycleevents.PodStatusSummary{
+			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
+		},
+	}
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, nil, lifecycle, "default")
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -111,7 +140,16 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 			Visible:     true,
 		},
 	}
-	reader := NewReaderWithRegistry(client, sessionmodel.SessionsNamespace, registry)
+	lifecycle := fakeLifecycleSource{
+		pod: map[string]*lifecycleevents.PodStatusSummary{
+			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
+			"16": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
+			// 15 has no pod and no lifecycle row — the infoFromRecord
+			// fallback path stamps "Failed", which is what the test
+			// expects.
+		},
+	}
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, lifecycle, "default")
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -143,24 +181,13 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 	}
 }
 
-func TestPodStatusCompatibility(t *testing.T) {
-	pending := sessionPod("12", "nelson@romaine.life", corev1.PodPending, true)
-	if got := podStatus(pending); got != "Pending" {
-		t.Fatalf("pending status = %q", got)
-	}
-
-	crash := sessionPod("13", "nelson@romaine.life", corev1.PodRunning, true)
-	crash.Status.ContainerStatuses = []corev1.ContainerStatus{{
-		Name:  "claude",
-		Ready: false,
-		State: corev1.ContainerState{
-			Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
-		},
-	}}
-	if got := podStatus(crash); got != "Failed" {
-		t.Fatalf("crash status = %q", got)
-	}
-}
+// TestPodStatusCompatibility was deleted in tank-operator#83 along with
+// the podStatus() helper it pinned. Status is now derived from the
+// session_lifecycle_events ledger via Reader.hydrateLifecycle and tested
+// end-to-end through TestListReturnsOwnedSandboxAgentPods (which wires a
+// fakeLifecycleSource). Re-introducing this test would resurrect the
+// retired path the migration-guard forbids; the equivalent pod-state
+// derivation is now tested in internal/podinformer.
 
 type registryRecords []sessionmodel.SessionRecord
 

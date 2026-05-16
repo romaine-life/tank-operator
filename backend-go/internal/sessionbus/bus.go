@@ -22,11 +22,12 @@ type Config struct {
 	Stream   string
 	Scope    string
 	Replicas int
-	// WakeMetrics is optional. When set, wake-publish failures inside
-	// PublishSessionEventWake / PublishSessionListWake increment the
+	// WakeMetrics is optional. When set, publish failures inside
+	// PublishSessionEventWake (chat per-session wake) and
+	// PublishSessionListEvent (typed sidebar event) increment the
 	// supplied counters before returning the error to the caller, so
-	// silent `_ = b.PublishSessionListWake(...)` patterns in mutation
-	// paths still produce telemetry.
+	// silent fire-and-forget call sites still produce telemetry on a
+	// NATS outage.
 	WakeMetrics WakeMetrics
 	// ConnectionMetrics is optional. When set, the bus wires the NATS
 	// disconnect / reconnect / async-error connection callbacks to the
@@ -54,6 +55,27 @@ type EventStore interface {
 	Upsert(context.Context, map[string]any) error
 }
 
+// LifecycleEmitter is the hook the persister calls after a successful
+// chat-event upsert so a session.activity_changed lifecycle row can be
+// derived and published on the per-owner session-list events subject.
+// The implementation lives in cmd/tank-operator and bridges
+// lifecycleevents.Store + Bus.PublishSessionListEvent — kept as an
+// interface here so this package doesn't depend on lifecycleevents.
+//
+// Emit-or-skip is the emitter's decision (a no-op delta returns nil
+// without writing). Errors are logged by the persister and otherwise
+// ignored: the chat event is already durable and the per-session SSE
+// wake already fired, so we don't NAK on a sidebar-only emit failure.
+type LifecycleEmitter interface {
+	EmitChatActivityDelta(ctx context.Context, event map[string]any) error
+}
+
+type noopLifecycleEmitter struct{}
+
+func (noopLifecycleEmitter) EmitChatActivityDelta(_ context.Context, _ map[string]any) error {
+	return nil
+}
+
 // PersisterMetrics receives counters from the schema-rejection / transient-
 // failure split in the persister. Steady-state expectation: zero schema
 // rejections. Wired to prometheus in cmd/tank-operator/observability.go.
@@ -67,20 +89,20 @@ type noopPersisterMetrics struct{}
 func (noopPersisterMetrics) RecordSchemaRejected()   {}
 func (noopPersisterMetrics) RecordTransientFailure() {}
 
-// WakeMetrics receives counters for wake-publish failures. The bus records
-// here before returning the error to the caller; callers that silently
-// drop the error (Manager.PublishSessionListWake on lifecycle mutations)
-// still get visibility into "NATS is down". Wired to prometheus in
-// cmd/tank-operator/observability.go.
+// WakeMetrics receives counters for wake/event publish failures. The bus
+// records here before returning the error to the caller; callers that
+// silently drop the error (Manager mutations that just want
+// fire-and-forget) still get visibility into "NATS is down". Wired to
+// prometheus in cmd/tank-operator/observability.go.
 type WakeMetrics interface {
 	RecordSessionEventWakePublishFailed()
-	RecordSessionListWakePublishFailed()
+	RecordSessionListEventPublishFailed()
 }
 
 type noopWakeMetrics struct{}
 
-func (noopWakeMetrics) RecordSessionEventWakePublishFailed() {}
-func (noopWakeMetrics) RecordSessionListWakePublishFailed()  {}
+func (noopWakeMetrics) RecordSessionEventWakePublishFailed()  {}
+func (noopWakeMetrics) RecordSessionListEventPublishFailed() {}
 
 type Bus struct {
 	nc          *nats.Conn
@@ -89,6 +111,21 @@ type Bus struct {
 	scope       string
 	replicas    int
 	wakeMetrics WakeMetrics
+	lifecycle   LifecycleEmitter
+}
+
+// SetLifecycleEmitter wires the chat→activity-delta hook the persister
+// calls after each successful upsert. Optional: nil leaves the emitter at
+// the no-op default. Set once at startup after the lifecycle store + the
+// bus are both built.
+func (b *Bus) SetLifecycleEmitter(emitter LifecycleEmitter) {
+	if b == nil {
+		return
+	}
+	if emitter == nil {
+		emitter = noopLifecycleEmitter{}
+	}
+	b.lifecycle = emitter
 }
 
 func Connect(ctx context.Context, cfg Config) (*Bus, error) {
@@ -152,6 +189,9 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 	}
 	if b.wakeMetrics == nil {
 		b.wakeMetrics = noopWakeMetrics{}
+	}
+	if b.lifecycle == nil {
+		b.lifecycle = noopLifecycleEmitter{}
 	}
 	if err := b.ensureStream(ctx); err != nil {
 		nc.Close()
@@ -218,41 +258,54 @@ func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey strin
 	return nil
 }
 
-// PublishSessionListWake signals to SSE subscribers on /api/sessions/events
-// that the owner's session list has changed. Replaces the in-process
-// EventBus fanout pattern with a NATS subject so the live path matches
-// docs/product-inspirations.md ("Work delivery should use a real
-// command/event fabric. Browser polling, process memory fanout, and
-// database polling are not the normal live path for app-managed GUI chat.").
-func (b *Bus) PublishSessionListWake(_ context.Context, email string) error {
+// PublishSessionListEvent publishes one typed lifecycle-event payload on
+// the per-owner session-list events subject. The SSE handler on
+// /api/sessions/events forwards the payload verbatim to subscribed
+// clients — there is no separate wake-and-refetch step. Replaces the
+// prior opaque resync-trigger publish per tank-operator#83. Steady-state
+// expectation: zero publish failures; a failure here means NATS is down,
+// in which case SSE clients fall back to the durable Postgres replay on
+// reconnect.
+func (b *Bus) PublishSessionListEvent(_ context.Context, email string, payload []byte) error {
 	if b == nil {
 		return fmt.Errorf("session bus unavailable")
 	}
 	if strings.TrimSpace(email) == "" {
 		return nil
 	}
-	if err := b.nc.Publish(SessionListWakeSubject(email), nil); err != nil {
-		b.wakeMetrics.RecordSessionListWakePublishFailed()
-		slog.Warn("session list wake publish failed",
+	if len(payload) == 0 {
+		return fmt.Errorf("session list event payload is empty")
+	}
+	if err := b.nc.Publish(SessionListEventSubject(email), payload); err != nil {
+		b.wakeMetrics.RecordSessionListEventPublishFailed()
+		slog.Warn("session list event publish failed",
 			"email", email, "error", err)
 		return err
 	}
 	return nil
 }
 
-// SubscribeSessionListWake returns a channel that receives a struct{} on
-// every session-list-change signal for the owner. Channel cap is 1 so
-// multiple wakes coalesce into one resync — same semantics as the prior
-// in-process EventBus.
-func (b *Bus) SubscribeSessionListWake(ctx context.Context, email string) (<-chan struct{}, func(), error) {
+// SubscribeSessionListEvents returns a channel that receives each typed
+// lifecycle-event payload published for the owner. Channel cap is 64 to
+// absorb short bursts (pod-informer can emit several transitions in
+// quick succession during pod startup); if the consumer falls further
+// behind, payloads are dropped at the NATS-subscription callback and the
+// consumer's next reconnect cursor-resume catches up from Postgres.
+func (b *Bus) SubscribeSessionListEvents(ctx context.Context, email string) (<-chan []byte, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
-	ch := make(chan struct{}, 1)
-	sub, err := b.nc.Subscribe(SessionListWakeSubject(email), func(*nats.Msg) {
+	ch := make(chan []byte, 64)
+	sub, err := b.nc.Subscribe(SessionListEventSubject(email), func(msg *nats.Msg) {
+		// Copy the data slice — the NATS client reuses the underlying
+		// buffer across deliveries.
+		payload := make([]byte, len(msg.Data))
+		copy(payload, msg.Data)
 		select {
-		case ch <- struct{}{}:
+		case ch <- payload:
 		default:
+			// Drop. SSE consumer will resync from the durable ledger on
+			// the next reconnect; better than a slow-consumer stall.
 		}
 	})
 	if err != nil {
@@ -373,6 +426,13 @@ func (b *Bus) handlePersistMessage(ctx context.Context, store EventStore, metric
 // persistOneEvent unmarshals + upserts + wakes for one message. Mirrors
 // persistEventMessage but takes the narrow persistableMessage interface so
 // it can be unit-tested without a live NATS server.
+//
+// After the chat event is durably stored and the per-session wake has
+// fired, the lifecycle emitter hook gets a chance to derive a
+// session.activity_changed sidebar delta. An emitter error is logged but
+// does not cause the persister to NAK — the chat event is already
+// durable, and the sidebar will catch up via cursor-resume on the next
+// SSE reconnect.
 func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persistableMessage) error {
 	var event map[string]any
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
@@ -397,6 +457,14 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 	if storageKey != "" && b.nc != nil {
 		if err := b.nc.Publish(WakeSubject(storageKey), nil); err != nil {
 			return err
+		}
+	}
+	if b.lifecycle != nil {
+		if err := b.lifecycle.EmitChatActivityDelta(ctx, event); err != nil {
+			slog.Warn("lifecycle activity-delta emit failed",
+				"subject", msg.Subject(),
+				"error", err,
+			)
 		}
 	}
 	return nil

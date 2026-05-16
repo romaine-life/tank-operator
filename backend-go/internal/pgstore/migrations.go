@@ -86,6 +86,56 @@ var schemaMigrations = []string{
 		updated_at           timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (email, session_scope, session_id)
 	)`,
+
+	// `session_lifecycle_events` — the durable per-owner ledger that drives
+	// the sidebar's session list. Replaces the prior opaque wake subject
+	// + resync-trigger SSE and the activity-polling endpoint with the same
+	// shape `session_events` uses for chat:
+	// typed events with a monotonic order_key per owner, cursor-resumable
+	// SSE on /api/sessions/events, explicit resync on unknown cursor.
+	//
+	// One row per durable transition. Producers:
+	//   - sessions.Manager  → session.created / .deleted / .name_changed /
+	//                         .test_state_changed / .rollout_state_changed
+	//   - podinformer       → session.pod_scheduled / .pod_ready /
+	//                         .pod_not_ready / .pod_failed / .pod_terminating
+	//   - sessionbus persister → session.activity_changed (per-session
+	//                         activity-summary deltas folded from chat events)
+	//
+	// order_key is a BIGSERIAL because the read shape is per-owner (sidebar
+	// subscribes per owner); a per-owner global serial preserves write order
+	// across all three producers without any cross-table merge logic at read
+	// time. event_id is the producer-supplied idempotency key — pod-informer
+	// resync-without-real-change skips re-inserting via the unique constraint.
+	`CREATE TABLE IF NOT EXISTS session_lifecycle_events (
+		order_key       bigserial PRIMARY KEY,
+		email           text        NOT NULL,
+		session_scope   text        NOT NULL,
+		session_id      text        NOT NULL,
+		event_type      text        NOT NULL,
+		event_id        text        NOT NULL,
+		payload         jsonb       NOT NULL,
+		occurred_at     timestamptz NOT NULL DEFAULT now()
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS session_lifecycle_events_event_id
+		ON session_lifecycle_events (session_scope, session_id, event_id)`,
+	`CREATE INDEX IF NOT EXISTS session_lifecycle_events_owner_order
+		ON session_lifecycle_events (email, session_scope, order_key)`,
+	`CREATE INDEX IF NOT EXISTS session_lifecycle_events_session_order
+		ON session_lifecycle_events (session_scope, session_id, order_key)`,
+	// Latest activity_changed per session — the sidebar's initial-state
+	// query joins against this to materialize the activity summary block
+	// of GET /api/sessions without folding the full ledger.
+	`CREATE INDEX IF NOT EXISTS session_lifecycle_events_activity_latest
+		ON session_lifecycle_events (session_scope, session_id, order_key DESC)
+		WHERE event_type = 'session.activity_changed'`,
+	// Latest pod-state event per session — used by GET /api/sessions to
+	// derive the durable status field (no more live podStatus() compute).
+	`CREATE INDEX IF NOT EXISTS session_lifecycle_events_pod_latest
+		ON session_lifecycle_events (session_scope, session_id, order_key DESC)
+		WHERE event_type IN ('session.pod_scheduled', 'session.pod_ready',
+		                     'session.pod_not_ready', 'session.pod_failed',
+		                     'session.pod_terminating')`,
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

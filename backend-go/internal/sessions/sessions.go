@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -28,23 +29,41 @@ var (
 )
 
 type Info struct {
-	ID           string         `json:"id"`
-	PodName      *string        `json:"pod_name"`
-	Owner        string         `json:"owner"`
-	Status       string         `json:"status"`
-	Mode         string         `json:"mode"`
-	RequestedAt  *string        `json:"requested_at"`
-	CreatedAt    *string        `json:"created_at"`
-	ReadyAt      *string        `json:"ready_at"`
-	Name         *string        `json:"name"`
-	TestState    map[string]any `json:"test_state"`
-	RolloutState map[string]any `json:"rollout_state"`
+	ID           string                            `json:"id"`
+	PodName      *string                           `json:"pod_name"`
+	Owner        string                            `json:"owner"`
+	Status       string                            `json:"status"`
+	Mode         string                            `json:"mode"`
+	RequestedAt  *string                           `json:"requested_at"`
+	CreatedAt    *string                           `json:"created_at"`
+	ReadyAt      *string                           `json:"ready_at"`
+	Name         *string                           `json:"name"`
+	TestState    map[string]any                    `json:"test_state"`
+	RolloutState map[string]any                    `json:"rollout_state"`
+	// Activity is the chat-derived sidebar indicator block. Populated by
+	// the ListByOwner read path from the latest session.activity_changed
+	// lifecycle event for this session; nil for sessions that haven't
+	// produced any chat activity yet. Replaces the per-session response of
+	// the deleted activity-polling endpoint.
+	Activity *lifecycleevents.ActivitySummary `json:"activity,omitempty"`
+}
+
+// LifecycleStatusSource lets the Reader pull each session's durable
+// pod-status snapshot from the lifecycle ledger so the `status` field on
+// Info reflects the latest pod-state event instead of being recomputed
+// from the live pod object on every List() call. Satisfied by
+// lifecycleevents.Store.
+type LifecycleStatusSource interface {
+	LatestPodStatus(ctx context.Context, scope, sessionID string) (*lifecycleevents.PodStatusSummary, error)
+	LatestActivity(ctx context.Context, scope, sessionID string) (*lifecycleevents.ActivitySummary, error)
 }
 
 type Reader struct {
 	client    kubernetes.Interface
 	namespace string
 	registry  Registry
+	lifecycle LifecycleStatusSource
+	scope     string
 }
 
 type Registry interface {
@@ -56,10 +75,22 @@ func NewReader(client kubernetes.Interface, namespace string) *Reader {
 }
 
 func NewReaderWithRegistry(client kubernetes.Interface, namespace string, registry Registry) *Reader {
+	return NewReaderFull(client, namespace, registry, nil, "")
+}
+
+// NewReaderFull is the full-fledged constructor that wires the lifecycle
+// store so List/Get can hydrate Activity and the durable Status field
+// from the ledger. The legacy two-arg / three-arg constructors are kept
+// for the manager's reaperLoop call sites that don't need the lifecycle
+// data.
+func NewReaderFull(client kubernetes.Interface, namespace string, registry Registry, lifecycle LifecycleStatusSource, scope string) *Reader {
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
-	return &Reader{client: client, namespace: namespace, registry: registry}
+	if scope == "" {
+		scope = "default"
+	}
+	return &Reader{client: client, namespace: namespace, registry: registry, lifecycle: lifecycle, scope: scope}
 }
 
 func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
@@ -88,14 +119,18 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 		out := make([]Info, 0, len(records)+len(pods.Items))
 		for _, record := range records {
 			seen[record.ID] = struct{}{}
-			out = append(out, infoFromRecord(owner, record, podsByID[record.ID]))
+			info := infoFromRecord(owner, record, podsByID[record.ID])
+			r.hydrateLifecycle(ctx, &info)
+			out = append(out, info)
 		}
 		for _, pod := range podOrder {
 			id := sessionIDFromPod(pod)
 			if _, ok := seen[id]; ok || !podHasSandboxAgent(pod) {
 				continue
 			}
-			out = append(out, infoFromPod(owner, pod))
+			info := infoFromPod(owner, pod)
+			r.hydrateLifecycle(ctx, &info)
+			out = append(out, info)
 		}
 		return out, nil
 	}
@@ -105,9 +140,35 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 		if !podHasSandboxAgent(pod) {
 			continue
 		}
-		out = append(out, infoFromPod(owner, pod))
+		info := infoFromPod(owner, pod)
+		r.hydrateLifecycle(ctx, &info)
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// hydrateLifecycle replaces the live-pod status computation with the
+// durable equivalent: the latest session.pod_* event drives Status (and
+// ReadyAt where applicable), and the latest session.activity_changed
+// fills the Activity block. Falls back to whatever Status the
+// infoFromRecord/infoFromPod path already set if the lifecycle store is
+// unwired (local dev with stub store) or hasn't seen the session yet.
+func (r *Reader) hydrateLifecycle(ctx context.Context, info *Info) {
+	if r.lifecycle == nil || info == nil || info.ID == "" {
+		return
+	}
+	if status, err := r.lifecycle.LatestPodStatus(ctx, r.scope, info.ID); err == nil && status != nil {
+		if status.Status != "" {
+			info.Status = status.Status
+		}
+		if status.ReadyAt != nil {
+			info.ReadyAt = status.ReadyAt
+		}
+	}
+	if activity, err := r.lifecycle.LatestActivity(ctx, r.scope, info.ID); err == nil && activity != nil {
+		copy := *activity
+		info.Activity = &copy
+	}
 }
 
 func (r *Reader) Get(ctx context.Context, owner, sessionID string) (Info, error) {
@@ -157,6 +218,13 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord, pod *corev1
 	}
 }
 
+// infoFromPod builds an Info from a live pod for callers that haven't
+// wired the lifecycle store yet (legacy NewReader / NewReaderWithRegistry).
+// The Status field defaults to "Pending" — the real Status comes from
+// hydrateLifecycle's pull against the latest session.pod_* lifecycle
+// event. Live pod-state computation is intentionally NOT done here per
+// tank-operator#83: status is derived from the durable ledger, not the
+// pod object.
 func infoFromPod(owner string, pod *corev1.Pod) Info {
 	podName := pod.Name
 	createdAt := timeString(pod.CreationTimestamp.Time)
@@ -166,7 +234,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		ID:           sessionIDFromPod(pod),
 		PodName:      &podName,
 		Owner:        owner,
-		Status:       podStatus(pod),
+		Status:       "Pending",
 		Mode:         sessionmodel.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
 		RequestedAt:  createdAt,
 		CreatedAt:    createdAt,
@@ -222,20 +290,10 @@ func podHasSandboxAgent(pod *corev1.Pod) bool {
 	return false
 }
 
-func podStatus(pod *corev1.Pod) string {
-	if pod.Status.Phase == corev1.PodRunning && podReady(pod) {
-		return "Active"
-	}
-	if pod.Status.Phase == corev1.PodFailed || pod.Status.Phase == corev1.PodSucceeded {
-		return "Failed"
-	}
-	for _, status := range pod.Status.ContainerStatuses {
-		if status.State.Waiting != nil && status.State.Waiting.Reason == "CrashLoopBackOff" {
-			return "Failed"
-		}
-	}
-	return "Pending"
-}
+// podStatus was deleted in tank-operator#83. Status is derived from the
+// session_lifecycle_events ledger via LatestPodStatus, not computed live
+// from the pod object. See Reader.hydrateLifecycle and the
+// scripts/check-removed-chat-runtime.mjs guard.
 
 func podReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) == 0 {
