@@ -48,6 +48,7 @@ var LifecycleEventTypes = []string{
 	"turn.completed",
 	"turn.failed",
 	"turn.command_failed",
+	"turn.interrupt_requested",
 	"turn.interrupted",
 	"item.failed",
 	"tool.approval_requested",

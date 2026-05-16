@@ -67,6 +67,13 @@ func DeriveActivitySummary(prior *ActivitySummary, events []map[string]any, unre
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = true
+		case "turn.interrupt_requested":
+			// Stop has been requested but the turn is still mid-flight;
+			// keep ActiveTurnID. The terminal event (turn.interrupted /
+			// completed / failed / command_failed) resolves this later.
+			out.Status = "stopping"
+			out.NeedsInput = false
+			out.Failed = false
 		case "turn.interrupted":
 			out.Status = "stopped"
 			out.ActiveTurnID = nil

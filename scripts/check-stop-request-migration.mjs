@@ -188,7 +188,7 @@ const CHECKS = [
     file: "backend-go/internal/store/session_events.go",
     description: "FindTurnTerminal query does NOT treat the new type as terminal (interrupt_requested is mid-flight)",
     kind: "block-absent",
-    blockPattern: /FindTurnTerminal\(ctx[\s\S]*?Scan\(&payload\)/,
+    blockPattern: /func \(s \*postgresSessionEventStore\) FindTurnTerminal\([\s\S]*?\)\.Scan\(&payload\)/,
     absentPattern: /turn\.interrupt_requested|EventTurnInterruptRequested/,
   },
   {
