@@ -145,7 +145,12 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
 export async function startLogin(): Promise<void> {
   const config = await fetchConfig();
   const callbackURL = encodeURIComponent(window.location.origin + window.location.pathname);
-  window.location.href = `${config.auth_url}/api/auth/sign-in/social/microsoft?callbackURL=${callbackURL}`;
+  // auth.romaine.life exposes a GET endpoint at /sign-in/microsoft that
+  // takes callbackURL as a query param, kicks off Better Auth's social
+  // flow, and 302s back to the callback once Microsoft completes. The
+  // Better Auth routes under /api/auth/* are POST-only, so a top-level
+  // GET redirect there 404s.
+  window.location.href = `${config.auth_url}/sign-in/microsoft?callbackURL=${callbackURL}`;
 }
 
 export async function logout(): Promise<void> {
