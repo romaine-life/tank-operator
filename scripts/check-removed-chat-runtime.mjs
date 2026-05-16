@@ -113,6 +113,36 @@ const blocked = [
   { name: "removed Bus.PublishEvent", pattern: /\bfunc \(b \*Bus\) PublishEvent\b|\bsessionBus\.PublishEvent\b|\bbus\.PublishEvent\b/ },
   { name: "removed EventSubject helper", pattern: /\bfunc EventSubject\b|\bEventSubject\(/ },
   { name: "removed SessionEventSink.create", pattern: /\bsink\.create\(|create\(message: StampedTankEvent|create\(event: StampedTankEvent/ },
+  // Cosmos DB SQL API was retired in #466 in favor of Azure Postgres
+  // Flexible Server. Block reintroduction of the storage-layer symbols
+  // and the orphan migration scripts that talked to Cosmos REST. Note:
+  // backend-go/internal/{auth,keyvault,pgstore} still import the
+  // generic `azcore` package — that's the Azure SDK auth package, used
+  // by Key Vault and Postgres workload identity. Cosmos-specific deps
+  // (`azcosmos`, `x-ms-documentdb-*` headers, etc.) are gone.
+  { name: "removed cosmosSessionEventStore", pattern: /\bcosmosSessionEventStore\b|\bNewCosmosSessionEventStore\b/ },
+  { name: "removed Cosmos retry helpers", pattern: /\bretryOnCosmosThrottle\b|\bisCosmosThrottled\b|\bcosmosRetryAfter\b/ },
+  { name: "removed Cosmos retry module", pattern: /backend-go\/internal\/store\/cosmos_retry\.go\b/ },
+  { name: "removed Cosmos data-plane import", pattern: /azure-sdk-for-go\/sdk\/data\/azcosmos\b/ },
+  { name: "removed Cosmos REST header", pattern: /\bx-ms-documentdb-/ },
+  // mcp.tf legitimately grants the azure-personal MCP server data-plane
+  // access to an UNRELATED Cosmos account (infra-cosmos-serverless,
+  // not the migrated tank-operator app store). Block only the
+  // tank-operator-side provisioning resources, not role-assignment
+  // grants on Cosmos accounts that still exist.
+  { name: "removed Cosmos tofu module", pattern: /\binfra\/cosmos\.tf\b|\bazurerm_cosmosdb_sql_(database|container)\b/ },
+  { name: "removed Cosmos env var", pattern: /\bCOSMOS_ENDPOINT\b|\bCOSMOS_DATABASE\b|\bCOSMOS_SESSION_EVENTS_CONTAINER\b|\bCOSMOS_PROFILES_CONTAINER\b/ },
+  { name: "removed Cosmos cleanup scripts", pattern: /scripts\/(audit-session-events|clean-session-events|migrate-session-events-timeline-id)\.py\b/ },
+  // NATS-delayed ScheduleWakeup was replaced by a pod-local setTimeout
+  // in the agent-runner during the #457 session bus refactor. The old
+  // path published a scheduled command via JetStream's AllowMsgSchedules
+  // feature; block reintroduction so a future refactor doesn't recreate
+  // the durable scheduler the inspirations doc explicitly scoped out.
+  { name: "removed NATS-delayed wakeup helpers", pattern: /\benqueueDelayed\b|\bbuildDelayedCommand\b/ },
+  { name: "removed schedule subject helper", pattern: /\bscheduleSubject\(/ },
+  // Match the actual config-field assignment, not the doc-of-deletion
+  // comment in bus.go that explains why the field is gone.
+  { name: "removed JetStream AllowMsgSchedules config", pattern: /AllowMsgSchedules:\s*true\b/ },
 ];
 
 const failures = [];
