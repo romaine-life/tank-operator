@@ -34,6 +34,10 @@ const ignoredRelativePaths = new Set([
   "scripts/check-tank-conversation-contract.mjs",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
+  // The observability test asserts /debug/vars returns 404 (the negative
+  // confirmation that the route is gone). Excluded so the migration
+  // guard doesn't fire on its own enforcement.
+  "backend-go/cmd/tank-operator/observability_test.go",
 ]);
 
 const blocked = [
@@ -201,6 +205,22 @@ const blocked = [
   // the per-app gate back.
   { name: "removed ALLOWED_EMAILS env var", pattern: /\bALLOWED_EMAILS\b/ },
   { name: "removed romaine-life-admin-emails KV mount", pattern: /\bromaine-life-admin-emails\b/ },
+  // expvar / /debug/vars deleted in the observability cutover that
+  // replaced ad-hoc expvar counters with a real Prometheus surface
+  // (docs/observability.md). The Go stdlib expvar package and its
+  // /debug/vars HTTP handler are migration-policy.md deletion targets:
+  // nothing in the cluster scraped /debug/vars, and reintroducing
+  // expvar.NewInt next to promauto.NewCounter would split metrics
+  // between two registries silently.
+  { name: "removed expvar package import in backend-go", pattern: /^\s*"expvar"$/m },
+  { name: "removed expvar.NewInt counter", pattern: /\bexpvar\.NewInt\b/ },
+  { name: "removed expvar.NewFloat counter", pattern: /\bexpvar\.NewFloat\b/ },
+  { name: "removed expvar.NewMap counter", pattern: /\bexpvar\.NewMap\b/ },
+  { name: "removed expvar.NewString counter", pattern: /\bexpvar\.NewString\b/ },
+  { name: "removed expvar.Handler mount", pattern: /\bexpvar\.Handler\b/ },
+  { name: "removed /debug/vars HTTP route", pattern: /\/debug\/vars\b/ },
+  { name: "removed expvarPersisterMetrics type", pattern: /\bexpvarPersisterMetrics\b/ },
+  { name: "removed expvarWakeMetrics type", pattern: /\bexpvarWakeMetrics\b/ },
 ];
 
 const failures = [];

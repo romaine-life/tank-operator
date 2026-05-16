@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"expvar"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,9 +57,9 @@ type sessionCommandBus interface {
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
-	// Health / config.
+	// Health / config / metrics.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.Handle("GET /debug/vars", expvar.Handler())
+	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/design/selection/latest", s.handleGetLatestDesignSelection)
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)

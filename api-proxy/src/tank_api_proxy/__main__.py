@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 
+from .metrics import start_metrics_server
 from .server import serve
 
 
@@ -19,7 +20,9 @@ def main() -> None:
 
 async def _run() -> None:
     port = int(os.environ.get("EXT_PROC_PORT", "9000"))
+    metrics_port = int(os.environ.get("METRICS_PORT", "9100"))
     server = await serve(port)
+    metrics_runner = await start_metrics_server(metrics_port)
     stop = asyncio.Event()
 
     def _shutdown(*_: object) -> None:
@@ -36,6 +39,7 @@ async def _run() -> None:
 
     await stop.wait()
     await server.stop(grace=5)
+    await metrics_runner.cleanup()
 
 
 if __name__ == "__main__":

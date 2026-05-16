@@ -45,6 +45,14 @@ from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, web
 
+from .metrics import (
+    record_github_attestation,
+    record_proxy_request,
+    record_sa_token_read,
+    start_metrics_server,
+    upstream_timer,
+)
+
 log = logging.getLogger(__name__)
 
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
@@ -98,7 +106,13 @@ class ServiceAccountTokenProvider:
         self._token_path = token_path
 
     async def token(self) -> str:
-        return _read_token(self._token_path)
+        try:
+            value = _read_token(self._token_path)
+        except Exception:
+            record_sa_token_read("failure")
+            raise
+        record_sa_token_read("success")
+        return value
 
 
 class TankGitHubAttestationProvider:
@@ -121,31 +135,43 @@ class TankGitHubAttestationProvider:
     async def token(self) -> str:
         now = time.time()
         if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+            record_github_attestation("cache_hit")
             return self._cached_token
         async with self._lock:
             now = time.time()
             if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
+                record_github_attestation("cache_hit")
                 return self._cached_token
             if not self._operator_url:
+                record_github_attestation("exception")
                 raise RuntimeError("TANK_OPERATOR_INTERNAL_URL is required for GitHub MCP auth")
-            pod_token = _read_token(self._token_path)
-            async with self._http.post(
-                f"{self._operator_url}/api/internal/github/attestation",
-                headers={"Authorization": f"Bearer {pod_token}"},
-                json={},
-            ) as response:
-                if response.status != 200:
-                    detail = (await response.text())[:300]
-                    raise RuntimeError(
-                        f"Tank GitHub MCP attestation request returned {response.status}: {detail}"
-                    )
-                body = await response.json()
+            try:
+                pod_token = _read_token(self._token_path)
+                async with self._http.post(
+                    f"{self._operator_url}/api/internal/github/attestation",
+                    headers={"Authorization": f"Bearer {pod_token}"},
+                    json={},
+                ) as response:
+                    if response.status != 200:
+                        detail = (await response.text())[:300]
+                        record_github_attestation("http_error")
+                        raise RuntimeError(
+                            f"Tank GitHub MCP attestation request returned {response.status}: {detail}"
+                        )
+                    body = await response.json()
+            except RuntimeError:
+                raise
+            except Exception:
+                record_github_attestation("exception")
+                raise
             token = str(body.get("token") or "")
             expires_at = _parse_expires_at(body.get("expires_at"))
             if not token or expires_at <= time.time():
+                record_github_attestation("invalid_response")
                 raise RuntimeError("Tank GitHub MCP attestation response was invalid")
             self._cached_token = token
             self._expires_at = expires_at
+            record_github_attestation("success")
             return token
 
 
@@ -188,14 +214,28 @@ async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
     )
 
 
+def _mcp_server_label(upstream: str) -> str:
+    """Extract a bounded label from the upstream URL. Example:
+    'http://mcp-azure-personal.mcp-azure.svc:80' → 'mcp-azure-personal'.
+    The fallback is the full host string, which is still bounded by the
+    LISTENERS map but less Grafana-friendly. Cardinality is the count
+    of distinct upstreams (~6), never per-request.
+    """
+    host = upstream.replace("http://", "").replace("https://", "")
+    name = host.split(".", 1)[0]
+    return name or host or "unknown"
+
+
 def _make_handler(upstream: str, http: ClientSession, token_provider):
     upstream = upstream.rstrip("/")
+    mcp_label = _mcp_server_label(upstream)
 
     async def handler(request: web.Request) -> web.StreamResponse:
         try:
             token = await token_provider.token()
         except Exception:
             log.exception("could not load bearer token for %s", upstream)
+            record_proxy_request(mcp_label, 503)
             return web.Response(status=503, text="bearer token unavailable")
 
         forwarded_headers = {
@@ -206,28 +246,32 @@ def _make_handler(upstream: str, http: ClientSession, token_provider):
         body = await request.read()
         url = upstream + request.path_qs
         try:
-            async with http.request(
-                request.method,
-                url,
-                headers=forwarded_headers,
-                data=body,
-                allow_redirects=False,
-            ) as upstream_resp:
-                response = web.StreamResponse(
-                    status=upstream_resp.status,
-                    headers={
-                        k: v
-                        for k, v in upstream_resp.headers.items()
-                        if k.lower() not in _STRIP_RESPONSE_HEADERS
-                    },
-                )
-                await response.prepare(request)
-                async for chunk in upstream_resp.content.iter_any():
-                    await response.write(chunk)
-                await response.write_eof()
-                return response
+            async with upstream_timer(mcp_label):
+                async with http.request(
+                    request.method,
+                    url,
+                    headers=forwarded_headers,
+                    data=body,
+                    allow_redirects=False,
+                ) as upstream_resp:
+                    status = upstream_resp.status
+                    response = web.StreamResponse(
+                        status=status,
+                        headers={
+                            k: v
+                            for k, v in upstream_resp.headers.items()
+                            if k.lower() not in _STRIP_RESPONSE_HEADERS
+                        },
+                    )
+                    await response.prepare(request)
+                    async for chunk in upstream_resp.content.iter_any():
+                        await response.write(chunk)
+                    await response.write_eof()
+            record_proxy_request(mcp_label, status)
+            return response
         except Exception:
             log.exception("upstream request to %s failed", url)
+            record_proxy_request(mcp_label, 502)
             return web.Response(status=502, text="upstream request failed")
 
     return handler
@@ -243,6 +287,13 @@ async def run() -> None:
     # the user-visible MCP call.
     http = ClientSession(timeout=ClientTimeout(total=600, sock_connect=5))
     runners: list[web.AppRunner] = []
+    # Bind metrics on a separate port so the PodMonitor scrape doesn't
+    # clash with the localhost-only MCP listeners. 9990 sits just below
+    # the LISTENERS port range (9991+) so the entire observability +
+    # MCP-proxy port block reads contiguously.
+    metrics_port = int(os.environ.get("MCP_AUTH_PROXY_METRICS_PORT", "9990"))
+    metrics_runner = await start_metrics_server(metrics_port)
+    runners.append(metrics_runner)
     try:
         for port, upstream in LISTENERS:
             app = web.Application()

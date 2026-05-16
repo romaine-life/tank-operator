@@ -1,0 +1,230 @@
+{{- /*
+Observability surface for tank-operator: ServiceMonitor / PodMonitor /
+PrometheusRule resources discovered by the kube-prometheus-stack
+deployed in the `monitoring` namespace.
+
+Conditional on observability.enabled so an environment without the
+Prometheus operator CRDs renders cleanly. docs/observability.md is the
+contract — the metric names referenced in PromQL below must match the
+Counter/Histogram declarations in:
+
+  - backend-go/cmd/tank-operator/observability.go
+  - backend-go/cmd/tank-operator/middleware_http.go
+  - backend-go/internal/pgstore/tracer.go
+  - agent-runner/src/metrics.ts
+  - codex-runner/src/metrics.ts
+  - api-proxy/src/tank_api_proxy/metrics.py
+  - claude-container/mcp-auth-proxy/src/mcp_auth_proxy/metrics.py
+*/}}
+{{- if .Values.observability.enabled }}
+---
+# ServiceMonitor: orchestrator. /metrics on the existing http port (same
+# listener as /api/*). 30s scrape; metrics latency budget allows it.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tank-operator
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tank-operator
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
+      scrapeTimeout: 10s
+---
+# ServiceMonitor: api-proxy deployments (Claude + Codex). Both Services
+# expose the metrics sidecar port; the `provider` label on each metric
+# distinguishes the two at query time.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: tank-api-proxy
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-api-proxy
+spec:
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values: [claude-api-proxy, codex-api-proxy]
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
+      scrapeTimeout: 10s
+---
+# PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
+# sidecar and (for claude_gui / codex_gui sessions) the runner sidecar.
+# Session pods are ephemeral — scrape interval 15s gives the operator a
+# realistic chance of catching at least one sample from a short-lived
+# session before the pod terminates and its series ages out.
+#
+# Cardinality discipline: we drop the pod / instance labels on the
+# scrape side via metricRelabelings so the per-pod prefix the prom
+# operator auto-injects doesn't grow active series with each new
+# session pod. The metric payload's own labels (mode, mcp_server,
+# outcome, etc.) remain — those are bounded by code.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: tank-session-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-session-pods
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: tank-operator
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+      metricRelabelings:
+        - action: labeldrop
+          regex: ^(pod|instance|namespace|container|endpoint|service|job)$
+    - port: runner-metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 5s
+      metricRelabelings:
+        - action: labeldrop
+          regex: ^(pod|instance|namespace|container|endpoint|service|job)$
+---
+# PrometheusRule: user-trust failure alerts. Each alert names exactly the
+# class of failure it surfaces; no "high-level" health alerts that fire
+# for unrelated reasons.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: tank-operator
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+spec:
+  groups:
+    - name: tank-operator.http
+      rules:
+        - alert: TankOperatorHTTP5xxRate
+          expr: sum(rate(tank_http_requests_total{status_class="5xx"}[5m])) by (route) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank-operator route {{`{{ $labels.route }}`}} is returning 5xx > 0.01 req/s for 5m"
+            runbook: "Inspect orchestrator logs for `http server error` lines on this route; the slog includes method, route, email, and the response detail."
+
+        - alert: TankPgQueryP99High
+          expr: histogram_quantile(0.99, sum by (le, operation) (rate(tank_pg_query_duration_seconds_bucket[5m]))) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank-operator Postgres p99 latency for operation {{`{{ $labels.operation }}`}} > 1s for 10m"
+
+        - alert: TankPgUnmappedOperation
+          expr: increase(tank_pg_queries_total{operation="other"}[1h]) > 0
+          for: 0m
+          labels:
+            severity: info
+          annotations:
+            summary: "tank-operator ran a Postgres query the operationFromSQL extractor did not recognize"
+            runbook: "Add the new table to pgstore.knownTables and ship a follow-up; otherwise that query is invisible in latency dashboards."
+
+    - name: tank-operator.session-bus
+      rules:
+        - alert: TankSessionEventPersistSchemaRejected
+          expr: tank_session_event_persist_schema_rejected_total > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session-events persister terminated an event for schema reasons"
+            runbook: "A producer is emitting non-Tank events to the bus. Steady-state expectation is zero. Inspect persister logs for `session bus event terminated: schema rejected`."
+
+        - alert: TankSessionEventWakePublishFailures
+          expr: rate(tank_session_event_wake_publish_failure_total[10m]) > 0
+            or on() rate(tank_session_list_wake_publish_failure_total[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank-operator wake publishes to NATS are failing"
+            runbook: "SSE clients will lag behind durable state until the next heartbeat. Check NATS health in the nats namespace."
+
+    - name: tank-operator.nats
+      rules:
+        - alert: TankNATSReconnectStorm
+          expr: rate(tank_nats_disconnect_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank-operator's NATS client is reconnecting faster than 6/min"
+            runbook: "JetStream session bus is unstable. Check the nats namespace's pod health and ServerCertificate."
+
+    - name: tank-operator.api-proxy
+      rules:
+        - alert: TankApiProxyRefreshStorm
+          expr: rate(tank_api_proxy_upstream_401_total[5m]) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) is seeing upstream 401s > 0.5/s for 5m"
+            runbook: "Refresh-storm signature. Check the refresh-token chain in KV; the single-flight gate may be failing to dedupe."
+
+        - alert: TankApiProxyRefreshFailures
+          expr: rate(tank_api_proxy_token_refresh_total{result!="success"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot rotate its OAuth refresh chain"
+            runbook: "All inbound requests will eventually 401. Inspect ext-proc logs for `refresh failed` / `refresh request crashed`."
+
+    - name: tank-operator.mcp-auth-proxy
+      rules:
+        - alert: TankMCPAuthProxySATokenReadFailures
+          expr: rate(tank_mcp_auth_proxy_sa_token_read_total{result="failure"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "mcp-auth-proxy cannot read the projected ServiceAccount token"
+            runbook: "kubelet's projected token volume is broken on this session pod. MCP calls will 503. Restart the pod or investigate kubelet."
+
+        - alert: TankMCPAuthProxyUpstream5xx
+          expr: sum(rate(tank_mcp_auth_proxy_requests_total{status_class="5xx"}[5m])) by (mcp_server) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "MCP server {{`{{ $labels.mcp_server }}`}} is returning 5xx > 0.05 req/s for 5m"
+
+    - name: tank-operator.runners
+      rules:
+        - alert: TankRunnerProviderErrorRate
+          expr: rate(tank_runner_provider_error_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
+            runbook: "Inspect the affected session pod's agent-runner / codex-runner logs."
+
+        - alert: TankRunnerPendingWakeupsGrowth
+          expr: max_over_time(tank_runner_pending_wakeups[1h]) > 50
+          for: 1h
+          labels:
+            severity: info
+          annotations:
+            summary: "ScheduleWakeup queue depth exceeded 50 in the last hour"
+            runbook: "Pod-local setTimeout scheduler is accumulating timers. May indicate a runaway agent loop or a stuck turn."
+{{- end }}

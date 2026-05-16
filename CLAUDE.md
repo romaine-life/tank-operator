@@ -42,6 +42,23 @@ or cleanup work. Read
 [docs/product-inspirations.md](docs/product-inspirations.md) when making
 product or architecture decisions.
 
+## Observability
+
+Every service in this repo (orchestrator, agent-runner, codex-runner,
+api-proxy, mcp-auth-proxy) exposes Prometheus metrics under the `tank_*`
+namespace and is scraped by the kube-prometheus-stack in the `monitoring`
+namespace. The orchestrator HTTP middleware emits a structured
+`slog.Error` line on every 5xx with `method`, `route`, `email`, and the
+response body's `detail` field — that log is the first stop for any
+"endpoint X returned 500" investigation. The Grafana dashboard
+auto-loads from a ConfigMap; PrometheusRule alerts cover the user-trust
+failure modes (refresh storms, schema-rejected events, SA-token read
+failures). The full taxonomy, cardinality rules, and the "adding a new
+metric" recipe live in [docs/observability.md](docs/observability.md);
+the migration guard at `scripts/check-removed-chat-runtime.mjs` blocks
+re-introduction of the deleted expvar surface (the ad-hoc JSON metrics
+endpoint that preceded `/metrics`).
+
 ## Migration audit checklist (procedural)
 
 The migration-policy doc is not values — it is a checklist. Before declaring

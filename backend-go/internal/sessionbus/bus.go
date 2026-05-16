@@ -28,7 +28,27 @@ type Config struct {
 	// silent `_ = b.PublishSessionListWake(...)` patterns in mutation
 	// paths still produce telemetry.
 	WakeMetrics WakeMetrics
+	// ConnectionMetrics is optional. When set, the bus wires the NATS
+	// disconnect / reconnect / async-error connection callbacks to the
+	// supplied counters so an operator can tell whether session-bus
+	// drops are happening (the failure mode behind both "SSE went
+	// silent" and the wake-publish failures above).
+	ConnectionMetrics ConnectionMetrics
 }
+
+// ConnectionMetrics receives counters for NATS connection lifecycle
+// events. The bus wires these to nats.Options callbacks at Connect time.
+type ConnectionMetrics interface {
+	RecordDisconnect()
+	RecordReconnect()
+	RecordAsyncError()
+}
+
+type noopConnectionMetrics struct{}
+
+func (noopConnectionMetrics) RecordDisconnect() {}
+func (noopConnectionMetrics) RecordReconnect()  {}
+func (noopConnectionMetrics) RecordAsyncError() {}
 
 type EventStore interface {
 	Upsert(context.Context, map[string]any) error
@@ -36,7 +56,7 @@ type EventStore interface {
 
 // PersisterMetrics receives counters from the schema-rejection / transient-
 // failure split in the persister. Steady-state expectation: zero schema
-// rejections. Wired to expvar in cmd/tank-operator/observability.go.
+// rejections. Wired to prometheus in cmd/tank-operator/observability.go.
 type PersisterMetrics interface {
 	RecordSchemaRejected()
 	RecordTransientFailure()
@@ -50,7 +70,7 @@ func (noopPersisterMetrics) RecordTransientFailure() {}
 // WakeMetrics receives counters for wake-publish failures. The bus records
 // here before returning the error to the caller; callers that silently
 // drop the error (Manager.PublishSessionListWake on lifecycle mutations)
-// still get visibility into "NATS is down". Wired to expvar in
+// still get visibility into "NATS is down". Wired to prometheus in
 // cmd/tank-operator/observability.go.
 type WakeMetrics interface {
 	RecordSessionEventWakePublishFailed()
@@ -76,10 +96,33 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 	if url == "" {
 		return nil, fmt.Errorf("NATS_URL is required")
 	}
+	connMetrics := cfg.ConnectionMetrics
+	if connMetrics == nil {
+		connMetrics = noopConnectionMetrics{}
+	}
 	opts := []nats.Option{
 		nats.Name("tank-operator"),
 		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2 * time.Second),
+		// Connection callbacks drive the tank_nats_* counters.
+		// DisconnectErrHandler fires on every drop (with or without an
+		// error attached); ReconnectHandler fires on the first
+		// successful redial. ErrorHandler covers slow-consumer warnings
+		// and permission errors that don't surface as Connect failures.
+		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
+			connMetrics.RecordDisconnect()
+			if err != nil {
+				slog.Warn("nats disconnected", "error", err)
+			}
+		}),
+		nats.ReconnectHandler(func(_ *nats.Conn) {
+			connMetrics.RecordReconnect()
+			slog.Info("nats reconnected")
+		}),
+		nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+			connMetrics.RecordAsyncError()
+			slog.Warn("nats async error", "error", err)
+		}),
 	}
 	if token := strings.TrimSpace(cfg.Token); token != "" {
 		opts = append(opts, nats.Token(token))

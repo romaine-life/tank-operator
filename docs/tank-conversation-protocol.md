@@ -409,10 +409,12 @@ Storage:
 
 Operational counters:
 
-- `/debug/vars` exposes stream opens, reconnects, `resync_required`, stream
-  errors, timeline read failures, emitted events, heartbeats, wake-subscribe
-  failures, and observed SSE event lag.
-- Missing-message investigations should start from those counters and the
+- `/metrics` exposes the `tank_session_event_stream_*` counters
+  (opens, reconnects, `resync_required`, stream errors, timeline read
+  failures, emitted events, heartbeats, wake-subscribe failures) and the
+  `tank_session_event_stream_lag_seconds` histogram. See
+  `docs/observability.md` for the full taxonomy and the Grafana panels.
+- Missing-message investigations should start from those metrics and the
   durable Postgres `session_events` ledger cursor, not from browser-local state.
 
 ## Migration Guardrails

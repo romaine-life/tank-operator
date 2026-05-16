@@ -14,6 +14,9 @@ dependencies = [
     # actually persist rotations back to KV (otherwise we'd leak rotations
     # on every restart — see _persist_to_kv comment).
     "aiohttp>=3.10",
+    # Prometheus client for /metrics. The aiohttp listener that serves
+    # /metrics is wired in tank_api_proxy.metrics.start_metrics_server.
+    "prometheus-client>=0.20",
 ]
 
 [build-system]
