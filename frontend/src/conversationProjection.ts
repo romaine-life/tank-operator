@@ -66,7 +66,6 @@ export interface ConversationProjection {
   lastError: string | null;
   lastUsage: unknown | null;
   lastOrderKey: string | null;
-  unreadCount: number;
 }
 
 export function projectConversationState(
@@ -123,7 +122,6 @@ export function projectConversationState(
     lastError: state.lastError,
     lastUsage: state.lastUsage,
     lastOrderKey: state.lastOrderKey,
-    unreadCount: state.unreadCount,
   };
 }
 

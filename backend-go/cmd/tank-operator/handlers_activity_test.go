@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
@@ -18,22 +19,21 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
+func TestSummarizeSessionActivityFoldsLifecycleEventsToStatus(t *testing.T) {
+	// Only lifecycle events reach the fold now — the store filters and
+	// caps the input via LatestLifecycleEvents. user_message.created
+	// and item.completed are correctly excluded; they're either user-
+	// input or non-lifecycle content events.
 	summary := summarizeSessionActivity(
 		sessionActivitySummary{SessionID: "63", Status: "ready"},
 		[]map[string]any{
-			activityEvent("u1", "user_message.created", "001", "user", nil),
 			activityEvent("t1", "turn.started", "002", "runner", map[string]any{"turn_id": "turn-1"}),
-			activityEvent("m1", "item.completed", "003", "assistant", map[string]any{
-				"turn_id":     "turn-1",
-				"timeline_id": "msg-1",
-			}),
 			activityEvent("a1", "tool.approval_requested", "004", "tool", map[string]any{
 				"turn_id":     "turn-1",
 				"timeline_id": "ask-1",
 			}),
 		},
-		"",
+		2, // pre-computed unread count (from the store's COUNT query)
 	)
 
 	if summary.Status != "needs_input" || !summary.NeedsInput {
@@ -50,23 +50,6 @@ func TestSummarizeSessionActivityComputesAttentionAndUnread(t *testing.T) {
 	}
 }
 
-func TestSummarizeSessionActivityAppliesPersistedReadState(t *testing.T) {
-	events := []map[string]any{
-		activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
-		activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"timeline_id": "msg-2"}),
-		activityEvent("m3", "item.completed", "003", "assistant", map[string]any{"timeline_id": "msg-3"}),
-	}
-	summary := summarizeSessionActivity(
-		sessionActivitySummary{SessionID: "63", Status: "ready"},
-		events,
-		activityEventCursor(events[1]),
-	)
-
-	if summary.UnreadCount != 1 {
-		t.Fatalf("unread = %d, want 1", summary.UnreadCount)
-	}
-}
-
 func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 	client := fake.NewSimpleClientset(activitySessionPod("63", "user@example.com"))
 	app := &appServer{
@@ -79,7 +62,7 @@ func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 			nil,
 			sessions.ManagerOptions{},
 		),
-		sessionEvents: activityEventStore{events: map[string][]map[string]any{
+		sessionEvents: &activityEventStore{events: map[string][]map[string]any{
 			"63": {
 				activityEvent("started", "turn.started", "001", "runner", map[string]any{"turn_id": "turn-1"}),
 			},
@@ -126,7 +109,7 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 			nil,
 			sessions.ManagerOptions{},
 		),
-		sessionEvents: activityEventStore{events: map[string][]map[string]any{
+		sessionEvents: &activityEventStore{events: map[string][]map[string]any{
 			"63": {
 				activityEvent("m1", "item.completed", "001", "assistant", map[string]any{"timeline_id": "msg-1"}),
 				activityEvent("m2", "item.completed", "002", "assistant", map[string]any{"timeline_id": "msg-2"}),
@@ -152,15 +135,19 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 	}
 }
 
+// activityEventStore is an in-memory SessionEventStore for the activity
+// handler tests. It implements LatestLifecycleEvents and
+// UnreadOutputCount by filtering the test fixture, mirroring the
+// behavior the Cosmos implementation gets from server-side queries.
 type activityEventStore struct {
 	events map[string][]map[string]any
 }
 
-func (s activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
+func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
 	return nil
 }
 
-func (s activityEventStore) ListBySession(_ context.Context, sessionID string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
+func (s *activityEventStore) ListBySession(_ context.Context, sessionID string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
 	if cursor.AfterOrderKey != "" {
 		return store.SessionEventPage{Events: []map[string]any{}}, nil
 	}
@@ -172,7 +159,7 @@ func (s activityEventStore) ListBySession(_ context.Context, sessionID string, c
 	return store.SessionEventPage{Events: events, NextOrderKey: next, HasMore: false}, nil
 }
 
-func (s activityEventStore) HasOrderKey(_ context.Context, sessionID, orderKey string) (bool, error) {
+func (s *activityEventStore) HasOrderKey(_ context.Context, sessionID, orderKey string) (bool, error) {
 	if orderKey == "" {
 		return true, nil
 	}
@@ -184,7 +171,7 @@ func (s activityEventStore) HasOrderKey(_ context.Context, sessionID, orderKey s
 	return false, nil
 }
 
-func (s activityEventStore) FindTurnTerminal(_ context.Context, sessionID, turnID string) (map[string]any, error) {
+func (s *activityEventStore) FindTurnTerminal(_ context.Context, sessionID, turnID string) (map[string]any, error) {
 	for _, event := range s.events[sessionID] {
 		if event["turn_id"] == turnID {
 			switch event["type"] {
@@ -194,6 +181,73 @@ func (s activityEventStore) FindTurnTerminal(_ context.Context, sessionID, turnI
 		}
 	}
 	return nil, nil
+}
+
+func (s *activityEventStore) LatestLifecycleEvents(_ context.Context, sessionID string, limit int) ([]map[string]any, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	lifecycle := make([]map[string]any, 0)
+	allowed := map[string]bool{}
+	for _, t := range store.LifecycleEventTypes {
+		allowed[t] = true
+	}
+	for _, event := range s.events[sessionID] {
+		eventType, _ := event["type"].(string)
+		if allowed[eventType] {
+			lifecycle = append(lifecycle, event)
+		}
+	}
+	// Return ASC; the test fixture is already ASC by order_key.
+	if len(lifecycle) > limit {
+		lifecycle = lifecycle[len(lifecycle)-limit:]
+	}
+	return lifecycle, nil
+}
+
+func (s *activityEventStore) UnreadOutputCount(_ context.Context, sessionID, afterOrderKey string) (int, error) {
+	itemTypes := map[string]bool{}
+	for _, t := range store.UnreadOutputItemTypes {
+		itemTypes[t] = true
+	}
+	turnTypes := map[string]bool{}
+	for _, t := range store.UnreadOutputTurnTypes {
+		turnTypes[t] = true
+	}
+	itemIDs := map[string]struct{}{}
+	turnIDs := map[string]struct{}{}
+	for _, event := range s.events[sessionID] {
+		eventType, _ := event["type"].(string)
+		orderKey, _ := event["order_key"].(string)
+		if afterOrderKey != "" && orderKey <= afterOrderKey {
+			continue
+		}
+		actor, _ := event["actor"].(string)
+		if actor == "user" {
+			continue
+		}
+		if itemTypes[eventType] {
+			if id, _ := event["timeline_id"].(string); id != "" {
+				itemIDs[id] = struct{}{}
+			}
+		}
+		if turnTypes[eventType] {
+			if id, _ := event["turn_id"].(string); id != "" {
+				turnIDs[id] = struct{}{}
+			}
+		}
+	}
+	return len(itemIDs) + len(turnIDs), nil
+}
+
+// Ensure ASC ordering of the test fixture so the in-memory store mirrors
+// Cosmos query results when callers add events out of order_key sequence.
+func sortActivityEvents(events []map[string]any) {
+	sort.SliceStable(events, func(i, j int) bool {
+		left, _ := events[i]["order_key"].(string)
+		right, _ := events[j]["order_key"].(string)
+		return left < right
+	})
 }
 
 func activityEvent(eventID, eventType, orderKey, actor string, fields map[string]any) map[string]any {
@@ -270,3 +324,5 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 		},
 	}
 }
+
+var _ = sortActivityEvents // referenced in case future tests need pre-sort

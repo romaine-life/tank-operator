@@ -1,19 +1,19 @@
 package main
 
 import (
-	"context"
 	"net/http"
-	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-const (
-	sessionActivityPageLimit = 1000
-	sessionActivityMaxPages  = 50
-)
+// activityLifecycleLimit caps the LatestLifecycleEvents read per
+// session. 50 covers a few turns' worth of lifecycle markers — more
+// than enough to determine current run-status / active-turn-id /
+// needs-input. The previous implementation folded up to 50,000 events
+// per session per /activity call; this is the bound replacement.
+const activityLifecycleLimit = 50
 
 type sessionActivityResponse struct {
 	Sessions []sessionActivitySummary `json:"sessions"`
@@ -28,12 +28,6 @@ type sessionActivitySummary struct {
 	Failed       bool    `json:"failed"`
 	ActiveTurnID *string `json:"active_turn_id"`
 	UpdatedAt    *string `json:"updated_at"`
-}
-
-type unreadOutputMarker struct {
-	orderKey string
-	cursor   string
-	id       string
 }
 
 func (s *appServer) handleSessionActivity(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +50,6 @@ func (s *appServer) handleSessionActivity(w http.ResponseWriter, r *http.Request
 	out := make([]sessionActivitySummary, 0, len(infos))
 	for _, info := range infos {
 		summary := defaultSessionActivity(info)
-		events, err := loadSessionActivityEvents(r.Context(), eventStore, info.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
 		readState, err := s.getSessionReadState(r, user.Email, info.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -70,27 +59,25 @@ func (s *appServer) handleSessionActivity(w http.ResponseWriter, r *http.Request
 		if readState != nil {
 			readOrderKey = readState.LastReadOrderKey
 		}
-		out = append(out, summarizeSessionActivity(summary, events, readOrderKey))
+		// Bounded read: just the latest lifecycle markers, not the
+		// full event ledger. The fold below is O(activityLifecycleLimit)
+		// regardless of session age.
+		events, err := eventStore.LatestLifecycleEvents(r.Context(), info.ID, activityLifecycleLimit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Unread count is a separate Cosmos COUNT query — O(1) RU
+		// regardless of how much output the session has produced.
+		unread, err := eventStore.UnreadOutputCount(r.Context(), info.ID, readOrderKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, summarizeSessionActivity(summary, events, unread))
 	}
 
 	writeJSON(w, http.StatusOK, sessionActivityResponse{Sessions: out})
-}
-
-func loadSessionActivityEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID string) ([]map[string]any, error) {
-	cursor := store.SessionEventCursor{}
-	out := make([]map[string]any, 0)
-	for pageNo := 0; pageNo < sessionActivityMaxPages; pageNo++ {
-		page, err := eventStore.ListBySession(ctx, sessionID, cursor, sessionActivityPageLimit)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, page.Events...)
-		if !page.HasMore || page.NextOrderKey == "" || page.NextOrderKey == cursor.AfterOrderKey {
-			break
-		}
-		cursor = store.SessionEventCursor{AfterOrderKey: page.NextOrderKey}
-	}
-	return out, nil
 }
 
 func defaultSessionActivity(info sessions.Info) sessionActivitySummary {
@@ -110,28 +97,22 @@ func defaultSessionActivity(info sessions.Info) sessionActivitySummary {
 	return summary
 }
 
-func summarizeSessionActivity(summary sessionActivitySummary, events []map[string]any, readOrderKey string) sessionActivitySummary {
-	outputMarkers := make([]unreadOutputMarker, 0)
-
+// summarizeSessionActivity applies the lifecycle fold over an ASC-ordered
+// slice of recent lifecycle events. The caller bounds the slice to the
+// most recent N events via SessionEventStore.LatestLifecycleEvents, so
+// this is O(N) over a small constant — not over the session's full
+// history.
+func summarizeSessionActivity(summary sessionActivitySummary, events []map[string]any, unreadCount int) sessionActivitySummary {
 	for _, event := range events {
-		if !isDurableTankActivityEvent(event) {
+		if !isDurableLifecycleEvent(event) {
 			continue
 		}
-
 		if orderKey := activityEventOrderKey(event); orderKey != "" {
 			summary.LastOrderKey = stringPtr(orderKey)
 		}
 		if updatedAt := activityEventTime(event); updatedAt != "" {
 			summary.UpdatedAt = stringPtr(updatedAt)
 		}
-		if isUnreadOutputEvent(event) {
-			outputMarkers = append(outputMarkers, unreadOutputMarker{
-				orderKey: activityEventOrderKey(event),
-				cursor:   activityEventCursor(event),
-				id:       unreadOutputID(event),
-			})
-		}
-
 		switch activityEventType(event) {
 		case "turn.submitted":
 			summary.Status = "submitted"
@@ -180,96 +161,24 @@ func summarizeSessionActivity(summary sessionActivitySummary, events []map[strin
 			}
 		}
 	}
-
-	summary.UnreadCount = countUnreadOutputs(outputMarkers, readOrderKey)
+	summary.UnreadCount = unreadCount
 	return summary
 }
 
-func isDurableTankActivityEvent(event map[string]any) bool {
+func isDurableLifecycleEvent(event map[string]any) bool {
 	if err := conversation.ValidateEventMap(event); err != nil {
 		return false
 	}
 	if visibility, _ := event["visibility"].(string); visibility == "live-only" {
 		return false
 	}
-	switch activityEventType(event) {
-	case "user_message.created",
-		"turn.submitted",
-		"turn.started",
-		"turn.completed",
-		"turn.failed",
-		"turn.command_failed",
-		"turn.interrupted",
-		"item.started",
-		"item.delta",
-		"item.completed",
-		"item.failed",
-		"tool.approval_requested",
-		"tool.approval_resolved":
-		return true
-	default:
-		return false
-	}
-}
-
-func isUnreadOutputEvent(event map[string]any) bool {
-	if actor, _ := event["actor"].(string); actor == "user" {
-		return false
-	}
-	switch activityEventType(event) {
-	case "item.started",
-		"item.delta",
-		"item.completed",
-		"item.failed",
-		"tool.approval_requested",
-		"tool.approval_resolved",
-		"turn.failed",
-		"turn.command_failed",
-		"turn.interrupted":
-		return true
-	default:
-		return false
-	}
-}
-
-func countUnreadOutputs(markers []unreadOutputMarker, readOrderKey string) int {
-	seen := make(map[string]struct{}, len(markers))
-	for _, marker := range markers {
-		if readOrderKey != "" && !unreadMarkerAfterRead(marker, readOrderKey) {
-			continue
-		}
-		id := marker.id
-		if id == "" {
-			id = marker.orderKey
-		}
-		if id == "" {
-			continue
-		}
-		seen[id] = struct{}{}
-	}
-	return len(seen)
-}
-
-func unreadMarkerAfterRead(marker unreadOutputMarker, readOrderKey string) bool {
-	if readOrderKey == "" {
-		return true
-	}
-	if strings.Contains(readOrderKey, "\x1f") {
-		return marker.cursor != "" && marker.cursor > readOrderKey
-	}
-	if marker.orderKey != "" {
-		return marker.orderKey > readOrderKey
-	}
-	return marker.cursor > readOrderKey
-}
-
-func unreadOutputID(event map[string]any) string {
-	for _, field := range []string{"timeline_id", "turn_id", "event_id", "id", "uuid"} {
-		if value, _ := event[field].(string); value != "" {
-			return value
+	t := activityEventType(event)
+	for _, allowed := range store.LifecycleEventTypes {
+		if t == allowed {
+			return true
 		}
 	}
-	return ""
+	return false
 }
 
 func activityEventType(event map[string]any) string {
@@ -284,10 +193,6 @@ func activityEventOrderKey(event map[string]any) string {
 	return ""
 }
 
-func activityEventCursor(event map[string]any) string {
-	return activityEventOrderKey(event)
-}
-
 func activityEventTime(event map[string]any) string {
 	for _, field := range []string{"created_at", "written_at", "timestamp", "time"} {
 		if value, _ := event[field].(string); value != "" {
@@ -295,11 +200,6 @@ func activityEventTime(event map[string]any) string {
 		}
 	}
 	return ""
-}
-
-func activityPayload(event map[string]any) map[string]any {
-	payload, _ := event["payload"].(map[string]any)
-	return payload
 }
 
 func activityOptionalString(event map[string]any, key string) *string {

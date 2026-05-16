@@ -51,8 +51,6 @@ export interface ConversationReducerState {
   lastError: string | null;
   lastUsage: unknown | null;
   lastOrderKey: string | null;
-  lastReadOrderKey: string | null;
-  unreadCount: number;
 }
 
 export const initialConversationState: ConversationReducerState = {
@@ -68,8 +66,6 @@ export const initialConversationState: ConversationReducerState = {
   lastError: null,
   lastUsage: null,
   lastOrderKey: null,
-  lastReadOrderKey: null,
-  unreadCount: 0,
 };
 
 export function conversationReducer(
