@@ -86,6 +86,15 @@ spec:
             - name: GLIMMUNG_SUPERVISOR_RESTART_ENABLED
               value: "true"
             {{- end }}
+            {{- if .Values.testEnv.enabled }}
+            # Tells the orchestrator runtime to attach test-slot hot-swap
+            # surface (writable volume + supervisor env vars) onto the
+            # agent-runner container in session pods it spawns. Off in
+            # production. See sessionmodel.ManifestOptions.HotSwapAgentRunner
+            # and scripts/check-session-pod-hot-swap-migration.mjs.
+            - name: SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED
+              value: "true"
+            {{- end }}
             - name: CLAUDE_CREDENTIALS_FILE
               value: /etc/claude-credentials/{{ .Values.externalSecret.claudeCredentials.secretKey }}
             - name: CLAUDE_OAUTH_GATEWAY_HOST

@@ -132,6 +132,11 @@ func main() {
 			NATSURL:                 envDefault("NATS_URL", ""),
 			NATSStream:              envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:          envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			// Test-slot agent-runner hot-swap. Off by default; the chart
+			// turns this on only when .Values.testEnv.enabled is true.
+			// See scripts/check-session-pod-hot-swap-migration.mjs and
+			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
+			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
 		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
@@ -451,6 +456,14 @@ func envDefault(name, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// envBool reads a boolean env var. Accepts "1", "true", "yes" (case-insensitive)
+// as true; anything else (including unset and empty) as false. Used for
+// development-mode toggles like SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED.
+func envBool(name string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	return v == "1" || v == "true" || v == "yes"
 }
 
 func currentPodNamespace() string {

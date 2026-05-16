@@ -363,6 +363,93 @@ func claudeEnv(containers []any) map[string]any {
 	return nil
 }
 
+// TestPodManifestSlotModeAttachesAgentRunnerHotSwap pins Checkbox 1 of
+// scripts/check-session-pod-hot-swap-migration.mjs: with testEnv enabled
+// (HotSwapAgentRunner=true), the agent-runner container gets the writable
+// /var/run/agent-runner-hot volume, the matching volumeMount, and the
+// supervisor env vars that tell the launch script to exec tank-supervisor.
+func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
+		SessionImage:       "claude-image",
+		CodexSessionImage:  "codex-image",
+		PiSessionImage:     "pi-image",
+		HotSwapAgentRunner: true,
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertVolume(t, volumes, "agent-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "agent-runner")
+	assertVolumeMount(t, runner, "agent-runner-hot")
+
+	mounts := runner["volumeMounts"].([]any)
+	var hotMountPath string
+	for _, m := range mounts {
+		mm := m.(map[string]any)
+		if mm["name"] == "agent-runner-hot" {
+			hotMountPath, _ = mm["mountPath"].(string)
+		}
+	}
+	if hotMountPath != "/var/run/agent-runner-hot" {
+		t.Fatalf("agent-runner-hot mountPath = %q, want /var/run/agent-runner-hot", hotMountPath)
+	}
+
+	env := containerEnv(runner)
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/agent-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/agent-runner-hot/agent-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
+	}
+
+	// The launch-script command is unchanged — the bash script itself
+	// branches on the env var. This pins the property that the supervisor
+	// wiring is purely additive: command stays the same, only env + volume
+	// are new.
+	cmd := runner["command"].([]any)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/agent-runner-launch.sh" {
+		t.Fatalf("agent-runner command = %v, want [bash /opt/tank/agent-runner-launch.sh]", cmd)
+	}
+}
+
+// TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
+// scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
+// (HotSwapAgentRunner=false, the default), the agent-runner container has
+// NO agent-runner-hot volume, NO volumeMount, and NO supervisor env vars.
+// Production sessions are byte-identical to pre-PR behavior.
+func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+		PiSessionImage:    "pi-image",
+		// HotSwapAgentRunner intentionally left false.
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertNoVolume(t, volumes, "agent-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "agent-runner")
+	assertNoVolumeMount(t, runner, "agent-runner-hot")
+
+	env := containerEnv(runner)
+	for _, name := range []string{
+		"GLIMMUNG_SUPERVISOR_CHILD",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED",
+	} {
+		if _, present := env[name]; present {
+			t.Fatalf("env %s leaked into prod (HotSwapAgentRunner=false); value=%v", name, env[name])
+		}
+	}
+}
+
 func findContainer(t *testing.T, containers []any, name string) map[string]any {
 	t.Helper()
 	for _, item := range containers {
