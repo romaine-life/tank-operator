@@ -132,6 +132,29 @@ var (
 	})
 )
 
+// --- Service-principal (role=service) request metrics ---
+
+// serviceRoleRequestsTotal counts every call to a service-principal-gated
+// internal handler, labeled by route and outcome. Tracks both denial
+// breakdown (helps catch upstream regressions in auth.romaine.life's
+// /api/auth/exchange/k8s) and success volume (drives Stage 6 quota
+// decisions). Labels are bounded: routes are static path patterns,
+// results are a closed string set defined alongside the handler
+// (denied_token | denied_role | denied_actor_missing |
+// error_verifier_unconfigured | error_create_failed | ok). See
+// nelsong6/tank-operator#486 stage 5.
+var serviceRoleRequestsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_service_role_requests_total",
+		Help: "Calls to service-principal internal handlers, by route and outcome.",
+	},
+	[]string{"route", "result"},
+)
+
+func recordServiceRoleRequest(route, result string) {
+	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
+}
+
 // --- Postgres query tracer metrics ---
 
 var (

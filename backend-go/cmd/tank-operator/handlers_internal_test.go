@@ -298,6 +298,90 @@ func internalSessionRuntimeServer(t *testing.T, sessionID string) *appServer {
 	}
 }
 
+// TestRequireServicePrincipal_RejectionPaths exercises the auth-gate
+// portion of /api/internal/sessions/spawn without requiring a real
+// session manager. Each rejection path is a distinct telemetry reason
+// (see observability.go → tank_service_role_requests_total).
+func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	server := &appServer{verifier: verifier}
+
+	mint := func(t *testing.T, role string, extra jwt.MapClaims) string {
+		t.Helper()
+		claims := jwt.MapClaims{
+			"sub":   "svc:tank:session-x",
+			"email": "pod-session-x@service.tank.romaine.life",
+			"name":  "Service: tank pod-session-x",
+			"role":  role,
+		}
+		for k, v := range extra {
+			claims[k] = v
+		}
+		tok, err := jwtKey.MintJWT(context.Background(), claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok
+	}
+
+	t.Run("missing bearer → 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		rec := httptest.NewRecorder()
+		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
+			t.Fatalf("expected nil user; got %+v", user)
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("role=user → 403", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req.Header.Set("Authorization", "Bearer "+mint(t, "user", nil))
+		rec := httptest.NewRecorder()
+		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
+			t.Fatalf("expected nil user; got %+v", user)
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403", rec.Code)
+		}
+	})
+
+	t.Run("role=service with actor_email → accepted", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req.Header.Set("Authorization", "Bearer "+mint(t, "service", jwt.MapClaims{
+			"actor_email": "owner@example.com",
+		}))
+		rec := httptest.NewRecorder()
+		user := server.requireServicePrincipal(rec, req, "test-route")
+		if user == nil {
+			t.Fatalf("expected non-nil user; rec status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		if user.ActorEmail != "owner@example.com" {
+			t.Fatalf("ActorEmail = %q, want owner@example.com", user.ActorEmail)
+		}
+		if !user.IsService() {
+			t.Fatalf("IsService() = false; want true")
+		}
+	})
+
+	t.Run("role=service missing actor_email → 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/spawn", nil)
+		req.Header.Set("Authorization", "Bearer "+mint(t, "service", nil))
+		rec := httptest.NewRecorder()
+		if user := server.requireServicePrincipal(rec, req, "test-route"); user != nil {
+			t.Fatalf("expected nil user; got %+v", user)
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+	})
+}
+
 type terminalEventStore struct {
 	store.StubSessionEventStore
 	event map[string]any
