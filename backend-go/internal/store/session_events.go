@@ -264,7 +264,12 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 	return doc, nil
 }
 
-func (s *cosmosSessionEventStore) LatestLifecycleEvents(ctx context.Context, tankSessionID string, limit int) ([]map[string]any, error) {
+// LatestLifecycleEvents returns up to `limit` recent lifecycle events
+// (turn.*, item.failed, tool.approval_*) for one session, ascending by
+// order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
+// indexed on (tank_session_id, order_key) so this is a bounded backwards
+// scan, not a full ledger fold.
+func (s *postgresSessionEventStore) LatestLifecycleEvents(ctx context.Context, tankSessionID string, limit int) ([]map[string]any, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -272,47 +277,53 @@ func (s *cosmosSessionEventStore) LatestLifecycleEvents(ctx context.Context, tan
 		limit = 500
 	}
 	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
-	placeholders := make([]string, len(LifecycleEventTypes))
-	params := []azcosmos.QueryParameter{
-		{Name: "@sid", Value: storageKey},
-		{Name: "@limit", Value: limit},
+	const q = `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND event_type = ANY($2::text[])
+			AND order_key <> ''
+		ORDER BY order_key DESC
+		LIMIT $3
+	`
+	rows, err := s.pool.Query(ctx, q, storageKey, LifecycleEventTypes, limit)
+	if err != nil {
+		return nil, err
 	}
-	for i, t := range LifecycleEventTypes {
-		name := fmt.Sprintf("@t%d", i)
-		placeholders[i] = name
-		params = append(params, azcosmos.QueryParameter{Name: name, Value: t})
-	}
-	query := fmt.Sprintf(
-		"SELECT TOP @limit * FROM c WHERE c.tank_session_id = @sid AND c.type IN (%s) AND IS_DEFINED(c.order_key) AND c.order_key != '' ORDER BY c.order_key DESC",
-		strings.Join(placeholders, ", "),
-	)
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
+	defer rows.Close()
+
 	out := make([]map[string]any, 0, limit)
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		for _, raw := range page.Items {
-			var doc map[string]any
-			if err := json.Unmarshal(raw, &doc); err != nil {
-				return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
-			}
-			if err := conversation.ValidateEventMap(doc); err != nil {
-				return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
-			}
-			doc["tank_session_id"] = tankSessionID
-			out = append(out, doc)
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
 		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		doc["tank_session_id"] = tankSessionID
+		out = append(out, doc)
 	}
-	// Cosmos returns DESC; the activity fold expects ASC.
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// DESC -> ASC for the activity-fold's last-write-wins semantics.
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
 }
 
-func (s *cosmosSessionEventStore) UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error) {
+// UnreadOutputCount returns the number of distinct timeline_id markers (for
+// output-producing item events) plus distinct turn_id markers (for terminal
+// turn events) strictly after the caller's last_read_order_key cursor. The
+// two slices are queried separately because they use different distinct-key
+// columns; SUM in Go is one round-trip cheaper than a single CTE union.
+func (s *postgresSessionEventStore) UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error) {
 	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
 	itemCount, err := s.countDistinctField(
 		ctx, storageKey, "timeline_id", UnreadOutputItemTypes, afterOrderKey,
@@ -329,48 +340,43 @@ func (s *cosmosSessionEventStore) UnreadOutputCount(ctx context.Context, tankSes
 	return itemCount + turnCount, nil
 }
 
-func (s *cosmosSessionEventStore) countDistinctField(
+// countDistinctField counts distinct non-empty values of a payload field
+// (jsonb `->>` extractor for "timeline_id"; the dedicated `turn_id` column
+// for "turn_id") across event_type membership in `types`, excluding events
+// where actor='user', strictly after the optional order_key cursor.
+func (s *postgresSessionEventStore) countDistinctField(
 	ctx context.Context, storageKey, field string, types []string, afterOrderKey string,
 ) (int, error) {
 	if len(types) == 0 {
 		return 0, nil
 	}
-	placeholders := make([]string, len(types))
-	params := []azcosmos.QueryParameter{
-		{Name: "@sid", Value: storageKey},
+	// `turn_id` lives in a typed column for indexing; everything else lives
+	// in the jsonb payload and we extract via `->>`.
+	var selectExpr string
+	if field == "turn_id" {
+		selectExpr = "turn_id"
+	} else {
+		selectExpr = fmt.Sprintf("payload->>'%s'", field)
 	}
-	for i, t := range types {
-		name := fmt.Sprintf("@t%d", i)
-		placeholders[i] = name
-		params = append(params, azcosmos.QueryParameter{Name: name, Value: t})
-	}
-	where := fmt.Sprintf(
-		"c.tank_session_id = @sid AND c.type IN (%s) AND (NOT IS_DEFINED(c.actor) OR c.actor != 'user') AND IS_DEFINED(c.%s) AND c.%s != ''",
-		strings.Join(placeholders, ", "), field, field,
-	)
+	q := fmt.Sprintf(`
+		SELECT COUNT(DISTINCT %s)
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND event_type = ANY($2::text[])
+			AND COALESCE(payload->>'actor', '') <> 'user'
+			AND %s IS NOT NULL
+			AND %s <> ''
+	`, selectExpr, selectExpr, selectExpr)
+	args := []any{storageKey, types}
 	if strings.TrimSpace(afterOrderKey) != "" {
-		where += " AND c.order_key > @after"
-		params = append(params, azcosmos.QueryParameter{Name: "@after", Value: afterOrderKey})
+		q += " AND order_key > $3"
+		args = append(args, afterOrderKey)
 	}
-	query := fmt.Sprintf(
-		"SELECT VALUE COUNT(1) FROM (SELECT DISTINCT VALUE c.%s FROM c WHERE %s)",
-		field, where,
-	)
-	pager := s.container.NewQueryItemsPager(query, azcosmos.NewPartitionKeyString(storageKey), &azcosmos.QueryOptions{QueryParameters: params})
-	for pager.More() {
-		page, err := pager.NextPage(ctx)
-		if err != nil {
-			return 0, err
-		}
-		for _, raw := range page.Items {
-			var n int
-			if err := json.Unmarshal(raw, &n); err != nil {
-				return 0, fmt.Errorf("count result not int: %w", err)
-			}
-			return n, nil
-		}
+	var n int
+	if err := s.pool.QueryRow(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
 	}
-	return 0, nil
+	return n, nil
 }
 
 func sessionEventPageFromOrdered(events []map[string]any, limit int) SessionEventPage {
