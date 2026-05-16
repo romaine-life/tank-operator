@@ -12,7 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -79,7 +79,7 @@ func readStateTestServer(t *testing.T, readStates store.ConversationReadStateSto
 		mgr: sessions.NewManager(
 			client,
 			nil,
-			compat.SessionsNamespace,
+			sessionmodel.SessionsNamespace,
 			nil,
 			nil,
 			sessions.ManagerOptions{},

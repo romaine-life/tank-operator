@@ -12,8 +12,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type Config struct {
@@ -22,6 +22,12 @@ type Config struct {
 	Stream   string
 	Scope    string
 	Replicas int
+	// WakeMetrics is optional. When set, wake-publish failures inside
+	// PublishSessionEventWake / PublishSessionListWake increment the
+	// supplied counters before returning the error to the caller, so
+	// silent `_ = b.PublishSessionListWake(...)` patterns in mutation
+	// paths still produce telemetry.
+	WakeMetrics WakeMetrics
 }
 
 type EventStore interface {
@@ -38,15 +44,31 @@ type PersisterMetrics interface {
 
 type noopPersisterMetrics struct{}
 
-func (noopPersisterMetrics) RecordSchemaRejected()    {}
-func (noopPersisterMetrics) RecordTransientFailure()  {}
+func (noopPersisterMetrics) RecordSchemaRejected()   {}
+func (noopPersisterMetrics) RecordTransientFailure() {}
+
+// WakeMetrics receives counters for wake-publish failures. The bus records
+// here before returning the error to the caller; callers that silently
+// drop the error (Manager.PublishSessionListWake on lifecycle mutations)
+// still get visibility into "NATS is down". Wired to expvar in
+// cmd/tank-operator/observability.go.
+type WakeMetrics interface {
+	RecordSessionEventWakePublishFailed()
+	RecordSessionListWakePublishFailed()
+}
+
+type noopWakeMetrics struct{}
+
+func (noopWakeMetrics) RecordSessionEventWakePublishFailed() {}
+func (noopWakeMetrics) RecordSessionListWakePublishFailed()  {}
 
 type Bus struct {
-	nc       *nats.Conn
-	js       jetstream.JetStream
-	stream   string
-	scope    string
-	replicas int
+	nc          *nats.Conn
+	js          jetstream.JetStream
+	stream      string
+	scope       string
+	replicas    int
+	wakeMetrics WakeMetrics
 }
 
 func Connect(ctx context.Context, cfg Config) (*Bus, error) {
@@ -72,17 +94,21 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 	b := &Bus{
-		nc:       nc,
-		js:       js,
-		stream:   StreamName(cfg.Stream),
-		scope:    cfg.Scope,
-		replicas: cfg.Replicas,
+		nc:          nc,
+		js:          js,
+		stream:      StreamName(cfg.Stream),
+		scope:       cfg.Scope,
+		replicas:    cfg.Replicas,
+		wakeMetrics: cfg.WakeMetrics,
 	}
 	if b.scope == "" {
 		b.scope = "default"
 	}
 	if b.replicas <= 0 {
 		b.replicas = 2
+	}
+	if b.wakeMetrics == nil {
+		b.wakeMetrics = noopWakeMetrics{}
 	}
 	if err := b.ensureStream(ctx); err != nil {
 		nc.Close()
@@ -110,7 +136,7 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 		return fmt.Errorf("command type is required")
 	}
 	if command.SessionStorageKey == "" {
-		command.SessionStorageKey = compat.SessionStorageKey(b.scope, command.SessionID)
+		command.SessionStorageKey = sessionmodel.SessionStorageKey(b.scope, command.SessionID)
 	}
 	if command.SessionStorageKey == "" || command.Provider == "" {
 		return fmt.Errorf("command routing is incomplete")
@@ -124,14 +150,14 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 }
 
 // PublishSessionEventWake signals SSE subscribers on
-// /api/sessions/{id}/events that new durable events landed in Cosmos
-// for this session. The persister already publishes this after its own
-// Upsert; backend code that direct-writes events to Cosmos (e.g.,
-// boundary events on submit-turn, turn.command_failed when a command
-// publish fails) must call this to keep the live SSE path consistent
-// with the durable ledger. SSE clients otherwise wait up to one
-// heartbeat interval before noticing — which is exactly the bug this
-// fixes.
+// /api/sessions/{id}/events that new durable events landed in the
+// session_events Postgres table for this session. The persister already
+// publishes this after its own Upsert; backend code that direct-writes
+// events to the table (e.g., boundary events on submit-turn,
+// turn.command_failed when a command publish fails) must call this to
+// keep the live SSE path consistent with the durable ledger. SSE clients
+// otherwise wait up to one heartbeat interval before noticing — which is
+// exactly the bug this fixes.
 func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey string) error {
 	if b == nil {
 		return fmt.Errorf("session bus unavailable")
@@ -140,7 +166,13 @@ func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey strin
 	if sessionStorageKey == "" {
 		return nil
 	}
-	return b.nc.Publish(WakeSubject(sessionStorageKey), nil)
+	if err := b.nc.Publish(WakeSubject(sessionStorageKey), nil); err != nil {
+		b.wakeMetrics.RecordSessionEventWakePublishFailed()
+		slog.Warn("session event wake publish failed",
+			"storage_key", sessionStorageKey, "error", err)
+		return err
+	}
+	return nil
 }
 
 // PublishSessionListWake signals to SSE subscribers on /api/sessions/events
@@ -156,7 +188,13 @@ func (b *Bus) PublishSessionListWake(_ context.Context, email string) error {
 	if strings.TrimSpace(email) == "" {
 		return nil
 	}
-	return b.nc.Publish(SessionListWakeSubject(email), nil)
+	if err := b.nc.Publish(SessionListWakeSubject(email), nil); err != nil {
+		b.wakeMetrics.RecordSessionListWakePublishFailed()
+		slog.Warn("session list wake publish failed",
+			"email", email, "error", err)
+		return err
+	}
+	return nil
 }
 
 // SubscribeSessionListWake returns a channel that receives a struct{} on
@@ -191,7 +229,7 @@ func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan stru
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
-	storageKey := compat.SessionStorageKey(b.scope, sessionID)
+	storageKey := sessionmodel.SessionStorageKey(b.scope, sessionID)
 	ch := make(chan struct{}, 1)
 	sub, err := b.nc.Subscribe(WakeSubject(storageKey), func(*nats.Msg) {
 		select {
@@ -222,7 +260,7 @@ func (b *Bus) RunEventPersister(ctx context.Context, store EventStore, metrics P
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.stream, jetstream.ConsumerConfig{
 		Name:          "tank-session-event-persister",
 		Durable:       "tank-session-event-persister",
-		Description:   "Persists session bus events to the Cosmos session-events ledger",
+		Description:   "Persists session bus events to the Postgres session_events ledger",
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       60 * time.Second,
@@ -311,7 +349,7 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 	storageKey, _ := event["tank_session_id"].(string)
 	if storageKey == "" {
 		sessionID, _ := event["session_id"].(string)
-		storageKey = compat.SessionStorageKey(b.scope, sessionID)
+		storageKey = sessionmodel.SessionStorageKey(b.scope, sessionID)
 	}
 	if storageKey != "" && b.nc != nil {
 		if err := b.nc.Publish(WakeSubject(storageKey), nil); err != nil {

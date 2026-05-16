@@ -101,7 +101,6 @@
         "turn.command_failed",
         "turn.interrupted",
         "item.started",
-        "item.delta",
         "item.completed",
         "item.failed",
         "tool.approval_requested",
@@ -133,35 +132,36 @@
       }
     },
     "visibility": {
+      "description": "Tank conversation events are durable-by-design. `live-only` was retired once the producer-side live channel never landed; the enum is kept single-valued so callers still explicitly tag durability rather than infer it.",
       "type": "string",
-      "enum": ["durable", "live-only"]
+      "enum": ["durable"]
     },
     "payload": {
       "type": "object",
       "additionalProperties": true
     },
     "_rid": {
-      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "description": "Legacy Cosmos system property tolerated on documents migrated from the Cosmos session-events container so replay validates. New writes from the persister do not include these fields.",
       "type": "string",
       "minLength": 1
     },
     "_self": {
-      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "description": "Legacy Cosmos system property tolerated on migrated documents; see `_rid`.",
       "type": "string",
       "minLength": 1
     },
     "_etag": {
-      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "description": "Legacy Cosmos system property tolerated on migrated documents; see `_rid`.",
       "type": "string",
       "minLength": 1
     },
     "_attachments": {
-      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "description": "Legacy Cosmos system property tolerated on migrated documents; see `_rid`.",
       "type": "string",
       "minLength": 1
     },
     "_ts": {
-      "description": "Cosmos DB system property that may be present on persisted timeline documents.",
+      "description": "Legacy Cosmos system property tolerated on migrated documents; see `_rid`.",
       "type": "integer",
       "minimum": 0
     }
@@ -289,7 +289,7 @@
       "if": {
         "properties": {
           "type": {
-            "enum": ["item.started", "item.delta", "item.completed", "item.failed"]
+            "enum": ["item.started", "item.completed", "item.failed"]
           }
         },
         "required": ["type"]

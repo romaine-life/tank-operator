@@ -44,9 +44,9 @@ function mappedEvent(adapter: CodexTankEventAdapter, event: CodexEvent) {
   return events[0]!;
 }
 
-test("maps Codex item updates to live-only Tank deltas with delta payload", () => {
+test("emits no Tank event for Codex item.updated frames (live-only retired)", () => {
   const adapter = new CodexTankEventAdapter(cfg());
-  const first = mappedEvent(adapter, {
+  const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
     type: "item.updated",
     item: {
       id: "item_reasoning_1",
@@ -54,23 +54,7 @@ test("maps Codex item updates to live-only Tank deltas with delta payload", () =
       text: "think",
     },
   });
-  const second = mappedEvent(adapter, {
-    type: "item.updated",
-    item: {
-      id: "item_reasoning_1",
-      type: "reasoning",
-      text: "thinking",
-    },
-  });
-
-  assert.equal(first.type, "item.delta");
-  assert.equal(first.actor, "assistant");
-  assert.equal(first.visibility, "live-only");
-  assert.equal(first.payload?.kind, "reasoning");
-  assert.equal(first.payload?.delta, "think");
-  assert.equal(first.payload?.text, undefined);
-  assert.equal(second.payload?.delta, "ing");
-  assert.equal(second.payload?.text, undefined);
+  assert.deepEqual(events, []);
 });
 
 test("preserves completed Codex text as durable Tank item text", () => {
@@ -96,22 +80,15 @@ test("preserves completed Codex text as durable Tank item text", () => {
 
 test("carries streamed Codex text into durable completion when final item omits text", () => {
   const adapter = new CodexTankEventAdapter(cfg());
-  mappedEvent(adapter, {
-    type: "item.updated",
-    item: {
-      id: "item_agent_streamed",
-      type: "agent_message",
-      text: "Partial",
-    },
-  });
-  mappedEvent(adapter, {
-    type: "item.updated",
-    item: {
-      id: "item_agent_streamed",
-      type: "agent_message",
-      text: "Partial response",
-    },
-  });
+  // item.updated frames emit no Tank event, but the adapter must
+  // remember the running text so item.completed can fall back to it.
+  for (const frame of ["Partial", "Partial response"]) {
+    const events = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+      type: "item.updated",
+      item: { id: "item_agent_streamed", type: "agent_message", text: frame },
+    });
+    assert.deepEqual(events, [], "item.updated must not produce a Tank event");
+  }
 
   const completed = mappedEvent(adapter, {
     type: "item.completed",

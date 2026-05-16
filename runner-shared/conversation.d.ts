@@ -4,7 +4,7 @@ export type TankActor = (typeof TANK_ACTORS)[number];
 export const TANK_EVENT_SOURCES: readonly ["tank", "claude", "codex"];
 export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 
-export const TANK_VISIBILITIES: readonly ["durable", "live-only"];
+export const TANK_VISIBILITIES: readonly ["durable"];
 export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
 
 export const TANK_EVENT_TYPES: readonly [
@@ -16,7 +16,6 @@ export const TANK_EVENT_TYPES: readonly [
   "turn.command_failed",
   "turn.interrupted",
   "item.started",
-  "item.delta",
   "item.completed",
   "item.failed",
   "tool.approval_requested",

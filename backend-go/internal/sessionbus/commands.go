@@ -25,7 +25,13 @@ type Command struct {
 	SkillName            string `json:"skill_name,omitempty"`
 	FollowUp             bool   `json:"follow_up,omitempty"`
 	TargetTurnID         string `json:"target_turn_id,omitempty"`
-	TargetItemID         string `json:"target_item_id,omitempty"`
+	// TargetTimelineID is the Tank-owned timeline_id of the item the
+	// command targets (e.g., an input_reply pointing at the
+	// AskUserQuestion tool item). Was named `target_item_id` until the
+	// migration from `item_id` to `timeline_id` (#448); renamed to match
+	// its content semantics. No consumer reads this field today — it's
+	// preserved on the wire for audit/debug visibility.
+	TargetTimelineID     string `json:"target_timeline_id,omitempty"`
 	TargetProviderItemID string `json:"target_provider_item_id,omitempty"`
 	InputReply           string `json:"input_reply,omitempty"`
 	CreatedAt            string `json:"created_at"`
@@ -47,7 +53,7 @@ func (c Command) Normalize() Command {
 	c.PermissionMode = strings.TrimSpace(c.PermissionMode)
 	c.SkillName = strings.TrimSpace(c.SkillName)
 	c.TargetTurnID = strings.TrimSpace(c.TargetTurnID)
-	c.TargetItemID = strings.TrimSpace(c.TargetItemID)
+	c.TargetTimelineID = strings.TrimSpace(c.TargetTimelineID)
 	c.TargetProviderItemID = strings.TrimSpace(c.TargetProviderItemID)
 	c.InputReply = strings.TrimSpace(c.InputReply)
 	return c

@@ -258,33 +258,6 @@
       }
     },
     {
-      "name": "item delta",
-      "event": {
-        "event_id": "turn_contract:item.delta:assistant-message:provider-item-1",
-        "order_key": "order-0010",
-        "sequence": 10,
-        "conversation_id": "63",
-        "session_id": "63",
-        "turn_id": "turn_contract",
-        "timeline_id": "assistant-message",
-        "parent_id": "turn_contract",
-        "actor": "assistant",
-        "source": "codex",
-        "type": "item.delta",
-        "created_at": "2026-05-12T00:00:09.000Z",
-        "producer": {
-          "name": "codex-runner",
-          "runtime": "codex",
-          "provider_event_id": "provider-item-1"
-        },
-        "visibility": "live-only",
-        "payload": {
-          "kind": "agent_message",
-          "delta": "Hello"
-        }
-      }
-    },
-    {
       "name": "item completed",
       "event": {
         "event_id": "turn_contract:item.completed:assistant-message:provider-item-1",

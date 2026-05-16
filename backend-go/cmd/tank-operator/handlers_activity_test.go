@@ -14,7 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -57,7 +57,7 @@ func TestHandleSessionActivityReturnsOwnedSDKSessionSummaries(t *testing.T) {
 		mgr: sessions.NewManager(
 			client,
 			nil,
-			compat.SessionsNamespace,
+			sessionmodel.SessionsNamespace,
 			nil,
 			nil,
 			sessions.ManagerOptions{},
@@ -104,7 +104,7 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 		mgr: sessions.NewManager(
 			client,
 			nil,
-			compat.SessionsNamespace,
+			sessionmodel.SessionsNamespace,
 			nil,
 			nil,
 			sessions.ManagerOptions{},
@@ -138,7 +138,7 @@ func TestHandleSessionActivityUsesPersistedReadState(t *testing.T) {
 // activityEventStore is an in-memory SessionEventStore for the activity
 // handler tests. It implements LatestLifecycleEvents and
 // UnreadOutputCount by filtering the test fixture, mirroring the
-// behavior the Cosmos implementation gets from server-side queries.
+// behavior the Postgres implementation gets from server-side queries.
 type activityEventStore struct {
 	events map[string][]map[string]any
 }
@@ -241,7 +241,8 @@ func (s *activityEventStore) UnreadOutputCount(_ context.Context, sessionID, aft
 }
 
 // Ensure ASC ordering of the test fixture so the in-memory store mirrors
-// Cosmos query results when callers add events out of order_key sequence.
+// the Postgres ORDER BY order_key result when callers add events out of
+// order_key sequence.
 func sortActivityEvents(events []map[string]any) {
 	sort.SliceStable(events, func(i, j int) bool {
 		left, _ := events[i]["order_key"].(string)
@@ -273,7 +274,7 @@ func activityEvent(eventID, eventType, orderKey, actor string, fields map[string
 		event["payload"] = map[string]any{"status": "submitted"}
 	case "turn.started", "turn.completed", "turn.failed", "turn.interrupted":
 		event["turn_id"] = "turn-1"
-	case "item.started", "item.delta", "item.completed", "item.failed":
+	case "item.started", "item.completed", "item.failed":
 		event["turn_id"] = "turn-1"
 		event["timeline_id"] = "item-1"
 		event["payload"] = map[string]any{"kind": "message"}
@@ -294,12 +295,12 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "session-" + id,
-			Namespace:         compat.SessionsNamespace,
+			Namespace:         sessionmodel.SessionsNamespace,
 			CreationTimestamp: created,
 			Labels: map[string]string{
-				"tank-operator/owner":      compat.OwnerLabel(owner),
+				"tank-operator/owner":      sessionmodel.OwnerLabel(owner),
 				"tank-operator/session-id": id,
-				"tank-operator/mode":       compat.CodexGUIMode,
+				"tank-operator/mode":       sessionmodel.CodexGUIMode,
 			},
 		},
 		Spec: corev1.PodSpec{

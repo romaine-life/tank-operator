@@ -14,7 +14,7 @@ interface SessionUser {
   // completes the GitHub App install (#57 stage 2).
   github_login: string | null;
   installation_id: number | null;
-  // Phase E: SPA run-pane preferences, persisted on the Cosmos profile
+  // Phase E: SPA run-pane preferences, persisted on the Postgres profiles
   // row so they ride across browsers. Null when the user has never
   // saved prefs (e.g., first sign-in on a new account — the SPA falls
   // back to localStorage, then to defaults).

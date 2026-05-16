@@ -1,7 +1,7 @@
 // Runtime config sourced from env vars. SESSION_ID + POD_OWNER_EMAIL come
 // from the downward API on the pod spec. TANK_SESSION_STORAGE_KEY is the
 // scoped event ledger partition key. NATS_* points at the JetStream session
-// bus; the backend owns Cosmos writes after it persists bus events.
+// bus; the backend owns Postgres writes after it persists bus events.
 
 export interface Config {
   sessionId: string;

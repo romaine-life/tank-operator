@@ -30,10 +30,11 @@ The implementation has explicit durable and live boundaries:
   canonical transcript events to the NATS JetStream session bus before the UI
   can observe them.
 - `agent-runner/src/sessionEvents.ts` and `codex-runner/src/sessionEvents.ts`
-  define canonical-vs-live-only event allowlists.
-- The backend session-bus persister writes bus events to Cosmos
-  `session-events` and wakes SSE streams only after the ledger write commits.
-- `backend-go/internal/store/session_events.go` reads `session-events` by
+  define canonical Tank event allowlists. All Tank events are durable.
+- The backend session-bus persister writes bus events to the Postgres
+  `session_events` table and wakes SSE streams only after the ledger write
+  commits.
+- `backend-go/internal/store/session_events.go` reads `session_events` by
   session and pages by canonical `order_key`.
 - `frontend/src/App.tsx` renders Claude and Codex SDK events through the Tank
   conversation reducer/projection. It also owns status decisions such as
@@ -126,7 +127,9 @@ Required fields:
 - `source`: `tank`, `claude`, or `codex`.
 - `type`: stable Tank event type.
 - `created_at`: producer timestamp in RFC3339 format.
-- `visibility`: `durable` or `live-only`.
+- `visibility`: `durable`. The `live-only` value was retired once the
+  producer-side live channel never landed; the enum is kept single-valued so
+  callers still tag durability explicitly rather than infer it.
 
 Optional fields:
 
@@ -190,7 +193,6 @@ Turn lifecycle:
 Item lifecycle:
 
 - `item.started`
-- `item.delta`
 - `item.completed`
 - `item.failed`
 
@@ -228,9 +230,12 @@ Turn transitions:
 6. `turn.interrupted` returns to `stopped`.
 7. `turn.failed` returns to `error`.
 
-`item.*` events update transcript units under a turn. `item.delta` is durable
-only when it is needed to replay the item. Pure typewriter deltas may remain
-`live-only` and must not be required to reconstruct final UI state.
+`item.*` events update transcript units under a turn. Per-token typewriter
+deltas are intentionally not on the Tank event surface: the `item.delta`
+event type and the `live-only` visibility were retired together once it
+became clear no consumer subscribed to either. Items are snapshotted via
+`item.started` → `item.completed`; if a future live channel for partial
+tokens lands, restore both the event type and the visibility together.
 
 ## Provider Mappings
 
@@ -246,7 +251,7 @@ Claude SDK adapter:
 | `result` success | `turn.completed` | Include usage when present. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |
-| `stream_event`, status, hook/task progress | `item.delta` or live-only ignored | Durable only if needed for replay. |
+| `stream_event`, status, hook/task progress | ignored | Per-token deltas are not on the Tank surface; restoring requires re-adding `item.delta` + `live-only` together. |
 
 Codex SDK adapter:
 
@@ -255,7 +260,7 @@ Codex SDK adapter:
 | JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
-| `item.updated` | `item.delta` | Durable only when final `item.completed` lacks enough state to replay. |
+| `item.updated` | ignored (no Tank event) | Adapter still observes these frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. |
 | `item.completed` message/reasoning/tool | `item.completed` | Map command, file change, MCP, and web search to tool item payloads. |
 | `turn.completed` | `turn.completed` | Include usage. |
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
@@ -367,12 +372,12 @@ Body:
 The backend validates ownership, Claude GUI mode, target ids, and text size,
 then publishes a durable JetStream `input_reply` command with
 `target_turn_id=<turn_id>`, `target_provider_item_id=<provider_item_id>`,
-`target_item_id=<timeline_id>`, and `input_reply=<text>`. The Claude runner
+`target_timeline_id=<timeline_id>`, and `input_reply=<text>`. The Claude runner
 accepts the command only when the target turn is active and waiting for that
 provider item, pushes a provider tool-result message, and acks the command
 only after the durable `tool.approval_resolved` event is produced. Codex does
 not support this command and fails it explicitly. Browser tabs must not send
-AskUserQuestion answers through a runner socket or live-only control channel.
+AskUserQuestion answers through a runner socket or any non-durable control channel.
 
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while
@@ -391,11 +396,12 @@ polling fallback for an open session.
 
 Storage:
 
-- Keep `session-events` as the durable ledger, partitioned by `tank_session_id`.
+- Keep the Postgres `session_events` table as the durable ledger, partitioned
+  by `tank_session_id`.
 - Use NATS JetStream as the durable command/event fabric, not as the product
   history database. Commands are acked only after durable terminal events are
-  published; events are acknowledged by the backend persister after Cosmos
-  upsert succeeds.
+  published; events are acknowledged by the backend persister after the
+  Postgres upsert succeeds.
 - Add or materialize per-user read state keyed by `email + session_id`.
 - Use `order_key` as the pagination cursor. Document id is only a dedupe key.
 - Compute unread and attention state server-side from durable events plus read
@@ -407,12 +413,13 @@ Operational counters:
   errors, timeline read failures, emitted events, heartbeats, wake-subscribe
   failures, and observed SSE event lag.
 - Missing-message investigations should start from those counters and the
-  durable `session-events` ledger cursor, not from browser-local state.
+  durable Postgres `session_events` ledger cursor, not from browser-local state.
 
 ## Migration Guardrails
 
-- New provider events must map to Tank events, be marked `live-only`, or be
-  explicitly ignored with a test.
+- New provider events must map to a Tank event or be explicitly ignored with
+  a test. The `live-only` visibility was retired; resurrecting it requires
+  re-introducing the producer-side live channel in the same change.
 - New canonical Tank event types must be added to the JSON Schema first, then
   to the Go and TypeScript contract constants in the same change. The contract
   check is expected to fail until every package agrees.

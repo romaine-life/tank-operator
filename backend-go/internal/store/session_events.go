@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // SessionEventStore reads the canonical SDK events the pod-side runners write
@@ -30,14 +30,15 @@ type SessionEventStore interface {
 	LatestLifecycleEvents(ctx context.Context, tankSessionID string, limit int) ([]map[string]any, error)
 	// UnreadOutputCount returns the number of distinct timeline_id /
 	// turn_id markers that count as "unread output" strictly after the
-	// caller's last_read_order_key cursor. Implemented as a Cosmos COUNT
-	// query so it's O(1) RU per session regardless of history size.
+	// caller's last_read_order_key cursor. Implemented as two Postgres
+	// COUNT(DISTINCT ...) queries against the (tank_session_id, order_key)
+	// index so it stays bounded per session regardless of history size.
 	UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error)
 }
 
 // LifecycleEventTypes is the set of event types that drive run-status,
 // active-turn-id, and needs-input transitions in the activity summary.
-// Centralized here so the Cosmos query, the stub, and the activity
+// Centralized here so the Postgres query, the stub, and the activity
 // handler stay in sync. Order_key fold semantics are: ASC, last-write-
 // wins per field.
 var LifecycleEventTypes = []string{
@@ -58,7 +59,6 @@ var LifecycleEventTypes = []string{
 // are not "unread output" — they're lifecycle, not content).
 var UnreadOutputItemTypes = []string{
 	"item.started",
-	"item.delta",
 	"item.completed",
 	"item.failed",
 	"tool.approval_requested",
@@ -104,7 +104,7 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 	storageKey := stringField(doc, "tank_session_id")
 	publicSessionID := stringField(doc, "session_id")
 	if storageKey == "" {
-		storageKey = compat.SessionStorageKey(s.scope, publicSessionID)
+		storageKey = sessionmodel.SessionStorageKey(s.scope, publicSessionID)
 	}
 	if storageKey == "" {
 		return errMissingSessionEventField("tank_session_id")
@@ -155,7 +155,7 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
-	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 
 	const baseQuery = `
 		SELECT payload
@@ -209,7 +209,7 @@ func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSession
 	if strings.TrimSpace(orderKey) == "" {
 		return true, nil
 	}
-	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	const q = `
 		SELECT 1
 		FROM session_events
@@ -231,7 +231,7 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 	if strings.TrimSpace(turnID) == "" {
 		return nil, nil
 	}
-	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	const q = `
 		SELECT payload
 		FROM session_events
@@ -276,7 +276,7 @@ func (s *postgresSessionEventStore) LatestLifecycleEvents(ctx context.Context, t
 	if limit > 500 {
 		limit = 500
 	}
-	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	const q = `
 		SELECT payload
 		FROM session_events
@@ -324,7 +324,7 @@ func (s *postgresSessionEventStore) LatestLifecycleEvents(ctx context.Context, t
 // two slices are queried separately because they use different distinct-key
 // columns; SUM in Go is one round-trip cheaper than a single CTE union.
 func (s *postgresSessionEventStore) UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error) {
-	storageKey := compat.SessionStorageKey(s.scope, tankSessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	itemCount, err := s.countDistinctField(
 		ctx, storageKey, "timeline_id", UnreadOutputItemTypes, afterOrderKey,
 	)

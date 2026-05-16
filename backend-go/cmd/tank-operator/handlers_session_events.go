@@ -18,8 +18,8 @@ const (
 	sessionEventStreamHeartbeat = 15 * time.Second
 )
 
-// handleListSessionEvents reads canonical SDK events from the session-events
-// Cosmos container for the SPA's durable history path. The only resume cursor
+// handleListSessionEvents reads canonical SDK events from the session_events
+// Postgres table for the SPA's durable history path. The only resume cursor
 // is order_key; unknown cursors are explicit resync errors instead of silent
 // replay from the beginning.
 func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Request) {

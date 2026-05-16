@@ -18,7 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const (
@@ -29,9 +29,9 @@ const (
 
 // SessionRegistry is a write-capable registry interface.
 type SessionRegistry interface {
-	List(ctx context.Context, owner string) ([]compat.SessionRecord, error)
+	List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error)
 	NextSessionID(ctx context.Context) (string, error)
-	Upsert(ctx context.Context, record compat.SessionRecord) error
+	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
@@ -55,7 +55,7 @@ type Manager struct {
 	registry  SessionRegistry
 	waker     SessionListWaker
 
-	manifestOpts compat.ManifestOptions
+	manifestOpts sessionmodel.ManifestOptions
 
 	// In-memory activity tracking for reaper (single replica only).
 	mu           sync.Mutex
@@ -76,7 +76,7 @@ type Manager struct {
 
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
-	ManifestOpts      compat.ManifestOptions
+	ManifestOpts      sessionmodel.ManifestOptions
 	IdleTimeout       time.Duration
 	ReaperInterval    time.Duration
 	OAuthGatewayHost  string
@@ -198,9 +198,13 @@ func (m *Manager) reapIdle(ctx context.Context) {
 		delete(m.lastActivity, sessionID)
 		m.mu.Unlock()
 		if m.registry != nil && owner != "" {
-			_ = m.registry.MarkDeleted(ctx, owner, sessionID)
+			if regErr := m.registry.MarkDeleted(ctx, owner, sessionID); regErr != nil {
+				slog.Warn("reaper registry mark-deleted failed",
+					"session_id", sessionID, "owner", owner, "error", regErr)
+			}
 		}
 		if m.waker != nil && owner != "" {
+			// Bus-side logs + counter on failure (sessionbus.WakeMetrics).
 			_ = m.waker.PublishSessionListWake(ctx, owner)
 		}
 	}
@@ -230,8 +234,8 @@ func (m *Manager) Touch(sessionID string) {
 
 // Create creates a new session pod and registers it in the registry.
 func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContext map[string]any, requestedAt string) (Info, error) {
-	mode = compat.NormalizeSessionMode(mode)
-	if !compat.IsSessionMode(mode) {
+	mode = sessionmodel.NormalizeSessionMode(mode)
+	if !sessionmodel.IsSessionMode(mode) {
 		return Info{}, fmt.Errorf("unknown session mode: %q", mode)
 	}
 	if requestedAt == "" {
@@ -266,7 +270,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	opts.CodexAPIProxyIP = m.codexAPIProxyIP
 	opts.GlimmungContextJSON = contextJSON
 
-	manifest := compat.PodManifest(sessionID, owner, mode, opts)
+	manifest := sessionmodel.PodManifest(sessionID, owner, mode, opts)
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return Info{}, err
@@ -305,7 +309,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	}
 
 	if m.registry != nil {
-		_ = m.registry.Upsert(ctx, compat.SessionRecord{
+		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
 			ID:          sessionID,
 			Email:       owner,
 			Mode:        mode,
@@ -315,7 +319,10 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 			RequestedAt: requestedAt,
 			CreatedAt:   orEmpty(createdAt),
 			UpdatedAt:   requestedAt,
-		})
+		}); regErr != nil {
+			slog.Warn("create registry upsert failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
 	}
 
 	if m.waker != nil && owner != "" {
@@ -342,7 +349,10 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 	m.mu.Unlock()
 
 	if m.registry != nil {
-		_ = m.registry.MarkDeleted(ctx, owner, sessionID)
+		if regErr := m.registry.MarkDeleted(ctx, owner, sessionID); regErr != nil {
+			slog.Warn("delete registry mark-deleted failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
 	}
 	if m.waker != nil && owner != "" {
 		_ = m.waker.PublishSessionListWake(ctx, owner)
@@ -352,7 +362,7 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 
 // SetName updates the display name annotation on the pod and registry.
 func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *string) (Info, error) {
-	normalized := compat.NormalizeName(name)
+	normalized := sessionmodel.NormalizeName(name)
 	annotationValue := ""
 	if normalized != nil {
 		annotationValue = *normalized
@@ -377,7 +387,10 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	}
 
 	if m.registry != nil {
-		_ = m.registry.SetName(ctx, owner, sessionID, normalized)
+		if regErr := m.registry.SetName(ctx, owner, sessionID, normalized); regErr != nil {
+			slog.Warn("set-name registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
 	}
 	if m.waker != nil && owner != "" {
 		_ = m.waker.PublishSessionListWake(ctx, owner)
@@ -477,7 +490,7 @@ func (m *Manager) GetTerminalEndpoint(ctx context.Context, owner, sessionID stri
 			return "", 0, err
 		}
 		if podReady(pod) && pod.Status.PodIP != "" {
-			return pod.Status.PodIP, compat.SandboxAgentPort, nil
+			return pod.Status.PodIP, sessionmodel.SandboxAgentPort, nil
 		}
 		select {
 		case <-ctx.Done():
@@ -502,7 +515,7 @@ func (m *Manager) findPodBySessionID(ctx context.Context, owner, sessionID strin
 	}
 	if len(pods.Items) > 0 {
 		pod := &pods.Items[0]
-		if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
+		if pod.Labels["tank-operator/owner"] != sessionmodel.OwnerLabel(owner) {
 			return nil, ErrNotOwned
 		}
 		return pod, nil
@@ -514,7 +527,7 @@ func (m *Manager) findPodBySessionID(ctx context.Context, owner, sessionID strin
 	if err != nil {
 		return nil, err
 	}
-	if pod.Labels["tank-operator/owner"] != compat.OwnerLabel(owner) {
+	if pod.Labels["tank-operator/owner"] != sessionmodel.OwnerLabel(owner) {
 		return nil, ErrNotOwned
 	}
 	return pod, nil
@@ -563,7 +576,7 @@ func (m *Manager) reader() *Reader {
 // registryAdapter wraps the write-capable SessionRegistry into a read-only Registry.
 type registryAdapter struct{ r SessionRegistry }
 
-func (a *registryAdapter) List(ctx context.Context, owner string) ([]compat.SessionRecord, error) {
+func (a *registryAdapter) List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
 	return a.r.List(ctx, owner)
 }
 

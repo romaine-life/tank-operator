@@ -258,7 +258,7 @@ function activeToolItem(state: ConversationReducerState): ConversationItem | nul
 }
 
 function isRunningItem(item: ConversationItem): boolean {
-  return item.status === "started" || item.status === "streaming";
+  return item.status === "started";
 }
 
 function toolDisplay(item: ConversationItem): Pick<
@@ -330,7 +330,6 @@ function toolOutput(item: ConversationItem): string | undefined {
 }
 
 function toolStatus(item: ConversationItem): string {
-  if (item.status === "streaming") return "running";
   return item.status;
 }
 

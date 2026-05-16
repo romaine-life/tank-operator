@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // Store is the Postgres-backed session registry. Replaces the previous
@@ -28,7 +28,7 @@ func NewPostgresStore(pool *pgxpool.Pool, scope string) *Store {
 
 // List returns the visible session records for an owner in this scope,
 // ordered oldest-first by created_at to match the Cosmos impl.
-func (s *Store) List(ctx context.Context, owner string) ([]compat.SessionRecord, error) {
+func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
 	normalized := strings.ToLower(strings.TrimSpace(owner))
 	if normalized == "" {
 		return nil, nil
@@ -48,7 +48,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]compat.SessionRecord,
 	}
 	defer rows.Close()
 
-	var records []compat.SessionRecord
+	var records []sessionmodel.SessionRecord
 	for rows.Next() {
 		var (
 			sessionID, mode, podName, requestedAt, createdAt, updatedAt string
@@ -59,9 +59,9 @@ func (s *Store) List(ctx context.Context, owner string) ([]compat.SessionRecord,
 			return nil, err
 		}
 		if mode == "" {
-			mode = compat.DefaultSessionMode
+			mode = sessionmodel.DefaultSessionMode
 		}
-		records = append(records, compat.SessionRecord{
+		records = append(records, sessionmodel.SessionRecord{
 			ID:          sessionID,
 			Email:       normalized,
 			Mode:        mode,

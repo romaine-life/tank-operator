@@ -1,5 +1,6 @@
-// handlers_compat.go provides standalone handler factory functions used by
-// tests and as thin wrappers around the appServer methods.
+// handlers_factory.go provides standalone handler factory functions used by
+// main_test.go to exercise individual handler logic without spinning up the
+// full appServer.
 package main
 
 import (

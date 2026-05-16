@@ -96,30 +96,6 @@ test("dispatch refuses to publish events the persister would reject", async () =
   assert.deepEqual(order, []);
 });
 
-test("dispatch drops live-only Tank events without persisting", async () => {
-  const order: Order = [];
-  const sink = {
-    async upsert() {
-      order.push("sink");
-    },
-  };
-  const liveOnly: TankConversationEvent = {
-    event_id: "turn_run-123:item.delta:tool-1:p1",
-    session_id: "63",
-    turn_id: "turn_run-123",
-    timeline_id: "tool-1",
-    actor: "tool",
-    source: "claude",
-    type: "item.delta",
-    created_at: "2026-05-12T00:00:00.000Z",
-    visibility: "live-only",
-    payload: { kind: "tool" },
-  };
-  const ok = await dispatch(sink, liveOnly);
-  assert.equal(ok, true);
-  assert.deepEqual(order, [], "live-only events must not reach the durable sink");
-});
-
 test("dispatch reports failure when the sink throws", async () => {
   const ok = await dispatch(
     makeSink([], { throws: new Error("boom") }),
@@ -143,7 +119,6 @@ test("stampTankEvent throws when envelope fields are missing", () => {
 
 test("durable Tank fixtures pass the shared filter and dispatch end-to-end", async () => {
   for (const { name, event } of fixtures.events) {
-    if (event.visibility === "live-only") continue;
     const order: Order = [];
     const sink = makeSink(order);
     const stamped = stampTankEvent(event);

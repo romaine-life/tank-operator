@@ -14,16 +14,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 type recordingSessionBus struct {
-	commands         []sessionbus.Command
-	wakes            []string
-	err              error
+	commands []sessionbus.Command
+	wakes    []string
+	err      error
 }
 
 // recordingSessionEventStore captures every backend-owned Upsert so tests
@@ -68,7 +68,7 @@ func (*recordingSessionBus) SubscribeSessionListWake(context.Context, string) (<
 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
@@ -81,12 +81,12 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	if len(bus.commands) != 1 {
 		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
-	// Boundary events are persisted to Cosmos directly (handler must
+	// Boundary events are persisted to Postgres directly (handler must
 	// guarantee durability before returning success), and each persist
 	// publishes a NATS wake so SSE clients see them immediately.
 	es := app.sessionEvents.(*recordingSessionEventStore)
 	if len(es.upserts) != 2 {
-		t.Fatalf("Cosmos upserts = %d, want 2 (user_message.created + turn.submitted)", len(es.upserts))
+		t.Fatalf("session-event upserts = %d, want 2 (user_message.created + turn.submitted)", len(es.upserts))
 	}
 	wantTypes := []string{"user_message.created", "turn.submitted"}
 	for i, want := range wantTypes {
@@ -114,7 +114,7 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 
 func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-skill","prompt":"hello","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
@@ -130,7 +130,7 @@ func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
 
 func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
 	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-skill","prompt":"$test","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
@@ -146,7 +146,7 @@ func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 
 func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
 	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -162,7 +162,7 @@ func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 
 func TestInterruptSessionTurnPublishesControlCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
 	req := authedInterruptRequest(t, "64", "run-abc_123")
 	resp := httptest.NewRecorder()
 
@@ -185,7 +185,7 @@ func TestInterruptSessionTurnPublishesControlCommand(t *testing.T) {
 
 func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
 	req := authedInterruptRequest(t, "64", "bad/slash")
 	resp := httptest.NewRecorder()
 
@@ -201,7 +201,7 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 
 func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"  Continue  "}`)
 	resp := httptest.NewRecorder()
 
@@ -217,14 +217,14 @@ func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 	if got.Type != sessionbus.CommandInputReply || got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
 		t.Fatalf("input reply routing fields = %#v", got)
 	}
-	if got.TargetProviderItemID != "toolu_123" || got.TargetItemID != "turn-active_123:item:toolu_123" || got.InputReply != "Continue" || got.Prompt != "Continue" {
+	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" || got.InputReply != "Continue" || got.Prompt != "Continue" {
 		t.Fatalf("input reply payload fields = %#v", got)
 	}
 }
 
 func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", compat.CodexGUIMode, "codex-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
 	req := authedInputReplyRequest(t, "64", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
 	resp := httptest.NewRecorder()
 
@@ -240,7 +240,7 @@ func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
 
 func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
 	resp := httptest.NewRecorder()
 
@@ -256,7 +256,7 @@ func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
 
 func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-65", "65", "user@example.com", compat.ClaudeGUIMode, "claude"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-65", "65", "user@example.com", sessionmodel.ClaudeGUIMode, "claude"))
 	req := authedTurnRequest(t, "65", `{"client_nonce":"turn-no-runner","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -272,7 +272,7 @@ func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 
 func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "66", `{"client_nonce":"bad/slash","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -285,7 +285,7 @@ func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 
 func TestEnqueueSessionTurnSurfacesSessionBusFailure(t *testing.T) {
 	bus := &recordingSessionBus{err: errors.New("nats down")}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-67", "67", "user@example.com", compat.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-67", "67", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	req := authedTurnRequest(t, "67", `{"client_nonce":"turn-fail","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -303,7 +303,7 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 		clientObjects = append(clientObjects, pod)
 	}
 	k8s := fake.NewSimpleClientset(clientObjects...)
-	ns := compat.SessionsNamespace
+	ns := sessionmodel.SessionsNamespace
 	return &appServer{
 		k8s:           k8s,
 		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
@@ -319,10 +319,10 @@ func sdkSessionPod(name, sessionID, email, mode, runnerContainer string) *corev1
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: compat.SessionsNamespace,
+			Namespace: sessionmodel.SessionsNamespace,
 			Labels: map[string]string{
 				"tank-operator/session-id": sessionID,
-				"tank-operator/owner":      compat.OwnerLabel(email),
+				"tank-operator/owner":      sessionmodel.OwnerLabel(email),
 				"tank-operator/mode":       mode,
 			},
 			Annotations: map[string]string{

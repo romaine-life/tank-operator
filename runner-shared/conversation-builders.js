@@ -109,14 +109,14 @@ export function itemEvent(args) {
       name: `${args.source}-runner`,
       runtime: args.source,
     },
-    visibility: args.visibility ?? "durable",
+    visibility: "durable",
   };
   if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
   if (args.payload) event.payload = args.payload;
   return event;
 }
 
-const VALID_VISIBILITIES = new Set(["durable", "live-only"]);
+const VALID_VISIBILITIES = new Set(["durable"]);
 
 // stampTankEvent attaches uuid, order_key, sequence, and written_at to a
 // built Tank event. Throws TypeError if the input is not a Tank event so

@@ -33,7 +33,7 @@ export interface SessionCommand {
   source?: string;
   client_nonce?: string;
   target_turn_id?: string;
-  target_item_id?: string;
+  target_timeline_id?: string;
   target_provider_item_id?: string;
   input_reply?: string;
   prompt?: string;
@@ -61,7 +61,7 @@ export class SessionCommandRecord implements SessionCommand {
   source?: string;
   client_nonce?: string;
   target_turn_id?: string;
-  target_item_id?: string;
+  target_timeline_id?: string;
   target_provider_item_id?: string;
   input_reply?: string;
   prompt?: string;
@@ -89,7 +89,7 @@ export class SharedSessionBus {
     signal?: AbortSignal,
   ): Promise<() => Promise<void>>;
   publishEvent(event: Record<string, unknown>): Promise<"created" | "exists">;
-  enqueueWakeupCommand(args: {
+  enqueueWakeupSubmitTurn(args: {
     prompt: string;
     clientNonce: string;
   }): Promise<SessionCommand>;
@@ -101,7 +101,7 @@ export class SharedSessionBus {
   close(): Promise<void>;
 }
 
-export function buildScheduleWakeupCommand(args: {
+export function buildWakeupSubmitTurnCommand(args: {
   sessionID: string;
   sessionStorageKey?: string;
   email: string;

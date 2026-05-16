@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/compat"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -22,7 +22,7 @@ const (
 )
 
 // persistBackendEvent writes a backend-owned Tank conversation event
-// directly to the Cosmos session-events ledger and wakes any active SSE
+// directly to the Postgres session_events ledger and wakes any active SSE
 // subscribers on the per-session events subject. Backend-owned events
 // (user_message.created, turn.submitted, turn.command_failed) are the
 // backend's authority: it writes durably itself and signals the live
@@ -125,7 +125,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	interruptTurnID := "interrupt_" + auth.RandomHex(12)
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
 		CommandID:         "interrupt:" + targetTurnID + ":" + auth.RandomHex(12),
@@ -205,7 +205,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	if compat.NormalizeSessionMode(info.Mode) != compat.ClaudeGUIMode {
+	if sessionmodel.NormalizeSessionMode(info.Mode) != sessionmodel.ClaudeGUIMode {
 		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI sessions")
 		return
 	}
@@ -214,7 +214,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	inputReplyTurnID := "input_reply_" + auth.RandomHex(12)
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
 		CommandID:            "input-reply:" + targetTurnID + ":" + auth.RandomHex(12),
@@ -227,7 +227,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		TurnID:               inputReplyTurnID,
 		ClientNonce:          targetTurnID,
 		TargetTurnID:         targetTurnID,
-		TargetItemID:         timelineID,
+		TargetTimelineID:     timelineID,
 		TargetProviderItemID: providerItemID,
 		InputReply:           text,
 		Prompt:               text,
@@ -253,7 +253,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":                  "accepted",
 		"target_turn_id":          targetTurnID,
-		"target_item_id":          timelineID,
+		"target_timeline_id":      timelineID,
 		"target_provider_item_id": providerItemID,
 	})
 }
@@ -318,7 +318,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if s.sessionBus == nil {
 		return nil, http.StatusServiceUnavailable, "session bus unavailable"
 	}
-	storageKey := compat.SessionStorageKey(s.sessionScope, sessionID)
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	turnID, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
 		SessionID:         sessionID,
 		SessionStorageKey: storageKey,
@@ -353,7 +353,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	// Boundary events are backend-owned: the orchestrator accepted the turn,
 	// the orchestrator persists user_message.created + turn.submitted to
 	// the durable ledger before any runner involvement. Writing directly
-	// to Cosmos here (instead of publishing onto the bus and waiting for
+	// to Postgres here (instead of publishing onto the bus and waiting for
 	// the persister) keeps a single source of truth for these events and
 	// guarantees they exist before this handler returns success. The
 	// runner-side dispatchCreate of these events was removed during the
@@ -406,10 +406,10 @@ func skillPromptTrigger(provider, skillName string) string {
 }
 
 func sdkProviderForMode(mode string) (string, bool) {
-	switch compat.NormalizeSessionMode(mode) {
-	case compat.ClaudeGUIMode:
+	switch sessionmodel.NormalizeSessionMode(mode) {
+	case sessionmodel.ClaudeGUIMode:
 		return "claude", true
-	case compat.CodexGUIMode:
+	case sessionmodel.CodexGUIMode:
 		return "codex", true
 	default:
 		return "", false

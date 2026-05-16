@@ -67,11 +67,11 @@ func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request)
 	// github_login / run_prefs alongside the JWT. The SPA uses this
 	// `user` object directly on the fresh-login path (it does NOT then
 	// call /api/auth/me), so omitting these fields here makes the SPA
-	// believe installation_id is null even when the Cosmos doc has it
+	// believe installation_id is null even when the profiles row has it
 	// — surfacing as a spurious "Connect GitHub" wall after any flow
 	// that forces a re-login (cookie expiry, localStorage reap, manual
 	// logout). Read-only here; don't write — there's nothing new to
-	// merge in. A bad Cosmos read shouldn't block sign-in, so we log
+	// merge in. A bad profile read shouldn't block sign-in, so we log
 	// and continue with a zero profile rather than 500.
 	profile, err := s.profiles.GetOrCreate(r.Context(), email)
 	if err != nil {
@@ -125,7 +125,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUpdatePrefs persists the SPA's run-pane preferences (chat font
-// scale, sound volume, etc.) on the caller's Cosmos profile row. The
+// scale, sound volume, etc.) on the caller's Postgres profiles row. The
 // body shape is opaque to the orchestrator — the SPA owns the schema
 // (frontend/src/App.tsx → RunPrefs). The store does a merge-safe
 // upsert so unrelated profile fields (installation_id, github_login)

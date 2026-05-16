@@ -143,6 +143,37 @@ const blocked = [
   // Match the actual config-field assignment, not the doc-of-deletion
   // comment in bus.go that explains why the field is gone.
   { name: "removed JetStream AllowMsgSchedules config", pattern: /AllowMsgSchedules:\s*true\b/ },
+  // The Python → Go orchestrator rewrite (#373) left a Go package named
+  // `internal/compat` that grew into the de-facto shared session-pod
+  // model (modes, manifest builder, storage-key helpers). The name
+  // violated migration-policy.md ("compat is a deletion target"); the
+  // package was renamed to `internal/sessionmodel`. Block the old import
+  // path and the package keyword so a future PR can't accidentally
+  // resurrect the `compat` name. Allow the literal word "compat" in
+  // comments and identifiers like "incompatible" — match only the
+  // package qualifier and import path.
+  { name: "removed compat package import", pattern: /\binternal\/compat\b/ },
+  { name: "removed compat package keyword", pattern: /^\s*package compat\b/m },
+  // Python-vs-Go sessions diff utility, also from #373. It had no
+  // callers outside its own tests after the Python orchestrator
+  // retirement and was deleted in the post-NATS audit. Block re-add.
+  { name: "removed sessioncompare package", pattern: /\binternal\/sessioncompare\b|\bpackage sessioncompare\b/ },
+  // `live-only` visibility and the paired `item.delta` event type were
+  // retired together in the post-NATS audit. The codex adapter was the
+  // only producer of item.delta (always emitted as visibility=live-only,
+  // then dropped at the runner sink — no consumer ever subscribed).
+  // Resurrect both together if a live-only side channel is ever wired
+  // up; do not reintroduce one without the other.
+  { name: "removed live-only visibility", pattern: /["']live-only["']|\bVisibilityLiveOnly\b/ },
+  { name: "removed item.delta event type", pattern: /["']item\.delta["']|\bEventItemDelta\b/ },
+  // `target_item_id` was renamed to `target_timeline_id` to match the
+  // post-#448 `item_id → timeline_id` migration: the field has always
+  // carried a `timeline_id` value; only the wire/struct name was stale.
+  { name: "removed target_item_id wire field", pattern: /["']target_item_id["']|\bTargetItemID\b/ },
+  // Schedule/Wakeup naming residue from the now-retired NATS-delayed
+  // path. The runner-side helpers were renamed to drop the "Schedule"
+  // word once ScheduleWakeup became a pod-local setTimeout (#457).
+  { name: "removed Schedule/Wakeup helper names", pattern: /\benqueueWakeupCommand\b|\bbuildScheduleWakeupCommand\b/ },
 ];
 
 const failures = [];

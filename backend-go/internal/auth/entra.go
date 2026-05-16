@@ -37,9 +37,9 @@ type jwksResponse struct {
 }
 
 type jwksCache struct {
-	mu        sync.RWMutex
-	keys      map[string]*rsa.PublicKey
-	fetchedAt time.Time
+	mu         sync.RWMutex
+	keys       map[string]*rsa.PublicKey
+	fetchedAt  time.Time
 	httpClient *http.Client
 }
 
