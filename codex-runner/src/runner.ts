@@ -47,6 +47,13 @@ import {
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
+import {
+  commandsConsumedTotal,
+  natsPublishFailureTotal,
+  providerErrorTotal,
+  recordTurnStart,
+  recordTurnTerminal,
+} from "./metrics.js";
 
 // AsyncQueue — one writer, one consumer. Session commands push; the
 // run loop awaits the next value. Same shape as agent-runner's queue.
@@ -104,6 +111,7 @@ export async function dispatch(
     await sink.upsert(stamped);
   } catch (err) {
     console.error("session bus publish failed:", err);
+    natsPublishFailureTotal.inc();
     // Don't broadcast a live event we couldn't persist — the SPA's
     // history-replay would then disagree with what it saw live.
     return false;
@@ -245,6 +253,7 @@ export class Runner {
           turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
         }
 
+        recordTurnStart(turn.turnID);
         await dispatch(
           this.sink,
           turnEvent({
@@ -321,6 +330,7 @@ export class Runner {
             console.info("codex turn interrupted");
             continue;
           }
+          providerErrorTotal.labels("query").inc();
           const errMessage = err instanceof Error ? err.message : String(err);
           const dispatched = await dispatch(
             this.sink,
@@ -360,6 +370,7 @@ export class Runner {
     void this.commandBus
       .startCommandConsumer(async (record) => {
         if (isInputReplyCommand(record)) {
+          commandsConsumedTotal.labels("input_reply", "unsupported").inc();
           await this.commandBus.markFailed(
             record,
             new Error("input replies are not supported by codex"),
@@ -367,12 +378,15 @@ export class Runner {
           return;
         }
         if (isInterruptCommand(record)) {
+          commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
           await this.acceptInterrupt(record);
           return;
         }
+        commandsConsumedTotal.labels("submit_turn", "accepted").inc();
         const clientNonce = commandClientNonce(record);
         const prompt = String(record.prompt ?? "").trim();
         if (!prompt) {
+          commandsConsumedTotal.labels("submit_turn", "invalid").inc();
           await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
           return;
         }
@@ -471,6 +485,8 @@ export class Runner {
     turn: AcceptedTurn,
     type: "turn.completed" | "turn.failed" | "turn.interrupted",
   ): Promise<void> {
+    const outcome = type === "turn.completed" ? "completed" : type === "turn.failed" ? "failed" : "interrupted";
+    recordTurnTerminal(turn.turnID, outcome);
     turn.stopCommandHeartbeat?.();
     turn.stopCommandHeartbeat = undefined;
     if (turn.commandRecord) {

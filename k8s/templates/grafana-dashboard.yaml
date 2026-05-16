@@ -1,0 +1,236 @@
+{{- /*
+Grafana dashboard ConfigMap. The kube-prometheus-stack Grafana sidecar
+discovers dashboards by label selector across all namespaces, so this
+ConfigMap lives in tank-operator's namespace but the dashboard renders
+in the central Grafana instance running in the `monitoring` namespace.
+
+Dashboard JSON is hand-built rather than generated. If panels start to
+drift we should migrate to grafonnet — out of scope for v1.
+
+Only renders when observability.dashboards.enabled is true.
+*/}}
+{{- if and .Values.observability.enabled .Values.observability.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tank-operator-grafana
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-operator
+    {{ .Values.observability.dashboards.labelKey }}: {{ .Values.observability.dashboards.labelValue | quote }}
+data:
+  tank-operator.json: |
+    {
+      "title": "Tank Operator",
+      "uid": "tank-operator",
+      "schemaVersion": 39,
+      "version": 1,
+      "tags": ["tank"],
+      "timezone": "browser",
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "panels": [
+        {
+          "id": 1,
+          "title": "HTTP request rate by route+status_class",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_http_requests_total[5m])) by (route, status_class)",
+              "legendFormat": "{{`{{ route }}`}} {{`{{ status_class }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "HTTP 5xx by route (alert source)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_http_requests_total{status_class=\"5xx\"}[5m])) by (route)",
+              "legendFormat": "{{`{{ route }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "HTTP latency p50 / p95 / p99 by route",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, route) (rate(tank_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p50 {{`{{ route }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(tank_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p95 {{`{{ route }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, route) (rate(tank_http_request_duration_seconds_bucket[5m])))",
+              "legendFormat": "p99 {{`{{ route }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Postgres query rate + outcome",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_pg_queries_total[5m])) by (operation, outcome)",
+              "legendFormat": "{{`{{ operation }}`}} {{`{{ outcome }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Postgres p99 latency by operation",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, operation) (rate(tank_pg_query_duration_seconds_bucket[5m])))",
+              "legendFormat": "{{`{{ operation }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Session-event persister failures (steady-state = 0)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(tank_session_event_persist_schema_rejected_total[5m])",
+              "legendFormat": "schema rejected"
+            },
+            {
+              "expr": "rate(tank_session_event_persist_transient_failure_total[5m])",
+              "legendFormat": "transient failure"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "NATS connection events",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(tank_nats_disconnect_total[5m])",
+              "legendFormat": "disconnect"
+            },
+            {
+              "expr": "rate(tank_nats_reconnect_total[5m])",
+              "legendFormat": "reconnect"
+            },
+            {
+              "expr": "rate(tank_nats_async_error_total[5m])",
+              "legendFormat": "async error"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "api-proxy refresh outcomes by provider",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_api_proxy_token_refresh_total[10m])) by (provider, result)",
+              "legendFormat": "{{`{{ provider }}`}} {{`{{ result }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 9,
+          "title": "api-proxy upstream 401 rate (refresh storm signal)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_api_proxy_upstream_401_total[5m])) by (provider)",
+              "legendFormat": "{{`{{ provider }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 10,
+          "title": "mcp-auth-proxy request rate by mcp_server+status_class",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_mcp_auth_proxy_requests_total[5m])) by (mcp_server, status_class)",
+              "legendFormat": "{{`{{ mcp_server }}`}} {{`{{ status_class }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "mcp-auth-proxy SA token read failures + GitHub attestation",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "rate(tank_mcp_auth_proxy_sa_token_read_total{result=\"failure\"}[5m])",
+              "legendFormat": "SA token read failure"
+            },
+            {
+              "expr": "sum(rate(tank_mcp_auth_proxy_github_attestation_total[5m])) by (result)",
+              "legendFormat": "GH attestation {{`{{ result }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Runner turn duration p50/p95/p99",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, mode, outcome) (rate(tank_runner_turn_duration_seconds_bucket[10m])))",
+              "legendFormat": "p50 {{`{{ mode }}`}} {{`{{ outcome }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, mode, outcome) (rate(tank_runner_turn_duration_seconds_bucket[10m])))",
+              "legendFormat": "p95 {{`{{ mode }}`}} {{`{{ outcome }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, mode, outcome) (rate(tank_runner_turn_duration_seconds_bucket[10m])))",
+              "legendFormat": "p99 {{`{{ mode }}`}} {{`{{ outcome }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "Runner commands consumed by kind+result",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_runner_commands_consumed_total[5m])) by (mode, kind, result)",
+              "legendFormat": "{{`{{ mode }}`}} {{`{{ kind }}`}} {{`{{ result }}`}}"
+            }
+          ]
+        }
+      ]
+    }
+{{- end }}

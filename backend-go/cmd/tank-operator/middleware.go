@@ -58,13 +58,16 @@ func validateSkillName(v string) string {
 }
 
 // requireAuth extracts the user from the request, writes an error and returns
-// false if auth fails.
+// false if auth fails. On success the user's email is stashed on the
+// per-request metadata struct the HTTP middleware threads through so a
+// later 5xx slog line carries the caller's identity.
 func (s *appServer) requireAuth(w http.ResponseWriter, r *http.Request) (user auth.User, ok bool) {
 	user, err := s.verifier.CurrentUser(r)
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return auth.User{}, false
 	}
+	attachAuthToRequest(r, user)
 	return user, true
 }
 
@@ -75,6 +78,7 @@ func (s *appServer) requireWSAuth(w http.ResponseWriter, r *http.Request) (user 
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return auth.User{}, false
 	}
+	attachAuthToRequest(r, user)
 	return user, true
 }
 

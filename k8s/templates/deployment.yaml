@@ -253,6 +253,8 @@ kind: Service
 metadata:
   name: tank-operator
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: tank-operator
 spec:
   selector:
     app.kubernetes.io/name: tank-operator

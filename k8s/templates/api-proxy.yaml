@@ -60,6 +60,8 @@ kind: Service
 metadata:
   name: claude-api-proxy
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: claude-api-proxy
 spec:
   selector:
     app.kubernetes.io/name: claude-api-proxy
@@ -67,6 +69,12 @@ spec:
     - name: https
       port: 443
       targetPort: 8443
+    # /metrics — scraped by the ServiceMonitor in observability.yaml.
+    # Plain HTTP on the ext_proc sidecar's metrics port; the upstream
+    # api.anthropic.com leg keeps using port 443 with the leaf TLS.
+    - name: metrics
+      port: 9100
+      targetPort: metrics
 ---
 {{- /*
 Envoy config. Top-of-config rationale:
@@ -302,7 +310,13 @@ spec:
           ports:
             - name: grpc
               containerPort: 9000
+            - name: metrics
+              containerPort: 9100
           env:
+            - name: PROXY_PROVIDER
+              value: claude
+            - name: METRICS_PORT
+              value: "9100"
             - name: CLAUDE_CREDENTIALS_FILE
               value: /etc/claude-credentials/{{ .Values.externalSecret.claudeCredentials.secretKey }}
             - name: AZURE_KEYVAULT_URL
@@ -360,6 +374,8 @@ kind: Service
 metadata:
   name: codex-api-proxy
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: codex-api-proxy
 spec:
   selector:
     app.kubernetes.io/name: codex-api-proxy
@@ -367,6 +383,9 @@ spec:
     - name: https
       port: 443
       targetPort: 8443
+    - name: metrics
+      port: 9100
+      targetPort: metrics
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -541,9 +560,13 @@ spec:
           ports:
             - name: grpc
               containerPort: 9000
+            - name: metrics
+              containerPort: 9100
           env:
             - name: PROXY_PROVIDER
               value: codex
+            - name: METRICS_PORT
+              value: "9100"
             - name: CODEX_CREDENTIALS_FILE
               value: /etc/codex-credentials/{{ .Values.externalSecret.codexCredentials.secretKey }}
             - name: AZURE_KEYVAULT_URL

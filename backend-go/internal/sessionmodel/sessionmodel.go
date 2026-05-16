@@ -33,6 +33,15 @@ const (
 	SessionServiceAccount = "claude-session"
 	SessionConfigMap      = "tank-session-config"
 	SandboxAgentPort      = 2468
+	// Per-container metrics ports inside session pods. The
+	// k8s/templates/podmonitor-sessions.yaml PodMonitor scrapes each by
+	// the named container port (mcp-auth-proxy: "metrics", runners:
+	// "runner-metrics"). Numbers are documented in docs/observability.md;
+	// changing them requires bumping both the values here and the
+	// PodMonitor port-name references.
+	MCPAuthProxyMetricsPort = 9990
+	AgentRunnerMetricsPort  = 9095
+	CodexRunnerMetricsPort  = 9096
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -355,6 +364,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"env": []any{
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 				map[string]any{"name": "TANK_SESSION_ATTESTATION_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
+				map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+			},
+			// The metrics port is exposed as a named container port so the
+			// k8s/templates/podmonitor-sessions.yaml PodMonitor can scrape
+			// it by name without hard-coding numbers. Listens on 0.0.0.0;
+			// the proxy's MCP listeners stay on 127.0.0.1.
+			"ports": []any{
+				map[string]any{"name": "metrics", "containerPort": MCPAuthProxyMetricsPort},
 			},
 			"volumeMounts": mcpProxyVolumeMounts,
 		},
@@ -426,6 +443,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			})
 		}
 
+		runnerEnv = append(runnerEnv, map[string]any{
+			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AgentRunnerMetricsPort),
+		})
 		runnerContainer := map[string]any{
 			"name":            "agent-runner",
 			"image":           sessionImage,
@@ -433,6 +453,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"command":         []any{"bash", "/opt/tank/agent-runner-launch.sh"},
 			"env":             runnerEnv,
 			"volumeMounts":    runnerVolumeMounts,
+			"ports": []any{
+				map[string]any{"name": "runner-metrics", "containerPort": AgentRunnerMetricsPort},
+			},
 		}
 		if len(envFrom) > 0 {
 			runnerContainer["envFrom"] = envFrom
@@ -502,6 +525,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "CODEX_CA_CERTIFICATE", "value": "/etc/oauth-gateway-ca/ca.crt"},
 			)
 		}
+		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
+			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(CodexRunnerMetricsPort),
+		})
 		codexRunnerContainer := map[string]any{
 			"name":            "codex-runner",
 			"image":           sessionImage,
@@ -509,6 +535,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"command":         []any{"bash", "/opt/tank/codex-runner-launch.sh"},
 			"env":             codexRunnerEnv,
 			"volumeMounts":    runnerVolumeMounts,
+			"ports": []any{
+				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
+			},
 		}
 		if len(envFrom) > 0 {
 			codexRunnerContainer["envFrom"] = envFrom

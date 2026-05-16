@@ -147,7 +147,7 @@ func main() {
 	mgr.StartReaper(ctx)
 	if sessionBus != nil {
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, expvarPersisterMetrics{}); err != nil {
+			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, promPersisterMetrics{}); err != nil {
 				slog.Error("session bus event persister stopped", "error", err)
 			}
 		}()
@@ -179,10 +179,14 @@ func main() {
 	}
 	srv.registerRoutes(mux)
 
-	// 14. Listen and serve.
+	// 14. Listen and serve. Every request flows through
+	// httpInstrumentationMiddleware so 5xx errors carry method, route,
+	// email, and the underlying detail field to slog — the missing
+	// context that made "/api/sessions/activity returned 500"
+	// undebuggable from logs.
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           httpInstrumentationMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("starting tank-operator go server", "addr", addr)
@@ -244,10 +248,11 @@ func buildPostgresPool(azCred *azidentity.DefaultAzureCredential) *pgxpool.Pool 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pool, err := pgstore.NewPool(ctx, pgstore.Config{
-		Host:       host,
-		Database:   database,
-		Username:   username,
-		Credential: azCred,
+		Host:         host,
+		Database:     database,
+		Username:     username,
+		Credential:   azCred,
+		QueryMetrics: promPGMetrics{},
 	})
 	if err != nil {
 		slog.Error("postgres pool init failed", "error", err)
@@ -299,12 +304,13 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	bus, err := sessionbus.Connect(ctx, sessionbus.Config{
-		URL:         url,
-		Token:       os.Getenv("NATS_TOKEN"),
-		Stream:      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-		Scope:       scope,
-		Replicas:    replicas,
-		WakeMetrics: expvarWakeMetrics{},
+		URL:               url,
+		Token:             os.Getenv("NATS_TOKEN"),
+		Stream:            envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+		Scope:             scope,
+		Replicas:          replicas,
+		WakeMetrics:       promWakeMetrics{},
+		ConnectionMetrics: promNATSConnectionMetrics{},
 	})
 	if err != nil {
 		slog.Error("session bus unavailable", "error", err)

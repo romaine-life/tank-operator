@@ -93,6 +93,14 @@ from envoy.service.ext_proc.v3 import external_processor_pb2_grpc as ext_proc_gr
 from envoy.config.core.v3 import base_pb2
 from envoy.type.v3 import http_status_pb2
 
+from .metrics import (
+    record_ext_proc_request,
+    record_kv_persist,
+    record_refresh,
+    record_single_flight_wait,
+    record_upstream_status,
+)
+
 log = logging.getLogger(__name__)
 
 # Hardcoded into Claude Code's bundled JS. Two distinct client_ids ship in
@@ -309,6 +317,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # If we overwrite that Authorization with our OAuth Bearer the
         # /worker endpoint 401s — Anthropic rejects the OAuth token there.
         if inbound != PLACEHOLDER_BEARER:
+            record_ext_proc_request("passthrough")
             return (
                 ext_proc_pb2.ProcessingResponse(
                     request_headers=ext_proc_pb2.HeadersResponse()
@@ -316,6 +325,10 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 False,
             )
         token = await self._get_access_token()
+        if token == "missing":
+            record_ext_proc_request("missing_token")
+        else:
+            record_ext_proc_request("injected")
         set_headers = [
             base_pb2.HeaderValueOption(
                 header=base_pb2.HeaderValue(
@@ -367,6 +380,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # if /worker endpoints loop on 401.
         if was_injected:
             status = _peek_status(msg)
+            record_upstream_status(status)
             if status == 401:
                 self._access_invalidated = True
                 # Single-flight: only schedule a refresh if one isn't
@@ -388,6 +402,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # and the upstream re-401'd, scheduling yet another refresh.
         task = self._refresh_task
         if task is not None and not task.done():
+            record_single_flight_wait()
             try:
                 await task
             except Exception:
@@ -529,8 +544,10 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             self._reload_from_file()
             if self._cached_refresh is None:
                 log.error("no refresh token available; cannot rotate")
+                record_refresh("no_refresh_token")
                 return
             log.info("calling %s to rotate %s token", self._config.token_url, self._config.provider)
+            refresh_start = time.monotonic()
             try:
                 async with httpx.AsyncClient(timeout=30.0) as http:
                     resp = await http.post(
@@ -544,9 +561,11 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                     )
             except Exception:
                 log.exception("refresh request crashed; keeping existing tokens")
+                record_refresh("request_failed", time.monotonic() - refresh_start)
                 return
             if resp.status_code != 200:
                 log.error("refresh failed: status=%s body=%s", resp.status_code, resp.text[:500])
+                record_refresh("http_error", time.monotonic() - refresh_start)
                 return
             data = resp.json()
             new_access = data["access_token"]
@@ -575,6 +594,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 new_access[:12],
                 expires_in,
             )
+            record_refresh("success", time.monotonic() - refresh_start)
             await self._persist_to_kv(expires_in)
 
     async def _persist_to_kv(self, expires_in: int) -> None:
@@ -591,6 +611,7 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         just log and move on.
         """
         if not self._kv_url or self._cached_blob is None:
+            record_kv_persist("skipped")
             return
         try:
             cred = DefaultAzureCredential()
@@ -603,10 +624,12 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                     self._config.kv_secret_name,
                     expires_in,
                 )
+                record_kv_persist("success")
             finally:
                 await cred.close()
         except Exception:
             log.exception("KV write failed; tokens stay in memory only")
+            record_kv_persist("failure")
 
 
 def _peek_header(msg: ext_proc_pb2.HttpHeaders, name: str) -> str | None:

@@ -37,11 +37,17 @@ const MaxConnLifetime = 50 * time.Minute
 // Config describes how to reach the Postgres Flexible Server. Username is the
 // AAD principal name as it appears in the server's `pg_authid` (for a UAMI,
 // this is the UAMI's display name, e.g. `claude-credentials-refresher-identity`).
+//
+// QueryMetrics is optional; when non-nil every query the pool runs is
+// observed by the tracer (operation + outcome + duration). Production
+// always supplies a Prometheus-backed implementation through
+// cmd/tank-operator/observability.go. Tests can pass nil to opt out.
 type Config struct {
-	Host       string
-	Database   string
-	Username   string
-	Credential azcore.TokenCredential
+	Host         string
+	Database     string
+	Username     string
+	Credential   azcore.TokenCredential
+	QueryMetrics SQLMetrics
 }
 
 // NewPool builds a pgxpool.Pool wired with AAD authentication. The pool
@@ -74,6 +80,9 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	poolConfig.MaxConnLifetime = MaxConnLifetime
 	poolConfig.MaxConns = 10
 	poolConfig.MinConns = 1
+	if cfg.QueryMetrics != nil {
+		poolConfig.ConnConfig.Tracer = NewQueryTracer(cfg.QueryMetrics)
+	}
 
 	credential := cfg.Credential
 	poolConfig.BeforeConnect = func(ctx context.Context, c *pgx.ConnConfig) error {

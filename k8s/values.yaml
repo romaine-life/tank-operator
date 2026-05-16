@@ -251,3 +251,20 @@ externalSecret:
 jwt:
   kvVault: https://romaine-kv.vault.azure.net/
   kvKeyName: tank-operator-jwt-signing
+
+# Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
+# dashboards) ship only when the kube-prometheus-stack operator CRDs are
+# present. Disabled environments render the chart without these resources so
+# `helm template` doesn't fail on a fresh cluster.
+#
+# docs/observability.md is the contract for everything below.
+observability:
+  enabled: true
+  scrapeInterval: 30s
+  # Grafana dashboard ConfigMaps are picked up by the kube-prometheus-stack
+  # Grafana sidecar via the `grafana_dashboard: "1"` label selector.
+  dashboards:
+    enabled: true
+    labelKey: grafana_dashboard
+    labelValue: "1"
+    namespace: monitoring

@@ -48,6 +48,14 @@ import {
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
+import {
+  commandsConsumedTotal,
+  natsPublishFailureTotal,
+  pendingWakeupsGauge,
+  providerErrorTotal,
+  recordTurnStart,
+  recordTurnTerminal,
+} from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 
 // Pull a single dispatch out as a free function so the session-bus publish
@@ -73,6 +81,7 @@ export async function dispatch(
     await sink.upsert(stamped);
   } catch (err) {
     console.error("session bus publish failed:", err);
+    natsPublishFailureTotal.inc();
     return false;
   }
   return true;
@@ -207,6 +216,7 @@ export class Runner {
       }
     } catch (err) {
       console.error("SDK query exited with error:", err);
+      providerErrorTotal.labels("query").inc();
       await this.failActiveCommandTurn(err);
     } finally {
       signal.removeEventListener("abort", onAbort);
@@ -278,16 +288,20 @@ export class Runner {
   }
 
   private async acceptCommandTurn(record: SessionCommandRecord): Promise<void> {
+    commandsConsumedTotal.labels("submit_turn", "accepted").inc();
     const clientNonce = commandClientNonce(record);
     const prompt = String(record.prompt ?? "").trim();
     if (!prompt) {
+      commandsConsumedTotal.labels("submit_turn", "invalid").inc();
       await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
       return;
     }
     if (await this.finalizeCommandIfAlreadyTerminal(record, clientNonce)) {
+      commandsConsumedTotal.labels("submit_turn", "already_terminal").inc();
       return;
     }
     if (this.commandBus.attemptsExceeded(record)) {
+      commandsConsumedTotal.labels("submit_turn", "attempts_exceeded").inc();
       await this.failCommandRecord(
         record,
         new Error(`session command exceeded ${record.attempt_count ?? "unknown"} claim attempts`),
@@ -296,6 +310,7 @@ export class Runner {
     }
     const pendingTurn = this.acceptTurn(prompt, clientNonce, record);
     if (!pendingTurn) {
+      commandsConsumedTotal.labels("submit_turn", "invalid").inc();
       await this.commandBus.markFailed(record, new Error("session command was not accepted"));
       return;
     }
@@ -310,12 +325,18 @@ export class Runner {
   }
 
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
+    commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
     const outcome = await this.interruptActiveTurn(
       "client_interrupt",
       record.target_turn_id || record.client_nonce,
     );
     if (outcome === "interrupted") {
-      this.sdkQuery?.interrupt();
+      try {
+        this.sdkQuery?.interrupt();
+      } catch (err) {
+        providerErrorTotal.labels("interrupt").inc();
+        throw err;
+      }
       await this.commandBus.markCompleted(record);
       return;
     }
@@ -327,21 +348,26 @@ export class Runner {
   }
 
   private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
+    commandsConsumedTotal.labels("input_reply", "accepted").inc();
     const targetProviderItemID = inputReplyTargetProviderItemID(record);
     const text = inputReplyText(record);
     if (!targetProviderItemID || !text) {
+      commandsConsumedTotal.labels("input_reply", "invalid").inc();
       await this.commandBus.markFailed(record, new Error("input reply missing target or text"));
       return;
     }
     if (!this.activeTurn || !this.turnMatchesTarget(this.activeTurn, record.target_turn_id || record.client_nonce)) {
+      commandsConsumedTotal.labels("input_reply", "no_active_turn").inc();
       await this.commandBus.markFailed(record, new Error("input reply target turn is not active"));
       return;
     }
     if (!this.needsInputProviderItemIDs.has(targetProviderItemID)) {
+      commandsConsumedTotal.labels("input_reply", "not_waiting_for_input").inc();
       await this.commandBus.markFailed(record, new Error("input reply target is not waiting for input"));
       return;
     }
     if (this.pendingInputReplies.has(targetProviderItemID)) {
+      commandsConsumedTotal.labels("input_reply", "duplicate").inc();
       await this.commandBus.markFailed(record, new Error("input reply already pending for target"));
       return;
     }
@@ -385,6 +411,7 @@ export class Runner {
       this.activeTurn = this.pendingTurns.shift() ?? null;
       if (this.activeTurn && !this.activeTurn.started) {
         this.activeTurn.started = true;
+        recordTurnStart(this.activeTurn.turnID);
         await dispatch(
           this.sink,
           turnEvent({
@@ -440,6 +467,8 @@ export class Runner {
     turn: PendingTurn,
     type: "turn.completed" | "turn.failed" | "turn.interrupted",
   ): Promise<void> {
+    const outcome = type === "turn.completed" ? "completed" : type === "turn.failed" ? "failed" : "interrupted";
+    recordTurnTerminal(turn.turnID, outcome);
     await this.failPendingInputRepliesForTurn(turn, new Error(type));
     if (!turn.commandRecord) return;
     const record = turn.commandRecord;
@@ -509,7 +538,9 @@ export class Runner {
 
   private scheduleWakeup(req: WakeupRequest): void {
     const delayMs = Math.max(0, req.delayMs);
+    pendingWakeupsGauge.inc();
     setTimeout(() => {
+      pendingWakeupsGauge.dec();
       void this.commandBus
         .enqueueWakeupSubmitTurn({
           prompt: req.prompt,
