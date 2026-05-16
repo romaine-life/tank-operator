@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run from inside the tank-operator repo on the jp1-avatars branch.
-# Downloads the 14 JP1 avatar source images into
+# Downloads the 13 JP1 avatar source images into
 # frontend/public/assets/avatars/jp1-<slug>.png.
 #
 # Sources: Jurassic Park Fandom wiki (static.wikia.nocookie.net). These
@@ -49,7 +49,6 @@ declare -A URLS=(
   # in the corner of his mouth. Staged locally; no wiki file at this
   # exact framing/lighting.
   [jp1-arnold]="local:scripts/sources/jp1-arnold-source.png"
-  [jp1-gennaro]="https://static.wikia.nocookie.net/jurassicpark/images/9/9f/Donald_Gennaro_%28JP%29_Profile.png/revision/latest?cb=20210622174151"
 )
 
 for slug in "${!URLS[@]}"; do

@@ -4,7 +4,7 @@ export type AgentAvatar = {
   src: string;
 };
 
-// JP1 cast: 6 dinos + 8 humans. PNG files live in
+// JP1 cast: 6 dinos + 7 humans. PNG files live in
 // frontend/public/assets/avatars/ and are served at /assets/avatars/<file>.
 // See ATTRIBUTION.md in that directory for sourcing/licensing notes.
 //
@@ -29,7 +29,6 @@ export const AGENT_AVATARS: AgentAvatar[] = [
   { id: "jp1-nedry", name: "Dennis Nedry", src: "/assets/avatars/jp1-nedry.png" },
   { id: "jp1-muldoon", name: "Robert Muldoon", src: "/assets/avatars/jp1-muldoon.png" },
   { id: "jp1-arnold", name: "Ray Arnold", src: "/assets/avatars/jp1-arnold.png" },
-  { id: "jp1-gennaro", name: "Donald Gennaro", src: "/assets/avatars/jp1-gennaro.png" },
 ];
 
 function hashString(value: string): number {

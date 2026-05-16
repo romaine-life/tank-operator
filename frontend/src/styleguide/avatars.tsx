@@ -30,6 +30,22 @@ export function StyleguideAvatars() {
   const selectedAvatar =
     AGENT_AVATARS.find((a) => a.id === selectedAvatarId) ?? AGENT_AVATARS[0];
 
+  // Transient feedback on the "copy name" button. Bounces back to the
+  // resting label after a beat so a second click can be distinguished
+  // from the first; falls back to a manual-fail message when the
+  // Clipboard API rejects (insecure context, denied permission).
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  async function copySelectedName() {
+    if (!selectedAvatar) return;
+    try {
+      await navigator.clipboard.writeText(selectedAvatar.name);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+    setTimeout(() => setCopyState("idle"), 1500);
+  }
+
   return (
     <div style={styleguideShellStyle}>
       <div style={{ maxWidth: 880 }}>
@@ -51,13 +67,43 @@ export function StyleguideAvatars() {
 
         {selectedAvatar && (
           <section style={sectionStyle}>
-            <h2 style={headStyle}>pick a slug</h2>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                gap: 16,
+                flexWrap: "wrap",
+                margin: "0 0 12px",
+              }}
+            >
+              <h2 style={{ ...headStyle, margin: 0 }}>pick a slug</h2>
+              <button
+                type="button"
+                onClick={copySelectedName}
+                title={`Copy "${selectedAvatar.name}" to clipboard`}
+                data-design-component="AvatarCopyNameButton"
+                data-design-state={copyState}
+                className="btn-secondary"
+                style={{
+                  fontSize: "var(--text-xs)",
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                }}
+              >
+                {copyState === "copied"
+                  ? `copied "${selectedAvatar.name}"`
+                  : copyState === "failed"
+                    ? "copy failed (clipboard blocked)"
+                    : `copy "${selectedAvatar.name}"`}
+              </button>
+            </div>
             <div
               style={{
                 display: "grid",
                 gridTemplateColumns: "repeat(auto-fill, minmax(64px, 80px))",
                 gap: 10,
-                margin: "12px 0 24px",
+                margin: "0 0 24px",
               }}
               role="radiogroup"
               aria-label="avatar picker"
