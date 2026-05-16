@@ -57,8 +57,5 @@
       "installerIcon": "assets/app-icon.ico",
       "uninstallerIcon": "assets/app-icon.ico"
     }
-  },
-  "dependencies": {
-    "@azure/msal-node": "^5.1.5"
   }
 }

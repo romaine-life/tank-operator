@@ -14,7 +14,6 @@ testEnv:
   enabled: false
   recordBase: tank.dev.romaine.life
   sessionsGatewayIP: 172.179.163.96
-  authClientIdKvKey: tank-operator-test-oauth-client-id
   claudeCredentialsKvKey: claude-code-credentials
 
 staticOverride:
@@ -246,17 +245,16 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
-  # Auth secrets for the orchestrator's MSAL â†’ backend JWT flow. ENTRA_CLIENT_ID
-  # is the audience for verifying Entra ID tokens; ALLOWED_EMAILS
-  # (comma-separated) gates which signed-in users can use the app. The session
-  # JWT signing key lives in Key Vault as a Key (see jwt.kvVault/kvKeyName below)
-  # â€” orchestrator pods sign via the KV API per mint, so there is no JWT_SECRET
-  # to mirror into env.
+  # Auth secrets for the orchestrator. Microsoft sign-in is delegated to
+  # auth.romaine.life, which signs RS256 JWTs we verify against its JWKS;
+  # tank-operator carries no Entra client ID of its own. ALLOWED_EMAILS
+  # (comma-separated) gates which signed-in users can use the app. The
+  # session JWT signing key lives in Key Vault as a Key (see jwt.kvVault /
+  # kvKeyName below) â€” orchestrator pods sign via the KV API per mint, so
+  # there is no JWT_SECRET to mirror into env.
   auth:
     secretName: tank-operator-auth
     keys:
-      - envVar: ENTRA_CLIENT_ID
-        kvKey: tank-operator-oauth-client-id
       - envVar: ALLOWED_EMAILS
         kvKey: romaine-life-admin-emails
 # Session-JWT signing key in Key Vault. Private bytes never leave the vault;

@@ -14,12 +14,12 @@ import (
 )
 
 // userResponseBody is the canonical JSON shape returned for the SPA's
-// `user` object — used by /api/auth/microsoft/login (fresh sign-in)
-// and /api/auth/me (existing-JWT bootstrap). Both paths must agree:
-// the SPA reads whichever returns from the call it makes (login on
-// fresh, me on reload), and a missing field (e.g. installation_id)
-// reads as undefined → undefined == null in JS → the OnboardingWall
-// renders even for users with the GitHub App installed.
+// `user` object — used by /api/auth/exchange (fresh sign-in) and
+// /api/auth/me (existing-JWT bootstrap). Both paths must agree: the SPA
+// reads whichever returns from the call it makes (exchange on fresh, me
+// on reload), and a missing field (e.g. installation_id) reads as
+// undefined → undefined == null in JS → the OnboardingWall renders even
+// for users with the GitHub App installed.
 //
 // Keep this the single source of truth so the shape can't drift
 // between the two paths again.
@@ -35,23 +35,25 @@ func userResponseBody(sub, email, name string, profile profiles.Profile) map[str
 	}
 }
 
-// handleMicrosoftLogin exchanges an Entra ID token for a session JWT.
-func (s *appServer) handleMicrosoftLogin(w http.ResponseWriter, r *http.Request) {
-	// Frontend wire contract (inherited from Python): {"credential": "<token>"}.
-	// Kept `credential` rather than `id_token` to avoid a frontend change for
-	// what is a backend rewrite — see frontend/src/auth.ts.
+// handleAuthExchange exchanges an auth.romaine.life JWT for a
+// tank-operator session JWT. Microsoft sign-in happens upstream at
+// auth.romaine.life (Better Auth + Microsoft social provider); that
+// service issues an RS256 JWT, the SPA fetches it, then posts it here.
+// We verify the upstream signature against auth.romaine.life/api/auth/jwks
+// and mint our own tank-operator-signed session JWT so all downstream
+// verifier / minter / MCP-attestation plumbing stays on our KV signer.
+func (s *appServer) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		IDToken string `json:"credential"`
+		AuthJWT string `json:"auth_jwt"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.IDToken == "" {
-		writeError(w, http.StatusBadRequest, "missing credential")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AuthJWT == "" {
+		writeError(w, http.StatusBadRequest, "missing auth_jwt")
 		return
 	}
 
-	clientID := os.Getenv("ENTRA_CLIENT_ID")
 	allowedEmails := os.Getenv("ALLOWED_EMAILS")
 
-	email, name, sub, err := auth.ExchangeEntraToken(r.Context(), body.IDToken, clientID, allowedEmails)
+	email, name, sub, err := auth.ExchangeRomaineLifeToken(r.Context(), body.AuthJWT, allowedEmails)
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return

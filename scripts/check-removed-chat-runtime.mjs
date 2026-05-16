@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const ignoredDirs = new Set([
+  ".claude",
   ".git",
   ".terraform",
   ".vite",
@@ -174,6 +175,26 @@ const blocked = [
   // path. The runner-side helpers were renamed to drop the "Schedule"
   // word once ScheduleWakeup became a pod-local setTimeout (#457).
   { name: "removed Schedule/Wakeup helper names", pattern: /\benqueueWakeupCommand\b|\bbuildScheduleWakeupCommand\b/ },
+  // Microsoft sign-in was migrated off MSAL-in-each-app onto the shared
+  // auth.romaine.life service. Tank-operator now carries no Entra app
+  // registration, no MSAL client (browser or Electron), no per-app
+  // microsoft-login route, and no Microsoft JWKS verification code of
+  // its own. Block reintroduction of every name that participated in
+  // the old flow so a future refactor can't quietly rebuild a parallel
+  // path beside the auth.romaine.life delegation.
+  { name: "removed ENTRA_CLIENT_ID env var", pattern: /\bENTRA_CLIENT_ID\b/ },
+  { name: "removed entra_client_id config key", pattern: /\bentra_client_id\b/ },
+  { name: "removed entra_authority config key", pattern: /\bentra_authority\b/ },
+  { name: "removed tank-operator-oauth-client-id KV key", pattern: /\btank-operator-oauth-client-id\b|\btank-operator-test-oauth-client-id\b/ },
+  { name: "removed tank-operator-oauth Entra app reg name", pattern: /\btank-operator-oauth(?:-test)?\b/ },
+  { name: "removed MSAL browser/node deps", pattern: /@azure\/msal-(?:browser|node)\b/ },
+  { name: "removed ExchangeEntraToken function", pattern: /\bExchangeEntraToken\b/ },
+  { name: "removed Microsoft JWKS constants", pattern: /\bentraJWKSURL\b|\bissuerPattern\b/ },
+  { name: "removed /api/auth/microsoft/login route", pattern: /\/api\/auth\/microsoft\/login\b/ },
+  { name: "removed handleMicrosoftLogin handler", pattern: /\bhandleMicrosoftLogin\b/ },
+  { name: "removed desktop-auth IPC channel", pattern: /\bdesktop-auth:microsoft-login\b/ },
+  { name: "removed tankOperatorDesktop window bridge", pattern: /\btankOperatorDesktop\b/ },
+  { name: "removed tank-operator:// custom protocol", pattern: /\btank-operator:\/\/auth\b/ },
 ];
 
 const failures = [];

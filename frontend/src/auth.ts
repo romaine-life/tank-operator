@@ -1,8 +1,20 @@
-import { PublicClientApplication, type AuthenticationResult } from "@azure/msal-browser";
+// Microsoft sign-in happens upstream at auth.romaine.life. This SPA:
+//   1. On boot, checks for a stored tank-operator session JWT and validates
+//      it via /api/auth/me.
+//   2. If no valid session, tries to fetch an auth.romaine.life JWT from
+//      that service's /api/auth/token endpoint — the auth-service session
+//      cookie is on `.romaine.life` so it's auto-attached. If the user is
+//      already signed into auth.romaine.life from another app, this is the
+//      seamless path that lands them signed in here without any redirect.
+//      The JWT is then exchanged at /api/auth/exchange for a tank-operator-
+//      signed session JWT.
+//   3. If both fail, render the Sign-in button. Clicking it redirects to
+//      auth.romaine.life's Microsoft sign-in flow, which sets the
+//      .romaine.life session cookie and returns the user here. Step 2 then
+//      runs again on bootstrap and succeeds.
 
 interface AppConfig {
-  entra_client_id: string;
-  entra_authority: string;
+  auth_url: string;
 }
 
 interface SessionUser {
@@ -10,118 +22,52 @@ interface SessionUser {
   email: string;
   name: string;
   avatar_url: string;
-  // Profile fields surfaced from /api/auth/me. Null until the user
-  // completes the GitHub App install (#57 stage 2).
   github_login: string | null;
   installation_id: number | null;
-  // Phase E: SPA run-pane preferences, persisted on the Postgres profiles
-  // row so they ride across browsers. Null when the user has never
-  // saved prefs (e.g., first sign-in on a new account — the SPA falls
-  // back to localStorage, then to defaults).
   run_prefs: Record<string, unknown> | null;
 }
 
-const SCOPES = ["User.Read", "openid", "profile", "email"];
 const TOKEN_KEY = "tank-operator-jwt";
 
-let msal: PublicClientApplication | null = null;
-
-declare global {
-  interface Window {
-    tankOperatorDesktop?: {
-      microsoftLogin: () => Promise<{ idToken: string }>;
-    };
-  }
-}
+let cachedConfig: AppConfig | null = null;
 
 async function fetchConfig(): Promise<AppConfig> {
+  if (cachedConfig) return cachedConfig;
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`config fetch failed: ${res.status}`);
-  return res.json();
+  cachedConfig = (await res.json()) as AppConfig;
+  return cachedConfig;
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  const part = token.split(".")[1];
-  if (!part) return null;
+async function fetchUpstreamJWT(authURL: string): Promise<string | null> {
   try {
-    const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    return JSON.parse(atob(padded)) as Record<string, unknown>;
+    const res = await fetch(`${authURL}/api/auth/token`, { credentials: "include" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { token?: string };
+    return data.token ?? null;
   } catch {
     return null;
   }
 }
 
-function emailFromIdToken(idToken: string): string | null {
-  const payload = decodeJwtPayload(idToken);
-  const email = payload?.email ?? payload?.preferred_username;
-  return typeof email === "string" && email ? email.toLowerCase() : null;
-}
-
-async function loginErrorMessage(res: Response, attemptedEmail: string | null): Promise<string> {
-  const fallback = `Sign-in failed (${res.status}).`;
-  const text = await res.text();
-  if (!text) return fallback;
-  const notAllowed = attemptedEmail
-    ? `This Microsoft account is not allowed for Tank Operator: ${attemptedEmail}`
-    : "This Microsoft account is not allowed for Tank Operator.";
-  try {
-    const body = JSON.parse(text) as {
-      detail?: string | { code?: string; email?: string; message?: string };
-    };
-    const detail = body.detail;
-    if (typeof detail === "string") {
-      if (detail === "email not allowed") {
-        return notAllowed;
-      }
-      return detail;
-    }
-    if (detail?.code === "email_not_allowed") {
-      return detail.email
-        ? `This Microsoft account is not allowed for Tank Operator: ${detail.email}`
-        : "This Microsoft account is not allowed for Tank Operator.";
-    }
-    if (detail?.message) return detail.message;
-  } catch {
-    // Fall through to the compact status message below.
-  }
-  return fallback;
-}
-
-async function getMsal(): Promise<PublicClientApplication> {
-  if (msal) return msal;
-  const config = await fetchConfig();
-  if (!config.entra_client_id) throw new Error("backend has no ENTRA_CLIENT_ID");
-  msal = new PublicClientApplication({
-    auth: {
-      clientId: config.entra_client_id,
-      authority: config.entra_authority,
-      redirectUri: `${window.location.origin}/`,
-    },
-    cache: { cacheLocation: "sessionStorage" },
-  });
-  await msal.initialize();
-  return msal;
-}
-
-async function exchange(idToken: string): Promise<SessionUser> {
-  const res = await fetch("/api/auth/microsoft/login", {
+async function exchange(upstreamJWT: string): Promise<SessionUser> {
+  const res = await fetch("/api/auth/exchange", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ credential: idToken }),
+    body: JSON.stringify({ auth_jwt: upstreamJWT }),
   });
-  if (!res.ok) throw new Error(await loginErrorMessage(res, emailFromIdToken(idToken)));
-  const body = await res.json();
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Sign-in exchange failed (${res.status}): ${text}`);
+  }
+  const body = (await res.json()) as { token: string; user: SessionUser };
   storeToken(body.token);
   return body.user;
 }
 
-// Auth must win over cache. A bloated localStorage (transcript caches,
-// stale debris, other apps sharing the origin) shouldn't be able to
-// break sign-in — the failure mode is a dead-end auth error with no
-// in-app recovery. On a QuotaExceededError we drop every other key
-// and retry. Lost prefs are server-synced and recoverable; a broken
-// auth write is not.
+// Same eviction-on-quota dance as before: a bloated localStorage shouldn't
+// be allowed to break sign-in. Lost prefs are server-synced and recoverable;
+// a broken auth write is a dead-end.
 function storeToken(token: string): void {
   try {
     localStorage.setItem(TOKEN_KEY, token);
@@ -138,14 +84,11 @@ function storeToken(token: string): void {
       // best-effort
     }
   }
-  // Single retry; if this still fails the surrounding caller surfaces it.
   localStorage.setItem(TOKEN_KEY, token);
 }
 
 function isQuotaExceeded(err: unknown): boolean {
   if (!(err instanceof DOMException)) return false;
-  // Browsers spell the error name differently; Safari uses an older name.
-  // was QUOTA_EXCEEDED_ERR, modern browsers throw QuotaExceededError.
   return err.name === "QuotaExceededError" || err.name === "QUOTA_EXCEEDED_ERR";
 }
 
@@ -157,55 +100,48 @@ export function clearStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-/** Run once on app boot. Resolves to the signed-in user, or null if not signed in.
- *  Does NOT trigger a login redirect on its own — the SPA shows a Sign-in button
- *  for that. Auto-redirecting on boot would silently re-SSO users who just clicked
- *  sign out (their Microsoft account session outlives our local logout). */
+/**
+ * Boot-time auth check. Resolves to the signed-in user, or null. Does NOT
+ * trigger a redirect on its own — the SPA shows a Sign-in button for that.
+ * Auto-redirecting on boot would silently re-SSO users who just signed out.
+ */
 export async function bootstrapAuth(): Promise<SessionUser | null> {
-  // 1. Do we already have a backend session?
+  // 1. Existing tank-operator session?
   const existing = getStoredToken();
   if (existing) {
     const res = await fetch("/api/auth/me", {
       headers: { Authorization: `Bearer ${existing}` },
     });
-    if (res.ok) return res.json();
+    if (res.ok) return (await res.json()) as SessionUser;
     clearStoredToken();
   }
 
-  // 2. Did we just come back from Entra? If config is unavailable in a
-  // frontend-only dev server, still let the unauthenticated preview render.
-  let client: PublicClientApplication;
+  // 2. Try to silently exchange an auth.romaine.life session cookie.
+  let config: AppConfig;
   try {
-    client = await getMsal();
+    config = await fetchConfig();
   } catch (e) {
     console.info("auth config unavailable; rendering unauthenticated preview", e);
     return null;
   }
-
-  let redirectResult: AuthenticationResult | null = null;
-  try {
-    redirectResult = await client.handleRedirectPromise();
-  } catch (e) {
-    console.error("MSAL handleRedirectPromise failed", e);
-  }
-  if (redirectResult?.idToken) {
-    return exchange(redirectResult.idToken);
+  const upstreamJWT = await fetchUpstreamJWT(config.auth_url);
+  if (upstreamJWT) {
+    try {
+      return await exchange(upstreamJWT);
+    } catch (e) {
+      console.warn("silent exchange failed; user must click Sign-in", e);
+    }
   }
 
-  // 3. Not signed in. Wait for an explicit click to call startLogin().
+  // 3. Not signed in. Wait for startLogin().
   return null;
 }
 
-/** User-initiated sign-in. Navigates away to Entra. */
+/** User-initiated sign-in: redirect to auth.romaine.life's Microsoft flow. */
 export async function startLogin(): Promise<void> {
-  if (window.tankOperatorDesktop) {
-    const result = await window.tankOperatorDesktop.microsoftLogin();
-    await exchange(result.idToken);
-    window.location.assign("/");
-    return;
-  }
-  const client = await getMsal();
-  await client.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
+  const config = await fetchConfig();
+  const callbackURL = encodeURIComponent(window.location.origin + window.location.pathname);
+  window.location.href = `${config.auth_url}/api/auth/sign-in/social/microsoft?callbackURL=${callbackURL}`;
 }
 
 export async function logout(): Promise<void> {
@@ -215,11 +151,17 @@ export async function logout(): Promise<void> {
   } catch {
     // best-effort
   }
-  // Local-only sign-out: drop MSAL's cached account so the next bootstrap
-  // re-prompts, but don't hit Entra's end_session endpoint — that signs the
-  // user out of their Microsoft account globally across every app.
-  const client = await getMsal();
-  await client.clearCache();
+  // Also clear the auth.romaine.life session cookie so the next page load
+  // doesn't silently re-SSO via fetchUpstreamJWT.
+  try {
+    const config = await fetchConfig();
+    await fetch(`${config.auth_url}/api/auth/sign-out`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    // best-effort
+  }
   window.location.assign("/");
 }
 

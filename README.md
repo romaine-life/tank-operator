@@ -81,9 +81,10 @@ cd backend-go && go build ./... && go test ./...
 # Frontend
 cd frontend && npm install && npm run dev
 # Vite dev server proxies /api → http://localhost:8000.
-# Sign in via MSAL: the dev server uses the same Entra app registration as prod
-# (redirect URI registered for https://tank.romaine.life/), so you'll need to
-# either tunnel localhost behind that hostname or add a dev redirect URI.
+# Sign-in is delegated to auth.romaine.life; clicking Sign-in redirects you
+# there, you complete Microsoft sign-in, and bounce back. For local dev the
+# session cookie on .romaine.life makes the silent-exchange path "just work"
+# if you're already signed into another romaine.life app in the same browser.
 ```
 
 ## Desktop app mode
@@ -118,7 +119,7 @@ generic browser shortcut.
 Validation checklist before considering Electron:
 
 - Tank opens in its own app-like window without regular browser tabs.
-- Microsoft sign-in and the GitHub onboarding wall still work.
+- Sign-in via auth.romaine.life and the GitHub onboarding wall still work.
 - Session list, create, rename, refresh, and delete flows still work.
 - Terminal WebSocket attach works across active session switches.
 - Clipboard and image paste behave well enough for terminal use.
@@ -178,10 +179,13 @@ Project metadata for Glimmung:
 }
 ```
 
-Auth: the SPA uses MSAL.js to obtain an Entra ID token, POSTs it to
-`/api/auth/microsoft/login`, and the orchestrator mints an RS256 session
-JWT signed by a Key Vault Key (private bytes never leave KV; see
+Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
+an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is
+present, otherwise via a top-level redirect through Microsoft) and POSTs it
+to `/api/auth/exchange`. The orchestrator verifies the RS256 signature
+against auth.romaine.life/api/auth/jwks and mints its own session JWT
+signed by a Key Vault Key (private bytes never leave KV; see
 [backend-go/internal/auth/](backend-go/internal/auth/) and
-[infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped by
-SHA-256 of the signed-in user's email. Allowlist is the comma-separated
+[infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped
+by SHA-256 of the signed-in user's email. Allowlist is the comma-separated
 `ALLOWED_EMAILS` env var, sourced from KV via ExternalSecret.

@@ -48,7 +48,7 @@ func (r *fakeSessionReader) Get(_ context.Context, owner, sessionID string) (ses
 }
 
 func TestConfig(t *testing.T) {
-	t.Setenv("ENTRA_CLIENT_ID", "client-1")
+	t.Setenv("AUTH_URL", "https://auth.test.example")
 	response := httptest.NewRecorder()
 
 	config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
@@ -60,11 +60,23 @@ func TestConfig(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["entra_client_id"] != "client-1" || body["entra_authority"] != "https://login.microsoftonline.com/common" {
+	if body["auth_url"] != "https://auth.test.example" {
 		t.Fatalf("body = %#v", body)
 	}
 	if body["fork_session_prompt_template"] == "" {
 		t.Fatalf("missing fork_session_prompt_template: %#v", body)
+	}
+}
+
+func TestConfigDefaultsAuthURL(t *testing.T) {
+	// AUTH_URL not set — default to auth.romaine.life.
+	t.Setenv("AUTH_URL", "")
+	response := httptest.NewRecorder()
+	config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	var body map[string]string
+	_ = json.Unmarshal(response.Body.Bytes(), &body)
+	if body["auth_url"] != "https://auth.romaine.life" {
+		t.Fatalf("auth_url default = %q", body["auth_url"])
 	}
 }
 
@@ -222,7 +234,7 @@ func TestMeRejectsUnauthenticated(t *testing.T) {
 	}
 }
 
-// Pins the canonical user-response shape that both /api/auth/microsoft/login
+// Pins the canonical user-response shape that both /api/auth/exchange
 // (fresh sign-in) and /api/auth/me (existing-JWT bootstrap) build via
 // userResponseBody. A missing field reads as undefined in the SPA and —
 // because `undefined == null` in JS — flips installation_id-driven UI like
