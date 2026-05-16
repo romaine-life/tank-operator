@@ -50,7 +50,9 @@ func (s *postgresConversationReadStateStore) Get(ctx context.Context, email, ses
 		return nil, nil
 	}
 	const q = `
-		SELECT last_read_order_key, updated_at
+		SELECT
+			last_read_order_key,
+			COALESCE(to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at
 		FROM conversation_read_state
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
@@ -102,7 +104,9 @@ func (s *postgresConversationReadStateStore) Set(ctx context.Context, email, ses
 				THEN now()
 				ELSE conversation_read_state.updated_at
 			END
-		RETURNING last_read_order_key, updated_at
+		RETURNING
+			last_read_order_key,
+			COALESCE(to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at
 	`
 	var (
 		storedKey   string
