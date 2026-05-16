@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Night-vision goggles</title>
+  <!-- Headstrap arc -->
+  <path d="M4 32 Q32 14, 60 32" stroke="#1a1d20" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M4 32 Q32 14, 60 32" stroke="#3a3f44" stroke-width="1" fill="none" stroke-linecap="round" opacity="0.7"/>
+  <!-- Body -->
+  <path d="M6 26 L58 26 Q60 26, 60 28 L60 44 Q60 48, 56 48 L8 48 Q4 48, 4 44 L4 28 Q4 26, 6 26 Z"
+        fill="#2c3034" stroke="#0c0c0c" stroke-width="0.9"/>
+  <!-- Top highlight -->
+  <rect x="6" y="27" width="52" height="2" fill="#4a5056" opacity="0.6"/>
+  <!-- Bridge cutout -->
+  <rect x="28" y="32" width="8" height="12" rx="1" fill="#16191c"/>
+  <!-- Adjustment knob -->
+  <circle cx="32" cy="50" r="3" fill="#1a1d20" stroke="#0c0c0c" stroke-width="0.5"/>
+  <line x1="29.5" y1="50" x2="34.5" y2="50" stroke="#3a3f44" stroke-width="0.6"/>
+  <!-- Side knobs -->
+  <circle cx="8" cy="42" r="1.8" fill="#16191c"/>
+  <circle cx="56" cy="42" r="1.8" fill="#16191c"/>
+  <!-- Left lens housing -->
+  <circle cx="18" cy="37" r="8.5" fill="#0e1012" stroke="#1a1d20" stroke-width="1"/>
+  <circle cx="18" cy="37" r="6.5" fill="#1d4d2a"/>
+  <circle cx="18" cy="37" r="4.8" fill="#5cf08a"/>
+  <circle cx="18" cy="37" r="2" fill="#1a3520"/>
+  <circle cx="16.5" cy="35.5" r="1.4" fill="#d6ffe1" opacity="0.85"/>
+  <!-- Right lens housing -->
+  <circle cx="46" cy="37" r="8.5" fill="#0e1012" stroke="#1a1d20" stroke-width="1"/>
+  <circle cx="46" cy="37" r="6.5" fill="#1d4d2a"/>
+  <circle cx="46" cy="37" r="4.8" fill="#5cf08a"/>
+  <circle cx="46" cy="37" r="2" fill="#1a3520"/>
+  <circle cx="44.5" cy="35.5" r="1.4" fill="#d6ffe1" opacity="0.85"/>
+</svg>

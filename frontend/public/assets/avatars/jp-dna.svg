@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>DNA double helix</title>
+  <!-- Glow -->
+  <circle cx="32" cy="32" r="22" fill="#f5c84b" opacity="0.08"/>
+  <!-- Rungs (drawn first so strands overlay them) -->
+  <line x1="22" y1="14" x2="42" y2="14" stroke="#a8731a" stroke-width="2" stroke-linecap="round"/>
+  <line x1="22" y1="30" x2="42" y2="30" stroke="#a8731a" stroke-width="2" stroke-linecap="round"/>
+  <line x1="22" y1="46" x2="42" y2="46" stroke="#a8731a" stroke-width="2" stroke-linecap="round"/>
+  <!-- Strand A (gold) -->
+  <path d="M32 6 Q22 10, 22 14 Q22 18, 32 22 Q42 26, 42 30 Q42 34, 32 38 Q22 42, 22 46 Q22 50, 32 54 Q42 58, 42 60"
+        stroke="#f5c84b" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <!-- Strand B (darker gold) -->
+  <path d="M32 6 Q42 10, 42 14 Q42 18, 32 22 Q22 26, 22 30 Q22 34, 32 38 Q42 42, 42 46 Q42 50, 32 54 Q22 58, 22 60"
+        stroke="#d49b27" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <!-- Crossover highlights -->
+  <circle cx="32" cy="6" r="2.4" fill="#fde9b6"/>
+  <circle cx="32" cy="22" r="2.4" fill="#fde9b6"/>
+  <circle cx="32" cy="38" r="2.4" fill="#fde9b6"/>
+  <circle cx="32" cy="54" r="2.4" fill="#fde9b6"/>
+</svg>

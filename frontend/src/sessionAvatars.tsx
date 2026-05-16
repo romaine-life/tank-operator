@@ -6,24 +6,34 @@ export type AgentAvatar = {
 
 export const AGENT_AVATARS: AgentAvatar[] = [
   {
-    id: "noto-sauropod",
-    name: "Sauropod",
-    src: "/assets/avatars/noto-sauropod.svg",
+    id: "jp-amber",
+    name: "Amber with mosquito",
+    src: "/assets/avatars/jp-amber.svg",
   },
   {
-    id: "noto-trex",
-    name: "T-Rex",
-    src: "/assets/avatars/noto-trex.svg",
+    id: "jp-barbasol",
+    name: "Barbasol can",
+    src: "/assets/avatars/jp-barbasol.svg",
   },
   {
-    id: "twemoji-sauropod",
-    name: "Green sauropod",
-    src: "/assets/avatars/twemoji-sauropod.svg",
+    id: "jp-jeep",
+    name: "Tour jeep",
+    src: "/assets/avatars/jp-jeep.svg",
   },
   {
-    id: "twemoji-trex",
-    name: "Green T-Rex",
-    src: "/assets/avatars/twemoji-trex.svg",
+    id: "jp-goggles",
+    name: "Night-vision goggles",
+    src: "/assets/avatars/jp-goggles.svg",
+  },
+  {
+    id: "jp-gate",
+    name: "Park gate",
+    src: "/assets/avatars/jp-gate.svg",
+  },
+  {
+    id: "jp-dna",
+    name: "DNA double helix",
+    src: "/assets/avatars/jp-dna.svg",
   },
 ];
 

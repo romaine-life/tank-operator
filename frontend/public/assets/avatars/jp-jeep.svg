@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>Tour jeep</title>
+  <!-- Shadow under jeep -->
+  <ellipse cx="32" cy="55" rx="26" ry="2" fill="#000" opacity="0.2"/>
+  <!-- Body -->
+  <path d="M6 32 L10 24 L20 18 L42 18 L48 24 L58 26 L58 44 L52 46 L52 42 Q52 38, 48 38 Q44 38, 44 42 L44 46 L20 46 L20 42 Q20 38, 16 38 Q12 38, 12 42 L12 46 L6 46 Z"
+        fill="#cf2526" stroke="#5c1010" stroke-width="0.9"/>
+  <!-- Windshield -->
+  <path d="M14 28 L22 21 L40 21 L44 28 Z" fill="#2e3338" stroke="#0e1012" stroke-width="0.6"/>
+  <!-- Cabin door line -->
+  <line x1="30" y1="28" x2="30" y2="42" stroke="#5c1010" stroke-width="0.7"/>
+  <!-- JP stripes (yellow / red / blue) -->
+  <rect x="6" y="34" width="46" height="2" fill="#e8c732"/>
+  <rect x="6" y="36" width="46" height="2" fill="#cf2526"/>
+  <rect x="6" y="38" width="46" height="2" fill="#1f3066"/>
+  <!-- JP shield on door -->
+  <circle cx="36" cy="29" r="3" fill="#e8c732" stroke="#5c1010" stroke-width="0.5"/>
+  <path d="M34 30 L35 28 L37 27 L38 30 L37 31 L35 31 Z" fill="#1d1408"/>
+  <!-- Headlight -->
+  <circle cx="56" cy="30" r="2" fill="#fff8b8" stroke="#5c1010" stroke-width="0.5"/>
+  <!-- Tires -->
+  <circle cx="16" cy="47" r="6" fill="#1a1a1a"/>
+  <circle cx="16" cy="47" r="2.6" fill="#4a4a4a"/>
+  <circle cx="16" cy="47" r="1" fill="#1a1a1a"/>
+  <circle cx="48" cy="47" r="6" fill="#1a1a1a"/>
+  <circle cx="48" cy="47" r="2.6" fill="#4a4a4a"/>
+  <circle cx="48" cy="47" r="1" fill="#1a1a1a"/>
+  <!-- Roll bar hint -->
+  <path d="M20 18 L20 14 L42 14 L42 18" stroke="#5c1010" stroke-width="1" fill="none"/>
+</svg>
