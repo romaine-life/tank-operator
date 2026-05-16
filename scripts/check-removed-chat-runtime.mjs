@@ -36,6 +36,11 @@ const ignoredRelativePaths = new Set([
   // retired symbols as grep targets. Excluded so this guard doesn't
   // fire on its sibling guard's expectations.
   "scripts/check-stop-request-migration.mjs",
+  // The protocol doc explains the migration by naming the retired
+  // symbols in prose ("the retired stopRequested / stoppingTargetRef
+  // UI-mirror"). This is documentation, not live code — the guard is
+  // there to block reintroduction in implementation files.
+  "docs/tank-conversation-protocol.md",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
   // The observability test asserts /debug/vars returns 404 (the negative
