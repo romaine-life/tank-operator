@@ -1,15 +1,5 @@
-variable "arm_subscription_id" {
-  description = "Azure subscription ID. Set via TF_VAR_arm_subscription_id from the workflow."
-  type        = string
-}
-
-variable "arm_tenant_id" {
-  description = "Entra tenant ID. Set via TF_VAR_arm_tenant_id from the workflow."
-  type        = string
-}
-
 variable "github_pat" {
-  description = "GitHub PAT for the github provider. Sourced from KV by the workflow and passed via TF_VAR_github_pat."
+  description = "GitHub PAT for the github provider. Fetched from KV by the tofu workflow's secrets job and passed via tofu_vars -var=github_pat=… into the shared plan/apply template."
   type        = string
   sensitive   = true
 }
@@ -25,4 +15,3 @@ variable "key_vault_resource_group" {
   type        = string
   default     = "infra"
 }
-

@@ -144,9 +144,13 @@ Microsoft sign-in is delegated to **auth.romaine.life** (Better Auth + Microsoft
 
 ## In-cluster MCP servers
 
-The HTTP MCP servers live in standalone repos; this repo keeps only the
-runtime identities under `infra/mcp.tf`. Each MCP repo owns its Python source,
-image build workflow, and Helm chart with the `kube-rbac-proxy` sidecar.
+The HTTP MCP servers live in standalone repos. Each MCP repo owns its Python
+source, image build workflow, and Helm chart with the `kube-rbac-proxy`
+sidecar. Runtime identities (UAMI + federated credential + role assignments +
+KV-published client ID) are migrating into their respective MCP repos —
+`nelsong6/mcp-azure-personal/infra/` is the first; `mcp-tank-operator` and
+`mcp-auth` still live in `infra/mcp.tf` here pending the same migration. The
+cross-MCP `mcp-tenant-id` KV secret stays here as a shared convenience.
 Inbound auth: claude-session SA token validated via TokenReview +
 SubjectAccessReview against the synthetic
 `mcp.tank-operator.io/servers/<name>` resource. Currently:
