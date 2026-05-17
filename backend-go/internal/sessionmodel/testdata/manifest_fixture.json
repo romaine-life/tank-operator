@@ -43,7 +43,8 @@
     "metadata": {
       "annotations": {
         "argocd.argoproj.io/tracking-id": "tank-operator-sessions:/Pod:tank-operator-sessions/session-12",
-        "tank-operator/owner-email": "nelson@romaine.life"
+        "tank-operator/owner-email": "nelson@romaine.life",
+        "tank-operator/session-id": "12"
       },
       "labels": {
         "app.kubernetes.io/instance": "tank-operator-sessions",
