@@ -183,7 +183,8 @@ Project metadata for Glimmung:
       "target": "/var/run/agent-runner-hot/dist",
       "restart": "SIGHUP",
       "container": "agent-runner",
-      "pod_selector": "tank-operator/session-id"
+      "pod_selector": "tank-operator/session-id",
+      "builder_image": "node:20-alpine"
     }
   }
 }
