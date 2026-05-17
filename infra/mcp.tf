@@ -80,32 +80,19 @@ module "mcp_auth" {
 # ============================================================================
 # Migration: mcp_azure_personal moved to nelsong6/mcp-azure-personal/infra/
 # ============================================================================
-# These `removed { lifecycle { destroy = false } }` blocks forget the moved
-# resources from this state on apply without destroying them in Azure. The
-# opt-out lands in OpenTofu 1.10; the tofu workflow now calls the shared
-# pipeline-templates workflow pinned to 1.12.0, so this works on CI.
+# Deleting the resources from config rather than using
+# `removed { destroy = false }` — the FIC subject on the existing Azure
+# resources is stale (built when `aks_namespace = "mcp-azure"`, never
+# updated after the chart-side namespace rename in
+# nelsong6/mcp-azure-personal#12), so workload identity is broken anyway.
+# A clean destroy-recreate via the companion mcp-azure-personal PR
+# lets the new state start fresh with the correct
+# `aks_namespace = "mcp-azure-personal"` and the correct FIC subject.
 #
-# Apply order with the companion mcp-azure-personal PR:
-#   1. Merge mcp-azure-personal#10 first. Its CI runs the documented
-#      `tofu import` commands in that repo (the role-assignment GUIDs and
-#      KV secret version aren't known until import time, so they aren't
-#      `import { ... }` blocks) and `tofu apply` adopts the existing Azure
-#      resources into the MCP repo's state.
-#   2. Merge this PR. CI runs `tofu apply` here; the `removed` blocks below
-#      forget the resources from this state, no Azure-side change.
-# Reversing the order would briefly leave the resources orphaned in both
-# states, which is harmless but worth avoiding.
-
-removed {
-  from = module.mcp_azure_personal
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = azurerm_cosmosdb_sql_role_assignment.mcp_azure_personal_infra_serverless_contributor
-  lifecycle {
-    destroy = false
-  }
-}
+# Apply order with the companion PR:
+#   1. Merge this PR. CI applies; tofu destroys the UAMI, FIC, role
+#      assignments, KV secret, and Cosmos data-plane role assignment in
+#      Azure. MCP server stops authenticating (already broken — no impact).
+#   2. Merge nelsong6/mcp-azure-personal#10. Its CI applies; tofu creates
+#      the same resources fresh with the correct namespace, restoring
+#      the MCP server.
