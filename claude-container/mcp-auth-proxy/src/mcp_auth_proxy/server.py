@@ -97,7 +97,7 @@ AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 #   9995 â€” mcp-glimmung
 #   9996 â€” mcp-tank-operator
 LISTENERS: list[tuple[int, str]] = [
-    (9991, "http://mcp-azure-personal.mcp-azure.svc:80"),
+    (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
     (9993, "http://mcp-k8s.mcp-k8s.svc:80"),
     (9994, "http://mcp-argocd.mcp-argocd.svc:80"),
@@ -308,7 +308,7 @@ async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
 
 def _mcp_server_label(upstream: str) -> str:
     """Extract a bounded label from the upstream URL. Example:
-    'http://mcp-azure-personal.mcp-azure.svc:80' → 'mcp-azure-personal'.
+    'http://mcp-azure-personal.mcp-azure-personal.svc:80' → 'mcp-azure-personal'.
     The fallback is the full host string, which is still bounded by the
     LISTENERS map but less Grafana-friendly. Cardinality is the count
     of distinct upstreams (~6), never per-request.
