@@ -128,6 +128,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
 	mux.HandleFunc("POST /api/internal/github/attestation", s.handleInternalGitHubAttestation)
+	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)

@@ -155,6 +155,58 @@ func (s *appServer) handleInternalGitHubAttestation(w http.ResponseWriter, r *ht
 	})
 }
 
+// handleInternalGitHubInstallation resolves the caller's actor_email to a
+// {installation_id, is_host, is_super_admin} triple by reading the user's
+// profile row. The canonical lookup mcp-github performs on every request
+// after it switches off the Tank-attestation surface — replaces the
+// per-request /github/attestation flow with a stateless lookup that returns
+// just the routing inputs, leaving JWT minting to auth.romaine.life.
+//
+// Returns {} when the email has no profile (treated as "no installation"
+// on the caller side — mcp-github will reject the request rather than
+// silently falling back to the host minter).
+//
+// Cf. nelsong6/glimmung sweep step D.
+func (s *appServer) handleInternalGitHubInstallation(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/github/installation")
+	if user == nil {
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(user.ActorEmail))
+	if email == "" {
+		writeError(w, http.StatusBadRequest, "service token missing actor_email")
+		return
+	}
+
+	if s.profiles == nil {
+		writeError(w, http.StatusInternalServerError, "profile store not configured")
+		return
+	}
+	profile, err := s.profiles.GetOrCreate(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "profile lookup failed: "+err.Error())
+		return
+	}
+
+	hostEmail := strings.ToLower(strings.TrimSpace(os.Getenv("HOST_EMAIL")))
+	superAdmins := parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostEmail))
+	isHost := hostEmail != "" && email == hostEmail
+	isSuperAdmin := superAdmins[email]
+
+	resp := map[string]any{
+		"email":          email,
+		"is_host":        isHost,
+		"is_super_admin": isSuperAdmin,
+	}
+	if profile.InstallationID != nil {
+		resp["installation_id"] = *profile.InstallationID
+	} else {
+		resp["installation_id"] = nil
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // handleInternalListSessions lists sessions for the caller's actor_email.
 func (s *appServer) handleInternalListSessions(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions")
