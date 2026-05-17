@@ -27,8 +27,9 @@ resource "azurerm_key_vault_secret" "mcp_tenant_id" {
 # Migrated out: this server's UAMI + role assignments + Cosmos data-plane
 # grant now live in nelsong6/mcp-azure-personal/infra/. The `removed` blocks
 # at the bottom of this file forget the resources from this state without
-# deleting them in Azure, after which the import on the MCP repo's side
-# adopts them. See that repo's infra/README.md for the runbook.
+# deleting them in Azure (lifecycle.destroy = false), after which the import
+# on the MCP repo's side adopts them. See that repo's infra/README.md for
+# the runbook.
 
 # ----------------------------------------------------------------------------
 # mcp-tank-operator: thin shim — session CRUD on behalf of caller pod IP
@@ -79,17 +80,32 @@ module "mcp_auth" {
 # ============================================================================
 # Migration: mcp_azure_personal moved to nelsong6/mcp-azure-personal/infra/
 # ============================================================================
-# State for the moved resources is removed manually with `tofu state rm`
-# rather than via `removed { lifecycle.destroy = false }` blocks: OpenTofu
-# 1.9 (this repo's pinned version) treats a bare `removed` block as
-# DESTROY-then-remove, and the `lifecycle.destroy = false` opt-out only
-# lands in 1.10. The MCP repo's apply imports the existing Azure resources
-# into its state first; this side then runs the documented state-rm
-# commands; nothing in Azure gets touched.
+# These `removed { lifecycle { destroy = false } }` blocks forget the moved
+# resources from this state on apply without destroying them in Azure. The
+# opt-out lands in OpenTofu 1.10; the tofu workflow now calls the shared
+# pipeline-templates workflow pinned to 1.12.0, so this works on CI.
 #
-# Runbook (run from infra/ after `tofu init`):
-#
-#   tofu state rm module.mcp_azure_personal
-#   tofu state rm azurerm_cosmosdb_sql_role_assignment.mcp_azure_personal_infra_serverless_contributor
-#
-# Then merge this PR and let CI apply; the plan should show no changes.
+# Apply order with the companion mcp-azure-personal PR:
+#   1. Merge mcp-azure-personal#10 first. Its CI runs the documented
+#      `tofu import` commands in that repo (the role-assignment GUIDs and
+#      KV secret version aren't known until import time, so they aren't
+#      `import { ... }` blocks) and `tofu apply` adopts the existing Azure
+#      resources into the MCP repo's state.
+#   2. Merge this PR. CI runs `tofu apply` here; the `removed` blocks below
+#      forget the resources from this state, no Azure-side change.
+# Reversing the order would briefly leave the resources orphaned in both
+# states, which is harmless but worth avoiding.
+
+removed {
+  from = module.mcp_azure_personal
+  lifecycle {
+    destroy = false
+  }
+}
+
+removed {
+  from = azurerm_cosmosdb_sql_role_assignment.mcp_azure_personal_infra_serverless_contributor
+  lifecycle {
+    destroy = false
+  }
+}
