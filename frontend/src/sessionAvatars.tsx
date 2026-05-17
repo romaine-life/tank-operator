@@ -4,7 +4,11 @@ export type AgentAvatar = {
   src: string;
 };
 
-// JP1 cast: 2 dinos + 7 humans. PNG files live in
+// JP1 cast: 1 dino + 7 humans (brachiosaurus was dropped — the
+// JP-Brachiosaur scene still didn't survive the 42px circle clip; the
+// dino body alone wasn't recognizable as a brachio, and the wider crop
+// that kept the iconic neck visible read as a bright sky tile instead of
+// an avatar token). PNG files live in
 // frontend/public/assets/avatars/ and are served at /assets/avatars/<file>.
 // See ATTRIBUTION.md in that directory for sourcing/licensing notes.
 //
@@ -20,7 +24,6 @@ export type AgentAvatar = {
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
   { id: "jp1-raptor", name: "Velociraptor", src: "/assets/avatars/jp1-raptor.png" },
-  { id: "jp1-brachiosaurus", name: "Brachiosaurus", src: "/assets/avatars/jp1-brachiosaurus.png" },
   // Humans
   { id: "jp1-grant", name: "Dr. Alan Grant", src: "/assets/avatars/jp1-grant.png" },
   { id: "jp1-sattler", name: "Dr. Ellie Sattler", src: "/assets/avatars/jp1-sattler.png" },

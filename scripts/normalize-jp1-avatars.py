@@ -33,9 +33,6 @@ HINTS: dict[str, tuple[float, float]] = {
     "jp1-arnold": (0.62, 0.42),
     # Nedry at his workstation (918×687): face slightly left of centre.
     "jp1-nedry": (0.46, 0.50),
-    # Brachiosaurus — see CROPS below. The default square crop kept too
-    # much sky and the avatar read as a bright filled tile at 42px on
-    # the sidebar; CROPS narrows it onto the body silhouette.
     # Muldoon close-up (1491×1305): face sits upper-left, lots of shirt
     # bottom-right. Bias toward the face so the square crop keeps it.
     "jp1-muldoon": (0.40, 0.35),
@@ -58,13 +55,6 @@ HINTS: dict[str, tuple[float, float]] = {
 # can't be reproduced from the already-normalized 256×256 PNGs. If the
 # fetch script is re-run, re-tune these against the new source dims.
 CROPS: dict[str, tuple[int, int, int, int]] = {
-    # Brachiosaurus — the JP-Brachiosaur still is a wide landscape with a
-    # small dino body in the lower-left and dominant bright sky. The
-    # default square crop kept enough sky to read as a bright tile at
-    # 42px. Tighten onto the body silhouette. (Numbers below are the
-    # equivalent crop applied to the *current* 256×256 normalized PNG —
-    # see also the manual recrop in the session-avatar-remove-ring PR.)
-    # "jp1-brachiosaurus": (left, top, right, bottom) in fetched source coords
     # Hammond — wide portrait dominated by a bright white shirt and a
     # sliver of bright sky. Tighten onto the face so the silhouette
     # reads as a token rather than a card.
