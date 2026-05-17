@@ -64,12 +64,9 @@ jobs:
       backend_container: tfstate
       backend_key: tank-operator.tfstate
       tofu_version: '1.12.0'
-      # infra/providers.tf reads var.arm_subscription_id /
-      # var.arm_tenant_id / var.github_pat. The shared template exports
-      # ARM_* env vars for OIDC auth but doesn't set TF_VAR_*, so pipe
-      # them through tofu_vars.
-      tofu_vars: >-
-        -var=arm_subscription_id=${{ vars.ARM_SUBSCRIPTION_ID }}
-        -var=arm_tenant_id=${{ vars.ARM_TENANT_ID }}
-        -var=github_pat=${{ needs.secrets.outputs.github_pat }}
+      # github_pat is the only tofu_var we plumb through — the github
+      # provider explicitly reads it. azurerm/azuread auto-detect
+      # subscription/tenant from the ARM_* env vars the shared template
+      # exports for OIDC.
+      tofu_vars: '-var=github_pat=${{ needs.secrets.outputs.github_pat }}'
     secrets: inherit
