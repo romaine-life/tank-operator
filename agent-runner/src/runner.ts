@@ -17,6 +17,7 @@
 
 import {
   query,
+  type EffortLevel,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
@@ -51,6 +52,8 @@ import {
 import {
   commandsConsumedTotal,
   natsPublishFailureTotal,
+  optionsOverrideIgnoredTotal,
+  optionsPinnedTotal,
   pendingWakeupsGauge,
   providerErrorTotal,
   recordTurnStart,
@@ -131,6 +134,22 @@ export function buildInputReplyMessage(providerItemID: string, text: string): SD
   } as unknown as SDKUserMessage;
 }
 
+// Defaults for the model + extended-thinking effort pinned into SDK
+// Options when the first submit_turn arrives. The frontend's run-pane
+// dropdown sends user-chosen values; these are the fallback for older
+// clients (or programmatic submissions) that omit them. The model and
+// effort enum live with the Anthropic SDK — the allowlist is enforced
+// upstream in backend-go's middleware.validateEffort, so this layer
+// trusts what lands on the wire and only applies a default when the
+// field is empty.
+//
+// Keep in lockstep with:
+//   - frontend/src/App.tsx CLAUDE_MODELS / CLAUDE_EFFORTS (UI surface)
+//   - backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts
+//     (server-side allowlist)
+const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_EFFORT: EffortLevel = "high";
+
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
 // pushed item exactly once. The SDK consumes this as the prompt source.
 class AsyncQueue<T> {
@@ -175,10 +194,31 @@ export class Runner {
   private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
+  // Model + effort are pinned at pod boot from the first submit_turn
+  // that arrives, with the DEFAULT_* fallbacks above for empty fields.
+  // Once set, both are sealed for the runner's lifetime — the SDK's
+  // Options object is consumed by query() at construction and cannot
+  // be re-keyed without tearing the iterator down. Subsequent commands
+  // whose model/effort differ are honored only for "what did the user
+  // pick" metrics (optionsOverrideIgnoredTotal) and otherwise ignored.
+  // The dropdown lock in the SPA reflects this contract so users don't
+  // expect a mid-session switch to take effect.
+  private pinnedModel: string | null = null;
+  private pinnedEffort: EffortLevel | null = null;
+  // sdkReady gates run()'s for-await loop on the first submit_turn
+  // arriving so we can pin model/effort from that command's payload
+  // before constructing query(). resolveSdkReady is called exactly once
+  // by ensureSdkQuery; second-and-onward submit_turns hit the no-op
+  // early-return.
+  private readonly sdkReady: Promise<void>;
+  private resolveSdkReady: () => void = () => {};
 
   constructor(private readonly cfg: Config) {
     this.sink = new SessionEventSink(cfg);
     this.commandBus = new SessionCommandBus(cfg, "claude");
+    this.sdkReady = new Promise<void>((resolve) => {
+      this.resolveSdkReady = resolve;
+    });
   }
 
   // Run forever (or until externally aborted). Drives the SDK against
@@ -194,30 +234,24 @@ export class Runner {
     const stopConsumer = this.startCommandConsumer(signal);
     const stopControl = this.startControlConsumer(signal);
     const onAbort = () => {
+      // Unblock sdkReady so the await below returns even if no turn ever
+      // arrived. The signal.aborted check after the wait short-circuits
+      // before query() is touched.
+      this.resolveSdkReady();
       this.userQueue.close();
       this.sdkQuery?.interrupt();
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    const options: Options = {
-      cwd: this.cfg.workspace,
-      // The api-proxy injects OAuth from KV when the placeholder bearer
-      // is seen — both the SDK and the raw CLI go through this path.
-      // Match the browser chat's permissive editing mode.
-      permissionMode: "bypassPermissions",
-      // Resume an on-disk JSONL if one exists from a prior process
-      // life (e.g., agent-runner restart within the same pod).
-      // First boot with no JSONL: no-op.
-      continue: true,
-      // include_partial_messages keeps the typewriter effect — the SPA
-      // renders stream_event deltas live and snapshots to the canonical
-      // assistant message when it arrives.
-      includePartialMessages: true,
-      mcpServers: undefined, // file-mounted via --mcp-config below
-      // Bare mode would skip CLAUDE.md / skills / hooks; we want those.
-    };
-
-    this.sdkQuery = query({ prompt: this.userQueue, options });
     try {
+      // Block until the first submit_turn arrives (ensureSdkQuery resolves
+      // sdkReady after pinning options and constructing query()), or until
+      // the signal aborts. Without this, query() would launch with the
+      // hardcoded defaults and the user's very-first model/effort pick
+      // would be ignored — defeating the whole purpose of the dropdown.
+      await this.sdkReady;
+      if (signal.aborted || !this.sdkQuery) {
+        return;
+      }
       for await (const message of this.sdkQuery) {
         if (signal.aborted) break;
         await this.handleEvent(message);
@@ -235,6 +269,88 @@ export class Runner {
       }
       this.userQueue.close();
     }
+  }
+
+  // ensureSdkQuery is the one-time pinning point for model + effort.
+  // First call: read the command's model/effort (with DEFAULT_* fallback
+  // when empty), build SDK Options, construct query(), and unblock
+  // run()'s for-await loop. Subsequent calls: compare the incoming
+  // values against the pinned ones and bump optionsOverrideIgnoredTotal
+  // when they differ — the override is intentionally a no-op because
+  // Options is sealed by the running query iterator.
+  private ensureSdkQuery(record: SessionCommandRecord): void {
+    const requestedModel = String(record.model ?? "").trim();
+    const requestedEffort = String(record.effort ?? "").trim();
+    if (this.sdkQuery !== null) {
+      if (requestedModel && requestedModel !== this.pinnedModel) {
+        optionsOverrideIgnoredTotal.labels("model").inc();
+        console.warn(
+          "session command requested model override; ignoring (model is pinned for the runner's lifetime)",
+          { requested: requestedModel, pinned: this.pinnedModel },
+        );
+      }
+      if (requestedEffort && requestedEffort !== this.pinnedEffort) {
+        optionsOverrideIgnoredTotal.labels("effort").inc();
+        console.warn(
+          "session command requested effort override; ignoring (effort is pinned for the runner's lifetime)",
+          { requested: requestedEffort, pinned: this.pinnedEffort },
+        );
+      }
+      return;
+    }
+
+    const model = requestedModel || DEFAULT_MODEL;
+    // Effort allowlist is enforced upstream in middleware.validateEffort;
+    // any string that arrives here either matches EffortLevel or is the
+    // empty string. The cast is therefore safe in the happy path, and a
+    // wire-shape regression would surface as the SDK rejecting the value
+    // (visible via providerErrorTotal{kind="query"}).
+    const effort = (requestedEffort || DEFAULT_EFFORT) as EffortLevel;
+    this.pinnedModel = model;
+    this.pinnedEffort = effort;
+    optionsPinnedTotal.labels(model, effort).inc();
+    console.log(
+      JSON.stringify({
+        msg: "agent-runner pinning SDK options from first turn",
+        model,
+        effort,
+        source_command_id: record.id,
+      }),
+    );
+
+    const options: Options = {
+      cwd: this.cfg.workspace,
+      // The api-proxy injects OAuth from KV when the placeholder bearer
+      // is seen — both the SDK and the raw CLI go through this path.
+      // Match the browser chat's permissive editing mode.
+      permissionMode: "bypassPermissions",
+      // Resume an on-disk JSONL if one exists from a prior process
+      // life (e.g., agent-runner restart within the same pod).
+      // First boot with no JSONL: no-op.
+      continue: true,
+      // include_partial_messages keeps the typewriter effect — the SPA
+      // renders stream_event deltas live and snapshots to the canonical
+      // assistant message when it arrives.
+      includePartialMessages: true,
+      mcpServers: undefined, // file-mounted via --mcp-config below
+      // Bare mode would skip CLAUDE.md / skills / hooks; we want those.
+      model,
+      effort,
+    };
+
+    this.sdkQuery = this.launchSdkQuery(options);
+    this.resolveSdkReady();
+  }
+
+  // launchSdkQuery wraps the SDK's query() construction in a method so
+  // runner.test.ts can substitute a stub iterator without spawning the
+  // real claude binary. The split has no observable runtime effect — the
+  // production path is a single method call with no extra allocation.
+  // Keep the method body trivial; the pinning + Options construction
+  // belong in ensureSdkQuery so tests of *that* logic see the same code
+  // path as production.
+  private launchSdkQuery(options: Options): Query {
+    return query({ prompt: this.userQueue, options });
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
@@ -357,6 +473,14 @@ export class Runner {
       await this.commandBus.markFailed(record, new Error("session command was not accepted"));
       return;
     }
+    // Pin model + effort from the first submit_turn and construct the SDK
+    // query() lazily so the user's dropdown pick is what actually drives
+    // the model running in this pod. Second-and-onward calls are a no-op
+    // here (the override is logged + counted inside ensureSdkQuery). MUST
+    // happen before pushing onto userQueue: query() is what consumes the
+    // queue, and a message landing while sdkQuery is still null would sit
+    // unread until something else triggers ensureSdkQuery.
+    this.ensureSdkQuery(record);
     pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
     this.userQueue.push({

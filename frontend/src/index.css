@@ -3547,6 +3547,26 @@ button:disabled {
   min-width: 16rem;
 }
 
+/* Inline hint trailing an effort radio item ("Low — Fastest…"). Muted
+ * so the option label stays primary in the dropdown's scan. */
+.run-model-menu-hint {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+
+/* Launchpad footnote that surfaces the pod-lifetime lock on model +
+ * effort. Sits below the ⌘K hint, same tone, slightly tighter line. */
+.run-empty-lock-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  max-width: 28rem;
+  text-align: center;
+  line-height: 1.35;
+}
+
 /* Files tab — split view: entry list on the left, file preview on right. */
 .run-files {
   flex: 1 1 auto;

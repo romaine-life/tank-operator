@@ -268,6 +268,117 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
   ctl.abort();
 });
 
+// ensureSdkQuery is the load-bearing pinning point for model + effort.
+// These tests pin the contract:
+//   1. First submit_turn with values pins them into SDK Options.
+//   2. First submit_turn with empty values falls back to DEFAULT_MODEL /
+//      DEFAULT_EFFORT — the wire shape is additive so empty must keep
+//      working for legacy clients.
+//   3. Subsequent submit_turns are a no-op (the SDK Options are sealed
+//      by the running query iterator). The override is silently honored
+//      for telemetry only.
+// If a future change wires per-turn setModel/applyFlagSettings to make
+// the dropdown switchable mid-session, these tests will need to flip from
+// "ignore overrides" to "apply overrides" — the regression that test #3
+// catches today is the silent divergence between dropdown pick and pod
+// behavior, which would be the user-trust failure.
+test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    pinnedModel: string | null;
+    pinnedEffort: string | null;
+    sdkQuery: unknown;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  const captured: { opts: { model?: string; effort?: string } | null } = { opts: null };
+  runner.launchSdkQuery = (opts) => {
+    captured.opts = opts;
+    return { interrupt: () => {} } as unknown;
+  };
+
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-haiku-4-5",
+    effort: "low",
+  });
+
+  assert.equal(runner.pinnedModel, "claude-haiku-4-5");
+  assert.equal(runner.pinnedEffort, "low");
+  assert.notEqual(runner.sdkQuery, null);
+  assert.ok(captured.opts, "launchSdkQuery should have been called");
+  assert.equal(captured.opts.model, "claude-haiku-4-5");
+  assert.equal(captured.opts.effort, "low");
+});
+
+test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first turn", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    pinnedModel: string | null;
+    pinnedEffort: string | null;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  const captured: { opts: { model?: string; effort?: string } | null } = { opts: null };
+  runner.launchSdkQuery = (opts) => {
+    captured.opts = opts;
+    return { interrupt: () => {} } as unknown;
+  };
+
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    // No model or effort fields — legacy/pre-feature client.
+  });
+
+  // The defaults must stay in lockstep with the constants in runner.ts.
+  // If the product moves the default to a different model, both this
+  // assertion and the SPA's DEFAULT_RUN_PREFS need to update together.
+  assert.equal(runner.pinnedModel, "claude-opus-4-7");
+  assert.equal(runner.pinnedEffort, "high");
+  assert.ok(captured.opts);
+  assert.equal(captured.opts.model, "claude-opus-4-7");
+  assert.equal(captured.opts.effort, "high");
+});
+
+test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    pinnedModel: string | null;
+    pinnedEffort: string | null;
+    sdkQuery: unknown;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  let launchCalls = 0;
+  runner.launchSdkQuery = (_opts) => {
+    launchCalls += 1;
+    return { interrupt: () => {} } as unknown;
+  };
+
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-opus-4-7",
+    effort: "high",
+  });
+  // Second turn requests a different model + effort. The runner MUST
+  // keep the pinned values because the SDK's Options is sealed; an
+  // override here would be a no-op at the pod, and silently appearing
+  // to honor it would lie to the user. The metric path catches the
+  // divergence (optionsOverrideIgnoredTotal) — we don't assert the
+  // metric here because it's a prom-client global, but the no-launch +
+  // pinned-values assertions cover the observable behavior.
+  runner.ensureSdkQuery({
+    id: "cmd-2",
+    type: "submit_turn",
+    model: "claude-haiku-4-5",
+    effort: "low",
+  });
+
+  assert.equal(launchCalls, 1, "second turn must not relaunch the SDK query");
+  assert.equal(runner.pinnedModel, "claude-opus-4-7");
+  assert.equal(runner.pinnedEffort, "high");
+});
+
 test("terminal turn failures ack the durable submit command", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };

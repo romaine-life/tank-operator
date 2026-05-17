@@ -50,6 +50,37 @@ export const natsPublishFailureTotal = new Counter({
   registers: [registry],
 });
 
+// optionsPinnedTotal records the model/effort decision the runner made
+// on its first observable submit_turn. Cardinality is bounded by the
+// SDK's EffortLevel enum (5 values + "default") and the small set of
+// shipped Claude models. The labels are deliberately the *applied*
+// values, not the requested ones — so a downgrade from xhigh on a
+// model that doesn't support it would be invisible here (the SDK does
+// the downgrade silently per its docstring). This counter is the
+// operator's answer to "what did this pod actually boot with?" when a
+// session looks slower or thinkier than expected.
+export const optionsPinnedTotal = new Counter({
+  name: "tank_runner_options_pinned_total",
+  help: "Model and effort that the runner pinned into SDK Options at first turn.",
+  labelNames: ["model", "effort"],
+  registers: [registry],
+});
+
+// optionsOverrideIgnoredTotal increments when a submit_turn after the
+// first one carries a different model or effort than what's already
+// pinned. The runner ignores the override (Options is sealed once
+// query() runs), but the counter exposes the silent-divergence so a
+// future bug or product change ("let me switch model mid-session") is
+// visible in metrics before it surfaces as a user-reported "why didn't
+// my pick take effect?" ticket. Labels intentionally name the *field*
+// that diverged, not the values, to keep cardinality low.
+export const optionsOverrideIgnoredTotal = new Counter({
+  name: "tank_runner_options_override_ignored_total",
+  help: "Submit_turn commands whose model/effort differed from the pinned options (override is silently ignored — model/effort are pod-lifetime).",
+  labelNames: ["field"],
+  registers: [registry],
+});
+
 // turnStartTimes tracks turn.started timestamps so we can observe a
 // duration when the terminal turn event arrives. The map is per-runner-
 // process and unbounded only if turns leak (no terminal event ever
