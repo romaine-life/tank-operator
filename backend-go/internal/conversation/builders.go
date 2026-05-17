@@ -85,6 +85,7 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 			},
 		}),
 	}
+	originSessionID := strings.TrimSpace(args.OriginSessionID)
 	for _, event := range events {
 		if args.SessionStorageKey != "" {
 			event["tank_session_id"] = args.SessionStorageKey
@@ -96,6 +97,15 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 			event["email"] = args.Email
 		}
 		event["runtime"] = runtime
+		// Carry the originating session id on both events so the frontend
+		// can pick the parent session's avatar for the user bubble. Stamped
+		// only when the turn came in from a sibling tank-operator session
+		// via the mcp-tank-operator send_prompt / spawn_run_session path;
+		// human-typed turns leave this absent so the human's Gravatar
+		// continues to render.
+		if originSessionID != "" && originSessionID != args.SessionID {
+			event["origin_session_id"] = originSessionID
+		}
 	}
 	return turnID, events, nil
 }
@@ -109,6 +119,12 @@ type UserSubmissionArgs struct {
 	Message           any
 	Runtime           string
 	SkillName         string
+	// OriginSessionID identifies the sibling tank-operator session that
+	// authored this turn via an MCP handoff (send_prompt /
+	// spawn_run_session). Empty for human-typed browser turns. Only
+	// stamped on the emitted events when it differs from SessionID —
+	// a session sending a prompt to itself reads as a normal user turn.
+	OriginSessionID   string
 	Now               time.Time
 }
 

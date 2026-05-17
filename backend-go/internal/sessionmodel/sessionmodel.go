@@ -395,6 +395,27 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"command":         []any{"mcp-auth-proxy"},
 			"env": []any{
 				map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+				// Originating session id forwarded as
+				// X-Tank-Origin-Session-Id on outbound calls to
+				// mcp-tank-operator. mcp-tank-operator threads it
+				// onto handoff messages so the orchestrator stamps
+				// the persisted user_message.created event and the
+				// frontend renders the parent session's avatar on
+				// the user bubble in the target session. Sourced
+				// from the same downward-API path the runners use
+				// (metadata.labels['tank-operator/session-id']) so
+				// the sidecar agrees with the runner on which
+				// session it lives in. Absent SESSION_ID, the
+				// proxy omits the header and the orchestrator
+				// falls back to the human-Gravatar rendering.
+				map[string]any{
+					"name": "SESSION_ID",
+					"valueFrom": map[string]any{
+						"fieldRef": map[string]any{
+							"fieldPath": "metadata.labels['tank-operator/session-id']",
+						},
+					},
+				},
 			},
 			// The metrics port is exposed as a named container port so the
 			// k8s/templates/podmonitor-sessions.yaml PodMonitor can scrape

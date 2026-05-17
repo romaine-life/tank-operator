@@ -144,6 +144,12 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  // For user-role messages authored by a sibling tank-operator session
+  // via the mcp-tank-operator handoff path: the originating session id.
+  // RunMessageBubble swaps in that session's deterministic avatar in
+  // place of the human's Gravatar so cross-session handoffs read as
+  // agent-authored, not user-authored.
+  originSessionId?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
@@ -2987,11 +2993,34 @@ function RunMessageBubble({
           <CopyButton text={text} />
         </div>
       </div>
-      {variant === "user" && user && (
-        <span className="run-msg-avatar">
-          <Avatar user={user} />
-        </span>
-      )}
+      {variant === "user" && (() => {
+        // Cross-session handoff: a sibling tank-operator session posted
+        // this turn via mcp-tank-operator. Render the parent session's
+        // deterministic avatar in place of the human owner's Gravatar
+        // so the bubble reads as agent-authored. The user message is
+        // still owned by the same human — only the visual identity
+        // changes, mirroring how the assistant bubble already uses
+        // a session-derived avatar.
+        const originId = entry.originSessionId;
+        if (originId) {
+          return (
+            <span
+              className="run-msg-avatar"
+              data-origin-session-id={originId}
+            >
+              <AgentAvatarIcon
+                avatar={getSessionAvatar(originId)}
+                className="run-msg-ai-icon"
+              />
+            </span>
+          );
+        }
+        return user ? (
+          <span className="run-msg-avatar">
+            <Avatar user={user} />
+          </span>
+        ) : null;
+      })()}
     </div>
   );
 }
