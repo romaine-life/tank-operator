@@ -24,56 +24,11 @@ resource "azurerm_key_vault_secret" "mcp_tenant_id" {
 # ----------------------------------------------------------------------------
 # Per-server: azure-personal
 # ----------------------------------------------------------------------------
-# First-party Azure MCP server for personal operational tools. The permission
-# boundary is a separate UAMI plus intentionally scoped MCP tools: discovery is
-# read-only, and destructive operations require exact-name confirmations.
-
-module "mcp_azure_personal" {
-  source = "./mcp-server"
-
-  name                     = "azure-personal"
-  resource_group_name      = data.azurerm_resource_group.main.name
-  resource_group_location  = data.azurerm_resource_group.main.location
-  key_vault_id             = data.azurerm_key_vault.main.id
-  aks_oidc_issuer_url      = local.aks_oidc_issuer_url
-  aks_namespace            = "mcp-azure"
-  aks_service_account_name = "mcp-azure-personal"
-
-  role_assignments = {
-    "subscription-operator" = {
-      scope                = "/subscriptions/${data.azurerm_client_config.current.subscription_id}"
-      role_definition_name = "Contributor"
-    }
-    # Data-plane RBAC for romaine-kv. Subscription Contributor covers the
-    # control plane but not secret reads/writes — secret-officer is what the
-    # keyvault_get_secret / keyvault_set_secret tools call against.
-    "romaine-kv-secrets-officer" = {
-      scope                = data.azurerm_key_vault.main.id
-      role_definition_name = "Key Vault Secrets Officer"
-    }
-  }
-}
-
-# ----------------------------------------------------------------------------
-# azure-personal: Cosmos data-plane access
-# ----------------------------------------------------------------------------
-# Cosmos SQL API uses its own RBAC system (not ARM RBAC) — even Reader at
-# subscription scope doesn't grant data-plane reads or writes. The personal
-# server exposes guarded Cosmos write tools with dry-run defaults, so grant
-# account-scope Built-in Data Contributor on the Cosmos accounts it needs.
-
-data "azurerm_cosmosdb_account" "infra_serverless" {
-  name                = "infra-cosmos-serverless"
-  resource_group_name = data.azurerm_resource_group.main.name
-}
-
-resource "azurerm_cosmosdb_sql_role_assignment" "mcp_azure_personal_infra_serverless_contributor" {
-  resource_group_name = data.azurerm_resource_group.main.name
-  account_name        = data.azurerm_cosmosdb_account.infra_serverless.name
-  role_definition_id  = "${data.azurerm_cosmosdb_account.infra_serverless.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"
-  principal_id        = module.mcp_azure_personal.managed_identity_principal_id
-  scope               = data.azurerm_cosmosdb_account.infra_serverless.id
-}
+# Migrated out: this server's UAMI + role assignments + Cosmos data-plane
+# grant now live in nelsong6/mcp-azure-personal/infra/. The `removed` blocks
+# at the bottom of this file forget the resources from this state without
+# deleting them in Azure, after which the import on the MCP repo's side
+# adopts them. See that repo's infra/README.md for the runbook.
 
 # ----------------------------------------------------------------------------
 # mcp-tank-operator: thin shim — session CRUD on behalf of caller pod IP
@@ -120,3 +75,21 @@ module "mcp_auth" {
 
   role_assignments = {}
 }
+
+# ============================================================================
+# Migration: mcp_azure_personal moved to nelsong6/mcp-azure-personal/infra/
+# ============================================================================
+# State for the moved resources is removed manually with `tofu state rm`
+# rather than via `removed { lifecycle.destroy = false }` blocks: OpenTofu
+# 1.9 (this repo's pinned version) treats a bare `removed` block as
+# DESTROY-then-remove, and the `lifecycle.destroy = false` opt-out only
+# lands in 1.10. The MCP repo's apply imports the existing Azure resources
+# into its state first; this side then runs the documented state-rm
+# commands; nothing in Azure gets touched.
+#
+# Runbook (run from infra/ after `tofu init`):
+#
+#   tofu state rm module.mcp_azure_personal
+#   tofu state rm azurerm_cosmosdb_sql_role_assignment.mcp_azure_personal_infra_serverless_contributor
+#
+# Then merge this PR and let CI apply; the plan should show no changes.
