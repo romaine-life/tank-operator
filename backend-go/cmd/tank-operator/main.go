@@ -141,6 +141,7 @@ func main() {
 		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
 		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		ReaderMetrics:     promSessionReaderMetrics{},
 	})
 
 	// 10. Init auth signer + verifier (RS256, signing key in KV).

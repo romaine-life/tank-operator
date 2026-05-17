@@ -36,55 +36,22 @@ func (f fakeLifecycleSource) LatestActivity(_ context.Context, _, sessionID stri
 // readyAtPtr / activeSummary build the fixtures the merge test expects.
 func readyAtPtr(t string) *string { v := t; return &v }
 
-func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
+// TestListRequiresRegistry pins the post-#83 invariant that the registry
+// is the durable enumeration source. A Reader without a registry must
+// fail loud on List — the prior pod-only enumeration fallback was the
+// path that re-added still-terminating pods after Manager.Delete had
+// already tombstoned them, leaving the SPA sidebar with "stuck deleting"
+// rows. See docs/migration-policy.md ("no fallback paths") and
+// scripts/check-removed-chat-runtime.mjs.
+func TestListRequiresRegistry(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
-		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, false),
-		sessionPod("14", "other@example.com", corev1.PodRunning, true),
 	)
-	// Status comes from the lifecycle ledger now (tank-operator#83); seed
-	// the test source with a "ready" entry for session 12.
-	lifecycle := fakeLifecycleSource{
-		pod: map[string]*lifecycleevents.PodStatusSummary{
-			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
-		},
-	}
-	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, nil, lifecycle, "default")
+	reader := NewReader(client, sessionmodel.SessionsNamespace)
 
-	got, err := reader.List(context.Background(), "nelson@romaine.life")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("session count = %d, want 1: %#v", len(got), got)
-	}
-	session := got[0]
-	if session.ID != "12" {
-		t.Fatalf("session id = %q, want 12", session.ID)
-	}
-	if session.Status != "Active" {
-		t.Fatalf("session status = %q, want Active", session.Status)
-	}
-	if session.Mode != sessionmodel.CodexGUIMode {
-		t.Fatalf("session mode = %q, want %q", session.Mode, sessionmodel.CodexGUIMode)
-	}
-	if session.PodName == nil || *session.PodName != "session-12" {
-		t.Fatalf("pod name = %#v, want session-12", session.PodName)
-	}
-	if session.Name == nil || *session.Name != "Workbench" {
-		t.Fatalf("name = %#v, want Workbench", session.Name)
-	}
-	if session.TestState["active"] != true {
-		t.Fatalf("test state = %#v, want active true", session.TestState)
-	}
-	if session.RolloutState["active"] != true {
-		t.Fatalf("rollout state = %#v, want active true", session.RolloutState)
-	}
-	if session.CreatedAt == nil || *session.CreatedAt != "2026-05-11T00:00:01+00:00" {
-		t.Fatalf("created_at = %#v", session.CreatedAt)
-	}
-	if session.ReadyAt == nil || *session.ReadyAt != "2026-05-11T00:00:03+00:00" {
-		t.Fatalf("ready_at = %#v", session.ReadyAt)
+	_, err := reader.List(context.Background(), "nelson@romaine.life")
+	if !errors.Is(err, ErrRegistryRequired) {
+		t.Fatalf("List error = %v, want ErrRegistryRequired", err)
 	}
 }
 
@@ -113,11 +80,22 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
-func TestListMergesRegistryRecordsWithPods(t *testing.T) {
+// TestListEnumeratesVisibleRegistryRowsHydratedWithPods exercises the
+// registry-only enumeration: visible records produce list rows
+// (hydrated with the matching pod's annotations + the lifecycle ledger's
+// Status), records without a live pod still appear (per the
+// infoFromRecord fallback), and pods owned by tombstoned (visible=false)
+// records are dropped silently.
+func TestListEnumeratesVisibleRegistryRowsHydratedWithPods(t *testing.T) {
 	recordedName := "Saved name"
 	client := fake.NewSimpleClientset(
 		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
-		sessionPod("16", "nelson@romaine.life", corev1.PodRunning, true),
+		// session-99: pod still in K8s with deletionTimestamp set (the
+		// "terminating after Manager.Delete" case that produced the
+		// stuck-deleting bug). The registry has it tombstoned, so the
+		// Reader must drop it silently — not surface it, not count it as
+		// an orphan.
+		terminatingSessionPod("99", "nelson@romaine.life"),
 	)
 	registry := registryRecords{
 		{
@@ -139,17 +117,31 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 			CreatedAt:   "2026-05-10T00:00:01+00:00",
 			Visible:     true,
 		},
+		{
+			// Tombstoned (visible=false). The matching session-99 pod is
+			// still in K8s above. The Reader must NOT re-surface this
+			// session — pre-fix, the pod-loop fallback would have added
+			// it back and the SPA snapshot would lie about the delete.
+			ID:          "99",
+			Email:       "nelson@romaine.life",
+			Mode:        sessionmodel.ClaudeGUIMode,
+			PodName:     "session-99",
+			RequestedAt: "2026-05-09T00:00:00+00:00",
+			CreatedAt:   "2026-05-09T00:00:01+00:00",
+			Visible:     false,
+		},
 	}
 	lifecycle := fakeLifecycleSource{
 		pod: map[string]*lifecycleevents.PodStatusSummary{
 			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
-			"16": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
 			// 15 has no pod and no lifecycle row — the infoFromRecord
 			// fallback path stamps "Failed", which is what the test
 			// expects.
 		},
 	}
-	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, lifecycle, "default")
+	orphanMetrics := &recordingMetrics{}
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, lifecycle, "default").
+		WithMetrics(orphanMetrics)
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -164,20 +156,61 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 		}
 		return 0
 	})
-	if len(got) != 3 {
-		t.Fatalf("session count = %d, want 3: %#v", len(got), got)
+	if len(got) != 2 {
+		t.Fatalf("session count = %d, want 2: %#v", len(got), got)
 	}
 	if got[0].ID != "12" || got[0].Status != "Active" || got[0].Name == nil || *got[0].Name != recordedName {
-		t.Fatalf("merged session = %#v", got[0])
+		t.Fatalf("hydrated session = %#v", got[0])
 	}
 	if got[0].RequestedAt == nil || *got[0].RequestedAt != "2026-05-11T00:00:00+00:00" {
-		t.Fatalf("merged requested_at = %#v", got[0].RequestedAt)
+		t.Fatalf("hydrated requested_at = %#v", got[0].RequestedAt)
 	}
 	if got[1].ID != "15" || got[1].Status != "Failed" || got[1].Mode != sessionmodel.ClaudeCLIMode {
 		t.Fatalf("registry-only session = %#v", got[1])
 	}
-	if got[2].ID != "16" || got[2].Status != "Active" {
-		t.Fatalf("pod-only session = %#v", got[2])
+	if orphanMetrics.orphans != 0 {
+		t.Fatalf("orphan pod count = %d, want 0 (the tombstoned pod is known to the registry, not an orphan)", orphanMetrics.orphans)
+	}
+}
+
+// TestListCountsOrphanPodsButDoesNotSurfaceThem verifies the orphan-pod
+// observability counter ticks when a pod is observed for a session_id
+// the registry has never seen — without surfacing the pod to the
+// user-facing list. Steady-state expectation is zero orphans; this test
+// simulates a "Manager.Create wrote the pod but the registry insert
+// failed" condition and asserts the read path swallows the row and
+// records it as an anomaly.
+func TestListCountsOrphanPodsButDoesNotSurfaceThem(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
+		// Pod 42 has no registry row at all (visible OR tombstoned). The
+		// Reader must drop it from the list and tick the orphan counter.
+		sessionPod("42", "nelson@romaine.life", corev1.PodRunning, true),
+	)
+	registry := registryRecords{
+		{
+			ID:          "12",
+			Email:       "nelson@romaine.life",
+			Mode:        sessionmodel.CodexGUIMode,
+			PodName:     "session-12",
+			RequestedAt: "2026-05-11T00:00:00+00:00",
+			CreatedAt:   "2026-05-11T00:00:01+00:00",
+			Visible:     true,
+		},
+	}
+	orphanMetrics := &recordingMetrics{}
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, fakeLifecycleSource{}, "default").
+		WithMetrics(orphanMetrics)
+
+	got, err := reader.List(context.Background(), "nelson@romaine.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "12" {
+		t.Fatalf("list = %#v, want only session 12 (42 is an orphan)", got)
+	}
+	if orphanMetrics.orphans != 1 {
+		t.Fatalf("orphan pod count = %d, want 1 (pod 42 has no registry row)", orphanMetrics.orphans)
 	}
 }
 
@@ -193,6 +226,27 @@ type registryRecords []sessionmodel.SessionRecord
 
 func (r registryRecords) List(context.Context, string) ([]sessionmodel.SessionRecord, error) {
 	return []sessionmodel.SessionRecord(r), nil
+}
+
+// recordingMetrics is the test stand-in for the production
+// sessions.Metrics adapter. Counts orphan-pod observations so tests can
+// assert "exactly N orphans for this owner".
+type recordingMetrics struct {
+	orphans int
+}
+
+func (m *recordingMetrics) RecordOrphanPod() { m.orphans++ }
+
+// terminatingSessionPod returns the same shape as sessionPod but with a
+// non-nil DeletionTimestamp — the K8s API state of a pod between
+// pod.Delete (which sets the timestamp) and the kubelet's actual reap
+// after terminationGracePeriodSeconds. Reader.List must drop these when
+// the registry has tombstoned the matching session_id.
+func terminatingSessionPod(id, owner string) *corev1.Pod {
+	pod := sessionPod(id, owner, corev1.PodRunning, true)
+	now := metav1.NewTime(time.Date(2026, 5, 12, 0, 0, 1, 0, time.UTC))
+	pod.DeletionTimestamp = &now
+	return pod
 }
 
 func sessionPod(id, owner string, phase corev1.PodPhase, sandboxAgent bool) *corev1.Pod {

@@ -268,6 +268,52 @@ const blocked = [
   // PR can't quietly resurrect the parallel surface.
   { name: "removed handleInternalSpawnSession alias", pattern: /\bhandleInternalSpawnSession\b/ },
   { name: "removed /api/internal/sessions/spawn URL", pattern: /\/api\/internal\/sessions\/spawn\b/ },
+  // Sidebar session-list ledger refactor (#489) left four fallback
+  // paths live: the closingIds local-optimism set, the
+  // refresh-after-mutation wake-and-refetch pattern, the reducer's
+  // placeholder synthesis for unknown session_ids on pod-state events,
+  // and Reader.List's pod-only enumeration loop. The completion PR
+  // retired all four together so the "stuck deleting" failure mode
+  // cannot reassemble. Block reintroduction so a future refactor can't
+  // quietly bring the wake-and-refetch shape back. See
+  // docs/migration-policy.md ("no fallback paths") and
+  // docs/product-inspirations.md ("User-visible run state comes from
+  // durable turn events, not local optimism").
+  { name: "removed closingIds local-optimism set", pattern: /\bclosingIds\b/ },
+  { name: "removed setClosingIds setter", pattern: /\bsetClosingIds\b/ },
+  { name: "removed isClosing render flag", pattern: /\bisClosing\b/ },
+  { name: "removed is-closing CSS class", pattern: /\bis-closing\b/ },
+  { name: "removed session-delete-spinner spinner class", pattern: /\bsession-delete-spinner\b/ },
+  { name: "removed session-closing-chip pill class", pattern: /\bsession-closing-chip\b/ },
+  // The exact retired call site shape: `await refresh()` immediately
+  // following an `/api/sessions` mutation. SSE session.created /
+  // session.deleted own the live updates; the optimistic POST-response
+  // add covers the activate-this-id latency window for create. The
+  // refresh() function itself stays — it is the first-load + post-
+  // resync_required snapshot path the SSE handler still calls.
+  {
+    name: "removed refresh-after-mutation pattern (sessions ledger #489)",
+    pattern: /\/api\/sessions[^"`']*["`'][^]*?method:\s*["'](?:POST|DELETE|PATCH)["'][^]{0,400}?await\s+refresh\(\)/,
+  },
+  // applyPodStatusEvent's placeholder-synthesis branch. The literal
+  // string was the comment introducing the bug and the branch's
+  // append-by-fabricated-session shape — both must stay deleted.
+  {
+    name: "removed reducer placeholder synthesis for unknown session_id",
+    pattern: /Pod transitioned before the matching \/api\/sessions row landed/,
+  },
+  {
+    name: "removed reducer placeholder-Session append",
+    pattern: /\[\.\.\.state\.sessions,\s*placeholder\]/,
+  },
+  // Reader.List's pod-only fallback: the `for _, pod := range
+  // podOrder` enumeration that re-added still-terminating pods after
+  // Manager.Delete had already tombstoned them. Registry is the durable
+  // enumeration; pods are hydration data only.
+  {
+    name: "removed pod-only Reader.List fallback enumeration",
+    pattern: /for\s+_,\s+pod\s+:=\s+range\s+podOrder\s+\{[\s\S]{0,300}?info\s*:=\s*infoFromPod/,
+  },
 ];
 
 const failures = [];

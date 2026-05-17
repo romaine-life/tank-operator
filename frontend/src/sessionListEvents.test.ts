@@ -109,18 +109,69 @@ test("session.pod_ready updates the existing session's status + ready_at", () =>
   assert.equal(next.sessions[0].ready_at, "2026-05-16T19:35:19Z");
 });
 
-test("session.pod_failed synthesizes a placeholder when no session row exists yet", () => {
-  // Failure case from the original bug: the sidebar hadn't yet
-  // received the matching /api/sessions row when the pod evicted.
-  // Reducer must surface the Failed indicator anyway so the user sees
-  // the dead session, not nothing.
+test("pod-state events for unknown session ids are dropped (no placeholder synthesis)", () => {
+  // Flipped from the prior expectation. The reducer used to synthesize
+  // a placeholder Session for any session.pod_* event with an unknown
+  // session_id, comment-justified as "Pod transitioned before the
+  // matching /api/sessions row landed." That branch was the second
+  // half of the stuck-deleting bug: a session.pod_terminating event
+  // arriving on the SSE after session.deleted had already removed the
+  // row would resurrect the row as a placeholder and the next render
+  // showed it indefinitely. The cursor-correct invariant is that
+  // session.created has a smaller order_key than any pod_* event for
+  // the same session_id, so reaching this branch means either a
+  // producer regression or a missed ledger row — in either case the
+  // right answer is to drop the event and let the sidebar's
+  // resync_required cycle catch up from Postgres, not to fabricate
+  // state from a partial event.
   const next = applySessionListEvent(emptyState(), makeEvent({
     type: "session.pod_failed",
     payload: { status: "Failed", reason: "Evicted", exit_code: 137 },
   }));
-  assert.equal(next.sessions.length, 1);
-  assert.equal(next.sessions[0].id, "21");
-  assert.equal(next.sessions[0].status, "Failed");
+  assert.equal(next, emptyState() === emptyState() ? next : next, "(reference check below)");
+  assert.equal(next.sessions.length, 0, "no placeholder Session must be synthesized");
+  assert.equal(Object.keys(next.activities).length, 0, "no activity entry either");
+});
+
+test("session.pod_terminating after session.deleted does not resurrect the row", () => {
+  // The original chat-tab refactor's specific stuck-deleting case.
+  // Manager.Delete writes session.deleted; the leader-elected
+  // pod-informer separately writes session.pod_terminating when the
+  // pod's DeletionTimestamp lands. Depending on Postgres BIGSERIAL
+  // order_key assignment, session.pod_terminating can arrive on the
+  // SSE after session.deleted — the reducer used to resurrect the row
+  // as a placeholder. With the placeholder branch retired the event is
+  // a no-op.
+  const initial = emptyState();
+  initial.sessions = [
+    {
+      id: "21",
+      pod_name: "session-21",
+      owner: "u@example.com",
+      status: "Active",
+      mode: "claude_gui",
+      requested_at: null,
+      created_at: null,
+      ready_at: null,
+      name: null,
+    },
+  ];
+  const afterDelete = applySessionListEvent(initial, makeEvent({
+    type: "session.deleted",
+    payload: {},
+  }));
+  assert.equal(afterDelete.sessions.length, 0, "session.deleted removes the row");
+
+  const afterTerminating = applySessionListEvent(afterDelete, makeEvent({
+    order_key: "2",
+    type: "session.pod_terminating",
+    payload: { status: "Failed", pod_name: "session-21" },
+  }));
+  assert.equal(
+    afterTerminating.sessions.length,
+    0,
+    "session.pod_terminating for the deleted session must NOT resurrect the row",
+  );
 });
 
 test("session.deleted removes the session and its activity entry", () => {

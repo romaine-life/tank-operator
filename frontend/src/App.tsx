@@ -6426,7 +6426,22 @@ export function App() {
     // one-shot reconciliation per user identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, persistRunPrefs]);
-  const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
+  // pendingDeletes guards against double-fired DELETE requests while one
+  // is in flight against the same session_id. Strictly transactional — it
+  // does NOT drive any user-visible state (no spinner, no dimmed row, no
+  // disabled button). The pre-fix in-flight set DID all three and
+  // contradicted the durable lifecycle ledger when the SPA also called
+  // refresh() after the mutation: the ledger removed the row via SSE
+  // session.deleted, then refresh() reseeded it from a snapshot that
+  // still included the still-terminating pod, and the cleanup useEffect
+  // kept the row in the in-flight set indefinitely → "stuck deleting."
+  // Per docs/product-inspirations.md ("User-visible run state comes from
+  // durable turn events, not local optimism"), the row's presence in the
+  // sidebar is owned by the lifecycle ledger now: the SSE session.deleted
+  // removes it, full stop. pendingDeletes is held in a ref because it is
+  // never read during render. The retired-symbol grep that covers this
+  // migration lives in scripts/check-removed-chat-runtime.mjs.
+  const pendingDeletes = useRef<Set<string>>(new Set());
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
@@ -6574,7 +6589,14 @@ export function App() {
         const created = await res.json();
         clearGlimmungLaunchContext();
         const session: Session = created.session;
-        await refresh();
+        // Same as createSession: optimistically add the row from the
+        // POST response; SSE session.created arrives later and the
+        // reducer de-dupes. No refresh().
+        setSessions((prev) => {
+          if (prev.some((s) => s.id === session.id)) return prev;
+          const merged = [...prev, session];
+          return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+        });
         activate(session.id);
       } catch (e) {
         glimmungLaunchContext.current = context;
@@ -6675,26 +6697,20 @@ export function App() {
   }, [user]);
 
   useEffect(() => {
-    if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
-      const selectable = sessions.filter((s) => !closingIds.has(s.id));
-      setActive(selectable[selectable.length - 1]?.id ?? null);
+    // When the durable ledger removes a session via SSE session.deleted,
+    // the sessions list shrinks and we need to (a) pick a new active tab
+    // if the active one is gone, (b) drop the gone id from mounted, and
+    // (c) drop the gone id from sessionActivities. There is no in-flight
+    // mirror set anymore — the row's presence in `sessions` IS the
+    // single source of truth for "is this session in the sidebar."
+    if (active && !sessions.some((s) => s.id === active)) {
+      setActive(sessions[sessions.length - 1]?.id ?? null);
     }
-    // Drop any mounted ids that no longer exist or are being deleted.
     setMounted((prev) => {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((id) => {
-        if (sessions.some((s) => s.id === id) && !closingIds.has(id)) next.add(id);
-        else changed = true;
-      });
-      return changed ? next : prev;
-    });
-    setClosingIds((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      let changed = false;
-      const next = new Set<string>();
-      prev.forEach((id) => {
-        if (existing.has(id)) next.add(id);
+        if (sessions.some((s) => s.id === id)) next.add(id);
         else changed = true;
       });
       return changed ? next : prev;
@@ -6704,7 +6720,7 @@ export function App() {
       let changed = false;
       const next: Record<string, SessionActivitySummary> = {};
       for (const [id, activity] of Object.entries(prev)) {
-        if (existing.has(id) && !closingIds.has(id)) {
+        if (existing.has(id)) {
           next[id] = activity;
         } else {
           changed = true;
@@ -6712,7 +6728,7 @@ export function App() {
       }
       return changed ? next : prev;
     });
-  }, [sessions, active, closingIds]);
+  }, [sessions, active]);
 
   useEffect(() => {
     const target = initialSessionId.current;
@@ -6727,7 +6743,7 @@ export function App() {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = shiftArrowSessionDirection(event);
       if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
-      const nextId = adjacentSessionId(sessions, active, direction, closingIds);
+      const nextId = adjacentSessionId(sessions, active, direction);
       if (nextId == null) return;
       event.preventDefault();
       event.stopPropagation();
@@ -6736,14 +6752,14 @@ export function App() {
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
-  }, [sessions, active, closingIds]);
+  }, [sessions, active]);
 
   useEffect(() => {
     const renameHighlightedSession = (event: KeyboardEvent) => {
       if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       if (editingId) return;
       const targetId = shortcutSessionId(event.target) ?? active;
-      if (!targetId || closingIds.has(targetId)) return;
+      if (!targetId) return;
       const session = sessions.find((s) => s.id === targetId);
       if (!session) return;
       event.preventDefault();
@@ -6753,7 +6769,7 @@ export function App() {
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
     return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
-  }, [sessions, active, closingIds, editingId]);
+  }, [sessions, active, editingId]);
 
   function activate(id: string) {
     setActive(id);
@@ -6827,7 +6843,18 @@ export function App() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
-      await refresh();
+      // Optimistically add the new row to `sessions` so activate() has
+      // something to activate. The SSE session.created event arrives
+      // moments later; the reducer's createSession() de-dupes via the
+      // existing-id check (see sessionListEvents.ts:175). No
+      // `await refresh()` — the refresh-after-mutation pattern was the
+      // wake-and-refetch shape #489's ledger refactor retired
+      // (docs/migration-policy.md "no fallback paths").
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === created.id)) return prev;
+        const merged = [...prev, created];
+        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+      });
       activate(created.id);
       startEditing(created.id, created.name);
     } catch (e) {
@@ -6869,7 +6896,16 @@ export function App() {
       if (CHAT_MODES.has(created.mode)) {
         writeSessionInteraction(created.id, "gui");
       }
-      await refresh();
+      // Same shape as createSession: optimistically add the row so
+      // activate() has a target; the SSE session.created event de-dupes
+      // via the reducer's existing-id check. No `await refresh()` — the
+      // refresh-after-mutation pattern is retired per #489's ledger
+      // refactor and docs/migration-policy.md.
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === created.id)) return prev;
+        const merged = [...prev, created];
+        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+      });
       activate(created.id);
       await waitForSessionReady(created.id);
       const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
@@ -6990,37 +7026,41 @@ export function App() {
     setEditingValue("");
   }
 
+  // deleteSession fires the DELETE and lets the durable lifecycle ledger
+  // remove the row via SSE session.deleted. Pre-fix this also called
+  // `await refresh()` after the mutation, which re-fetched /api/sessions
+  // and reseeded the sessions list from a snapshot that still included
+  // the still-terminating pod — undoing the SSE-driven removal and
+  // leaving the row "stuck deleting." Per docs/migration-policy.md the
+  // refresh-after-mutation pattern is the old wake-and-refetch path the
+  // #489 ledger refactor was supposed to retire; this finishes that
+  // migration on the read side. The double-fire guard is purely
+  // transactional (a ref, not state) so the button's visual state stays
+  // owned by the durable ledger.
   async function deleteSession(id: string) {
-    if (closingIds.has(id)) return;
+    if (pendingDeletes.current.has(id)) return;
+    pendingDeletes.current.add(id);
     setError(null);
-    setClosingIds((prev) => new Set(prev).add(id));
-    setMounted((prev) => {
-      if (!prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
     setEditingId((prev) => (prev === id ? null : prev));
-    setActive((prev) => {
-      if (prev !== id) return prev;
-      const idx = sessions.findIndex((s) => s.id === id);
-      const selectable = sessions.filter((s) => s.id !== id && !closingIds.has(s.id));
-      if (selectable.length === 0) return null;
-      return sessions[idx + 1]?.id && !closingIds.has(sessions[idx + 1].id)
-        ? sessions[idx + 1].id
-        : selectable[selectable.length - 1].id;
-    });
     try {
       const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(`delete failed: ${res.status}`);
-      await refresh();
+      if (!res.ok) {
+        // 404 is benign: the session was already gone (a concurrent
+        // delete, or the user re-clicked after SSE removed the row but
+        // before the in-flight set was cleared). Anything else is a real
+        // failure worth surfacing.
+        if (res.status !== 404) {
+          throw new Error(`delete failed: ${res.status}`);
+        }
+      }
+      // No refresh(), no UI-state clearing. The SSE session.deleted
+      // event drives the row's removal from the sidebar; the cleanup
+      // useEffect drops the id from `mounted` / `sessionActivities` and
+      // reassigns `active` when sessions shrinks.
     } catch (e) {
-      setClosingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
       setError(String(e));
+    } finally {
+      pendingDeletes.current.delete(id);
     }
   }
 
@@ -7209,8 +7249,7 @@ export function App() {
             {sessions.map((s) => {
               const isEditing = editingId === s.id;
               const isLive = s.status === "Active";
-              const isClosing = closingIds.has(s.id);
-              const isActive = active === s.id && !isClosing;
+              const isActive = active === s.id;
               const avatar = getSessionAvatar(s.id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
@@ -7222,13 +7261,13 @@ export function App() {
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isEditing && !isClosing}
+                  className={`${isActive ? "is-open" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  draggable={!isEditing}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
                   onDrop={(e) => dropSession(s.id, e)}
                   onDragEnd={dragSessionEnd}
-                  onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
+                  onClick={isEditing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
@@ -7258,16 +7297,12 @@ export function App() {
                         className="session-open"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (isClosing) return;
                           startEditing(s.id, s.name);
                         }}
-                        disabled={isClosing}
                         title={
-                          isClosing
-                            ? "session is closing"
-                            : s.name
-                              ? `${defaultSessionName(s)} — click to rename`
-                              : "click to rename"
+                          s.name
+                            ? `${defaultSessionName(s)} — click to rename`
+                            : "click to rename"
                         }
                       >
                         <span className="session-id">{sessionDisplayName(s)}</span>
@@ -7300,11 +7335,10 @@ export function App() {
                     <button
                       className="session-delete"
                       onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                      disabled={isClosing}
-                      title={isClosing ? "closing session" : "delete session"}
-                      aria-label={isClosing ? "closing session" : "delete session"}
+                      title="delete session"
+                      aria-label="delete session"
                     >
-                      {isClosing ? <span className="session-delete-spinner" /> : <IconClose />}
+                      <IconClose />
                     </button>
                   </div>
                   <div className="session-row-bottom">
@@ -7319,12 +7353,11 @@ export function App() {
                         {chip.label}
                       </span>
                     ))}
-                    {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"
                         onClick={(e) => { e.stopPropagation(); saveCredentials(s.id); }}
-                        disabled={busy || !isLive || isClosing}
+                        disabled={busy || !isLive}
                         title={
                           s.mode === "codex_config"
                             ? "capture ~/.codex/auth.json from this pod and write it to KV"
@@ -7446,7 +7479,7 @@ export function App() {
                 <section className="home-panel" aria-labelledby="home-sessions-title">
                   <div className="home-panel-head">
                     <h3 id="home-sessions-title">Sessions</h3>
-                    <span className="home-panel-meta">{sessions.filter((s) => !closingIds.has(s.id)).length} available</span>
+                    <span className="home-panel-meta">{sessions.length} available</span>
                   </div>
                   <div className="home-session-list">
                     {sessions.length === 0 ? (
@@ -7458,7 +7491,6 @@ export function App() {
                           data-session-id={s.id}
                           className="home-session"
                           onClick={() => activate(s.id)}
-                          disabled={closingIds.has(s.id)}
                         >
                           <span className={sessionStatusDotClass(s, sessionActivities[s.id])} />
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />

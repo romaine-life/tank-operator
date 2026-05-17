@@ -57,13 +57,14 @@ type LifecycleAppender interface {
 
 // Manager owns session lifecycle: create, delete, patch, reaper.
 type Manager struct {
-	client    kubernetes.Interface
-	restCfg   *rest.Config
-	namespace string
-	registry  SessionRegistry
-	lifecycle LifecycleAppender
-	publisher SessionListEventPublisher
-	scope     string
+	client         kubernetes.Interface
+	restCfg        *rest.Config
+	namespace      string
+	registry       SessionRegistry
+	lifecycle      LifecycleAppender
+	publisher      SessionListEventPublisher
+	readerMetrics  Metrics
+	scope          string
 
 	manifestOpts sessionmodel.ManifestOptions
 
@@ -92,6 +93,10 @@ type ManagerOptions struct {
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
+	// ReaderMetrics surfaces the orphan-pod counter the Reader emits when
+	// a pod is observed without a registry row. Nil-safe — defaults to a
+	// no-op adapter inside the Reader.
+	ReaderMetrics Metrics
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, lifecycle LifecycleAppender, publisher SessionListEventPublisher, opts ManagerOptions) *Manager {
@@ -121,6 +126,7 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		registry:       registry,
 		lifecycle:      lifecycle,
 		publisher:      publisher,
+		readerMetrics:  opts.ReaderMetrics,
 		scope:          opts.ManifestOpts.SessionScope,
 		manifestOpts:   opts.ManifestOpts,
 		wsCount:        map[string]int{},
@@ -616,7 +622,8 @@ func (m *Manager) reader() *Reader {
 	if statusSrc, ok := m.lifecycle.(LifecycleStatusSource); ok {
 		lifecycleSrc = statusSrc
 	}
-	return NewReaderFull(m.client, m.namespace, reg, lifecycleSrc, m.scope)
+	return NewReaderFull(m.client, m.namespace, reg, lifecycleSrc, m.scope).
+		WithMetrics(m.readerMetrics)
 }
 
 // registryAdapter wraps the write-capable SessionRegistry into a read-only Registry.

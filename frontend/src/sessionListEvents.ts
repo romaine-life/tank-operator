@@ -220,7 +220,7 @@ function patchSessionField<S extends SessionListShape>(
 function applyPodStatusEvent<S extends SessionListShape>(
   state: SessionListReducerState<S>,
   event: SessionListEvent,
-  factory: (id: string) => S,
+  _factory: (id: string) => S,
 ): SessionListReducerState<S> {
   const status = stringField(event.payload, "status");
   if (!status) return state;
@@ -232,13 +232,25 @@ function applyPodStatusEvent<S extends SessionListShape>(
   });
   const idx = state.sessions.findIndex((s) => s.id === event.session_id);
   if (idx === -1) {
-    // Pod transitioned before the matching /api/sessions row landed.
-    // Synthesize a placeholder so the status renders correctly; the
-    // next snapshot will fill in the missing fields (mode, name, etc).
-    const placeholder = updateSession(factory(event.session_id));
-    placeholder.owner = event.email || placeholder.owner;
-    placeholder.pod_name = stringOrNull(event.payload.pod_name) ?? placeholder.pod_name;
-    return { ...state, sessions: [...state.sessions, placeholder] };
+    // Pod-state event for a session_id this client has never seen. Pre-
+    // fix the reducer synthesized a placeholder Session "so the status
+    // renders correctly before the matching /api/sessions row lands."
+    // That branch was the second half of the stuck-deleting bug: a
+    // session.pod_terminating event arriving on the SSE after
+    // session.deleted had already removed the row would resurrect the
+    // row as a status="Failed" placeholder, and the next render
+    // re-rendered it indefinitely.
+    //
+    // Per docs/product-inspirations.md ("Reconnect resumes from a cursor
+    // over persisted events. Unknown cursors force an explicit resync
+    // instead of silently skipping a gap"), the right answer is never to
+    // fabricate state from a partial event. The reducer drops the event
+    // — a session_id the durable ledger has surfaced a pod_* row for
+    // must have a session.created row at a smaller order_key, so a
+    // cursor-correct stream cannot legitimately reach this case. If we
+    // ever do (a producer regression, a missed ledger row), the
+    // sidebar's next resync_required cycle catches us up from Postgres.
+    return state;
   }
   const next = updateSession(state.sessions[idx]);
   const sessions = state.sessions.slice();

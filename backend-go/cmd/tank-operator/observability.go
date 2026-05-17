@@ -9,6 +9,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/podinformer"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
 // Observability is a real Prometheus surface scraped by the
@@ -131,6 +132,19 @@ var (
 		Name: "tank_session_list_event_publish_failure_total",
 		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
+
+	// sessionListOrphanPodTotal ticks once per pod observed by the Reader
+	// that has no matching registry row (visible OR tombstoned). The Reader
+	// drops these — registry-only enumeration is the post-#83 architecture
+	// — so the counter is the only place orphan pods become observable.
+	// Steady-state expectation is zero. Non-zero means either Manager.Create
+	// has a leak (pod created without a registry row), or the reaper / a
+	// future migration deleted a registry row while leaving the pod
+	// running. Either case is "investigate", not "auto-recover."
+	sessionListOrphanPodTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_orphan_pod_total",
+		Help: "Sessions-namespace pods observed by the Reader without a matching registry row (visible or tombstoned).",
+	})
 )
 
 // --- Service-principal (role=service) request metrics ---
@@ -229,6 +243,14 @@ var (
 // bump so handler call sites don't import the metric symbol directly.
 func recordSessionListStreamError() {
 	sessionListStreamErrorTotal.Inc()
+}
+
+// promSessionReaderMetrics satisfies sessions.Metrics so the read path
+// can bump the orphan-pod counter without importing prometheus.
+type promSessionReaderMetrics struct{}
+
+func (promSessionReaderMetrics) RecordOrphanPod() {
+	sessionListOrphanPodTotal.Inc()
 }
 
 // promPodInformerMetrics satisfies podinformer.Metrics so the informer
@@ -373,14 +395,16 @@ func (promPGMetrics) RecordQuery(operation, outcome string, duration time.Durati
 }
 
 // Compile-time interface conformance checks. If a future refactor renames
-// a method on the sessionbus / pgstore / podinformer interfaces, this
-// won't silently fall back to "no metrics emitted" — it will fail to build.
+// a method on the sessionbus / pgstore / podinformer / sessions
+// interfaces, this won't silently fall back to "no metrics emitted" — it
+// will fail to build.
 var (
 	_ sessionbus.PersisterMetrics  = promPersisterMetrics{}
 	_ sessionbus.WakeMetrics       = promWakeMetrics{}
 	_ sessionbus.ConnectionMetrics = promNATSConnectionMetrics{}
 	_ pgstore.SQLMetrics           = promPGMetrics{}
 	_ podinformer.Metrics          = promPodInformerMetrics{}
+	_ sessions.Metrics             = promSessionReaderMetrics{}
 	_ lifecycleEmitterMetrics      = promLifecycleEmitterMetrics{}
 )
 

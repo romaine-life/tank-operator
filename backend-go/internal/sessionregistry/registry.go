@@ -26,8 +26,22 @@ func NewPostgresStore(pool *pgxpool.Pool, scope string) *Store {
 	return &Store{pool: pool, scope: scope}
 }
 
-// List returns the visible session records for an owner in this scope,
-// ordered oldest-first by created_at to match the Cosmos impl.
+// List returns all session records for an owner in this scope (both
+// visible and tombstoned), ordered oldest-first by created_at. Callers
+// that want only the user-facing session list must filter on the Visible
+// field — the registry is also the source of truth for "this session_id
+// was registered and is now tombstoned", which sessions.Reader.List needs
+// so it can distinguish a still-terminating pod owned by a known-deleted
+// session (drop) from a never-registered orphan pod (drop and count).
+//
+// Pre-#83 follow-up the SQL filter was `WHERE visible = true` and the
+// pod-listing loop in sessions.Reader.List would re-add tombstoned
+// session_ids from the Kubernetes pod API whenever the pod was still
+// inside terminationGracePeriodSeconds — the snapshot lied about the
+// just-deleted session and the sidebar got "stuck deleting" rows. Per
+// docs/migration-policy.md the registry is the durable enumeration
+// source; the pod is hydration data for an existing registry row, never
+// the row itself.
 func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
 	normalized := strings.ToLower(strings.TrimSpace(owner))
 	if normalized == "" {
@@ -39,7 +53,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			COALESCE(to_char(created_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(updated_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at
 		FROM sessions
-		WHERE email = $1 AND session_scope = $2 AND visible = true
+		WHERE email = $1 AND session_scope = $2
 		ORDER BY created_at ASC
 	`
 	rows, err := s.pool.Query(ctx, q, normalized, s.scope)

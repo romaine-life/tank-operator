@@ -64,25 +64,61 @@ type Reader struct {
 	registry  Registry
 	lifecycle LifecycleStatusSource
 	scope     string
+	metrics   Metrics
 }
 
+// Registry is the read-only view of the session registry that Reader.List
+// needs. The implementation must return BOTH visible and tombstoned
+// (visible=false) records — Reader filters on Visible for the user-facing
+// enumeration and uses the full set to distinguish a still-terminating
+// pod owned by a known-deleted session (drop silently, the registry has
+// already retired the row) from an orphan pod that the registry never
+// knew about (drop, but increment the orphan counter — a steady-state
+// signal that a session pod escaped its registry row, which means the
+// pod-deletion / registry-deletion paths have diverged).
 type Registry interface {
 	List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error)
 }
 
+// Metrics is the optional observability hook the Reader uses to surface
+// list-side anomalies. RecordOrphanPod fires once per pod observed by the
+// Kubernetes API that has no matching registry row (visible or
+// tombstoned). Steady-state expectation is zero. Non-zero means either
+// (a) a session pod was created outside Manager.Create (real
+// architectural bug), or (b) the registry entry was wiped while the pod
+// kept running (the reaper should be the only thing in that path; if
+// this counter ticks, the reaper grew a leak). Either way the dashboard
+// alert is "investigate", not "auto-recover" — the Reader intentionally
+// no longer surfaces orphan pods to the user-facing list.
+type Metrics interface {
+	RecordOrphanPod()
+}
+
+type noopMetrics struct{}
+
+func (noopMetrics) RecordOrphanPod() {}
+
+// NewReader builds a Reader that supports only Get-side lookups. List
+// will fail with ErrRegistryRequired because, post-#83, the registry is
+// the durable enumeration source. Tests that exercise Get-only paths can
+// keep using this constructor; production callers wire NewReaderFull.
 func NewReader(client kubernetes.Interface, namespace string) *Reader {
 	return NewReaderWithRegistry(client, namespace, nil)
 }
 
+// NewReaderWithRegistry builds a Reader with a registry but without the
+// lifecycle ledger. Same use case as NewReader — Get-side lookups in
+// tests. List still requires a registry to enumerate from but does not
+// require the lifecycle ledger (Status falls back to the
+// infoFromRecord-derived value).
 func NewReaderWithRegistry(client kubernetes.Interface, namespace string, registry Registry) *Reader {
 	return NewReaderFull(client, namespace, registry, nil, "")
 }
 
-// NewReaderFull is the full-fledged constructor that wires the lifecycle
-// store so List/Get can hydrate Activity and the durable Status field
-// from the ledger. The legacy two-arg / three-arg constructors are kept
-// for the manager's reaperLoop call sites that don't need the lifecycle
-// data.
+// NewReaderFull is the production constructor. The registry is the
+// authoritative session enumeration; the lifecycle ledger hydrates each
+// row's Status and Activity. Wire metrics via WithMetrics to surface the
+// orphan-pod counter.
 func NewReaderFull(client kubernetes.Interface, namespace string, registry Registry, lifecycle LifecycleStatusSource, scope string) *Reader {
 	if namespace == "" {
 		namespace = defaultNamespace
@@ -90,10 +126,60 @@ func NewReaderFull(client kubernetes.Interface, namespace string, registry Regis
 	if scope == "" {
 		scope = "default"
 	}
-	return &Reader{client: client, namespace: namespace, registry: registry, lifecycle: lifecycle, scope: scope}
+	return &Reader{
+		client:    client,
+		namespace: namespace,
+		registry:  registry,
+		lifecycle: lifecycle,
+		scope:     scope,
+		metrics:   noopMetrics{},
+	}
 }
 
+// WithMetrics wires an observability adapter. Returns the receiver so
+// callers can chain off the constructor.
+func (r *Reader) WithMetrics(metrics Metrics) *Reader {
+	if metrics == nil {
+		metrics = noopMetrics{}
+	}
+	r.metrics = metrics
+	return r
+}
+
+// ErrRegistryRequired is returned by List when the Reader has no
+// registry wired. Post-#83 the registry is the durable session
+// enumeration; there is no fall-through to pod-listing as the
+// enumeration source. Get-only Readers (legacy NewReader without a
+// registry) intentionally fail loud here rather than silently degrading
+// to the retired pod-only path.
+var ErrRegistryRequired = errors.New("sessions: registry is required for List")
+
+// List returns the per-owner session enumeration from the durable
+// registry, hydrated with each session's latest Status/Activity from the
+// lifecycle ledger. Pods are looked up by session_id for additional
+// hydration (annotations, ready_at) of registry rows that have a live
+// pod, but the pod listing is never the source of enumeration — a pod
+// the registry doesn't know about is an orphan, counted but not
+// surfaced. A pod owned by a tombstoned registry row (visible=false) is
+// dropped silently; the registry already retired the row.
+//
+// This shape replaces the pre-fix pod-loop that re-added still-
+// terminating pods after Manager.Delete had already MarkDeleted them, so
+// the SPA snapshot lied about the deletion and the sidebar got "stuck
+// deleting" rows once the SSE session.deleted had cleared the entry. Per
+// docs/product-inspirations.md: user-visible state comes from durable
+// events, not from a runtime read whose purpose is to keep an old code
+// path alive.
 func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
+	if r.registry == nil {
+		return nil, ErrRegistryRequired
+	}
+
+	records, err := r.registry.List(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+
 	ownerLabel := sessionmodel.OwnerLabel(owner)
 	pods, err := r.client.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "tank-operator/owner=" + ownerLabel,
@@ -101,49 +187,40 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	podsByID := make(map[string]*corev1.Pod, len(pods.Items))
-	podOrder := make([]*corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
 		pod := &pods.Items[i]
 		podsByID[sessionIDFromPod(pod)] = pod
-		podOrder = append(podOrder, pod)
 	}
 
-	if r.registry != nil {
-		records, err := r.registry.List(ctx, owner)
-		if err != nil {
-			return nil, err
-		}
-		seen := make(map[string]struct{}, len(records))
-		out := make([]Info, 0, len(records)+len(pods.Items))
-		for _, record := range records {
-			seen[record.ID] = struct{}{}
-			info := infoFromRecord(owner, record, podsByID[record.ID])
-			r.hydrateLifecycle(ctx, &info)
-			out = append(out, info)
-		}
-		for _, pod := range podOrder {
-			id := sessionIDFromPod(pod)
-			if _, ok := seen[id]; ok || !podHasSandboxAgent(pod) {
-				continue
-			}
-			info := infoFromPod(owner, pod)
-			r.hydrateLifecycle(ctx, &info)
-			out = append(out, info)
-		}
-		return out, nil
-	}
-
-	out := make([]Info, 0, len(pods.Items))
-	for _, pod := range podOrder {
-		if !podHasSandboxAgent(pod) {
+	// known is the full set of session_ids the registry has seen for this
+	// owner (visible OR tombstoned). Used below to classify each pod:
+	// known-and-visible → already enumerated from the registry loop;
+	// known-and-tombstoned → drop silently (registry retired the row);
+	// unknown → orphan, count and drop.
+	known := make(map[string]struct{}, len(records))
+	out := make([]Info, 0, len(records))
+	for _, record := range records {
+		known[record.ID] = struct{}{}
+		if !record.Visible {
 			continue
 		}
-		info := infoFromPod(owner, pod)
+		info := infoFromRecord(owner, record, podsByID[record.ID])
 		r.hydrateLifecycle(ctx, &info)
 		out = append(out, info)
 	}
+
+	for _, pod := range pods.Items {
+		id := sessionIDFromPod(&pod)
+		if _, ok := known[id]; ok {
+			continue
+		}
+		if !podHasSandboxAgent(&pod) {
+			continue
+		}
+		r.metrics.RecordOrphanPod()
+	}
+
 	return out, nil
 }
 
@@ -218,9 +295,11 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord, pod *corev1
 	}
 }
 
-// infoFromPod builds an Info from a live pod for callers that haven't
-// wired the lifecycle store yet (legacy NewReader / NewReaderWithRegistry).
-// The Status field defaults to "Pending" — the real Status comes from
+// infoFromPod builds an Info from a live pod. Used by Reader.Get for
+// per-session lookups (pod is the cheapest source of pod-derived
+// annotations); Reader.List no longer flows here as the enumeration
+// source — the registry is, per the comment on Reader.List. The Status
+// field defaults to "Pending" — the real Status comes from
 // hydrateLifecycle's pull against the latest session.pod_* lifecycle
 // event. Live pod-state computation is intentionally NOT done here per
 // tank-operator#83: status is derived from the durable ledger, not the
