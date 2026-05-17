@@ -3141,6 +3141,32 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Pending-tail variant: the round button widens to a pill carrying the
+   "N new" count badge when events arrive while the user is back-reading.
+   Matches the affordance Slack and Discord use for new-messages-below. */
+.run-scroll-to-bottom-pending {
+  width: auto;
+  padding: 0 0.55rem 0 0.5rem;
+  gap: 0.35rem;
+  border-color: rgba(110, 168, 255, 0.5);
+  background: rgba(33, 53, 80, 0.94);
+}
+
+.run-scroll-to-bottom-pending:hover {
+  background: rgba(43, 64, 92, 0.96);
+  border-color: rgba(140, 190, 255, 0.7);
+}
+
+.run-scroll-to-bottom-count {
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  min-width: 1.2rem;
+  text-align: center;
+}
+
 /* Composer textarea — taller, more breathing room. Auto-grows with
    content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {

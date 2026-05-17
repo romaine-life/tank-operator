@@ -278,6 +278,12 @@ const blocked = [
   // future refactor can't quietly rebuild the forward walk.
   { name: "removed 50-page forward-walk loop", pattern: /for\s*\(\s*let\s+page\s*=\s*0\s*;\s*page\s*<\s*50\b/ },
   { name: "removed 1000-event-per-page timeline fetch", pattern: /limit:\s*["']1000["']/ },
+  // Stage 3: hand-rolled scroll-detect hysteresis. Replaced by react-
+  // virtuoso's atBottomStateChange callback, which is the durable
+  // boolean source for "is the user viewing the live tail." The 24px
+  // threshold was the smoking-gun signature of the prior listener —
+  // ban the literal so a future refactor can't reintroduce it.
+  { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
 ];
 
 const failures = [];
