@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  buildInputReplyMessage,
   dispatch,
+  inputReplyAnnotations,
+  inputReplyAnswers,
   inputReplyTargetProviderItemID,
-  inputReplyText,
+  joinAnswersForSDK,
   Runner,
 } from "./runner.js";
 import {
@@ -145,30 +146,51 @@ test("userSubmissionEvents produces Tank-shape boundary events", () => {
   }
 });
 
-test("input reply records map to Claude tool_result messages", () => {
-  const message = buildInputReplyMessage("toolu_ask", "Continue");
-
-  assert.equal((message as { type?: string }).type, "user");
-  assert.equal((message as { parent_tool_use_id?: string }).parent_tool_use_id, "toolu_ask");
-  assert.deepEqual((message as { message?: { content: unknown[] } }).message?.content, [
-    {
-      type: "tool_result",
-      tool_use_id: "toolu_ask",
-      content: "Continue",
-    },
-  ]);
-});
-
-test("input reply record helpers trim durable control fields", () => {
+test("inputReplyAnswers parses durable command answers map and drops empties", () => {
   const record = {
     target_provider_item_id: " toolu_ask ",
-    input_reply: " Continue ",
-    prompt: "fallback",
+    answers: {
+      "  Which auth method?  ": ["  OAuth  ", ""],
+      "  ": ["ignored"],
+      "Drop me": [],
+    },
   };
 
   assert.equal(inputReplyTargetProviderItemID(record as never), "toolu_ask");
-  assert.equal(inputReplyText(record as never), "Continue");
-  assert.equal(inputReplyText({ ...record, input_reply: "" } as never), "");
+  assert.deepEqual(inputReplyAnswers(record as never), { "Which auth method?": ["OAuth"] });
+});
+
+test("inputReplyAnswers tolerates a missing or malformed answers field", () => {
+  assert.deepEqual(inputReplyAnswers({} as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: null } as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: "not-a-map" } as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: [] } as never), {});
+});
+
+test("inputReplyAnnotations trims preview and notes, drops empty entries", () => {
+  const record = {
+    annotations: {
+      "Q1": { preview: "  <div/>  ", notes: "  hi  " },
+      "Q2": { notes: "" },
+      "  ": { preview: "x" },
+    },
+  };
+  assert.deepEqual(inputReplyAnnotations(record as never), {
+    Q1: { preview: "<div/>", notes: "hi" },
+  });
+});
+
+test("joinAnswersForSDK joins multi-select arrays with the SDK preprocess separator", () => {
+  assert.deepEqual(
+    joinAnswersForSDK({
+      "Single": ["OAuth"],
+      "Multi": ["A", "B", "C"],
+    }),
+    {
+      Single: "OAuth",
+      Multi: "A, B, C",
+    },
+  );
 });
 
 // Regression test for the "Stop doesn't interrupt deep tool-use loops"

@@ -47,11 +47,22 @@ export function startsClaudeTurn(event: ClaudeProviderEvent): boolean {
   return event.type === "assistant" || event.type === "user" || event.type === "result";
 }
 
+// ResolvedInputReply is the payload that resolved an AskUserQuestion via
+// the durable `input_reply` JetStream command. The runner stashes one
+// entry per resolved tool_use; this adapter drains and inlines them into
+// `tool.approval_resolved` payloads so durable replay carries the user's
+// selections. Empty maps are dropped from the emitted event.
+export interface ResolvedInputReply {
+  answers: Record<string, string[]>;
+  annotations: Record<string, { preview?: string; notes?: string }>;
+}
+
 export function canonicalEventsForClaudeMessage(
   cfg: Config,
   turn: ClaudeTurnContext | null,
   message: ClaudeProviderEvent,
   needsInputProviderItemIDs: Set<string>,
+  resolvedInputReplies?: Map<string, ResolvedInputReply>,
 ): TankConversationEvent[] {
   if (!turn) return [];
   const providerID = providerEventID(message);
@@ -169,6 +180,19 @@ export function canonicalEventsForClaudeMessage(
       });
       if (!needsInputProviderItemIDs.has(providerItemID)) return [completed];
       needsInputProviderItemIDs.delete(providerItemID);
+      const resolved = resolvedInputReplies?.get(providerItemID);
+      resolvedInputReplies?.delete(providerItemID);
+      const approvalPayload: Record<string, unknown> = {
+        kind: "needs_input",
+        resolved: true,
+        is_error: failed,
+      };
+      if (resolved && Object.keys(resolved.answers).length > 0) {
+        approvalPayload.answers = resolved.answers;
+      }
+      if (resolved && Object.keys(resolved.annotations).length > 0) {
+        approvalPayload.annotations = resolved.annotations;
+      }
       return [
         completed,
         itemEvent({
@@ -179,11 +203,7 @@ export function canonicalEventsForClaudeMessage(
           providerItemID,
           actor: "tool",
           providerEventID: providerID,
-          payload: {
-            kind: "needs_input",
-            resolved: true,
-            is_error: failed,
-          },
+          payload: approvalPayload,
         }),
       ];
     });

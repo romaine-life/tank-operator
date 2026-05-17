@@ -23,6 +23,15 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   originSessionId?: string;
 }
 
+export interface AskUserQuestionAnswer {
+  /** The list of option labels the user selected for this question. */
+  labels: string[];
+  /** Optional notes the user attached to the selected option(s). */
+  notes?: string;
+  /** Optional preview content for the selected option (HTML fragment). */
+  preview?: string;
+}
+
 export interface ConversationToolEntry extends ConversationEntryBase {
   kind: "tool";
   toolName: string;
@@ -32,6 +41,14 @@ export interface ConversationToolEntry extends ConversationEntryBase {
   toolInput?: string;
   toolOutput?: string;
   toolStatus?: string;
+  /**
+   * For AskUserQuestion tools that completed via a durable input_reply
+   * command, the answers the user selected — keyed by question text.
+   * Sourced from the `tool.approval_resolved` event payload, not from
+   * local React state, so a fresh tab opened after the answer arrived
+   * still renders the user's selections.
+   */
+  askUserAnswers?: Record<string, AskUserQuestionAnswer>;
 }
 
 export interface ConversationReasoningEntry extends ConversationEntryBase {
@@ -206,6 +223,7 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       toolInput: toolInput(item),
       toolOutput: toolOutput(item),
       toolStatus: toolStatus(item),
+      askUserAnswers: askUserAnswers(item),
       turnId: item.turnId,
       providerItemId: item.providerItemId,
       time: item.createdAt ?? "",
@@ -357,6 +375,38 @@ function toolOutput(item: ConversationItem): string | undefined {
 
 function toolStatus(item: ConversationItem): string {
   return item.status;
+}
+
+// askUserAnswers reads the durable answers/annotations off a
+// merged AskUserQuestion item payload. The reducer merges
+// `tool.approval_requested` (carrying `input.questions[]`) and
+// `tool.approval_resolved` (carrying `answers` / `annotations`) into the
+// same `ConversationItem` payload, so by the time the item reaches
+// projection both halves are present.
+function askUserAnswers(item: ConversationItem): Record<string, AskUserQuestionAnswer> | undefined {
+  const rawAnswers = item.payload?.answers;
+  if (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers)) {
+    return undefined;
+  }
+  const rawAnnotations = item.payload?.annotations;
+  const annotations =
+    rawAnnotations && typeof rawAnnotations === "object" && !Array.isArray(rawAnnotations)
+      ? (rawAnnotations as Record<string, { preview?: unknown; notes?: unknown }>)
+      : undefined;
+  const out: Record<string, AskUserQuestionAnswer> = {};
+  for (const [question, value] of Object.entries(rawAnswers as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue;
+    const labels = value
+      .map((entry) => (typeof entry === "string" ? entry : ""))
+      .filter((entry) => entry.length > 0);
+    if (labels.length === 0) continue;
+    const ann = annotations?.[question];
+    const entry: AskUserQuestionAnswer = { labels };
+    if (typeof ann?.preview === "string" && ann.preview) entry.preview = ann.preview;
+    if (typeof ann?.notes === "string" && ann.notes) entry.notes = ann.notes;
+    out[question] = entry;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function stringPayload(item: ConversationItem, key: string): string | undefined {

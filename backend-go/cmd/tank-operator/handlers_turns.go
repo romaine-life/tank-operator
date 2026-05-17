@@ -188,6 +188,21 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	})
 }
 
+// inputReplyRequest is the JSON body shape accepted by
+// `POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`.
+//
+// `answers` is `{questionText: answerLabel[]}` — always a slice so
+// single-select and multi-select questions share one shape. The runner
+// joins multi-element slices with ", " at the SDK boundary to match the
+// Claude Agent SDK's AskUserQuestion zod preprocess. `annotations` is
+// optional `{questionText: {preview?, notes?}}` from the SDK schema.
+type inputReplyRequest struct {
+	ProviderItemID string                                    `json:"provider_item_id"`
+	TimelineID     string                                    `json:"timeline_id"`
+	Answers        map[string][]string                       `json:"answers"`
+	Annotations    map[string]sessionbus.InputReplyAnnotation `json:"annotations,omitempty"`
+}
+
 func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -200,27 +215,30 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var body struct {
-		ProviderItemID string `json:"provider_item_id"`
-		TimelineID     string `json:"timeline_id"`
-		Text           string `json:"text"`
-	}
+	var body inputReplyRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	providerItemID := strings.TrimSpace(body.ProviderItemID)
 	timelineID := strings.TrimSpace(body.TimelineID)
-	text := strings.TrimSpace(body.Text)
 	if providerItemID == "" || timelineID == "" {
 		writeError(w, http.StatusBadRequest, "provider_item_id and timeline_id are required")
 		return
 	}
-	if text == "" {
-		writeError(w, http.StatusBadRequest, "missing input reply text")
+
+	// Validate the answers payload up front: at least one question with
+	// at least one non-empty label. This catches empty submits before
+	// they hit JetStream and matches the SDK's zod schema rejecting
+	// empty answer maps.
+	answers := normalizeInputReplyAnswers(body.Answers)
+	if len(answers) == 0 {
+		writeError(w, http.StatusBadRequest, "answers must contain at least one non-empty selection")
 		return
 	}
-	if len([]byte(text)) > maxSDKInputReplyBytes {
+	annotations := normalizeInputReplyAnnotations(body.Annotations)
+
+	if size := inputReplyPayloadSize(answers, annotations); size > maxSDKInputReplyBytes {
 		writeError(w, http.StatusBadRequest, "input reply too large")
 		return
 	}
@@ -254,8 +272,8 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		TargetTurnID:         targetTurnID,
 		TargetTimelineID:     timelineID,
 		TargetProviderItemID: providerItemID,
-		InputReply:           text,
-		Prompt:               text,
+		Answers:              answers,
+		Annotations:          annotations,
 		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
@@ -281,6 +299,77 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		"target_timeline_id":      timelineID,
 		"target_provider_item_id": providerItemID,
 	})
+}
+
+// normalizeInputReplyAnswers trims each question/label pair and drops
+// empties. Returns nil for "no usable answers" so the caller's `len() == 0`
+// check handles the rejection in one place.
+func normalizeInputReplyAnswers(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for question, labels := range in {
+		trimmedQuestion := strings.TrimSpace(question)
+		if trimmedQuestion == "" {
+			continue
+		}
+		cleaned := make([]string, 0, len(labels))
+		for _, label := range labels {
+			trimmed := strings.TrimSpace(label)
+			if trimmed != "" {
+				cleaned = append(cleaned, trimmed)
+			}
+		}
+		if len(cleaned) > 0 {
+			out[trimmedQuestion] = cleaned
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeInputReplyAnnotations(in map[string]sessionbus.InputReplyAnnotation) map[string]sessionbus.InputReplyAnnotation {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]sessionbus.InputReplyAnnotation, len(in))
+	for question, ann := range in {
+		trimmedQuestion := strings.TrimSpace(question)
+		if trimmedQuestion == "" {
+			continue
+		}
+		cleaned := sessionbus.InputReplyAnnotation{
+			Preview: strings.TrimSpace(ann.Preview),
+			Notes:   strings.TrimSpace(ann.Notes),
+		}
+		if cleaned.Preview != "" || cleaned.Notes != "" {
+			out[trimmedQuestion] = cleaned
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// inputReplyPayloadSize sums the answers + annotations bytes against
+// maxSDKInputReplyBytes. The cap is intentionally generous (64 KiB)
+// because previews can carry HTML fragments per the SDK schema.
+func inputReplyPayloadSize(answers map[string][]string, annotations map[string]sessionbus.InputReplyAnnotation) int {
+	total := 0
+	for question, labels := range answers {
+		total += len(question)
+		for _, label := range labels {
+			total += len(label)
+		}
+	}
+	for question, ann := range annotations {
+		total += len(question) + len(ann.Preview) + len(ann.Notes)
+	}
+	return total
 }
 
 type sdkTurnRequest struct {

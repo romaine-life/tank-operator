@@ -359,7 +359,23 @@
           "title": "Ask user question",
           "name": "AskUserQuestion",
           "input": {
-            "question": "Proceed?"
+            "questions": [
+              {
+                "question": "Which auth method should we use?",
+                "header": "Auth method",
+                "multiSelect": false,
+                "options": [
+                  {
+                    "label": "OAuth",
+                    "description": "Third-party identity providers (Google/Microsoft)."
+                  },
+                  {
+                    "label": "JWT",
+                    "description": "First-party signed sessions."
+                  }
+                ]
+              }
+            ]
           }
         }
       }
@@ -388,7 +404,10 @@
         "payload": {
           "kind": "needs_input",
           "resolved": true,
-          "is_error": false
+          "is_error": false,
+          "answers": {
+            "Which auth method should we use?": ["OAuth"]
+          }
         }
       }
     }

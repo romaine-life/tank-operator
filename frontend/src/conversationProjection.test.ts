@@ -297,3 +297,67 @@ test("projects durable AskUserQuestion reply targets", () => {
     assert.equal(projection.entries[0].id, "turn-active:item:toolu_ask");
   }
 });
+
+test("surfaces durable AskUserQuestion answers on the projected tool entry", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
+      ev("2", "tool.approval_requested", {
+        actor: "tool",
+        source: "claude",
+        turn_id: "turn-active",
+        timeline_id: "turn-active:item:toolu_ask",
+        provider_item_id: "toolu_ask",
+        payload: {
+          kind: "needs_input",
+          name: "AskUserQuestion",
+          input: {
+            questions: [
+              {
+                question: "Which features do you want to enable?",
+                header: "Features",
+                multiSelect: true,
+                options: [
+                  { label: "Search", description: "Full-text" },
+                  { label: "Tags", description: "Faceted nav" },
+                  { label: "Notes", description: "Inline notes" },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+      ev("3", "tool.approval_resolved", {
+        actor: "tool",
+        source: "claude",
+        turn_id: "turn-active",
+        timeline_id: "turn-active:item:toolu_ask",
+        provider_item_id: "toolu_ask",
+        payload: {
+          kind: "needs_input",
+          resolved: true,
+          is_error: false,
+          answers: {
+            "Which features do you want to enable?": ["Search", "Tags"],
+          },
+          annotations: {
+            "Which features do you want to enable?": {
+              notes: "Drop notes for now, we'll revisit",
+            },
+          },
+        },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.entries.length, 1);
+  assert.equal(projection.entries[0]?.kind, "tool");
+  if (projection.entries[0]?.kind === "tool") {
+    assert.deepEqual(projection.entries[0].askUserAnswers, {
+      "Which features do you want to enable?": {
+        labels: ["Search", "Tags"],
+        notes: "Drop notes for now, we'll revisit",
+      },
+    });
+  }
+});
