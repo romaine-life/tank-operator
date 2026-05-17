@@ -58,11 +58,12 @@ export function StyleguideAvatars() {
           <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
           render contexts ship: <code>.session-avatar</code> in the sidebar
           (42px, circle-cropped, edge-to-edge — no backdrop or padding),{" "}
-          <code>.run-msg-ai-icon</code> on transcript messages (~27px,
-          circle-cropped, edge-to-edge), <code>.run-status-avatar</code>{" "}
-          in the run-status pill (~22px, circle-cropped, edge-to-edge).
-          All three are the source PNG clipped to a circle with no
-          chrome, so the picker drives every surface at once.
+          <code>.run-msg-ai-icon</code> on transcript messages (also 42px,
+          matching the sidebar so the avatar reads the same in both
+          surfaces), <code>.run-status-avatar</code> in the run-status pill
+          (~22px, circle-cropped, edge-to-edge). All three are the source
+          PNG clipped to a circle with no chrome, so the picker drives
+          every surface at once.
         </p>
 
         {selectedAvatar && (
@@ -232,7 +233,7 @@ export function StyleguideAvatars() {
                     marginBottom: 6,
                   }}
                 >
-                  transcript · <code>.run-msg-ai-icon</code> · ~27px · circle
+                  transcript · <code>.run-msg-ai-icon</code> · 42px · circle
                 </div>
                 <div
                   style={{

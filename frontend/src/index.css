@@ -4680,7 +4680,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message {
   display: grid;
-  grid-template-columns: 1.7rem minmax(0, 1fr);
+  grid-template-columns: 2.625rem minmax(0, 1fr);
   column-gap: 0.55rem;
   row-gap: 0.2rem;
   align-items: start;
@@ -4688,11 +4688,13 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
-/* Avatars — assistant and user avatars are real elements in the outer columns. */
+/* Avatars — assistant and user avatars are real elements in the outer columns.
+   Sized to match the 42px sidebar .session-avatar so the JP1 avatar reads
+   at the same scale in both surfaces. */
 .run-transcript-message::before,
 .run-transcript-message::after {
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -4714,22 +4716,22 @@ textarea.run-files-viewer-editor:focus {
 .run-msg-avatar {
   grid-column: 1;
   grid-row: 1;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   flex-shrink: 0;
 }
 
 .run-msg-avatar .avatar {
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   font-size: var(--run-chat-font-meta);
 }
 
 .run-msg-ai-avatar {
   grid-column: 1;
   grid-row: 1;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -4738,8 +4740,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-msg-ai-icon {
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   display: block;
   border-radius: 999px;
   object-fit: contain;
