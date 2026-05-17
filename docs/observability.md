@@ -46,7 +46,11 @@ All metric names are prefixed `tank_`. The full namespace:
   expectation: `persisted` dominates; the two failure outcomes are
   alerted on `> 0` rate. Owned by the durable `turn.interrupt_requested`
   migration — see `docs/tank-conversation-protocol.md` for the boundary
-  contract.
+  contract. Paired with the pod-side
+  `tank_runner_commands_consumed_total{kind="interrupt_turn"}` and
+  `tank_runner_turn_duration_seconds_count{outcome="interrupted"}`
+  series to drive the `TankStopNotDelivered` / `TankStopNotTerminated`
+  self-telling alerts (see Alerts § below).
 - `tank_runner_*` — pod-side runner counters/histograms. Single label:
   `mode` ("claude" or "codex"), bound at module import.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
@@ -104,6 +108,18 @@ declares one rule group per subsystem:
   wake-publish failures, `turn.interrupt_requested` persist/publish
   failures (the durable stop boundary; non-zero rate means stops are
   losing durability or never reaching the runner).
+- **Stop chain self-telling**: `TankStopNotDelivered` fires if the
+  backend persists Stop requests faster than runners' control-plane
+  consumer claims `interrupt_turn` commands (the data/control plane
+  split has regressed — interrupts are queueing somewhere). 
+  `TankStopNotTerminated` fires if runners claim interrupts faster than
+  they emit terminal `turn.interrupted` events (the SDK / codex Thread
+  is ignoring the abort, or the terminal-event publish is failing).
+  Both are `critical` — Stop is a user-trust control surface and a
+  silent regression here is exactly the failure mode that necessitated
+  the control-plane split. See
+  `docs/tank-conversation-protocol.md` → "Durable turn interruption"
+  for the architecture they protect.
 - **NATS**: disconnect storm (>6/min for 5m).
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result).

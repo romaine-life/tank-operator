@@ -368,9 +368,28 @@ The backend validates ownership, then performs two writes in this order:
    `user_message.created` / `turn.submitted`. Event_id is deterministic in
    `target_turn_id` (`<turnID>:turn.interrupt_requested`) so a double-click
    POST collapses to one durable row at the Postgres UNIQUE constraint.
-2. **Publish a durable JetStream `interrupt_turn` command** with
-   `target_turn_id=<turn_id>`. Runners consume the command and abort the
-   matching active turn from inside the session pod.
+2. **Publish a durable JetStream `interrupt_turn` command** on the
+   per-session/per-provider **control-plane subject**
+   (`tank.session.<storage>.control.<provider>`), not the command subject
+   used for `submit_turn` / `input_reply`. Runners consume the command
+   from a dedicated control-plane JetStream consumer (separate
+   `durable_name`, separate `filter_subject`, higher `max_ack_pending`)
+   and abort the matching active turn from inside the session pod.
+
+The data plane (`tank.session.<storage>.commands.<provider>`) and the
+control plane (`tank.session.<storage>.control.<provider>`) are
+deliberately separate JetStream subjects with separate durable consumers.
+The data-plane consumer runs `max_ack_pending=1` so a long-running
+`submit_turn` is processed end-to-end before the next one starts; that's
+correct for turn serialization but fatal for stop semantics if interrupts
+shared the same consumer — a queued interrupt would sit behind the
+in-flight submit's ack window (sustained by `working()` heartbeats for
+the full duration of the turn) and only be delivered after the turn
+naturally completed. The split is the load-bearing fix for the "Stop
+doesn't interrupt deep tool-use loops" regression; see
+`scripts/check-removed-chat-runtime.mjs` and
+`backend-go/internal/sessionbus/SubjectForCommand` for the regression
+guards on either side of the wire.
 
 If step 1 fails, the handler returns 500 and step 2 does not execute — the
 ledger never carries a side-effect that wasn't accompanied by a durable

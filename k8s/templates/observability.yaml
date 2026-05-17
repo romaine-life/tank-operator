@@ -272,6 +272,76 @@ spec:
             summary: "ScheduleWakeup queue depth exceeded 50 in the last hour"
             runbook: "Pod-local setTimeout scheduler is accumulating timers. May indicate a runaway agent loop or a stuck turn."
 
+        # ----- "Stop is not stopping" self-telling alerts -----
+        #
+        # These exist because the prior failure mode was invisible: PR #481
+        # made the stop request durable (chip renders, runStatus=stopping)
+        # but a JetStream max_ack_pending=1 on the runner's command consumer
+        # held the interrupt_turn command behind the in-flight submit_turn,
+        # so the runner never delivered the interrupt, the SDK never
+        # interrupted, and the user only learned via "the agent kept going
+        # for 5 more minutes." See docs/tank-conversation-protocol.md →
+        # "Durable turn interruption" for the control-plane split that
+        # fixes it. The two alerts below tell on a regression of either
+        # stage of the chain so a future change can't silently re-break it.
+        #
+        # Stage 1 — backend persisted a request, runner control consumer
+        # never claimed an interrupt_turn command. Symptoms: the user
+        # presses Stop, the chip renders, nothing else happens. Root cause
+        # universe: control-plane consumer is unhealthy / JetStream subject
+        # routing regressed / backend published to the wrong subject.
+        - alert: TankStopNotDelivered
+          expr: |
+            sum(rate(tank_turn_interrupt_request_total{outcome="persisted"}[5m]))
+              - sum(rate(tank_runner_commands_consumed_total{kind="interrupt_turn"}[5m]))
+              > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Stop requests are being persisted faster than runners are receiving them"
+            runbook: |
+              Stop is silently broken. The backend keeps recording
+              turn.interrupt_requested rows (and the SPA shows the chip) but
+              the runner's control-plane JetStream consumer is not claiming
+              the interrupt_turn commands. This is the exact failure mode
+              the data/control plane split was designed to prevent — if
+              this alert fires, the split has regressed or one side of the
+              wire shape drifted. Check:
+              (1) backend-go/internal/sessionbus.SubjectForCommand still
+              routes CommandInterrupt to ControlSubject;
+              (2) runner-shared/sessionBus.js controlSubject() matches the
+              Go ControlSubject wire shape;
+              (3) the per-session control consumer (named "{provider}_control_{storage}")
+              exists and is consuming on JetStream.
+
+        # Stage 2 — runner claimed an interrupt but the SDK / codex
+        # AbortController never produced a terminal event for the active
+        # turn. Symptoms: turn keeps emitting tool events past the
+        # interrupt; chip is durable; sidebar stays in "stopping" until
+        # the provider naturally finishes. Root cause universe:
+        # sdkQuery.interrupt() is failing silently inside the Claude SDK,
+        # codex Thread.runStreamed isn't honoring the abort signal, or the
+        # runner is failing to publish turn.interrupted.
+        - alert: TankStopNotTerminated
+          expr: |
+            sum(rate(tank_runner_commands_consumed_total{kind="interrupt_turn",result="accepted"}[5m]))
+              - sum(rate(tank_runner_turn_duration_seconds_count{outcome="interrupted"}[5m]))
+              > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Runners are accepting interrupts but not producing terminal turn.interrupted events"
+            runbook: |
+              The control-plane consumer is delivering interrupts to the
+              runner, but the runner isn't emitting durable turn.interrupted
+              events at the same rate. The SDK / codex Thread is likely
+              ignoring the interrupt, OR the runner is failing to publish
+              the terminal event. Check the affected session pod's
+              agent-runner / codex-runner logs for the "session bus publish
+              failed" line and for "providerErrorTotal{operation=interrupt}".
+
     # Session spawn observability. The user-visible latency budget for
     # `POST /sessions` -> ContainersReady is "fast unless the chosen node
     # has to pull a ~700MB session image." Recording rules below collapse

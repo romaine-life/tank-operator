@@ -171,6 +171,103 @@ test("input reply record helpers trim durable control fields", () => {
   assert.equal(inputReplyText({ ...record, input_reply: "" } as never), "");
 });
 
+// Regression test for the "Stop doesn't interrupt deep tool-use loops"
+// failure mode that PR #481's durable-stop migration left open. Before
+// the data/control plane split, both submit_turn and interrupt_turn rode
+// the same JetStream subject through a single consumer with
+// max_ack_pending=1: while submit_turn was in-flight (the runner held
+// the message via working() heartbeats for the full duration of the
+// turn), the consumer would not deliver interrupt_turn at all. The fix
+// runs two consumers — one per plane — so an interrupt arrives on its
+// own subscription regardless of the data-plane consumer's slot state.
+//
+// This test pins the shape directly: stub both consumer-registration
+// methods on the bus, simulate "data handler never gets invoked"
+// (in-flight submit blocking the data plane), invoke the control
+// handler with an interrupt record, and assert acceptInterrupt fires.
+// If a future refactor folds the planes back together, the control
+// handler will be the same callable as the data handler and the test
+// will fail loudly instead of leaving the regression silent.
+test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interrupts without waiting for the data plane", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    commandBus: {
+      startCommandConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
+      startControlConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
+      markCompleted: () => Promise<void>;
+    };
+    startCommandConsumer: (signal: AbortSignal) => () => void;
+    startControlConsumer: (signal: AbortSignal) => () => void;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+    acceptCommandTurn: (record: unknown) => Promise<void>;
+    acceptInputReply: (record: unknown) => Promise<void>;
+  };
+
+  type RecordHandler = (record: unknown) => Promise<void>;
+  const handlers: { data: RecordHandler | null; control: RecordHandler | null } = {
+    data: null,
+    control: null,
+  };
+  const calls: string[] = [];
+
+  runner.commandBus = {
+    async startCommandConsumer(h: RecordHandler) {
+      handlers.data = h;
+      return async () => {};
+    },
+    async startControlConsumer(h: RecordHandler) {
+      handlers.control = h;
+      return async () => {};
+    },
+    async markCompleted() {
+      calls.push("ack");
+    },
+  };
+  runner.acceptInterrupt = async () => {
+    calls.push("acceptInterrupt");
+  };
+  runner.acceptCommandTurn = async () => {
+    calls.push("acceptCommandTurn");
+  };
+  runner.acceptInputReply = async () => {
+    calls.push("acceptInputReply");
+  };
+
+  const ctl = new AbortController();
+  runner.startCommandConsumer(ctl.signal);
+  runner.startControlConsumer(ctl.signal);
+  // Yield so the .then() callbacks that capture the consumer handlers
+  // get a chance to run before we read them.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const dataFn = handlers.data;
+  const controlFn = handlers.control;
+  if (!dataFn) throw new Error("startCommandConsumer should register a data handler");
+  if (!controlFn) throw new Error("startControlConsumer should register a separate control handler");
+  assert.notEqual(
+    dataFn,
+    controlFn,
+    "data and control handlers must be distinct callables; folding them back together restores the regression",
+  );
+
+  // Simulate the regression environment: the data-plane consumer's slot
+  // is held by an in-flight submit (working() heartbeats keep it
+  // unacked), so dataFn is NOT invoked. We invoke the control handler
+  // directly; the assertion is that acceptInterrupt fires without
+  // acceptCommandTurn ever running.
+  await controlFn({
+    type: "interrupt_turn",
+    id: "control-1",
+    target_turn_id: "turn-active",
+  });
+
+  assert.deepEqual(
+    calls,
+    ["acceptInterrupt"],
+    "interrupt must reach acceptInterrupt independently of the data-plane consumer's slot state",
+  );
+  ctl.abort();
+});
+
 test("terminal turn failures ack the durable submit command", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
