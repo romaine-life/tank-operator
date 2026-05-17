@@ -47,17 +47,6 @@ sa_token_read_total = Counter(
     ["result"],
 )
 
-# GitHub-specific attestation token. Cached and refreshed by the
-# orchestrator's /api/internal/github/attestation; this metric tracks
-# the local refresh path so we can tell "GitHub MCP is broken because
-# the attestation mint failed" apart from "GitHub MCP is broken because
-# the upstream server is down".
-github_attestation_total = Counter(
-    "tank_mcp_auth_proxy_github_attestation_total",
-    "Calls to the orchestrator's /api/internal/github/attestation endpoint.",
-    ["result"],
-)
-
 # auth.romaine.life service-principal exchange. Cached and refreshed by
 # the sidecar; this metric tracks the local exchange path so operators
 # can tell "spawn_service_session is broken because exchange mint
@@ -89,11 +78,6 @@ def record_proxy_request(mcp_server: str, status: int) -> None:
 def record_sa_token_read(result: str) -> None:
     """result is one of: success, failure."""
     sa_token_read_total.labels(result=result).inc()
-
-
-def record_github_attestation(result: str) -> None:
-    """result is one of: success, http_error, exception, invalid_response, cache_hit."""
-    github_attestation_total.labels(result=result).inc()
 
 
 def record_auth_romaine_exchange(result: str) -> None:
@@ -132,7 +116,6 @@ async def start_metrics_server(port: int) -> web.AppRunner:
 
 __all__ = [
     "record_auth_romaine_exchange",
-    "record_github_attestation",
     "record_proxy_request",
     "record_sa_token_read",
     "start_metrics_server",

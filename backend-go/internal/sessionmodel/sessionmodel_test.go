@@ -118,16 +118,8 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("sidecar container name = %v, want %q", got, want)
 	}
 	mcpProxy := containers[0].(map[string]any)
-	proxyEnv := containerEnv(mcpProxy)
-	if got, want := proxyEnv["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.tank-operator.svc.cluster.local"; got != want {
-		t.Fatalf("proxy TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
-	}
-	if got, want := proxyEnv["TANK_SESSION_ATTESTATION_TOKEN_PATH"], "/var/run/secrets/tank-operator/token"; got != want {
-		t.Fatalf("proxy TANK_SESSION_ATTESTATION_TOKEN_PATH = %v, want %q", got, want)
-	}
-	assertVolumeMount(t, mcpProxy, "tank-operator-sa-token")
-	// Second SA token, audience-pinned to auth.romaine.life — used by
-	// in-pod code to exchange for a role=service JWT against
+	// SA token audience-pinned to auth.romaine.life — used by the
+	// sidecar to exchange for a role=service JWT against
 	// /api/auth/exchange/k8s. See nelsong6/tank-operator#486.
 	assertVolumeMount(t, mcpProxy, "auth-romaine-sa-token")
 	claude := containers[1].(map[string]any)

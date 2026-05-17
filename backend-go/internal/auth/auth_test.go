@@ -175,44 +175,6 @@ func TestMinterIssuesVerifiableSession(t *testing.T) {
 	}
 }
 
-func TestMinterIssuesGitHubMCPAttestation(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	installationID := int64(42)
-	tok, expiresAt, err := minter.MintGitHubMCPAttestation(GitHubMCPAttestationSubject{
-		Email:          "USER@example.com",
-		InstallationID: &installationID,
-		IsHost:         false,
-		IsSuperAdmin:   true,
-		SessionScope:   "slot-a",
-		SessionID:      "12",
-		PodName:        "session-12",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Until(expiresAt) <= 0 || time.Until(expiresAt) > GitHubMCPAttestationTTL {
-		t.Fatalf("expiresAt = %s", expiresAt)
-	}
-
-	claims := jwt.MapClaims{}
-	parsed, err := jwt.ParseWithClaims(tok, claims, func(token *jwt.Token) (any, error) {
-		return jwtKey.PublicKey(context.Background(), "test-kid")
-	}, jwt.WithAudience(GitHubMCPAttestationAudience), jwt.WithIssuer("tank-operator"))
-	if err != nil || !parsed.Valid {
-		t.Fatalf("attestation did not verify: token=%v err=%v", parsed, err)
-	}
-	if got, want := claims["owner_email"], "user@example.com"; got != want {
-		t.Fatalf("owner_email = %v, want %q", got, want)
-	}
-	if got, want := claims["github_installation_id"], float64(42); got != want {
-		t.Fatalf("github_installation_id = %v, want %v", got, want)
-	}
-	if got, want := claims["session_scope"], "slot-a"; got != want {
-		t.Fatalf("session_scope = %v, want %q", got, want)
-	}
-}
-
 func TestMinterPublishesJWKS(t *testing.T) {
 	jwtKey := newTestJWT(t)
 	minter := NewMinter(jwtKey, jwtKey)
