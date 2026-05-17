@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-ae5c99d9f586311bf9acdae8b1f75e125c50410c93fad35c5dbd95de23b04c6a"
+  tag: "app-b7b593108b047fc56418e00c521986204efdc5b71ff394c3ec80a43fb93a8b23"
   pullPolicy: IfNotPresent
 
 testEnv:
