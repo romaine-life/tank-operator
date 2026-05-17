@@ -14,6 +14,7 @@ import {
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
+import { Virtuoso } from "react-virtuoso";
 import {
   PromptInput,
   PromptInputFooter,
@@ -1706,6 +1707,29 @@ function isScheduleWakeupToolName(name: string | undefined): boolean {
 
 function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
+}
+
+// eventCountsAsTailOutput mirrors store/session_events.go's
+// UnreadOutputItemTypes / UnreadOutputTurnTypes — content events that
+// render as new bubbles in the transcript. Lifecycle markers
+// (turn.submitted / turn.started / turn.completed, the user's own
+// user_message.created) are excluded so the pending-tail pill counter
+// only ticks on something the user would actually want to scroll down
+// to see.
+function eventCountsAsTailOutput(event: unknown): boolean {
+  if (!isTankConversationEvent(event)) return false;
+  if (event.actor === "user") return false;
+  const type = event.type;
+  return (
+    type === "item.started" ||
+    type === "item.completed" ||
+    type === "item.failed" ||
+    type === "tool.approval_requested" ||
+    type === "tool.approval_resolved" ||
+    type === "turn.failed" ||
+    type === "turn.command_failed" ||
+    type === "turn.interrupted"
+  );
 }
 
 function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
@@ -3437,6 +3461,19 @@ function RunToolGroup({
   );
 }
 
+// RunMessages renders the durable transcript through react-virtuoso so the
+// DOM stays bounded regardless of session length — Mattermost / Element /
+// Slack / Discord all converge on this architecture (see
+// docs/product-inspirations.md). Without virtualization the DOM grows
+// 15-50 nodes per event; long sessions reach 100K+ nodes and layout cost
+// dominates. With Virtuoso only the visible window plus a small overscan
+// buffer mount at any moment.
+//
+// `customScrollParent` makes Virtuoso reuse the existing <main> as its
+// scroll container — no wrapping/sizing layout changes vs. the prior
+// inline render. The `followOutput` + `startReached` +
+// `atBottomStateChange` props replace the hand-rolled scroll-detect /
+// auto-scroll effects deleted from ChatPane in this stage.
 function RunMessages({
   entries,
   avatar,
@@ -3446,6 +3483,9 @@ function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  scrollParent,
+  onStartReached,
+  onAtBottomChange,
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
@@ -3455,45 +3495,86 @@ function RunMessages({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  scrollParent: HTMLElement | null;
+  onStartReached?: () => void;
+  onAtBottomChange?: (atBottom: boolean) => void;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  // computeItemKey stabilizes Virtuoso's per-item identity across renders.
+  // Tool groups have no single id, so we composite the first/last child
+  // ids — same group instance stays the same key as it grows during a
+  // streaming turn.
+  const computeKey = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        const head = g.entries[0]?.id ?? "tools";
+        const tail = g.entries[g.entries.length - 1]?.id ?? head;
+        return `tools-${head}-${tail}`;
+      }
+      return g.entry.id;
+    },
+    [],
+  );
+  const renderItem = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+      }
+      if (g.kind === "reasoning") {
+        return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
+      }
+      if (g.kind === "meta") {
+        return <RunMetaBlock entry={g.entry} />;
+      }
+      return (
+        <RunMessageBubble
+          entry={g.entry}
+          avatar={avatar}
+          showTimestamps={showTimestamps}
+          showDuration={showDuration}
+          onQuote={onQuote}
+          onFork={onFork}
+        />
+      );
+    },
+    [
+      autoExpandTools,
+      avatar,
+      onFork,
+      onQuote,
+      showDuration,
+      showThinking,
+      showTimestamps,
+    ],
+  );
+  // followOutput="smooth" keeps the user stuck to the live tail when they
+  // ARE at the bottom; releases when they scroll up. Returning false from
+  // followOutput's callback would let us suppress auto-scroll mid-render,
+  // but the default behavior matches what ChatPane wants today (sticky
+  // when at bottom; the buffered pill in ChatPane handles back-read).
+  // startReached fires when the user scrolls within ~`overscan` of the
+  // top — Virtuoso debounces this so rapid scroll doesn't spam fetches.
   return (
-    <div className="run-transcript run-transcript-claude" data-slot="root">
-      {groups.map((g: EntryGroup, idx: number) => {
-        if (g.kind === "tools") {
-          return (
-            <RunToolGroup
-              key={`tools-${g.entries[0].id}-${idx}`}
-              entries={g.entries}
-              autoExpand={autoExpandTools}
-            />
-          );
-        }
-        if (g.kind === "reasoning") {
-          return (
-            <RunReasoningBlock
-              key={g.entry.id}
-              entry={g.entry}
-              showThinking={showThinking}
-            />
-          );
-        }
-        if (g.kind === "meta") {
-          return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
-        }
-        return (
-          <RunMessageBubble
-            key={g.entry.id}
-            entry={g.entry}
-            avatar={avatar}
-            showTimestamps={showTimestamps}
-            showDuration={showDuration}
-            onQuote={onQuote}
-            onFork={onFork}
-          />
-        );
-      })}
-    </div>
+    <Virtuoso
+      className="run-transcript run-transcript-claude"
+      data-slot="root"
+      data={groups}
+      customScrollParent={scrollParent ?? undefined}
+      computeItemKey={computeKey}
+      itemContent={renderItem}
+      followOutput="smooth"
+      startReached={onStartReached}
+      atBottomStateChange={onAtBottomChange}
+      // Render two extra screens worth above and below the viewport so
+      // tool-group expansion and markdown reflow don't expose unrendered
+      // gaps mid-scroll.
+      overscan={{ main: 800, reverse: 800 }}
+      // Default initialTopMostItemIndex is the first item; we want the
+      // bottom so caught-up sessions land at the live tail. The minus-1
+      // safeguards against empty arrays (Virtuoso accepts negative indices
+      // as "no anchor").
+      initialTopMostItemIndex={Math.max(groups.length - 1, 0)}
+    />
   );
 }
 
@@ -3621,7 +3702,18 @@ function ChatPane({
     "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
   } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  // transcriptScrollEl is a state-backed reference to the <main> element.
+  // Virtuoso's customScrollParent expects the actual DOM node, and React
+  // refs populate AFTER render — passing `ref.current` would give Virtuoso
+  // `null` on first render and the prop wouldn't reactively update when
+  // the ref hydrated. State + callback ref forces a re-render once <main>
+  // mounts so Virtuoso receives the element on the next pass.
+  const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
+    transcriptScrollRef.current = node;
+    setTranscriptScrollEl(node);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<boolean> | null>(null);
@@ -3640,6 +3732,15 @@ function ChatPane({
   const sdkFoundNewestRef = useRef(false);
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
+  // Streaming-while-back-reading bookkeeping. While the user is reading
+  // older context (atBottom=false), incoming SSE events get appended to
+  // the window — Virtuoso correctly renders them at the bottom of the
+  // virtualized list without moving the user's scroll position. The pill
+  // counter surfaces those events as a clickable "N new messages below ↓"
+  // affordance so the user knows the conversation moved. Cleared when
+  // atBottomStateChange(true) fires. Slack/Discord ship the same pattern.
+  const sdkAtBottomRef = useRef(true);
+  const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
@@ -3894,11 +3995,25 @@ function ChatPane({
   function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    if (!sdkServerEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
+    const alreadySeen = sdkServerEventsRef.current.some(
+      (candidate) => candidate.event_id === event.event_id,
+    );
+    if (!alreadySeen) {
       sdkServerEventsRef.current = orderedConversationEvents([
         ...sdkServerEventsRef.current,
         event,
       ]);
+      // Streaming-back-read pill: count visible-output events that
+      // arrive while the user isn't viewing the live tail. Lifecycle
+      // markers (turn.*, tool.approval_*) shouldn't count — they don't
+      // produce new bubbles, just status transitions. Match the same
+      // policy the server-side UnreadOutputItemTypes uses for badging.
+      if (
+        !sdkAtBottomRef.current &&
+        eventCountsAsTailOutput(event as unknown as JsonObject)
+      ) {
+        setSdkPendingTailCount((count) => count + 1);
+      }
     }
     syncSdkRenderedEntries();
 
@@ -3907,6 +4022,18 @@ function ChatPane({
     if (run && terminal && event.client_nonce === run.id) {
       finalizeSdkRun(run, terminal, { refreshHistory: false });
     }
+  }
+  // handleSdkAtBottomChange is the durable boolean source from Virtuoso
+  // for "is the user viewing the live tail." Replaces the prior 24px
+  // scrollTop hysteresis listener. Two side effects:
+  //   - Mirror to userScrolledUp so the existing scroll-to-bottom button
+  //     visibility CSS still works.
+  //   - When transitioning to atBottom=true, clear the pending-tail
+  //     pill counter — the user has now seen those events.
+  function handleSdkAtBottomChange(atBottom: boolean): void {
+    sdkAtBottomRef.current = atBottom;
+    setUserScrolledUp(!atBottom);
+    if (atBottom) setSdkPendingTailCount(0);
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -4014,28 +4141,11 @@ function ChatPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, queuedMessages]);
 
-  // Auto-scroll the transcript to the bottom when entries grow, unless
-  // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
-  // + wheel-detection behaviour.
-  useEffect(() => {
-    if (userScrolledUp) return;
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    main.scrollTop = main.scrollHeight;
-  }, [entries.length, userScrolledUp, visible, activeTab]);
-
-  // Detect user scroll-away from the bottom. Threshold of 24px so small
-  // overshoots (image loads) don't disable auto-scroll.
-  useEffect(() => {
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    const onScroll = () => {
-      const distanceFromBottom = main.scrollHeight - main.scrollTop - main.clientHeight;
-      setUserScrolledUp(distanceFromBottom > 24);
-    };
-    main.addEventListener("scroll", onScroll, { passive: true });
-    return () => main.removeEventListener("scroll", onScroll);
-  }, []);
+  // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
+  // keeps the user pinned to the live tail when at-bottom, and
+  // `atBottomStateChange` is the durable boolean source for
+  // `setUserScrolledUp` (no more 24px hysteresis listener, no more manual
+  // scrollTop=scrollHeight effect). See RunMessages for the wiring.
 
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
@@ -4571,6 +4681,8 @@ function ChatPane({
     sdkFoundNewestRef.current = false;
     setSdkFoundOldest(false);
     setSdkLoadingOlder(false);
+    sdkAtBottomRef.current = true;
+    setSdkPendingTailCount(0);
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
     stoppingTargetRef.current = null;
@@ -5484,7 +5596,7 @@ function ChatPane({
 
       <main
         className={`run-main run-main-${runStatus}`}
-        ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+        ref={transcriptScrollCallbackRef}
         style={chatFontScaleStyle}
       >
         {activeTab === "files" ? (
@@ -5949,6 +6061,11 @@ function ChatPane({
                   permissionMode: composerMode,
                 })
               }
+              scrollParent={transcriptScrollEl}
+              onStartReached={() => {
+                void loadSdkOlderEvents();
+              }}
+              onAtBottomChange={handleSdkAtBottomChange}
             />
           </>
         )}
@@ -5998,32 +6115,25 @@ function ChatPane({
         </div>
       )}
 
-      {/* Floating scroll-to-bottom button — fades in when the transcript
-          has been scrolled up. Snaps the user back to the latest message
-          and re-enables auto-scroll. Always rendered so the opacity
-          transition reads cleanly; pointer-events handled in CSS. */}
+      {/* Floating scroll-to-bottom button — fades in when the user has
+          scrolled away from the live tail (atBottom=false). When new
+          events have streamed in during a back-read the button shows
+          "N new" so the user knows the conversation moved (Slack /
+          Discord pattern). Click reaches the live tail in one round-trip
+          — refetching the tail if the user back-paginated past it. */}
       {activeTab === "chat" && entries.length > 0 && (
         <button
           type="button"
           className={`run-scroll-to-bottom${
             userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
-          }`}
+          }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
-            // Two-step: when the live tail isn't loaded (the user has
-            // back-paginated past it), drop the window and refetch tail
-            // before scrolling. Otherwise scroll the existing DOM. This
-            // is the path that resolves "getting to the end is not
-            // straightforward" — a single click reaches newest even
-            // when older context is in the window.
             const reachNewest = async () => {
               await jumpSdkToLatest();
-              // After replaceSdkServerEvents the entries effect runs and
-              // the auto-scroll-on-entries-change effect will land us at
-              // the bottom. Reset the userScrolledUp latch so the effect
-              // doesn't skip.
               setUserScrolledUp(false);
-              // Belt-and-suspenders: if the entries effect already ran
-              // (cache hit), force a scroll on the next frame.
+              setSdkPendingTailCount(0);
+              // Belt-and-suspenders: scroll on the next frame in case
+              // Virtuoso's followOutput hasn't repositioned yet.
               requestAnimationFrame(() => {
                 const main = transcriptScrollRef.current;
                 if (main) main.scrollTop = main.scrollHeight;
@@ -6031,9 +6141,18 @@ function ChatPane({
             };
             void reachNewest();
           }}
-          aria-label="Scroll to latest"
+          aria-label={
+            sdkPendingTailCount > 0
+              ? `${sdkPendingTailCount} new messages below`
+              : "Scroll to latest"
+          }
         >
           <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+          {sdkPendingTailCount > 0 && (
+            <span className="run-scroll-to-bottom-count">
+              {sdkPendingTailCount > 99 ? "99+" : sdkPendingTailCount}
+            </span>
+          )}
         </button>
       )}
 
