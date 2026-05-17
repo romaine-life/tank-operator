@@ -3167,6 +3167,86 @@ button:disabled {
   text-align: center;
 }
 
+/* Floating scroll-to-top button — sibling of .run-scroll-to-bottom,
+   stacked above it. Visual treatment matches so the pair reads as one
+   control. Slack-style: ↑ jumps to the very first message of the
+   session (anchor=oldest); ↓ jumps to the live tail. The two buttons
+   are siblings under <ChatPane>'s root so they share absolute
+   positioning context (the <main> transcript element). */
+.run-scroll-to-top {
+  position: absolute;
+  right: calc(var(--space-5) + 0.5rem);
+  /* Stack above .run-scroll-to-bottom (bottom: 6.5rem + 2.25rem + 0.5rem gap). */
+  bottom: 9.25rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 17, 21, 0.92);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  transition:
+    background var(--motion-fast, 140ms) ease,
+    border-color var(--motion-fast, 140ms) ease;
+}
+
+.run-scroll-to-top:hover {
+  background: rgba(30, 33, 39, 0.96);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Passive variant of .run-transcript-load-older — same pill shape so
+   layout doesn't jump when the auto-paginate fetch fires, but no hover
+   affordance and no cursor pointer because it isn't a clickable action.
+   Used when scroll-up triggers loadSdkOlderEvents and we want feedback
+   that something happened. */
+.run-transcript-load-older-passive {
+  cursor: default;
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.run-transcript-load-older-passive:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+/* Beginning-of-conversation divider — replaces the back-paginate button
+   once foundOldest flips true. Rule-flanked label so the user can tell
+   they hit the head of the ledger instead of just a silent scroll-stop.
+   Slack/Discord both ship this divider; the visual is intentionally
+   quieter than the load-older pill it replaces because it's an end-state,
+   not an action. */
+.run-transcript-beginning {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: var(--space-4) auto var(--space-3);
+  padding: 0 var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.run-transcript-beginning-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.run-transcript-beginning-label {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
 /* Composer textarea — taller, more breathing room. Auto-grows with
    content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {

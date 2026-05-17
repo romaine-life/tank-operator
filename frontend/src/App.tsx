@@ -36,6 +36,7 @@ import {
   AlertCircleIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowUpIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -4345,6 +4346,59 @@ function ChatPane({
     }
   }
 
+  // jumpSdkToOldest resets the window to the head of the ledger. Symmetric
+  // counterpart of jumpSdkToLatest — drives the "scroll to start" floating
+  // button next to scroll-to-bottom. Always refetches (anchor=oldest)
+  // rather than walking the entire ledger client-side, so the round-trip
+  // cost is O(limit) regardless of session length. The handler is the
+  // dedicated anchor=oldest path added in handlers_session_events.go,
+  // which dispatches an indexed ASC scan from the head with
+  // FoundOldest=true.
+  async function jumpSdkToOldest(): Promise<void> {
+    const refreshSessionId = session.id;
+    const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      events?: unknown[];
+      next_order_key?: string;
+      prev_order_key?: string;
+      found_oldest?: boolean;
+      found_newest?: boolean;
+    };
+    if (sessionIdRef.current !== refreshSessionId) return;
+    if (!Array.isArray(body.events)) return;
+    const canonicalEvents: TankConversationEvent[] = [];
+    for (const ev of body.events) {
+      if (isTankConversationEvent(ev)) {
+        advanceSdkTimelineCursor(ev);
+        canonicalEvents.push(ev);
+      }
+    }
+    // Forward cursor: events newer than this page exist only if found_newest
+    // is false. The SSE stream resumes at next_order_key; we don't drop the
+    // SSE cursor here because the user can scroll forward into territory
+    // already covered by the live tail subscriber.
+    const nextAfter =
+      typeof body.next_order_key === "string" ? body.next_order_key : "";
+    if (nextAfter) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        nextAfter,
+      );
+    }
+    const prevAfter =
+      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+    // anchor=oldest always sets found_oldest=true server-side; mirror it.
+    sdkFoundOldestRef.current = body.found_oldest === true;
+    sdkFoundNewestRef.current = body.found_newest === true;
+    setSdkFoundOldest(body.found_oldest === true);
+    replaceSdkServerEvents(canonicalEvents, false);
+  }
+
   // jumpSdkToLatest resets the window to the live tail. If the SPA never
   // back-paginated (foundNewest=true), this is a no-op fast path: the
   // existing DOM bottom is the live tail, so the caller can just scroll.
@@ -5989,26 +6043,42 @@ function ChatPane({
           </div>
         ) : (
           <>
-            {/* "Load earlier messages" sits above the transcript when the
-                loaded window doesn't yet include the head of the ledger.
-                One click brings 100 older events into the window. Hides
-                once foundOldest flips true — by then the user can see the
-                very first message of the session. The button is the
-                back-paginate path; Virtuoso-style scroll-up-to-load is
-                Stage 3. */}
-            {!sdkFoundOldest && sdkOldestLoadedOrderKeyRef.current && (
-              <button
-                type="button"
-                className="run-transcript-load-older"
-                onClick={() => {
-                  void loadSdkOlderEvents();
-                }}
-                disabled={sdkLoadingOlder}
-                aria-label="Load earlier messages"
+            {/* Passive top-of-transcript indicator. Replaces the prior
+                explicit "Load earlier messages" button: the auto-load on
+                Virtuoso's startReached (wired below) is the affordance now,
+                matching Slack and Discord. Three states:
+                  - sdkLoadingOlder: spinner-ish "Loading earlier messages…"
+                    surfaced while the back-paginate fetch is in flight so
+                    the user has feedback that the silent scroll-up triggered
+                    something.
+                  - sdkFoundOldest: a "Beginning of conversation" divider so
+                    the user can tell they've hit the head of the ledger
+                    instead of just a scroll-stop with no explanation.
+                  - otherwise: nothing — older content sits virtualized just
+                    above the viewport and reveals itself as the user scrolls.
+                Both states are status, not actions; the SDk loading marker
+                gets role="status" so screenreaders announce it. */}
+            {sdkLoadingOlder ? (
+              <div
+                className="run-transcript-load-older run-transcript-load-older-passive"
+                role="status"
+                aria-live="polite"
               >
-                {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
-              </button>
-            )}
+                Loading earlier messages…
+              </div>
+            ) : sdkFoundOldest && entries.length > 0 ? (
+              <div
+                className="run-transcript-beginning"
+                role="status"
+                aria-label="Beginning of conversation"
+              >
+                <span className="run-transcript-beginning-rule" aria-hidden="true" />
+                <span className="run-transcript-beginning-label">
+                  Beginning of conversation
+                </span>
+                <span className="run-transcript-beginning-rule" aria-hidden="true" />
+              </div>
+            ) : null}
             {continueHintVisible && (
               <div className="run-continue-hint" role="status">
                 Continuing previous conversation
@@ -6085,6 +6155,37 @@ function ChatPane({
             </>
           )}
         </div>
+      )}
+
+      {/* Floating jump-to-start button — symmetric with jump-to-latest.
+          Slack/Discord ship the pair: ↑ takes you to the very first
+          message of the session (anchor=oldest), ↓ takes you back to the
+          live tail. Visible when the user isn't already at the head AND
+          the ledger isn't tiny enough that "start" is already on screen
+          (loaded window doesn't include the oldest event yet). Hidden
+          while scrolled-to-bottom on a fresh session so the at-tail UI
+          isn't cluttered. Sits above the scroll-to-bottom button. */}
+      {activeTab === "chat" && entries.length > 0 && !sdkFoundOldest && userScrolledUp && (
+        <button
+          type="button"
+          className="run-scroll-to-top"
+          onClick={() => {
+            const reachOldest = async () => {
+              await jumpSdkToOldest();
+              // Don't clear sdkPendingTailCount — those events are still
+              // unread, just no longer "below" the user; the pill on the
+              // scroll-to-bottom button stays informative.
+              requestAnimationFrame(() => {
+                const main = transcriptScrollRef.current;
+                if (main) main.scrollTop = 0;
+              });
+            };
+            void reachOldest();
+          }}
+          aria-label="Scroll to beginning of conversation"
+        >
+          <ArrowUpIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+        </button>
       )}
 
       {/* Floating scroll-to-bottom button — fades in when the user has
