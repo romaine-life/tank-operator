@@ -58,6 +58,7 @@ log = logging.getLogger(__name__)
 
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 GITHUB_MCP_PORT = 9992
+GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
 
 # auth.romaine.life service-principal exchange (see
@@ -380,11 +381,14 @@ async def run() -> None:
             else:
                 token_provider = ServiceAccountTokenProvider()
 
-            # mcp-tank-operator gets the auth.romaine.life service JWT
-            # forwarded so its session-management tools can authenticate
-            # to /api/internal/sessions/* . Other MCPs are unaffected.
+            # mcp-tank-operator and mcp-glimmung both gate their tool
+            # surface on the caller's auth.romaine.life service JWT (read
+            # from X-Auth-Romaine-Token because Authorization is consumed
+            # by kube-rbac-proxy in front of each, which strips it before
+            # forwarding upstream). Inject the header so the upstreams
+            # can attribute every call to the originating user.
             extra_header_provider = None
-            if port == TANK_OPERATOR_MCP_PORT:
+            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT):
                 async def _provide_auth_romaine_header(
                     provider=auth_romaine_provider,
                 ) -> tuple[str, str]:
