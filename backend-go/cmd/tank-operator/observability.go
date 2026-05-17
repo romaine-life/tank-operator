@@ -168,6 +168,36 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// --- Admin cross-user read metrics ---
+//
+// Counts every time a role=admin caller reads a session whose Owner !=
+// their email, or lists sessions for a different owner via
+// `?owner=<email>`. Single-counter shape (no labels) keeps cardinality
+// at 2 series total — the operational signal is "is this happening at
+// all" plus per-rate alerting if it ever spikes outside expected admin
+// activity windows. The reads themselves are intentionally not
+// per-target-email so audit-trail concerns belong in the request log,
+// not the metrics surface.
+
+var (
+	adminCrossUserReadsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_admin_cross_user_session_reads_total",
+		Help: "Times an admin-role caller read a session belonging to another user (per-session read endpoints).",
+	})
+	adminCrossUserListsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_admin_cross_user_session_lists_total",
+		Help: "Times an admin-role caller passed `?owner=<email>` to list sessions or session-list events for another user.",
+	})
+)
+
+func recordAdminCrossUserRead() {
+	adminCrossUserReadsTotal.Inc()
+}
+
+func recordAdminCrossUserList() {
+	adminCrossUserListsTotal.Inc()
+}
+
 // --- Session-list (sidebar) stream metrics --- the matching names for
 // the chat-side counters above so dashboards can render both ledgers
 // side-by-side. Same shape: open/reconnect/resync/error/emitted/heartbeat.

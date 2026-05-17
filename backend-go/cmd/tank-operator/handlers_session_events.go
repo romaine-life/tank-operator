@@ -48,12 +48,8 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
-		return
-	}
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 
@@ -122,12 +118,8 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
-		return
-	}
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 
