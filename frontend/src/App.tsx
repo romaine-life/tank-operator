@@ -632,6 +632,43 @@ function writeSessionInteraction(id: string, interaction: SessionInteraction): v
   } catch {}
 }
 
+// Per-session transcript-anchor persistence (Stage 2 chat windowing). When
+// the user returns to a long session we want them to land on the last
+// event they were viewing instead of either the head of the ledger (the
+// old 50-page-walk behavior) or always-newest. The order_key is a small
+// string — one entry per session — so localStorage is the right fit.
+//
+// Read/write paths defensive against quota errors and private-mode storage
+// blocks; the fallback chain (saved → first_unread → newest) means losing
+// a key never breaks the load, it just degrades the UX one notch.
+const SDK_TRANSCRIPT_POSITION_KEY_PREFIX = "tank.transcript.position.";
+
+function readSdkTranscriptPosition(sessionId: string): string | null {
+  try {
+    const stored = localStorage.getItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+    );
+    if (typeof stored === "string" && stored) return stored;
+  } catch {}
+  return null;
+}
+
+function writeSdkTranscriptPosition(sessionId: string, orderKey: string): void {
+  if (!orderKey) return;
+  try {
+    localStorage.setItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+      orderKey,
+    );
+  } catch {}
+}
+
+function clearSdkTranscriptPosition(sessionId: string): void {
+  try {
+    localStorage.removeItem(SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId);
+  } catch {}
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -3590,6 +3627,19 @@ function ChatPane({
   const historyRefreshRef = useRef<Promise<boolean> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
+  // Windowed-transcript bookkeeping introduced when /timeline switched from
+  // a 50-page forward walk to anchored reads. `sdkOldestLoadedOrderKeyRef`
+  // tracks the prev-cursor of the loaded window so "Load earlier" can
+  // back-paginate. `sdkFoundOldestRef` / `sdkFoundNewestRef` mirror the
+  // server's found_oldest / found_newest so the UI can hide back- and
+  // forward-paginate affordances at the edges of the ledger. Empty cursor
+  // / unknown booleans default to "we don't know yet" — UI treats that
+  // conservatively (paginate buttons remain visible until proven needed).
+  const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
+  const sdkFoundOldestRef = useRef(false);
+  const sdkFoundNewestRef = useRef(false);
+  const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
+  const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
@@ -4016,6 +4066,19 @@ function ChatPane({
     );
   }
 
+  // refreshSdkRunHistoryResult loads the durable transcript through a
+  // single anchored read instead of the prior 50-page forward walk from
+  // order_key=0. The old loop was the root cause of the mid-load scroll
+  // "dance": rendering as each 1000-event page arrived extended the DOM
+  // under the user's eyes, so any user scroll-down latched off the
+  // auto-scroll effect and the next page rendered with stale scroll
+  // position. Per docs/migration-policy.md the old path is deleted, not
+  // kept as a fallback.
+  //
+  // Anchor resolution: prefer the saved per-session position from
+  // localStorage (so reopening a session lands where the user left off),
+  // fall back to anchor=first_unread (server resolves to
+  // last_read_order_key), final fallback to anchor=newest.
   function refreshSdkRunHistoryResult(
     showHint: boolean,
     clearRealtime = false,
@@ -4023,55 +4086,84 @@ function ChatPane({
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
-    const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      let afterOrderKey = "";
-      for (let page = 0; page < 50; page += 1) {
-        const params = new URLSearchParams({ limit: "1000" });
-        if (afterOrderKey) params.set("after_order_key", afterOrderKey);
-        const res = await authedFetch(
-          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
-        );
-        if (!res.ok) return { replayed: false };
-        const body = (await res.json()) as {
-          session_id?: string;
-          events?: unknown[];
-          next_order_key?: string;
-          has_more?: boolean;
-          read_state?: { last_read_order_key?: unknown } | null;
-        };
-        if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
-        const lastReadOrderKey = body.read_state?.last_read_order_key;
-        if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
-          sdkLastReadSentRef.current = advanceTimelineCursor(
-            sdkLastReadSentRef.current,
-            lastReadOrderKey,
-          );
-        }
-        if (!Array.isArray(body.events)) return { replayed: false };
-        events.push(...body.events);
-        const previousAfter = afterOrderKey;
-        const nextAfter = typeof body.next_order_key === "string" ? body.next_order_key : "";
-        if (nextAfter) {
-          afterOrderKey = nextAfter;
-          sdkTimelineCursorRef.current = advanceTimelineCursor(
-            sdkTimelineCursorRef.current,
-            nextAfter,
-          );
-        }
-        if (!body.has_more) break;
-        if (!nextAfter || nextAfter === previousAfter) break;
+      const savedAnchor = readSdkTranscriptPosition(refreshSessionId);
+      const params = new URLSearchParams();
+      if (savedAnchor) {
+        params.set("anchor", savedAnchor);
+        params.set("num_before", "100");
+        params.set("num_after", "100");
+      } else {
+        params.set("anchor", "first_unread");
+        params.set("num_before", "100");
+        params.set("num_after", "100");
       }
-
+      let res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      // If the saved anchor was pruned/never existed, server returns 409;
+      // fall through to first_unread which never 409s (the server degrades
+      // to tail when read state is empty or fully caught up).
+      if (res.status === 409 && savedAnchor) {
+        clearSdkTranscriptPosition(refreshSessionId);
+        const fallback = new URLSearchParams({
+          anchor: "first_unread",
+          num_before: "100",
+          num_after: "100",
+        });
+        res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${fallback.toString()}`,
+        );
+      }
+      if (!res.ok) return { replayed: false };
+      const body = (await res.json()) as {
+        session_id?: string;
+        events?: unknown[];
+        next_order_key?: string;
+        prev_order_key?: string;
+        has_more?: boolean;
+        found_oldest?: boolean;
+        found_newest?: boolean;
+        read_state?: { last_read_order_key?: unknown } | null;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+      const lastReadOrderKey = body.read_state?.last_read_order_key;
+      if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
+        sdkLastReadSentRef.current = advanceTimelineCursor(
+          sdkLastReadSentRef.current,
+          lastReadOrderKey,
+        );
+      }
+      if (!Array.isArray(body.events)) return { replayed: false };
       const canonicalEvents: TankConversationEvent[] = [];
-      for (const ev of events) {
+      for (const ev of body.events) {
         if (isTankConversationEvent(ev)) {
           advanceSdkTimelineCursor(ev);
           canonicalEvents.push(ev);
         }
       }
+      // Forward cursor advances to next_order_key — the SSE stream resumes
+      // from this point so we don't re-emit events already in the window.
+      const nextAfter =
+        typeof body.next_order_key === "string" ? body.next_order_key : "";
+      if (nextAfter) {
+        sdkTimelineCursorRef.current = advanceTimelineCursor(
+          sdkTimelineCursorRef.current,
+          nextAfter,
+        );
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      const foundNewest = body.found_newest === true;
+      sdkFoundOldestRef.current = foundOldest;
+      sdkFoundNewestRef.current = foundNewest;
+      setSdkFoundOldest(foundOldest);
       const terminal = clientNonce
-        ? sdkHistoryTerminalForRun(events, clientNonce)
+        ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
       replaceSdkServerEvents(
@@ -4085,6 +4177,110 @@ function ChatPane({
       return { replayed: true, terminal };
     };
     return load().catch(() => ({ replayed: false }));
+  }
+
+  // loadSdkOlderEvents fetches one bounded page of events strictly older
+  // than the current window's oldest event. Surfaced through the "Earlier
+  // messages" affordance at the top of the transcript. Each click brings
+  // 100 more events into the window; the UI hides the button once
+  // sdkFoundOldest flips true.
+  async function loadSdkOlderEvents(): Promise<void> {
+    const refreshSessionId = session.id;
+    const oldest = sdkOldestLoadedOrderKeyRef.current;
+    if (!oldest) return;
+    if (sdkFoundOldestRef.current) return;
+    if (sdkLoadingOlder) return;
+    setSdkLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({
+        before_order_key: oldest,
+        limit: "100",
+      });
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        events?: unknown[];
+        prev_order_key?: string;
+        found_oldest?: boolean;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return;
+      if (!Array.isArray(body.events)) return;
+      const olderEvents: TankConversationEvent[] = [];
+      for (const ev of body.events) {
+        if (isTankConversationEvent(ev)) olderEvents.push(ev);
+      }
+      if (olderEvents.length > 0) {
+        // Merge: existing server events stay at the tail of the array;
+        // older page goes to the head. orderedConversationEvents
+        // sorts ASC by order_key so insertion order doesn't matter, but
+        // doing a head-merge keeps the conceptual model honest.
+        sdkServerEventsRef.current = orderedConversationEvents([
+          ...olderEvents,
+          ...sdkServerEventsRef.current,
+        ]);
+        syncSdkRenderedEntries();
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      if (foundOldest) {
+        sdkFoundOldestRef.current = true;
+        setSdkFoundOldest(true);
+      }
+    } finally {
+      setSdkLoadingOlder(false);
+    }
+  }
+
+  // jumpSdkToLatest resets the window to the live tail. If the SPA never
+  // back-paginated (foundNewest=true), this is a no-op fast path: the
+  // existing DOM bottom is the live tail, so the caller can just scroll.
+  // If the user back-paginated past the live tail, we drop the window
+  // and refetch — that's the "stale tail" path mentioned in the plan.
+  async function jumpSdkToLatest(): Promise<void> {
+    if (sdkFoundNewestRef.current) return;
+    const refreshSessionId = session.id;
+    const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      events?: unknown[];
+      next_order_key?: string;
+      prev_order_key?: string;
+      found_oldest?: boolean;
+      found_newest?: boolean;
+    };
+    if (sessionIdRef.current !== refreshSessionId) return;
+    if (!Array.isArray(body.events)) return;
+    const canonicalEvents: TankConversationEvent[] = [];
+    for (const ev of body.events) {
+      if (isTankConversationEvent(ev)) {
+        advanceSdkTimelineCursor(ev);
+        canonicalEvents.push(ev);
+      }
+    }
+    const nextAfter =
+      typeof body.next_order_key === "string" ? body.next_order_key : "";
+    if (nextAfter) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        nextAfter,
+      );
+    }
+    const prevAfter =
+      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+    sdkFoundOldestRef.current = body.found_oldest === true;
+    sdkFoundNewestRef.current = body.found_newest === true;
+    setSdkFoundOldest(body.found_oldest === true);
+    replaceSdkServerEvents(canonicalEvents, false);
   }
 
   useEffect(() => {
@@ -4358,6 +4554,9 @@ function ChatPane({
 
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
+  // The cleanup also persists the user's last-viewing cursor for the
+  // departing session so reopening lands at the same spot (Stage 2 chat
+  // windowing).
   useEffect(() => {
     sessionIdRef.current = session.id;
     sdkServerEntriesRef.current = [];
@@ -4367,6 +4566,11 @@ function ChatPane({
     sdkConversationStateRef.current = initialConversationState;
     sdkAssistantDurationsRef.current = new Map();
     sdkTimelineCursorRef.current = null;
+    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkFoundOldestRef.current = false;
+    sdkFoundNewestRef.current = false;
+    setSdkFoundOldest(false);
+    setSdkLoadingOlder(false);
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
     stoppingTargetRef.current = null;
@@ -4378,6 +4582,20 @@ function ChatPane({
     setSdkConnectionState("idle");
     setRunStatus("idle");
     setRunning(false);
+    const departingSessionId = session.id;
+    return () => {
+      // Persist transcript position only when the user has back-paginated
+      // past the live tail; otherwise the default first_unread / newest
+      // anchor on reopen is already the right place to land. Save the
+      // last_order_key of the loaded window — the next open uses it as
+      // the anchor and EventsAround re-centers around that point.
+      const newest = sdkTimelineCursorRef.current;
+      if (newest && sdkFoundNewestRef.current === false) {
+        writeSdkTranscriptPosition(departingSessionId, newest);
+      } else {
+        clearSdkTranscriptPosition(departingSessionId);
+      }
+    };
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -5687,6 +5905,26 @@ function ChatPane({
           </div>
         ) : (
           <>
+            {/* "Load earlier messages" sits above the transcript when the
+                loaded window doesn't yet include the head of the ledger.
+                One click brings 100 older events into the window. Hides
+                once foundOldest flips true — by then the user can see the
+                very first message of the session. The button is the
+                back-paginate path; Virtuoso-style scroll-up-to-load is
+                Stage 3. */}
+            {!sdkFoundOldest && sdkOldestLoadedOrderKeyRef.current && (
+              <button
+                type="button"
+                className="run-transcript-load-older"
+                onClick={() => {
+                  void loadSdkOlderEvents();
+                }}
+                disabled={sdkLoadingOlder}
+                aria-label="Load earlier messages"
+              >
+                {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            )}
             {continueHintVisible && (
               <div className="run-continue-hint" role="status">
                 Continuing previous conversation
@@ -5771,9 +6009,27 @@ function ChatPane({
             userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
           }`}
           onClick={() => {
-            const main = transcriptScrollRef.current;
-            if (main) main.scrollTop = main.scrollHeight;
-            setUserScrolledUp(false);
+            // Two-step: when the live tail isn't loaded (the user has
+            // back-paginated past it), drop the window and refetch tail
+            // before scrolling. Otherwise scroll the existing DOM. This
+            // is the path that resolves "getting to the end is not
+            // straightforward" — a single click reaches newest even
+            // when older context is in the window.
+            const reachNewest = async () => {
+              await jumpSdkToLatest();
+              // After replaceSdkServerEvents the entries effect runs and
+              // the auto-scroll-on-entries-change effect will land us at
+              // the bottom. Reset the userScrolledUp latch so the effect
+              // doesn't skip.
+              setUserScrolledUp(false);
+              // Belt-and-suspenders: if the entries effect already ran
+              // (cache hit), force a scroll on the next frame.
+              requestAnimationFrame(() => {
+                const main = transcriptScrollRef.current;
+                if (main) main.scrollTop = main.scrollHeight;
+              });
+            };
+            void reachNewest();
           }}
           aria-label="Scroll to latest"
         >

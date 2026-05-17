@@ -3798,6 +3798,35 @@ textarea.run-files-viewer-editor:focus {
   100% { opacity: 0; }
 }
 
+/* "Load earlier messages" pill — sits at the top of the transcript when
+   the loaded window doesn't yet include the head of the ledger. Visual
+   sibling of .run-continue-hint, with a stronger affordance because
+   it's an action, not a status. */
+.run-transcript-load-older {
+  align-self: center;
+  margin: var(--space-3) auto var(--space-2);
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-default);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.run-transcript-load-older:hover:not(:disabled) {
+  background: var(--bg-default);
+  border-color: var(--border-default);
+}
+
+.run-transcript-load-older:disabled {
+  cursor: progress;
+  color: var(--text-muted);
+}
+
 @keyframes run-status-pulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }

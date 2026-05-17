@@ -268,6 +268,16 @@ const blocked = [
   // PR can't quietly resurrect the parallel surface.
   { name: "removed handleInternalSpawnSession alias", pattern: /\bhandleInternalSpawnSession\b/ },
   { name: "removed /api/internal/sessions/spawn URL", pattern: /\/api\/internal\/sessions\/spawn\b/ },
+  // Stage 2 chat-windowing cutover (this PR): the SPA used to fetch the
+  // entire ledger forward from order_key=0 in a 50-page loop of 1000-event
+  // pages. The DOM extended under the user's eyes mid-load and produced
+  // the "scroll down, scroll bar learns there's more, repeat 3-4×"
+  // dance. Replaced with one anchored read (anchor=first_unread by
+  // default, fallback to anchor=newest) + bounded back-paginate via
+  // before_order_key. Block re-introduction of the old shapes so a
+  // future refactor can't quietly rebuild the forward walk.
+  { name: "removed 50-page forward-walk loop", pattern: /for\s*\(\s*let\s+page\s*=\s*0\s*;\s*page\s*<\s*50\b/ },
+  { name: "removed 1000-event-per-page timeline fetch", pattern: /limit:\s*["']1000["']/ },
 ];
 
 const failures = [];
