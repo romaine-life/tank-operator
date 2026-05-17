@@ -529,6 +529,195 @@ const CHECKS = [
     pattern: /tank_turn_interrupt_request_total/,
   },
 
+  // ────────────────────────── Control plane (interrupt delivery) ──────────────────────────
+  //
+  // The durable stop *boundary* (turn.interrupt_requested) shipped in PR
+  // #481 made the request observable. It did not make the interrupt
+  // *effective* during long tool-use turns: both runners' JetStream
+  // command consumer is configured with max_ack_pending=1 so the
+  // in-flight submit_turn's ack window (sustained by working() heartbeats
+  // for the duration of the turn) held the queued interrupt_turn
+  // command behind it. The fix splits data plane (submit_turn,
+  // input_reply — serial, max_ack_pending=1) from control plane
+  // (interrupt_turn — low-latency, separate durable consumer) onto
+  // distinct JetStream subjects. The checks below pin the load-bearing
+  // invariants so a future refactor can't merge the planes back.
+  {
+    id: "go-control-subject-helper",
+    from: "Control plane",
+    file: "backend-go/internal/sessionbus/subjects.go",
+    description: "ControlSubject helper exists and is distinct from CommandSubject",
+    kind: "grep-present",
+    pattern: /func ControlSubject\(sessionStorageKey, provider string\) string \{[\s\S]{0,400}?\.control\./,
+  },
+  {
+    id: "go-subject-for-command-routes-interrupt",
+    from: "Control plane",
+    file: "backend-go/internal/sessionbus/subjects.go",
+    description: "SubjectForCommand routes CommandInterrupt to ControlSubject",
+    kind: "grep-present",
+    pattern: /func SubjectForCommand\([\s\S]{0,400}?command\.Type == CommandInterrupt[\s\S]{0,200}?return ControlSubject\(/,
+  },
+  {
+    id: "go-publish-uses-subject-for-command",
+    from: "Control plane",
+    file: "backend-go/internal/sessionbus/bus.go",
+    description: "PublishCommand selects subject via SubjectForCommand (not CommandSubject directly)",
+    kind: "grep-present",
+    pattern: /b\.js\.Publish\([\s\S]{0,200}?SubjectForCommand\(command\)/,
+  },
+  {
+    id: "go-publish-does-not-direct-route-interrupt",
+    from: "Control plane",
+    file: "backend-go/internal/sessionbus/bus.go",
+    description: "PublishCommand body does NOT call CommandSubject directly (routing is the single decision in SubjectForCommand)",
+    kind: "order-in-function-absent",
+    functionName: "PublishCommand",
+    absentPattern: /CommandSubject\(/,
+  },
+  {
+    id: "js-control-subject-helper",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "controlSubject helper is exported and mirrors the Go ControlSubject wire shape",
+    kind: "grep-present",
+    pattern: /export function controlSubject\([\s\S]{0,200}?\.control\./,
+  },
+  {
+    id: "js-start-control-consumer-method",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "SharedSessionBus exposes startControlConsumer",
+    kind: "grep-present",
+    pattern: /async startControlConsumer\(handler, signal\)/,
+  },
+  {
+    id: "js-ensure-control-consumer-method",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "ensureControlConsumer registers a JetStream consumer on the control filter_subject",
+    kind: "grep-present",
+    pattern: /async ensureControlConsumer\(\)[\s\S]{0,1200}?filter_subject:\s*controlSubject\(/,
+  },
+  {
+    id: "js-control-consumer-name-distinct",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "controlConsumerName carries a `_control_` segment so it doesn't collide with the data-plane consumer",
+    kind: "grep-present",
+    pattern: /controlConsumerName\(\)[\s\S]{0,400}?_control_/,
+  },
+  {
+    id: "js-control-max-ack-pending-not-one",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "SESSION_CONTROL_MAX_ACK_PENDING default is greater than 1 (the data-plane budget that caused the regression)",
+    kind: "grep-present",
+    pattern: /SESSION_CONTROL_MAX_ACK_PENDING\s*=\s*parsePositiveInt\(\s*process\.env\.SESSION_CONTROL_MAX_ACK_PENDING\s*,\s*(?:[2-9]|\d{2,})/,
+  },
+  {
+    id: "js-data-plane-drops-stray-interrupt",
+    from: "Control plane",
+    file: "runner-shared/sessionBus.js",
+    description: "data-plane consumer ack-and-drops stray interrupts (cutover hygiene; handler is never invoked)",
+    kind: "grep-present",
+    pattern: /isInterruptCommand\(command\)[\s\S]{0,400}?record\.ack\(\)/,
+  },
+  {
+    id: "agent-runner-starts-control-consumer",
+    from: "Control plane",
+    file: "agent-runner/src/runner.ts",
+    description: "agent-runner Runner.run() starts the control consumer alongside the command consumer",
+    kind: "grep-present",
+    pattern: /this\.startControlConsumer\(signal\)/,
+  },
+  {
+    id: "codex-runner-starts-control-consumer",
+    from: "Control plane",
+    file: "codex-runner/src/runner.ts",
+    description: "codex-runner Runner.run() starts the control consumer alongside the command consumer",
+    kind: "grep-present",
+    pattern: /this\.startControlConsumer\(signal\)/,
+  },
+  {
+    id: "agent-runner-command-consumer-no-interrupt-dispatch",
+    from: "Control plane",
+    file: "agent-runner/src/runner.ts",
+    description: "agent-runner startCommandConsumer body does NOT dispatch interrupts (control plane is the only path)",
+    kind: "order-in-function-absent",
+    functionName: "startCommandConsumer",
+    absentPattern: /acceptInterrupt/,
+  },
+  {
+    id: "codex-runner-command-consumer-no-interrupt-dispatch",
+    from: "Control plane",
+    file: "codex-runner/src/runner.ts",
+    description: "codex-runner startCommandConsumer body does NOT dispatch interrupts (control plane is the only path)",
+    kind: "order-in-function-absent",
+    functionName: "startCommandConsumer",
+    absentPattern: /acceptInterrupt/,
+  },
+  {
+    id: "agent-runner-control-consumer-dispatches-interrupt",
+    from: "Control plane",
+    file: "agent-runner/src/runner.ts",
+    description: "agent-runner startControlConsumer body dispatches interrupts to acceptInterrupt",
+    kind: "grep-present",
+    pattern: /private startControlConsumer\([\s\S]{0,1200}?isInterruptCommand\(record\)[\s\S]{0,400}?acceptInterrupt\(record\)/,
+  },
+  {
+    id: "codex-runner-control-consumer-dispatches-interrupt",
+    from: "Control plane",
+    file: "codex-runner/src/runner.ts",
+    description: "codex-runner startControlConsumer body dispatches interrupts to acceptInterrupt",
+    kind: "grep-present",
+    pattern: /private startControlConsumer\([\s\S]{0,1200}?isInterruptCommand\(record\)[\s\S]{0,400}?acceptInterrupt\(record\)/,
+  },
+
+  // ────────────────────────── Self-telling observability ──────────────────────────
+  {
+    id: "alert-stop-not-delivered",
+    from: "Self-telling observability",
+    file: "k8s/templates/observability.yaml",
+    description: "TankStopNotDelivered alert is declared (backend persisted > runner consumed)",
+    kind: "grep-present",
+    pattern: /alert:\s*TankStopNotDelivered/,
+  },
+  {
+    id: "alert-stop-not-terminated",
+    from: "Self-telling observability",
+    file: "k8s/templates/observability.yaml",
+    description: "TankStopNotTerminated alert is declared (runner consumed > terminal interrupted)",
+    kind: "grep-present",
+    pattern: /alert:\s*TankStopNotTerminated/,
+  },
+
+  // ────────────────────────── Tests by name (control plane) ──────────────────────────
+  {
+    id: "test-go-subject-routes-interrupt",
+    from: "Tests",
+    file: "backend-go/internal/sessionbus/bus_test.go",
+    description: "TestSubjectForCommandRoutesInterruptToControlPlane exists",
+    kind: "grep-present",
+    pattern: /func TestSubjectForCommandRoutesInterruptToControlPlane\b/,
+  },
+  {
+    id: "test-go-subject-routes-data-plane",
+    from: "Tests",
+    file: "backend-go/internal/sessionbus/bus_test.go",
+    description: "TestSubjectForCommandRoutesDataPlane exists",
+    kind: "grep-present",
+    pattern: /func TestSubjectForCommandRoutesDataPlane\b/,
+  },
+  {
+    id: "test-agent-runner-interrupt-during-submit",
+    from: "Tests",
+    file: "agent-runner/src/runner.test.ts",
+    description: "agent-runner has a regression test that interrupt dispatch is independent of an in-flight submit (the load-bearing property the split establishes)",
+    kind: "grep-present",
+    pattern: /interrupt.*(?:during|while).*submit|dispatchInterruptIndependentlyOfSubmit/i,
+  },
+
   // ────────────────────────── Executable gates ──────────────────────────
   {
     id: "exec-contract-checker",
@@ -670,8 +859,16 @@ async function blockAbsent({ file, blockPattern, absentPattern }) {
 async function absentInFunction({ file, functionName, absentPattern }) {
   if (!(await fileExists(file))) return { pass: false, evidence: `file missing: ${file}` };
   const content = await readRel(file);
-  // Match either Go-style "func name(" or JS/TS-style "function name(".
-  const sigRe = new RegExp(`(?:func\\s+(?:\\([^)]*\\)\\s+)?|function\\s+)${functionName}\\s*\\(`);
+  // Match Go-style "func name(", JS-style "function name(", OR
+  // TS-class-method-style "  private name(" / "  async name(" so the
+  // function-body checks apply to runner-class methods like
+  // `private startCommandConsumer(signal: AbortSignal)`. Anchored to
+  // start-of-line to avoid matching call sites like `this.name(`.
+  const sigRe = new RegExp(
+    `(?:func\\s+(?:\\([^)]*\\)\\s+)?${functionName}\\s*\\(` +
+    `|function\\s+${functionName}\\s*\\(` +
+    `|(?:^|\\n)\\s*(?:private|public|protected|export)?\\s*(?:async\\s+)?${functionName}\\s*\\()`,
+  );
   const sig = sigRe.exec(content);
   if (!sig) return { pass: false, evidence: `function ${functionName} not found in ${file}` };
   const bodyStart = content.indexOf("{", sig.index);

@@ -1,5 +1,8 @@
 export const SESSION_COMMAND_ACK_MS: number;
 export const SESSION_COMMAND_MAX_DELIVER: number;
+export const SESSION_CONTROL_ACK_MS: number;
+export const SESSION_CONTROL_MAX_DELIVER: number;
+export const SESSION_CONTROL_MAX_ACK_PENDING: number;
 
 export interface SessionBusConfig {
   sessionId: string;
@@ -88,6 +91,16 @@ export class SharedSessionBus {
     handler: (record: SessionCommandRecord) => Promise<void>,
     signal?: AbortSignal,
   ): Promise<() => Promise<void>>;
+  /**
+   * Subscribe to the control-plane subject (interrupts today; any future
+   * low-latency control signal). The consumer is separate from
+   * startCommandConsumer's data-plane consumer so a long-running
+   * submit_turn cannot block delivery.
+   */
+  startControlConsumer(
+    handler: (record: SessionCommandRecord) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<() => Promise<void>>;
   publishEvent(event: Record<string, unknown>): Promise<"created" | "exists">;
   enqueueWakeupSubmitTurn(args: {
     prompt: string;
@@ -111,6 +124,7 @@ export function buildWakeupSubmitTurnCommand(args: {
 }): SessionCommand;
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
+export function controlSubject(sessionStorageKey: string, provider: string): string;
 export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;

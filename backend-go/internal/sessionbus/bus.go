@@ -228,7 +228,12 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 	if err != nil {
 		return err
 	}
-	_, err = b.js.Publish(ctx, CommandSubject(command.SessionStorageKey, command.Provider), raw, jetstream.WithMsgID(command.CommandID))
+	// Route by command type: interrupts go to the control-plane subject so a
+	// runner-side max_ack_pending=1 on the data subject can't hold an
+	// interrupt behind an in-flight submit_turn. SubjectForCommand is the
+	// single decision point so the routing rule is unit-testable without
+	// touching JetStream.
+	_, err = b.js.Publish(ctx, SubjectForCommand(command), raw, jetstream.WithMsgID(command.CommandID))
 	return err
 }
 

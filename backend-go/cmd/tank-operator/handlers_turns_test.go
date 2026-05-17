@@ -188,6 +188,22 @@ func TestInterruptSessionTurnPublishesControlCommand(t *testing.T) {
 	if got.Prompt != "" {
 		t.Fatalf("interrupt prompt = %q, want empty", got.Prompt)
 	}
+	// Pin the load-bearing routing: interrupts MUST select the control
+	// subject. If a future refactor sends them back through CommandSubject,
+	// the runner-side max_ack_pending=1 on the command consumer will hold
+	// the interrupt behind the in-flight submit_turn for the full duration
+	// of the turn (the original "Stop doesn't stop deep tool-use loops"
+	// regression). The unit test in internal/sessionbus pins the function;
+	// this test pins that the handler's command Type + StorageKey + Provider
+	// resolve to the same routing decision end-to-end.
+	subject := sessionbus.SubjectForCommand(got)
+	if subject != sessionbus.ControlSubject(got.SessionStorageKey, got.Provider) {
+		t.Fatalf("interrupt subject = %q, want control subject for storage=%q provider=%q",
+			subject, got.SessionStorageKey, got.Provider)
+	}
+	if subject == sessionbus.CommandSubject(got.SessionStorageKey, got.Provider) {
+		t.Fatalf("interrupt MUST NOT publish on the data-plane command subject (%q)", subject)
+	}
 }
 
 func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {

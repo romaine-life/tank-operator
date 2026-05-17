@@ -5,6 +5,24 @@ export const SESSION_COMMAND_ACK_MS = parsePositiveInt(process.env.SESSION_COMMA
 export const SESSION_COMMAND_MAX_DELIVER = parsePositiveInt(process.env.SESSION_COMMAND_MAX_DELIVER, 20);
 const SESSION_COMMAND_WORKING_MS = Math.max(1_000, Math.floor(SESSION_COMMAND_ACK_MS / 3));
 
+// Control-plane consumer config: tuned for low-latency delivery of
+// interrupts during an in-flight turn. ACK window is short (the handler
+// either completes synchronously or NAKs); max in-flight is sized for
+// burst clicks (double-clicked Stop, queued retries) without being so
+// large that an orchestrator bug could fan-spam the runner.
+//
+// NOT shared with the data-plane consumer constants above on purpose:
+// the data plane wants long ack windows (turn duration) and serial
+// dispatch (max_ack_pending=1); the control plane wants the opposite.
+// If you find yourself unifying them, re-read
+// docs/tank-conversation-protocol.md → "Durable turn interruption".
+export const SESSION_CONTROL_ACK_MS = parsePositiveInt(process.env.SESSION_CONTROL_ACK_MS, 15_000);
+export const SESSION_CONTROL_MAX_DELIVER = parsePositiveInt(process.env.SESSION_CONTROL_MAX_DELIVER, 10);
+export const SESSION_CONTROL_MAX_ACK_PENDING = parsePositiveInt(
+    process.env.SESSION_CONTROL_MAX_ACK_PENDING,
+    16,
+);
+
 export class SharedSessionBus {
     cfg;
     provider;
@@ -46,6 +64,24 @@ export class SharedSessionBus {
                 if (stopped || signal?.aborted) break;
                 const command = this.commandFromMessage(msg);
                 const record = new SessionCommandRecord(command, msg);
+                // Cutover hygiene: interrupts are control-plane and MUST
+                // arrive on the control consumer (see startControlConsumer).
+                // A stray interrupt on the data-plane subject is either a
+                // pre-cutover straggler in the JetStream replay buffer or a
+                // backend regression. Ack-and-drop with a structured warn so
+                // the message doesn't block the serial submit_turn consumer
+                // (max_ack_pending=1) and the regression is visible in logs.
+                // This is NOT a fallback path — the handler is never invoked
+                // for the interrupt; the control plane is the only place it
+                // can take effect.
+                if (isInterruptCommand(command)) {
+                    console.warn("session bus: dropped stray interrupt_turn on data plane (control plane is the supported path)", {
+                        command_id: command.command_id,
+                        target_turn_id: command.target_turn_id,
+                    });
+                    record.ack();
+                    continue;
+                }
                 try {
                     await handler(record);
                 }
@@ -55,6 +91,56 @@ export class SharedSessionBus {
                 }
             }
         })().catch((err) => console.error("session bus command consumer crashed:", err));
+        return stop;
+    }
+    // startControlConsumer subscribes to the control-plane subject (today:
+    // interrupt_turn; future: any low-latency control signal). Sibling of
+    // startCommandConsumer with three deliberate differences:
+    //
+    //   1. Different filter_subject (controlSubject vs commandSubject) so a
+    //      JetStream max_ack_pending budget on the data plane can never hold
+    //      a control command behind an in-flight submit_turn — that was the
+    //      "Stop doesn't interrupt deep tool-use loops" regression.
+    //   2. max_ack_pending sized for control burst (default 16) rather than
+    //      serial dispatch (1 on the data plane).
+    //   3. Shorter ack_wait — control handlers complete synchronously
+    //      (dispatch to sdkQuery.interrupt() or codex AbortController) and
+    //      either ack or NAK quickly; no working() heartbeat needed.
+    //
+    // Durable consumer name is provider-scoped per session so a runner-
+    // process restart re-attaches and any unacked control command replays.
+    async startControlConsumer(handler, signal) {
+        await this.ensureConnected();
+        await this.ensureControlConsumer();
+        const consumer = await this.js.consumers.get(this.stream, this.controlConsumerName());
+        const messages = await consumer.consume({
+            max_messages: 16,
+            threshold_messages: 8,
+            expires: 30_000,
+            idle_heartbeat: 5_000,
+        });
+        let stopped = false;
+        const stop = async () => {
+            stopped = true;
+            await messages.close();
+        };
+        signal?.addEventListener("abort", () => {
+            void stop();
+        }, { once: true });
+        void (async () => {
+            for await (const msg of messages) {
+                if (stopped || signal?.aborted) break;
+                const command = this.commandFromMessage(msg);
+                const record = new SessionCommandRecord(command, msg);
+                try {
+                    await handler(record);
+                }
+                catch (err) {
+                    console.error("session bus control handler failed:", err);
+                    record.nak(2_000);
+                }
+            }
+        })().catch((err) => console.error("session bus control consumer crashed:", err));
         return stop;
     }
     async publishEvent(event, options = {}) {
@@ -173,8 +259,48 @@ export class SharedSessionBus {
             });
         }
     }
+    // ensureControlConsumer is the sibling of ensureConsumer for the
+    // control-plane subject. The two consumers MUST stay distinct (separate
+    // durable name, separate filter_subject) so an in-flight data-plane
+    // command's ack window can never gate control delivery.
+    async ensureControlConsumer() {
+        const name = this.controlConsumerName();
+        const cfg = {
+            durable_name: name,
+            name,
+            description: `${this.provider} session control consumer`,
+            filter_subject: controlSubject(this.sessionStorageKey, this.provider),
+            ack_policy: this.deps.AckPolicy.Explicit,
+            deliver_policy: this.deps.DeliverPolicy.All,
+            replay_policy: this.deps.ReplayPolicy.Instant,
+            ack_wait: this.deps.nanos(SESSION_CONTROL_ACK_MS),
+            max_deliver: SESSION_CONTROL_MAX_DELIVER,
+            max_ack_pending: SESSION_CONTROL_MAX_ACK_PENDING,
+            inactive_threshold: this.deps.nanos(7 * 24 * 60 * 60 * 1000),
+        };
+        try {
+            await this.jsm.consumers.add(this.stream, cfg);
+        }
+        catch (err) {
+            try {
+                await this.jsm.consumers.info(this.stream, name);
+            }
+            catch {
+                throw err;
+            }
+            await this.jsm.consumers.update(this.stream, name, {
+                ack_wait: cfg.ack_wait,
+                max_deliver: cfg.max_deliver,
+                max_ack_pending: cfg.max_ack_pending,
+                inactive_threshold: cfg.inactive_threshold,
+            });
+        }
+    }
     consumerName() {
         return `${sanitizeConsumerName(this.provider)}_${storageToken(this.sessionStorageKey)}`;
+    }
+    controlConsumerName() {
+        return `${sanitizeConsumerName(this.provider)}_control_${storageToken(this.sessionStorageKey)}`;
     }
     commandFromMessage(msg) {
         const command = msg.json();
@@ -256,6 +382,14 @@ export function turnIDForClientNonce(clientNonce) {
 
 function commandSubject(sessionStorageKey, provider) {
     return `tank.session.${storageToken(sessionStorageKey)}.commands.${sanitizeSubjectToken(provider)}`;
+}
+
+// controlSubject mirrors backend-go's sessionbus.ControlSubject. The two
+// helpers MUST stay in lockstep — if the wire shape diverges, the runner
+// won't see interrupts. See scripts/check-stop-request-migration.mjs for
+// the regression guard that grep-pins both sides.
+export function controlSubject(sessionStorageKey, provider) {
+    return `tank.session.${storageToken(sessionStorageKey)}.control.${sanitizeSubjectToken(provider)}`;
 }
 
 function eventSubject(sessionStorageKey) {

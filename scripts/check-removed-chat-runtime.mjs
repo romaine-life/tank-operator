@@ -304,6 +304,30 @@ const blocked = [
   // 24px threshold was the smoking-gun signature of the prior listener —
   // ban the literal so a future refactor can't reintroduce it.
   { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
+  // Interrupt-on-data-plane (the retired single-consumer architecture).
+  // Until this PR, both runners dispatched isInterruptCommand →
+  // acceptInterrupt from inside the data-plane command consumer. That's
+  // the exact shape that produced the "Stop doesn't interrupt deep
+  // tool-use loops" regression: JetStream max_ack_pending=1 on the
+  // command consumer held interrupt_turn behind submit_turn for the
+  // duration of the turn. Interrupts now arrive via the control-plane
+  // consumer (startControlConsumer); reintroducing the data-plane
+  // dispatch breaks the split. The runner-shared sessionBus.js
+  // legitimately keeps `isInterruptCommand` as a defensive ack-and-drop
+  // (cutover hygiene for in-flight stragglers); the pattern below
+  // matches only the dispatch-to-acceptInterrupt shape, not the
+  // defensive drop.
+  {
+    name: "retired interrupt-on-data-plane dispatch",
+    // Anchored on `.startCommandConsumer(...)` so the control-plane
+    // dispatch inside `.startControlConsumer(...)` (which legitimately
+    // routes isInterruptCommand → acceptInterrupt) does not trip this
+    // guard. The regression we are blocking is specifically: the same
+    // handler that processes submit_turn also tries to handle interrupts,
+    // which is the shape JetStream max_ack_pending=1 turns into a stuck
+    // interrupt.
+    pattern: /\.startCommandConsumer\(async\s*\(record\)[\s\S]{0,800}?isInterruptCommand\(record\)\s*\)\s*\{\s*(?:commandsConsumedTotal[\s\S]{0,200}?)?await\s+this\.acceptInterrupt/,
+  },
 ];
 
 const failures = [];

@@ -184,7 +184,15 @@ export class Runner {
   // Run forever (or until externally aborted). Drives the SDK against
   // the user queue and fans events out to both sinks.
   async run(signal: AbortSignal): Promise<void> {
+    // Two independent JetStream consumers: data plane (submit_turn,
+    // input_reply — serial, ack-after-terminal) and control plane
+    // (interrupt_turn — low-latency, never blocked by an in-flight turn).
+    // See runner-shared/sessionBus.js for the consumer config split and
+    // docs/tank-conversation-protocol.md → "Durable turn interruption"
+    // for the contract. Don't fold these back into one consumer; that's
+    // exactly the regression the split fixes.
     const stopConsumer = this.startCommandConsumer(signal);
+    const stopControl = this.startControlConsumer(signal);
     const onAbort = () => {
       this.userQueue.close();
       this.sdkQuery?.interrupt();
@@ -221,6 +229,7 @@ export class Runner {
     } finally {
       signal.removeEventListener("abort", onAbort);
       stopConsumer();
+      stopControl();
       if (signal.aborted) {
         await this.interruptActiveTurn("runner_shutdown");
       }
@@ -272,16 +281,50 @@ export class Runner {
           await this.acceptInputReply(record);
           return;
         }
-        if (isInterruptCommand(record)) {
-          await this.acceptInterrupt(record);
-          return;
-        }
+        // Interrupts MUST arrive via startControlConsumer (separate
+        // JetStream consumer on the control subject). The data-plane
+        // consumer has max_ack_pending=1 by design, so an interrupt
+        // delivered here would block behind the in-flight submit_turn
+        // for the full duration of the turn — the exact regression the
+        // split fixes. The shared sessionBus drops stray interrupts on
+        // the data subject before they reach this handler; this branch
+        // exists only to keep the dispatch table exhaustive.
         await this.acceptCommandTurn(record);
       }, signal)
       .then((stop) => {
         stopConsumer = stop;
       })
       .catch((err) => console.error("session bus command consumer crashed:", err));
+    return () => {
+      void stopConsumer?.();
+    };
+  }
+
+  // startControlConsumer drives the control-plane JetStream consumer.
+  // Today: interrupt_turn. Future control signals (resume, cancel-with-
+  // reason, etc.) should land here as additional branches, not on the
+  // data-plane consumer.
+  private startControlConsumer(signal: AbortSignal): () => void {
+    let stopConsumer: (() => Promise<void>) | null = null;
+    void this.commandBus
+      .startControlConsumer(async (record) => {
+        if (isInterruptCommand(record)) {
+          await this.acceptInterrupt(record);
+          return;
+        }
+        // Unknown control command type. Ack to clear the slot; log so
+        // the producer-side surprise is visible. No retry — a
+        // backend-only command type a runner doesn't recognise will
+        // never start working on retry.
+        commandsConsumedTotal.labels("control_unknown", "dropped").inc();
+        console.warn("session bus control consumer: unknown command type",
+          { type: record.type, command_id: record.id });
+        await this.commandBus.markCompleted(record);
+      }, signal)
+      .then((stop) => {
+        stopConsumer = stop;
+      })
+      .catch((err) => console.error("session bus control consumer crashed:", err));
     return () => {
       void stopConsumer?.();
     };
