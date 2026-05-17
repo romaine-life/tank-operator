@@ -154,6 +154,179 @@ func TestHandleInternalGitHubAttestationRejectsUnboundSAToken(t *testing.T) {
 	}
 }
 
+func TestHandleInternalGitHubInstallationResolvesFromProfile(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.test")
+	t.Setenv("SUPER_ADMIN_EMAILS", "host@example.test, admin@example.test")
+	installationID := int64(424242)
+	jwtKey, err := auth.NewInMemoryJWT("svc-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"name":        "Service: tank pod-session-x",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{
+		verifier: verifier,
+		profiles: testProfilesStore{
+			"owner@example.test": {InstallationID: &installationID},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/github/installation", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalGitHubInstallation(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := body["email"], "owner@example.test"; got != want {
+		t.Fatalf("email = %v, want %q", got, want)
+	}
+	if got, want := body["installation_id"], float64(424242); got != want {
+		t.Fatalf("installation_id = %v, want %v", got, want)
+	}
+	if got, want := body["is_host"], false; got != want {
+		t.Fatalf("is_host = %v, want %v", got, want)
+	}
+	if got, want := body["is_super_admin"], false; got != want {
+		t.Fatalf("is_super_admin = %v, want %v", got, want)
+	}
+}
+
+func TestHandleInternalGitHubInstallationFlagsHost(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.test")
+	t.Setenv("SUPER_ADMIN_EMAILS", "host@example.test")
+	jwtKey, err := auth.NewInMemoryJWT("svc-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"name":        "Service: tank pod-session-x",
+		"role":        "service",
+		"actor_email": "host@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{
+		verifier: verifier,
+		// Host has no installation row; the response should still flag
+		// is_host=true so mcp-github routes to the host minter without
+		// needing an installation_id.
+		profiles: testProfilesStore{},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/github/installation", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalGitHubInstallation(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := body["is_host"], true; got != want {
+		t.Fatalf("is_host = %v, want %v", got, want)
+	}
+	if got, want := body["is_super_admin"], true; got != want {
+		t.Fatalf("is_super_admin = %v, want %v", got, want)
+	}
+	if body["installation_id"] != nil {
+		t.Fatalf("installation_id = %v, want nil for host", body["installation_id"])
+	}
+}
+
+func TestHandleInternalGitHubInstallationReturnsNullForUnknownEmail(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.test")
+	jwtKey, err := auth.NewInMemoryJWT("svc-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"name":        "Service: tank pod-session-x",
+		"role":        "service",
+		"actor_email": "stranger@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{
+		verifier: verifier,
+		profiles: testProfilesStore{},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/github/installation", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalGitHubInstallation(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["installation_id"] != nil {
+		t.Fatalf("installation_id = %v, want nil for unknown email", body["installation_id"])
+	}
+	if got, want := body["is_host"], false; got != want {
+		t.Fatalf("is_host = %v, want %v", got, want)
+	}
+}
+
+func TestHandleInternalGitHubInstallationRejectsNonService(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":   "u-admin",
+		"email": "admin@example.test",
+		"name":  "Admin",
+		"role":  "admin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{verifier: verifier}
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/github/installation", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalGitHubInstallation(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleInternalSessionTurnTerminalReturnsTerminalEvent(t *testing.T) {
 	server := internalSessionRuntimeServer(t, "12")
 	server.sessionEvents = terminalEventStore{event: map[string]any{
