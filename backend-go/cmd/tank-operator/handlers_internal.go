@@ -6,9 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
@@ -60,113 +57,14 @@ func (s *appServer) handleInternalJWKS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, jwks)
 }
 
-func (s *appServer) handleInternalGitHubAttestation(w http.ResponseWriter, r *http.Request) {
-	token, err := auth.ParseSAToken(r)
-	if err != nil {
-		writeError(w, auth.ErrorStatus(err), err.Error())
-		return
-	}
-
-	subject, err := auth.ValidateSAToken(r.Context(), s.k8s, token, []string{"tank-operator"})
-	if err != nil {
-		writeError(w, auth.ErrorStatus(err), err.Error())
-		return
-	}
-	if subject.Namespace != s.namespace || subject.Name != s.sessionServiceAccount {
-		writeError(w, http.StatusForbidden, "caller is not the Tank session service account")
-		return
-	}
-	podName := subject.ExtraValue("authentication.kubernetes.io/pod-name")
-	podUID := subject.ExtraValue("authentication.kubernetes.io/pod-uid")
-	if podName == "" || podUID == "" {
-		writeError(w, http.StatusForbidden, "service account token is not bound to a session pod")
-		return
-	}
-	pod, err := s.k8s.CoreV1().Pods(s.namespace).Get(r.Context(), podName, metav1.GetOptions{})
-	if err != nil {
-		writeError(w, http.StatusForbidden, "session pod not found")
-		return
-	}
-	if pod.Spec.ServiceAccountName != s.sessionServiceAccount || string(pod.UID) != podUID {
-		writeError(w, http.StatusForbidden, "service account token does not match session pod")
-		return
-	}
-	if pod.Labels["app.kubernetes.io/managed-by"] != "tank-operator" {
-		writeError(w, http.StatusForbidden, "pod is not managed by Tank")
-		return
-	}
-	sessionID := strings.TrimSpace(pod.Labels["tank-operator/session-id"])
-	sessionScope := strings.TrimSpace(pod.Labels["tank-operator/session-scope"])
-	expectedScope := strings.TrimSpace(s.sessionScope)
-	if expectedScope == "" {
-		expectedScope = "default"
-	}
-	if sessionID == "" || sessionScope == "" || sessionScope != expectedScope {
-		writeError(w, http.StatusForbidden, "pod is not in the active Tank session scope")
-		return
-	}
-	email := strings.ToLower(strings.TrimSpace(pod.Annotations["tank-operator/owner-email"]))
-	if email == "" {
-		writeError(w, http.StatusForbidden, "session pod is missing owner identity")
-		return
-	}
-	hostEmail := os.Getenv("HOST_EMAIL")
-	superAdmins := parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostEmail))
-	var installationID *int64
-
-	if s.profiles == nil {
-		writeError(w, http.StatusInternalServerError, "profile store not configured")
-		return
-	}
-	profile, err := s.profiles.GetOrCreate(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "profile lookup failed: "+err.Error())
-		return
-	}
-	installationID = profile.InstallationID
-
-	isHost := strings.EqualFold(email, hostEmail)
-	if !isHost && installationID == nil {
-		writeError(w, http.StatusForbidden, "GitHub App installation required for Tank session")
-		return
-	}
-	if s.minter == nil {
-		writeError(w, http.StatusInternalServerError, "JWT minter not configured")
-		return
-	}
-
-	attestation, expiresAt, err := s.minter.MintGitHubMCPAttestation(auth.GitHubMCPAttestationSubject{
-		Email:          email,
-		InstallationID: installationID,
-		IsHost:         isHost,
-		IsSuperAdmin:   superAdmins[strings.ToLower(strings.TrimSpace(email))],
-		SessionScope:   sessionScope,
-		SessionID:      sessionID,
-		PodName:        podName,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mint GitHub MCP attestation: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token":      attestation,
-		"expires_at": expiresAt.UTC().Format(time.RFC3339),
-	})
-}
-
 // handleInternalGitHubInstallation resolves the caller's actor_email to a
 // {installation_id, is_host, is_super_admin} triple by reading the user's
-// profile row. The canonical lookup mcp-github performs on every request
-// after it switches off the Tank-attestation surface — replaces the
-// per-request /github/attestation flow with a stateless lookup that returns
-// just the routing inputs, leaving JWT minting to auth.romaine.life.
+// profile row. The canonical lookup mcp-github performs on every request:
+// returns the routing inputs only, leaving JWT minting to auth.romaine.life.
 //
-// Returns {} when the email has no profile (treated as "no installation"
-// on the caller side — mcp-github will reject the request rather than
-// silently falling back to the host minter).
-//
-// Cf. nelsong6/glimmung sweep step D.
+// Returns {installation_id: null} when the email has no profile (treated
+// as "no installation" on the caller side — mcp-github will reject the
+// request rather than silently falling back to the host minter).
 func (s *appServer) handleInternalGitHubInstallation(w http.ResponseWriter, r *http.Request) {
 	user := s.requireServicePrincipal(w, r, "GET /api/internal/github/installation")
 	if user == nil {

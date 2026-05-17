@@ -2,9 +2,10 @@
 
 Sidecar to the claude-container in each session pod. Listens on per-MCP
 localhost ports; .mcp.json points claude at these instead of at the
-in-cluster MCP Services directly. Most MCPs still receive the projected
-ServiceAccount token. GitHub MCP receives a short-lived Tank session
-attestation minted from a separate audience-scoped pod token.
+in-cluster MCP Services directly. Most MCPs receive the projected
+ServiceAccount token; mcp-github and mcp-tank-operator receive an
+auth.romaine.life-issued role=service JWT via the AuthRomaineService
+exchange.
 
 The bug this exists to fix: kubelet rotates the SA token file in-place
 (eager renewal at ~50 min, well inside the default 1h TTL), but env
@@ -47,7 +48,6 @@ from aiohttp import ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
-    record_github_attestation,
     record_proxy_request,
     record_sa_token_read,
     start_metrics_server,
@@ -57,13 +57,6 @@ from .metrics import (
 log = logging.getLogger(__name__)
 
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-TANK_ATTESTATION_TOKEN_PATH = Path(
-    os.environ.get(
-        "TANK_SESSION_ATTESTATION_TOKEN_PATH",
-        "/var/run/secrets/tank-operator/token",
-    )
-)
-TANK_OPERATOR_INTERNAL_URL = os.environ.get("TANK_OPERATOR_INTERNAL_URL", "").rstrip("/")
 GITHUB_MCP_PORT = 9992
 TANK_OPERATOR_MCP_PORT = 9996
 
@@ -134,66 +127,6 @@ class ServiceAccountTokenProvider:
             raise
         record_sa_token_read("success")
         return value
-
-
-class TankGitHubAttestationProvider:
-    def __init__(
-        self,
-        http: ClientSession,
-        *,
-        operator_url: str = TANK_OPERATOR_INTERNAL_URL,
-        token_path: Path = TANK_ATTESTATION_TOKEN_PATH,
-        refresh_skew_seconds: float = 30.0,
-    ) -> None:
-        self._http = http
-        self._operator_url = operator_url.rstrip("/")
-        self._token_path = token_path
-        self._refresh_skew_seconds = refresh_skew_seconds
-        self._cached_token = ""
-        self._expires_at = 0.0
-        self._lock = asyncio.Lock()
-
-    async def token(self) -> str:
-        now = time.time()
-        if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
-            record_github_attestation("cache_hit")
-            return self._cached_token
-        async with self._lock:
-            now = time.time()
-            if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
-                record_github_attestation("cache_hit")
-                return self._cached_token
-            if not self._operator_url:
-                record_github_attestation("exception")
-                raise RuntimeError("TANK_OPERATOR_INTERNAL_URL is required for GitHub MCP auth")
-            try:
-                pod_token = _read_token(self._token_path)
-                async with self._http.post(
-                    f"{self._operator_url}/api/internal/github/attestation",
-                    headers={"Authorization": f"Bearer {pod_token}"},
-                    json={},
-                ) as response:
-                    if response.status != 200:
-                        detail = (await response.text())[:300]
-                        record_github_attestation("http_error")
-                        raise RuntimeError(
-                            f"Tank GitHub MCP attestation request returned {response.status}: {detail}"
-                        )
-                    body = await response.json()
-            except RuntimeError:
-                raise
-            except Exception:
-                record_github_attestation("exception")
-                raise
-            token = str(body.get("token") or "")
-            expires_at = _parse_expires_at(body.get("expires_at"))
-            if not token or expires_at <= time.time():
-                record_github_attestation("invalid_response")
-                raise RuntimeError("Tank GitHub MCP attestation response was invalid")
-            self._cached_token = token
-            self._expires_at = expires_at
-            record_github_attestation("success")
-            return token
 
 
 class AuthRomaineServiceProvider:
@@ -442,10 +375,7 @@ async def run() -> None:
                 # against the IdP's JWKS and resolves the caller's GitHub
                 # App installation by calling tank-operator's
                 # /api/internal/github/installation with this same bearer
-                # forwarded. The legacy Tank-attestation path is still
-                # accepted by mcp-github through the transition; once all
-                # session pods are running this proxy build, removing the
-                # /github/attestation endpoint is safe.
+                # forwarded.
                 token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()

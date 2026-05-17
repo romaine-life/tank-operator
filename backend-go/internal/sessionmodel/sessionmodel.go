@@ -382,11 +382,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
 	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
-		"name":      "tank-operator-sa-token",
-		"mountPath": "/var/run/secrets/tank-operator",
-		"readOnly":  true,
-	})
-	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
 		"name":      "auth-romaine-sa-token",
 		"mountPath": "/var/run/secrets/auth.romaine.life",
 		"readOnly":  true,
@@ -399,8 +394,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"imagePullPolicy": "Always",
 			"command":         []any{"mcp-auth-proxy"},
 			"env": []any{
-				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
-				map[string]any{"name": "TANK_SESSION_ATTESTATION_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 				map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
 			},
 			// The metrics port is exposed as a named container port so the
