@@ -129,6 +129,14 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 			wantLabel: "newest",
 		},
 		{
+			// Symmetric counterpart of anchor=newest. No cursor validation
+			// because the head of the ledger is not a caller-supplied key.
+			name:      "anchor=oldest → head",
+			url:       "/api/sessions/s/timeline?anchor=oldest",
+			wantKind:  sessionEventReadHead,
+			wantLabel: "oldest",
+		},
+		{
 			name:          "anchor=first_unread with read state → around",
 			url:           "/api/sessions/s/timeline?anchor=first_unread",
 			readState:     readState,
@@ -221,6 +229,66 @@ func TestSessionEventReadIntentDefaultsAndCaps(t *testing.T) {
 	got = sessionEventReadIntentFromRequest(req, nil)
 	if got.numBefore != 250 || got.numAfter != 250 {
 		t.Fatalf("num_before/num_after caps = (%d,%d), want (250,250)", got.numBefore, got.numAfter)
+	}
+}
+
+// cursorRecordingFakeStore wraps fakeSessionEventStore but captures the
+// cursor passed to ListBySession so dispatch tests can prove that a given
+// read kind targets the right indexed scan (empty cursor = head/legacy,
+// AfterOrderKey set = forward, BeforeOrderKey set = backward). Named
+// distinctly from recordingSessionEventStore in handlers_turns_test.go,
+// which captures Upserts for a different test surface.
+type cursorRecordingFakeStore struct {
+	fakeSessionEventStore
+	lastCursor store.SessionEventCursor
+	lastLimit  int
+}
+
+func (s *cursorRecordingFakeStore) ListBySession(ctx context.Context, sessionID string, cursor store.SessionEventCursor, limit int) (store.SessionEventPage, error) {
+	s.lastCursor = cursor
+	s.lastLimit = limit
+	return s.fakeSessionEventStore.ListBySession(ctx, sessionID, cursor, limit)
+}
+
+func TestRunSessionEventReadAnchorOldestUsesEmptyCursor(t *testing.T) {
+	// anchor=oldest must dispatch ListBySession with an empty cursor so the
+	// store's ascending scan stamps FoundOldest=true (no AfterOrderKey /
+	// BeforeOrderKey supplied — see sessionEventPageFromAscendingScan).
+	rec := &cursorRecordingFakeStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {
+					Events: []map[string]any{
+						{"event_id": "e1", "order_key": "001", "type": "item.completed"},
+					},
+					FoundOldest:  true,
+					FoundNewest:  true,
+					NextOrderKey: "001",
+					PrevOrderKey: "001",
+				},
+			},
+		},
+	}
+	app := &appServer{sessionEvents: rec}
+
+	intent := sessionEventReadIntent{
+		kind:           sessionEventReadHead,
+		limit:          200,
+		metricLabel:    "oldest",
+		responseAnchor: "oldest",
+	}
+	page, err := app.runSessionEventRead(context.Background(), rec, "63", intent)
+	if err != nil {
+		t.Fatalf("dispatch error: %v", err)
+	}
+	if rec.lastCursor.AfterOrderKey != "" || rec.lastCursor.BeforeOrderKey != "" {
+		t.Fatalf("anchor=oldest must pass empty cursor; got %+v", rec.lastCursor)
+	}
+	if rec.lastLimit != 200 {
+		t.Fatalf("limit propagation: got %d, want 200", rec.lastLimit)
+	}
+	if !page.FoundOldest {
+		t.Fatalf("anchor=oldest must surface FoundOldest=true; got %+v", page)
 	}
 }
 

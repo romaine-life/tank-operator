@@ -23,6 +23,10 @@ const (
 // selects the shape of the read:
 //
 //   - anchor=newest                — last N events (tail).
+//   - anchor=oldest                — first N events (head of ledger). Powers
+//                                    the SPA's "jump to start" affordance —
+//                                    Discord/Slack-style symmetric pair with
+//                                    anchor=newest.
 //   - anchor=first_unread          — page centered on the caller's
 //                                    last_read_order_key+1 (Zulip semantics).
 //                                    Falls back to newest when the session is
@@ -306,6 +310,11 @@ type sessionEventReadKind int
 const (
 	sessionEventReadLegacyForward sessionEventReadKind = iota
 	sessionEventReadTail
+	// sessionEventReadHead is the symmetric counterpart of sessionEventReadTail:
+	// the FIRST N events of the ledger in ASC order. Indexed seek (same plan
+	// as legacy_forward, but as a named anchor with its own metric label) —
+	// dispatched by anchor=oldest from the SPA's "jump to start" button.
+	sessionEventReadHead
 	sessionEventReadAround
 	sessionEventReadAfter
 	sessionEventReadBefore
@@ -365,6 +374,18 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 			limit:          limit,
 			metricLabel:    "newest",
 			responseAnchor: "newest",
+		}
+	case "oldest":
+		// Head of ledger, ASC. Same underlying scan as legacy_forward
+		// (empty cursor, ascending) but exposed as a named, intentional
+		// anchor so the metric label and the SPA contract reflect the
+		// "jump to start" semantics. Sets FoundOldest=true; FoundNewest
+		// when the ledger has <=limit events.
+		return sessionEventReadIntent{
+			kind:           sessionEventReadHead,
+			limit:          limit,
+			metricLabel:    "oldest",
+			responseAnchor: "oldest",
 		}
 	case "first_unread":
 		anchorKey := sessionEventFirstUnreadAnchor(readState)
@@ -437,6 +458,14 @@ func (s *appServer) runSessionEventRead(ctx context.Context, eventStore store.Se
 	switch intent.kind {
 	case sessionEventReadTail:
 		return eventStore.LatestEvents(ctx, sessionID, intent.limit)
+	case sessionEventReadHead:
+		// ASC from the head of the ledger. The empty cursor lands on the
+		// `default` branch of ListBySession's switch, which is
+		// `ORDER BY order_key ASC LIMIT $1` — the indexed forward scan.
+		// sessionEventPageFromAscendingScan then stamps
+		// FoundOldest=true (no AfterOrderKey/BeforeOrderKey was supplied)
+		// and FoundNewest=!hasMore (no row beyond limit fetched).
+		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{}, intent.limit)
 	case sessionEventReadAround:
 		return eventStore.EventsAround(ctx, sessionID, intent.anchorOrderKey, intent.numBefore, intent.numAfter)
 	case sessionEventReadBefore:
