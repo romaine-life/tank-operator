@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
@@ -76,7 +77,7 @@ func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -152,7 +153,7 @@ func (s *appServer) handleGetFileContent(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -222,7 +223,7 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -258,7 +259,7 @@ func (s *appServer) handleWalkFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -409,7 +410,7 @@ func (s *appServer) handleListSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -512,7 +513,7 @@ func (s *appServer) handleListMCPServers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -577,7 +578,7 @@ func (s *appServer) handleListMCPTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	_, podName, herr := s.resolveSessionPodForRead(r.Context(), user, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -698,10 +699,28 @@ type podResolveError struct {
 }
 
 // resolveSessionPod validates ownership and returns the pod name.
+// Write-side gate: an admin token can NOT pass this helper into another
+// user's pod — admin lift is read-only by construction.
 func (s *appServer) resolveSessionPod(ctx context.Context, email, sessionID string) (sessions.Info, string, *podResolveError) {
 	info, err := s.mgr.GetByOwner(ctx, email, sessionID)
 	if err != nil {
 		return sessions.Info{}, "", &podResolveError{http.StatusNotFound, "session not found"}
+	}
+	if info.PodName == nil {
+		return sessions.Info{}, "", &podResolveError{http.StatusServiceUnavailable, "session pod not ready"}
+	}
+	return info, *info.PodName, nil
+}
+
+// resolveSessionPodForRead is the read-side parallel: admin can resolve
+// any session pod; non-admin still gets per-owner gating (404 on miss).
+// Used by file/MCP/skill READ handlers. Write handlers (uploads,
+// edits, terminal attach) intentionally keep calling resolveSessionPod
+// — see auth_session.go authorizeSessionRead for the rationale.
+func (s *appServer) resolveSessionPodForRead(ctx context.Context, user auth.User, sessionID string) (sessions.Info, string, *podResolveError) {
+	info, status, err := s.authorizeSessionRead(ctx, user, sessionID)
+	if err != nil {
+		return sessions.Info{}, "", &podResolveError{status, err.Error()}
 	}
 	if info.PodName == nil {
 		return sessions.Info{}, "", &podResolveError{http.StatusServiceUnavailable, "session pod not ready"}

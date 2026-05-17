@@ -27,6 +27,13 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 				"tank-operator/session-id": id,
 				"tank-operator/mode":       sessionmodel.CodexGUIMode,
 			},
+			// owner-email annotation is required by Reader.GetByID for
+			// admin cross-user reads. Production pods always carry this
+			// (set in sessionmodel.go pod template); fixtures must too
+			// or admin-read tests silently fall through to ErrNotFound.
+			Annotations: map[string]string{
+				"tank-operator/owner-email": owner,
+			},
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
