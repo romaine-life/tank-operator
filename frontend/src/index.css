@@ -1363,10 +1363,7 @@ button:disabled {
   transform: translateY(-50%);
   flex-shrink: 0;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
   object-fit: contain;
-  padding: 6px;
-  box-shadow: var(--shadow-avatar-inset);
   pointer-events: none;
   z-index: 0;
 }
@@ -3144,6 +3141,32 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Pending-tail variant: the round button widens to a pill carrying the
+   "N new" count badge when events arrive while the user is back-reading.
+   Matches the affordance Slack and Discord use for new-messages-below. */
+.run-scroll-to-bottom-pending {
+  width: auto;
+  padding: 0 0.55rem 0 0.5rem;
+  gap: 0.35rem;
+  border-color: rgba(110, 168, 255, 0.5);
+  background: rgba(33, 53, 80, 0.94);
+}
+
+.run-scroll-to-bottom-pending:hover {
+  background: rgba(43, 64, 92, 0.96);
+  border-color: rgba(140, 190, 255, 0.7);
+}
+
+.run-scroll-to-bottom-count {
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  min-width: 1.2rem;
+  text-align: center;
+}
+
 /* Composer textarea — taller, more breathing room. Auto-grows with
    content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {
@@ -3801,6 +3824,35 @@ textarea.run-files-viewer-editor:focus {
   100% { opacity: 0; }
 }
 
+/* "Load earlier messages" pill — sits at the top of the transcript when
+   the loaded window doesn't yet include the head of the ledger. Visual
+   sibling of .run-continue-hint, with a stronger affordance because
+   it's an action, not a status. */
+.run-transcript-load-older {
+  align-self: center;
+  margin: var(--space-3) auto var(--space-2);
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-default);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.run-transcript-load-older:hover:not(:disabled) {
+  background: var(--bg-default);
+  border-color: var(--border-default);
+}
+
+.run-transcript-load-older:disabled {
+  cursor: progress;
+  color: var(--text-muted);
+}
+
 @keyframes run-status-pulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
@@ -3826,12 +3878,12 @@ textarea.run-files-viewer-editor:focus {
   width: 1.4rem;
   height: 1.4rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .run-status-avatar {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
   object-fit: contain;
 }
 
@@ -4683,7 +4735,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-transcript-message {
   display: grid;
-  grid-template-columns: 1.7rem minmax(0, 1fr);
+  grid-template-columns: 2.625rem minmax(0, 1fr);
   column-gap: 0.55rem;
   row-gap: 0.2rem;
   align-items: start;
@@ -4691,11 +4743,13 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
-/* Avatars — assistant and user avatars are real elements in the outer columns. */
+/* Avatars — assistant and user avatars are real elements in the outer columns.
+   Sized to match the 42px sidebar .session-avatar so the JP1 avatar reads
+   at the same scale in both surfaces. */
 .run-transcript-message::before,
 .run-transcript-message::after {
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
@@ -4717,35 +4771,34 @@ textarea.run-files-viewer-editor:focus {
 .run-msg-avatar {
   grid-column: 1;
   grid-row: 1;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   flex-shrink: 0;
 }
 
 .run-msg-avatar .avatar {
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   font-size: var(--run-chat-font-meta);
 }
 
 .run-msg-ai-avatar {
   grid-column: 1;
   grid-row: 1;
-  width: 1.7rem;
-  height: 1.7rem;
+  width: 2.625rem;
+  height: 2.625rem;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.07);
   flex-shrink: 0;
-  box-shadow: var(--shadow-avatar-inset);
 }
 
 .run-msg-ai-icon {
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 2.625rem;
+  height: 2.625rem;
   display: block;
+  border-radius: 999px;
   object-fit: contain;
 }
 

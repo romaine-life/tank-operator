@@ -14,6 +14,7 @@ import {
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
+import { Virtuoso } from "react-virtuoso";
 import {
   PromptInput,
   PromptInputFooter,
@@ -629,6 +630,43 @@ function readSessionInteraction(id: string): SessionInteraction | null {
 function writeSessionInteraction(id: string, interaction: SessionInteraction): void {
   try {
     localStorage.setItem(SESSION_INTERACTION_KEY_PREFIX + id, interaction);
+  } catch {}
+}
+
+// Per-session transcript-anchor persistence (Stage 2 chat windowing). When
+// the user returns to a long session we want them to land on the last
+// event they were viewing instead of either the head of the ledger (the
+// old 50-page-walk behavior) or always-newest. The order_key is a small
+// string — one entry per session — so localStorage is the right fit.
+//
+// Read/write paths defensive against quota errors and private-mode storage
+// blocks; the fallback chain (saved → first_unread → newest) means losing
+// a key never breaks the load, it just degrades the UX one notch.
+const SDK_TRANSCRIPT_POSITION_KEY_PREFIX = "tank.transcript.position.";
+
+function readSdkTranscriptPosition(sessionId: string): string | null {
+  try {
+    const stored = localStorage.getItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+    );
+    if (typeof stored === "string" && stored) return stored;
+  } catch {}
+  return null;
+}
+
+function writeSdkTranscriptPosition(sessionId: string, orderKey: string): void {
+  if (!orderKey) return;
+  try {
+    localStorage.setItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+      orderKey,
+    );
+  } catch {}
+}
+
+function clearSdkTranscriptPosition(sessionId: string): void {
+  try {
+    localStorage.removeItem(SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId);
   } catch {}
 }
 
@@ -1669,6 +1707,29 @@ function isScheduleWakeupToolName(name: string | undefined): boolean {
 
 function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
+}
+
+// eventCountsAsTailOutput mirrors store/session_events.go's
+// UnreadOutputItemTypes / UnreadOutputTurnTypes — content events that
+// render as new bubbles in the transcript. Lifecycle markers
+// (turn.submitted / turn.started / turn.completed, the user's own
+// user_message.created) are excluded so the pending-tail pill counter
+// only ticks on something the user would actually want to scroll down
+// to see.
+function eventCountsAsTailOutput(event: unknown): boolean {
+  if (!isTankConversationEvent(event)) return false;
+  if (event.actor === "user") return false;
+  const type = event.type;
+  return (
+    type === "item.started" ||
+    type === "item.completed" ||
+    type === "item.failed" ||
+    type === "tool.approval_requested" ||
+    type === "tool.approval_resolved" ||
+    type === "turn.failed" ||
+    type === "turn.command_failed" ||
+    type === "turn.interrupted"
+  );
 }
 
 function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
@@ -3400,6 +3461,19 @@ function RunToolGroup({
   );
 }
 
+// RunMessages renders the durable transcript through react-virtuoso so the
+// DOM stays bounded regardless of session length — Mattermost / Element /
+// Slack / Discord all converge on this architecture (see
+// docs/product-inspirations.md). Without virtualization the DOM grows
+// 15-50 nodes per event; long sessions reach 100K+ nodes and layout cost
+// dominates. With Virtuoso only the visible window plus a small overscan
+// buffer mount at any moment.
+//
+// `customScrollParent` makes Virtuoso reuse the existing <main> as its
+// scroll container — no wrapping/sizing layout changes vs. the prior
+// inline render. The `followOutput` + `startReached` +
+// `atBottomStateChange` props replace the hand-rolled scroll-detect /
+// auto-scroll effects deleted from ChatPane in this stage.
 function RunMessages({
   entries,
   avatar,
@@ -3409,6 +3483,9 @@ function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  scrollParent,
+  onStartReached,
+  onAtBottomChange,
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
@@ -3418,45 +3495,86 @@ function RunMessages({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  scrollParent: HTMLElement | null;
+  onStartReached?: () => void;
+  onAtBottomChange?: (atBottom: boolean) => void;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  // computeItemKey stabilizes Virtuoso's per-item identity across renders.
+  // Tool groups have no single id, so we composite the first/last child
+  // ids — same group instance stays the same key as it grows during a
+  // streaming turn.
+  const computeKey = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        const head = g.entries[0]?.id ?? "tools";
+        const tail = g.entries[g.entries.length - 1]?.id ?? head;
+        return `tools-${head}-${tail}`;
+      }
+      return g.entry.id;
+    },
+    [],
+  );
+  const renderItem = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+      }
+      if (g.kind === "reasoning") {
+        return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
+      }
+      if (g.kind === "meta") {
+        return <RunMetaBlock entry={g.entry} />;
+      }
+      return (
+        <RunMessageBubble
+          entry={g.entry}
+          avatar={avatar}
+          showTimestamps={showTimestamps}
+          showDuration={showDuration}
+          onQuote={onQuote}
+          onFork={onFork}
+        />
+      );
+    },
+    [
+      autoExpandTools,
+      avatar,
+      onFork,
+      onQuote,
+      showDuration,
+      showThinking,
+      showTimestamps,
+    ],
+  );
+  // followOutput="smooth" keeps the user stuck to the live tail when they
+  // ARE at the bottom; releases when they scroll up. Returning false from
+  // followOutput's callback would let us suppress auto-scroll mid-render,
+  // but the default behavior matches what ChatPane wants today (sticky
+  // when at bottom; the buffered pill in ChatPane handles back-read).
+  // startReached fires when the user scrolls within ~`overscan` of the
+  // top — Virtuoso debounces this so rapid scroll doesn't spam fetches.
   return (
-    <div className="run-transcript run-transcript-claude" data-slot="root">
-      {groups.map((g: EntryGroup, idx: number) => {
-        if (g.kind === "tools") {
-          return (
-            <RunToolGroup
-              key={`tools-${g.entries[0].id}-${idx}`}
-              entries={g.entries}
-              autoExpand={autoExpandTools}
-            />
-          );
-        }
-        if (g.kind === "reasoning") {
-          return (
-            <RunReasoningBlock
-              key={g.entry.id}
-              entry={g.entry}
-              showThinking={showThinking}
-            />
-          );
-        }
-        if (g.kind === "meta") {
-          return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
-        }
-        return (
-          <RunMessageBubble
-            key={g.entry.id}
-            entry={g.entry}
-            avatar={avatar}
-            showTimestamps={showTimestamps}
-            showDuration={showDuration}
-            onQuote={onQuote}
-            onFork={onFork}
-          />
-        );
-      })}
-    </div>
+    <Virtuoso
+      className="run-transcript run-transcript-claude"
+      data-slot="root"
+      data={groups}
+      customScrollParent={scrollParent ?? undefined}
+      computeItemKey={computeKey}
+      itemContent={renderItem}
+      followOutput="smooth"
+      startReached={onStartReached}
+      atBottomStateChange={onAtBottomChange}
+      // Render two extra screens worth above and below the viewport so
+      // tool-group expansion and markdown reflow don't expose unrendered
+      // gaps mid-scroll.
+      overscan={{ main: 800, reverse: 800 }}
+      // Default initialTopMostItemIndex is the first item; we want the
+      // bottom so caught-up sessions land at the live tail. The minus-1
+      // safeguards against empty arrays (Virtuoso accepts negative indices
+      // as "no anchor").
+      initialTopMostItemIndex={Math.max(groups.length - 1, 0)}
+    />
   );
 }
 
@@ -3584,12 +3702,45 @@ function ChatPane({
     "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
   } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  // transcriptScrollEl is a state-backed reference to the <main> element.
+  // Virtuoso's customScrollParent expects the actual DOM node, and React
+  // refs populate AFTER render — passing `ref.current` would give Virtuoso
+  // `null` on first render and the prop wouldn't reactively update when
+  // the ref hydrated. State + callback ref forces a re-render once <main>
+  // mounts so Virtuoso receives the element on the next pass.
+  const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
+    transcriptScrollRef.current = node;
+    setTranscriptScrollEl(node);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<boolean> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
+  // Windowed-transcript bookkeeping introduced when /timeline switched from
+  // a 50-page forward walk to anchored reads. `sdkOldestLoadedOrderKeyRef`
+  // tracks the prev-cursor of the loaded window so "Load earlier" can
+  // back-paginate. `sdkFoundOldestRef` / `sdkFoundNewestRef` mirror the
+  // server's found_oldest / found_newest so the UI can hide back- and
+  // forward-paginate affordances at the edges of the ledger. Empty cursor
+  // / unknown booleans default to "we don't know yet" — UI treats that
+  // conservatively (paginate buttons remain visible until proven needed).
+  const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
+  const sdkFoundOldestRef = useRef(false);
+  const sdkFoundNewestRef = useRef(false);
+  const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
+  const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
+  // Streaming-while-back-reading bookkeeping. While the user is reading
+  // older context (atBottom=false), incoming SSE events get appended to
+  // the window — Virtuoso correctly renders them at the bottom of the
+  // virtualized list without moving the user's scroll position. The pill
+  // counter surfaces those events as a clickable "N new messages below ↓"
+  // affordance so the user knows the conversation moved. Cleared when
+  // atBottomStateChange(true) fires. Slack/Discord ship the same pattern.
+  const sdkAtBottomRef = useRef(true);
+  const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
@@ -3842,11 +3993,25 @@ function ChatPane({
   function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    if (!sdkServerEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
+    const alreadySeen = sdkServerEventsRef.current.some(
+      (candidate) => candidate.event_id === event.event_id,
+    );
+    if (!alreadySeen) {
       sdkServerEventsRef.current = orderedConversationEvents([
         ...sdkServerEventsRef.current,
         event,
       ]);
+      // Streaming-back-read pill: count visible-output events that
+      // arrive while the user isn't viewing the live tail. Lifecycle
+      // markers (turn.*, tool.approval_*) shouldn't count — they don't
+      // produce new bubbles, just status transitions. Match the same
+      // policy the server-side UnreadOutputItemTypes uses for badging.
+      if (
+        !sdkAtBottomRef.current &&
+        eventCountsAsTailOutput(event as unknown as JsonObject)
+      ) {
+        setSdkPendingTailCount((count) => count + 1);
+      }
     }
     syncSdkRenderedEntries();
 
@@ -3855,6 +4020,18 @@ function ChatPane({
     if (run && terminal && event.client_nonce === run.id) {
       finalizeSdkRun(run, terminal, { refreshHistory: false });
     }
+  }
+  // handleSdkAtBottomChange is the durable boolean source from Virtuoso
+  // for "is the user viewing the live tail." Replaces the prior 24px
+  // scrollTop hysteresis listener. Two side effects:
+  //   - Mirror to userScrolledUp so the existing scroll-to-bottom button
+  //     visibility CSS still works.
+  //   - When transitioning to atBottom=true, clear the pending-tail
+  //     pill counter — the user has now seen those events.
+  function handleSdkAtBottomChange(atBottom: boolean): void {
+    sdkAtBottomRef.current = atBottom;
+    setUserScrolledUp(!atBottom);
+    if (atBottom) setSdkPendingTailCount(0);
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -3962,28 +4139,11 @@ function ChatPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, queuedMessages]);
 
-  // Auto-scroll the transcript to the bottom when entries grow, unless
-  // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
-  // + wheel-detection behaviour.
-  useEffect(() => {
-    if (userScrolledUp) return;
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    main.scrollTop = main.scrollHeight;
-  }, [entries.length, userScrolledUp, visible, activeTab]);
-
-  // Detect user scroll-away from the bottom. Threshold of 24px so small
-  // overshoots (image loads) don't disable auto-scroll.
-  useEffect(() => {
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    const onScroll = () => {
-      const distanceFromBottom = main.scrollHeight - main.scrollTop - main.clientHeight;
-      setUserScrolledUp(distanceFromBottom > 24);
-    };
-    main.addEventListener("scroll", onScroll, { passive: true });
-    return () => main.removeEventListener("scroll", onScroll);
-  }, []);
+  // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
+  // keeps the user pinned to the live tail when at-bottom, and
+  // `atBottomStateChange` is the durable boolean source for
+  // `setUserScrolledUp` (no more 24px hysteresis listener, no more manual
+  // scrollTop=scrollHeight effect). See RunMessages for the wiring.
 
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
@@ -4014,6 +4174,19 @@ function ChatPane({
     );
   }
 
+  // refreshSdkRunHistoryResult loads the durable transcript through a
+  // single anchored read instead of the prior 50-page forward walk from
+  // order_key=0. The old loop was the root cause of the mid-load scroll
+  // "dance": rendering as each 1000-event page arrived extended the DOM
+  // under the user's eyes, so any user scroll-down latched off the
+  // auto-scroll effect and the next page rendered with stale scroll
+  // position. Per docs/migration-policy.md the old path is deleted, not
+  // kept as a fallback.
+  //
+  // Anchor resolution: prefer the saved per-session position from
+  // localStorage (so reopening a session lands where the user left off),
+  // fall back to anchor=first_unread (server resolves to
+  // last_read_order_key), final fallback to anchor=newest.
   function refreshSdkRunHistoryResult(
     showHint: boolean,
     clearRealtime = false,
@@ -4021,55 +4194,84 @@ function ChatPane({
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
-    const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      let afterOrderKey = "";
-      for (let page = 0; page < 50; page += 1) {
-        const params = new URLSearchParams({ limit: "1000" });
-        if (afterOrderKey) params.set("after_order_key", afterOrderKey);
-        const res = await authedFetch(
-          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
-        );
-        if (!res.ok) return { replayed: false };
-        const body = (await res.json()) as {
-          session_id?: string;
-          events?: unknown[];
-          next_order_key?: string;
-          has_more?: boolean;
-          read_state?: { last_read_order_key?: unknown } | null;
-        };
-        if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
-        const lastReadOrderKey = body.read_state?.last_read_order_key;
-        if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
-          sdkLastReadSentRef.current = advanceTimelineCursor(
-            sdkLastReadSentRef.current,
-            lastReadOrderKey,
-          );
-        }
-        if (!Array.isArray(body.events)) return { replayed: false };
-        events.push(...body.events);
-        const previousAfter = afterOrderKey;
-        const nextAfter = typeof body.next_order_key === "string" ? body.next_order_key : "";
-        if (nextAfter) {
-          afterOrderKey = nextAfter;
-          sdkTimelineCursorRef.current = advanceTimelineCursor(
-            sdkTimelineCursorRef.current,
-            nextAfter,
-          );
-        }
-        if (!body.has_more) break;
-        if (!nextAfter || nextAfter === previousAfter) break;
+      const savedAnchor = readSdkTranscriptPosition(refreshSessionId);
+      const params = new URLSearchParams();
+      if (savedAnchor) {
+        params.set("anchor", savedAnchor);
+        params.set("num_before", "100");
+        params.set("num_after", "100");
+      } else {
+        params.set("anchor", "first_unread");
+        params.set("num_before", "100");
+        params.set("num_after", "100");
       }
-
+      let res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      // If the saved anchor was pruned/never existed, server returns 409;
+      // fall through to first_unread which never 409s (the server degrades
+      // to tail when read state is empty or fully caught up).
+      if (res.status === 409 && savedAnchor) {
+        clearSdkTranscriptPosition(refreshSessionId);
+        const fallback = new URLSearchParams({
+          anchor: "first_unread",
+          num_before: "100",
+          num_after: "100",
+        });
+        res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${fallback.toString()}`,
+        );
+      }
+      if (!res.ok) return { replayed: false };
+      const body = (await res.json()) as {
+        session_id?: string;
+        events?: unknown[];
+        next_order_key?: string;
+        prev_order_key?: string;
+        has_more?: boolean;
+        found_oldest?: boolean;
+        found_newest?: boolean;
+        read_state?: { last_read_order_key?: unknown } | null;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+      const lastReadOrderKey = body.read_state?.last_read_order_key;
+      if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
+        sdkLastReadSentRef.current = advanceTimelineCursor(
+          sdkLastReadSentRef.current,
+          lastReadOrderKey,
+        );
+      }
+      if (!Array.isArray(body.events)) return { replayed: false };
       const canonicalEvents: TankConversationEvent[] = [];
-      for (const ev of events) {
+      for (const ev of body.events) {
         if (isTankConversationEvent(ev)) {
           advanceSdkTimelineCursor(ev);
           canonicalEvents.push(ev);
         }
       }
+      // Forward cursor advances to next_order_key — the SSE stream resumes
+      // from this point so we don't re-emit events already in the window.
+      const nextAfter =
+        typeof body.next_order_key === "string" ? body.next_order_key : "";
+      if (nextAfter) {
+        sdkTimelineCursorRef.current = advanceTimelineCursor(
+          sdkTimelineCursorRef.current,
+          nextAfter,
+        );
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      const foundNewest = body.found_newest === true;
+      sdkFoundOldestRef.current = foundOldest;
+      sdkFoundNewestRef.current = foundNewest;
+      setSdkFoundOldest(foundOldest);
       const terminal = clientNonce
-        ? sdkHistoryTerminalForRun(events, clientNonce)
+        ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
       replaceSdkServerEvents(
@@ -4083,6 +4285,110 @@ function ChatPane({
       return { replayed: true, terminal };
     };
     return load().catch(() => ({ replayed: false }));
+  }
+
+  // loadSdkOlderEvents fetches one bounded page of events strictly older
+  // than the current window's oldest event. Surfaced through the "Earlier
+  // messages" affordance at the top of the transcript. Each click brings
+  // 100 more events into the window; the UI hides the button once
+  // sdkFoundOldest flips true.
+  async function loadSdkOlderEvents(): Promise<void> {
+    const refreshSessionId = session.id;
+    const oldest = sdkOldestLoadedOrderKeyRef.current;
+    if (!oldest) return;
+    if (sdkFoundOldestRef.current) return;
+    if (sdkLoadingOlder) return;
+    setSdkLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({
+        before_order_key: oldest,
+        limit: "100",
+      });
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        events?: unknown[];
+        prev_order_key?: string;
+        found_oldest?: boolean;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return;
+      if (!Array.isArray(body.events)) return;
+      const olderEvents: TankConversationEvent[] = [];
+      for (const ev of body.events) {
+        if (isTankConversationEvent(ev)) olderEvents.push(ev);
+      }
+      if (olderEvents.length > 0) {
+        // Merge: existing server events stay at the tail of the array;
+        // older page goes to the head. orderedConversationEvents
+        // sorts ASC by order_key so insertion order doesn't matter, but
+        // doing a head-merge keeps the conceptual model honest.
+        sdkServerEventsRef.current = orderedConversationEvents([
+          ...olderEvents,
+          ...sdkServerEventsRef.current,
+        ]);
+        syncSdkRenderedEntries();
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      if (foundOldest) {
+        sdkFoundOldestRef.current = true;
+        setSdkFoundOldest(true);
+      }
+    } finally {
+      setSdkLoadingOlder(false);
+    }
+  }
+
+  // jumpSdkToLatest resets the window to the live tail. If the SPA never
+  // back-paginated (foundNewest=true), this is a no-op fast path: the
+  // existing DOM bottom is the live tail, so the caller can just scroll.
+  // If the user back-paginated past the live tail, we drop the window
+  // and refetch — that's the "stale tail" path mentioned in the plan.
+  async function jumpSdkToLatest(): Promise<void> {
+    if (sdkFoundNewestRef.current) return;
+    const refreshSessionId = session.id;
+    const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      events?: unknown[];
+      next_order_key?: string;
+      prev_order_key?: string;
+      found_oldest?: boolean;
+      found_newest?: boolean;
+    };
+    if (sessionIdRef.current !== refreshSessionId) return;
+    if (!Array.isArray(body.events)) return;
+    const canonicalEvents: TankConversationEvent[] = [];
+    for (const ev of body.events) {
+      if (isTankConversationEvent(ev)) {
+        advanceSdkTimelineCursor(ev);
+        canonicalEvents.push(ev);
+      }
+    }
+    const nextAfter =
+      typeof body.next_order_key === "string" ? body.next_order_key : "";
+    if (nextAfter) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        nextAfter,
+      );
+    }
+    const prevAfter =
+      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+    sdkFoundOldestRef.current = body.found_oldest === true;
+    sdkFoundNewestRef.current = body.found_newest === true;
+    setSdkFoundOldest(body.found_oldest === true);
+    replaceSdkServerEvents(canonicalEvents, false);
   }
 
   useEffect(() => {
@@ -4356,6 +4662,9 @@ function ChatPane({
 
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
+  // The cleanup also persists the user's last-viewing cursor for the
+  // departing session so reopening lands at the same spot (Stage 2 chat
+  // windowing).
   useEffect(() => {
     sessionIdRef.current = session.id;
     sdkServerEntriesRef.current = [];
@@ -4365,6 +4674,13 @@ function ChatPane({
     sdkConversationStateRef.current = initialConversationState;
     sdkAssistantDurationsRef.current = new Map();
     sdkTimelineCursorRef.current = null;
+    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkFoundOldestRef.current = false;
+    sdkFoundNewestRef.current = false;
+    setSdkFoundOldest(false);
+    setSdkLoadingOlder(false);
+    sdkAtBottomRef.current = true;
+    setSdkPendingTailCount(0);
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
     setEntries([]);
@@ -4375,6 +4691,20 @@ function ChatPane({
     setSdkConnectionState("idle");
     setRunStatus("idle");
     setRunning(false);
+    const departingSessionId = session.id;
+    return () => {
+      // Persist transcript position only when the user has back-paginated
+      // past the live tail; otherwise the default first_unread / newest
+      // anchor on reopen is already the right place to land. Save the
+      // last_order_key of the loaded window — the next open uses it as
+      // the anchor and EventsAround re-centers around that point.
+      const newest = sdkTimelineCursorRef.current;
+      if (newest && sdkFoundNewestRef.current === false) {
+        writeSdkTranscriptPosition(departingSessionId, newest);
+      } else {
+        clearSdkTranscriptPosition(departingSessionId);
+      }
+    };
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -5238,7 +5568,7 @@ function ChatPane({
 
       <main
         className={`run-main run-main-${runStatus}`}
-        ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+        ref={transcriptScrollCallbackRef}
         style={chatFontScaleStyle}
       >
         {activeTab === "files" ? (
@@ -5659,6 +5989,26 @@ function ChatPane({
           </div>
         ) : (
           <>
+            {/* "Load earlier messages" sits above the transcript when the
+                loaded window doesn't yet include the head of the ledger.
+                One click brings 100 older events into the window. Hides
+                once foundOldest flips true — by then the user can see the
+                very first message of the session. The button is the
+                back-paginate path; Virtuoso-style scroll-up-to-load is
+                Stage 3. */}
+            {!sdkFoundOldest && sdkOldestLoadedOrderKeyRef.current && (
+              <button
+                type="button"
+                className="run-transcript-load-older"
+                onClick={() => {
+                  void loadSdkOlderEvents();
+                }}
+                disabled={sdkLoadingOlder}
+                aria-label="Load earlier messages"
+              >
+                {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
+              </button>
+            )}
             {continueHintVisible && (
               <div className="run-continue-hint" role="status">
                 Continuing previous conversation
@@ -5683,6 +6033,11 @@ function ChatPane({
                   permissionMode: composerMode,
                 })
               }
+              scrollParent={transcriptScrollEl}
+              onStartReached={() => {
+                void loadSdkOlderEvents();
+              }}
+              onAtBottomChange={handleSdkAtBottomChange}
             />
           </>
         )}
@@ -5732,24 +6087,44 @@ function ChatPane({
         </div>
       )}
 
-      {/* Floating scroll-to-bottom button — fades in when the transcript
-          has been scrolled up. Snaps the user back to the latest message
-          and re-enables auto-scroll. Always rendered so the opacity
-          transition reads cleanly; pointer-events handled in CSS. */}
+      {/* Floating scroll-to-bottom button — fades in when the user has
+          scrolled away from the live tail (atBottom=false). When new
+          events have streamed in during a back-read the button shows
+          "N new" so the user knows the conversation moved (Slack /
+          Discord pattern). Click reaches the live tail in one round-trip
+          — refetching the tail if the user back-paginated past it. */}
       {activeTab === "chat" && entries.length > 0 && (
         <button
           type="button"
           className={`run-scroll-to-bottom${
             userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
-          }`}
+          }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
-            const main = transcriptScrollRef.current;
-            if (main) main.scrollTop = main.scrollHeight;
-            setUserScrolledUp(false);
+            const reachNewest = async () => {
+              await jumpSdkToLatest();
+              setUserScrolledUp(false);
+              setSdkPendingTailCount(0);
+              // Belt-and-suspenders: scroll on the next frame in case
+              // Virtuoso's followOutput hasn't repositioned yet.
+              requestAnimationFrame(() => {
+                const main = transcriptScrollRef.current;
+                if (main) main.scrollTop = main.scrollHeight;
+              });
+            };
+            void reachNewest();
           }}
-          aria-label="Scroll to latest"
+          aria-label={
+            sdkPendingTailCount > 0
+              ? `${sdkPendingTailCount} new messages below`
+              : "Scroll to latest"
+          }
         >
           <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+          {sdkPendingTailCount > 0 && (
+            <span className="run-scroll-to-bottom-count">
+              {sdkPendingTailCount > 99 ? "99+" : sdkPendingTailCount}
+            </span>
+          )}
         </button>
       )}
 

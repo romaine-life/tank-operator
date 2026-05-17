@@ -35,13 +35,19 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, info)
 }
 
-// handleListSessions lists sessions owned by the authenticated user.
+// handleListSessions lists sessions for the authenticated user, or for
+// a different owner when an admin passes `?owner=<email>`. The query
+// param is the explicit signal that unlocks the admin cross-user path
+// (intentional opt-in so the default response stays own-only and an
+// admin token isn't a footgun for tools that didn't expect cross-user
+// reads).
 func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
-	infos, err := s.mgr.ListSessions(r.Context(), user.Email)
+	owner := listSessionsOwner(user, r)
+	infos, err := s.mgr.ListSessions(r.Context(), owner)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -65,6 +71,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	owner := listSessionsOwner(user, r)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -79,7 +86,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 
 	cursor := sessionListCursorFromRequest(r)
 	if s.lifecycleEvents != nil {
-		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), user.Email, cursor.AfterOrderKey); err != nil {
+		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, cursor.AfterOrderKey); err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 				"reason": "cursor_check_failed",
@@ -90,7 +97,8 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 		} else if !ok {
 			sessionListStreamResyncTotal.Inc()
 			slog.Warn("session list stream resync required",
-				"email", user.Email,
+				"caller", user.Email,
+				"owner", owner,
 				"last_order_key", cursor.AfterOrderKey,
 			)
 			writeSSEJSONEvent(w, "resync_required", "", map[string]any{
@@ -111,10 +119,10 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 		sessionListStreamReconnectTotal.Inc()
 	}
 
-	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionListEvents(r.Context(), user.Email)
+	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionListEvents(r.Context(), owner)
 	if err != nil {
 		recordSessionListStreamError()
-		slog.Warn("session list events subscribe failed", "email", user.Email, "error", err)
+		slog.Warn("session list events subscribe failed", "caller", user.Email, "owner", owner, "error", err)
 		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 			"reason": "subscribe_failed",
 			"detail": err.Error(),
@@ -128,7 +136,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	// and before the NATS subscription was active. Pages capped at
 	// listEventStreamPageLimit; we loop until the page is short.
 	for {
-		hasMore, written, err := s.writeSessionListStreamPage(r.Context(), w, user.Email, &cursor)
+		hasMore, written, err := s.writeSessionListStreamPage(r.Context(), w, owner, &cursor)
 		if err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
@@ -141,7 +149,8 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 		flusher.Flush()
 		if written > 0 {
 			slog.Debug("session list stream catch-up emitted events",
-				"email", user.Email,
+				"caller", user.Email,
+				"owner", owner,
 				"count", written,
 				"last_order_key", cursor.AfterOrderKey,
 				"has_more", hasMore,
@@ -205,21 +214,15 @@ func (s *appServer) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
+	info, status, err := s.authorizeSessionRead(r.Context(), user, sessionID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		writeError(w, status, err.Error())
 		return
 	}
-	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
-	switch {
-	case err == nil:
-		writeJSON(w, http.StatusOK, info)
-	case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
-		writeError(w, http.StatusNotFound, "session not found")
-	case errors.Is(err, context.Canceled):
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
-	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 // handleTouchSession updates the idle timer for a session.

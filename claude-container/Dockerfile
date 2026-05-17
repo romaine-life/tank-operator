@@ -162,9 +162,39 @@ COPY runner-shared /opt/runner-shared
 # the shim is never resolved. Image gains ~5MB of dead weight in prod; the
 # tradeoff is "the same image works for both prod and test-slot iteration."
 COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
-RUN printf '%s\n%s\n' '#!/bin/sh' 'exec node /opt/agent-runner/dist/index.js' \
-        > /app/agent-runner-launch-binary.sh \
-    && chmod 0755 /app/agent-runner-launch-binary.sh
+# Hot-aware baked launch shim.
+#
+# Two responsibilities, both at every supervisor restart:
+#
+#  1. Ensure /var/run/agent-runner-hot/node_modules resolves. Hot-swap
+#     places only `dist/` at /var/run/agent-runner-hot/dist; node_modules
+#     remains baked at /opt/agent-runner/node_modules. ESM bare-specifier
+#     resolution walks UP from the importing file, so without a sibling
+#     `node_modules` next to the hot dist, `import "@anthropic-ai/..."`
+#     fails ERR_MODULE_NOT_FOUND. A symlink fixes that without copying
+#     ~100MB on every hot-swap. Idempotent: skip if symlink already there.
+#
+#  2. Prefer hot dist if present, else baked. The shim itself encodes
+#     "hot-aware" so the apply-hot-swap path can deliver just the dist
+#     directory (the contract surface) without also delivering a separate
+#     launch shim. Supervisor's existing `GLIMMUNG_SUPERVISOR_HOT_ARTIFACT`
+#     hot-shim override remains supported for callers who do want a custom
+#     entrypoint, but the default baked shim is itself hot-aware.
+#
+# The fallback `exec node /opt/agent-runner/dist/index.js` remains literal
+# so scripts/check-session-pod-hot-swap-migration.mjs's regex pin still
+# matches (and so the behavior at fresh pod boot — before any hot-swap —
+# is identical to pre-change).
+RUN cat > /app/agent-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/agent-runner-launch-binary.sh
+#!/bin/sh
+if [ ! -e /var/run/agent-runner-hot/node_modules ]; then
+  ln -sfn /opt/agent-runner/node_modules /var/run/agent-runner-hot/node_modules
+fi
+if [ -f /var/run/agent-runner-hot/dist/index.js ]; then
+  exec node /var/run/agent-runner-hot/dist/index.js
+fi
+exec node /opt/agent-runner/dist/index.js
+EOF
 
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.
 # Baked into all three session images so the build is symmetric; only

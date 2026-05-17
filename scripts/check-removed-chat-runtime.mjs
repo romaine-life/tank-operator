@@ -288,6 +288,22 @@ const blocked = [
   // which has finer-grained function-body awareness than this script.
   { name: "retired local stop-request flag", pattern: /\bstopRequested\b/ },
   { name: "retired stopping-target ref",     pattern: /\bstoppingTargetRef\b/ },
+  // Stage 2 chat-windowing cutover (PR #503): the SPA used to fetch the
+  // entire ledger forward from order_key=0 in a 50-page loop of 1000-event
+  // pages. The DOM extended under the user's eyes mid-load and produced
+  // the "scroll down, scroll bar learns there's more, repeat 3-4×"
+  // dance. Replaced with one anchored read (anchor=first_unread by
+  // default, fallback to anchor=newest) + bounded back-paginate via
+  // before_order_key. Block re-introduction of the old shapes so a
+  // future refactor can't quietly rebuild the forward walk.
+  { name: "removed 50-page forward-walk loop", pattern: /for\s*\(\s*let\s+page\s*=\s*0\s*;\s*page\s*<\s*50\b/ },
+  { name: "removed 1000-event-per-page timeline fetch", pattern: /limit:\s*["']1000["']/ },
+  // Stage 3 (PR #503): hand-rolled scroll-detect hysteresis. Replaced
+  // by react-virtuoso's atBottomStateChange callback, which is the
+  // durable boolean source for "is the user viewing the live tail." The
+  // 24px threshold was the smoking-gun signature of the prior listener —
+  // ban the literal so a future refactor can't reintroduce it.
+  { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
 ];
 
 const failures = [];

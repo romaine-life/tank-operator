@@ -19,53 +19,70 @@ const (
 )
 
 // handleListSessionEvents reads canonical SDK events from the session_events
-// Postgres table for the SPA's durable history path. The only resume cursor
-// is order_key; unknown cursors are explicit resync errors instead of silent
-// replay from the beginning.
+// Postgres table for the SPA's durable history path. The anchor query param
+// selects the shape of the read:
+//
+//   - anchor=newest                — last N events (tail).
+//   - anchor=first_unread          — page centered on the caller's
+//                                    last_read_order_key+1 (Zulip semantics).
+//                                    Falls back to newest when the session is
+//                                    fully read or never read.
+//   - anchor=<order_key>           — page centered on that order_key.
+//   - before_order_key=<order_key> — strictly older than the cursor (DESC).
+//   - after_order_key=<order_key>  — strictly newer than the cursor (ASC).
+//                                    Used for "catch up forward" inside a
+//                                    bounded forward-paginate from the SPA.
+//   - none of the above            — `legacy_forward`: ASC from the head of
+//                                    the ledger. Retained for the Stage 1
+//                                    rollout window before the SPA cutover
+//                                    deletes its only caller. A Prometheus
+//                                    alert on the labeled counter catches
+//                                    re-introduction post-cutover.
+//
+// num_before / num_after govern the symmetric anchor reads; limit governs
+// before/after cursor reads and the tail. Unknown cursors are explicit 409
+// resync errors per docs/product-inspirations.md.
 func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
 		return
-	}
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
-		return
-	}
-
-	cursor := sessionEventCursorFromRequest(r)
-	if ok, err := s.sessionEventCursorExists(r.Context(), sessionID, cursor); err != nil {
-		recordSessionEventTimelineFailure()
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	} else if !ok {
-		recordSessionEventTimelineFailure()
-		writeError(w, http.StatusConflict, "event cursor not found; reload timeline")
-		return
-	}
-
-	limit := 200
-	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 1000 {
-			limit = n
-		}
 	}
 
 	eventStore := s.sessionEvents
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
 	}
-	page, err := eventStore.ListBySession(r.Context(), sessionID, cursor, limit)
+	readState, err := s.getSessionReadState(r, user.Email, sessionID)
 	if err != nil {
 		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	readState, err := s.getSessionReadState(r, user.Email, sessionID)
+
+	intent := sessionEventReadIntentFromRequest(r, readState)
+	recordSessionEventTimelineRequest(intent.metricLabel)
+
+	// Cursor-existence validation: only meaningful for caller-supplied
+	// order_keys (after/before/anchor=<key>). Tail/around-first-unread/
+	// legacy-forward have no cursor to validate.
+	if intent.validateCursor != "" {
+		if ok, err := eventStore.HasOrderKey(r.Context(), sessionID, intent.validateCursor); err != nil {
+			recordSessionEventTimelineFailure()
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if !ok {
+			recordSessionEventTimelineFailure()
+			writeError(w, http.StatusConflict, "event cursor not found; reload timeline")
+			return
+		}
+	}
+
+	page, err := s.runSessionEventRead(r.Context(), eventStore, sessionID, intent)
 	if err != nil {
 		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -78,7 +95,11 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		"session_id":      sessionID,
 		"events":          page.Events,
 		"next_order_key":  page.NextOrderKey,
+		"prev_order_key":  page.PrevOrderKey,
 		"has_more":        page.HasMore,
+		"found_oldest":    page.FoundOldest,
+		"found_newest":    page.FoundNewest,
+		"anchor":          intent.responseAnchor,
 		"cursor_semantic": "order_key",
 		"read_state":      sessionReadStateBody(readState),
 	})
@@ -97,12 +118,8 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
-		return
-	}
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 
@@ -280,6 +297,180 @@ func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
 		return store.SessionEventCursor{AfterOrderKey: lastOrderKey}
 	}
 	return store.SessionEventCursor{}
+}
+
+// sessionEventReadKind enumerates the shapes the /timeline read can take.
+// Centralized so the metric label and the dispatcher stay in sync.
+type sessionEventReadKind int
+
+const (
+	sessionEventReadLegacyForward sessionEventReadKind = iota
+	sessionEventReadTail
+	sessionEventReadAround
+	sessionEventReadAfter
+	sessionEventReadBefore
+)
+
+// sessionEventReadIntent is the parsed shape of one /timeline request.
+// It carries the dispatch decision plus the cursor (if any) that needs the
+// 409-resync existence check, plus the metric label and the anchor string
+// echoed back in the response so the SPA can confirm what it got.
+type sessionEventReadIntent struct {
+	kind            sessionEventReadKind
+	limit           int
+	numBefore       int
+	numAfter        int
+	anchorOrderKey  string
+	afterOrderKey   string
+	beforeOrderKey  string
+	validateCursor  string
+	metricLabel     string
+	responseAnchor  string
+}
+
+func sessionEventReadIntentFromRequest(r *http.Request, readState *store.ConversationReadStateRecord) sessionEventReadIntent {
+	q := r.URL.Query()
+	anchor := strings.TrimSpace(q.Get("anchor"))
+	beforeOrderKey := strings.TrimSpace(q.Get("before_order_key"))
+	afterOrderKey := strings.TrimSpace(q.Get("after_order_key"))
+	if afterOrderKey == "" {
+		afterOrderKey = strings.TrimSpace(q.Get("last_order_key"))
+	}
+	if afterOrderKey == "" {
+		afterOrderKey = strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	}
+
+	limit := parseSessionEventIntParam(q.Get("limit"), 200, 1, 1000)
+	numBefore := parseSessionEventIntParam(q.Get("num_before"), 100, 0, 250)
+	numAfter := parseSessionEventIntParam(q.Get("num_after"), 100, 0, 250)
+
+	// Resolution precedence: explicit before_order_key wins (back-paginate),
+	// then anchor=first_unread / newest / <order_key>, then after_order_key
+	// (forward catch-up), then legacy_forward fallback.
+	if beforeOrderKey != "" {
+		return sessionEventReadIntent{
+			kind:           sessionEventReadBefore,
+			limit:          limit,
+			beforeOrderKey: beforeOrderKey,
+			validateCursor: beforeOrderKey,
+			metricLabel:    "before",
+			responseAnchor: "before:" + beforeOrderKey,
+		}
+	}
+
+	switch anchor {
+	case "newest":
+		return sessionEventReadIntent{
+			kind:           sessionEventReadTail,
+			limit:          limit,
+			metricLabel:    "newest",
+			responseAnchor: "newest",
+		}
+	case "first_unread":
+		anchorKey := sessionEventFirstUnreadAnchor(readState)
+		if anchorKey == "" {
+			// Fully caught up, or never read — fall through to tail.
+			return sessionEventReadIntent{
+				kind:           sessionEventReadTail,
+				limit:          limit,
+				metricLabel:    "first_unread",
+				responseAnchor: "first_unread:tail",
+			}
+		}
+		return sessionEventReadIntent{
+			kind:           sessionEventReadAround,
+			numBefore:      numBefore,
+			numAfter:       numAfter,
+			anchorOrderKey: anchorKey,
+			// Don't 409 if the read-state cursor is stale — the next
+			// fetch should silently degrade to tail rather than break.
+			validateCursor: "",
+			metricLabel:    "first_unread",
+			responseAnchor: "first_unread:" + anchorKey,
+		}
+	case "":
+		// no-op; falls through
+	default:
+		// Treat any non-keyword anchor as an order_key.
+		return sessionEventReadIntent{
+			kind:           sessionEventReadAround,
+			numBefore:      numBefore,
+			numAfter:       numAfter,
+			anchorOrderKey: anchor,
+			validateCursor: anchor,
+			metricLabel:    "around",
+			responseAnchor: "around:" + anchor,
+		}
+	}
+
+	if afterOrderKey != "" {
+		return sessionEventReadIntent{
+			kind:           sessionEventReadAfter,
+			limit:          limit,
+			afterOrderKey:  afterOrderKey,
+			validateCursor: afterOrderKey,
+			metricLabel:    "after",
+			responseAnchor: "after:" + afterOrderKey,
+		}
+	}
+
+	return sessionEventReadIntent{
+		kind:           sessionEventReadLegacyForward,
+		limit:          limit,
+		metricLabel:    "legacy_forward",
+		responseAnchor: "legacy_forward",
+	}
+}
+
+// sessionEventFirstUnreadAnchor returns the order_key the SPA should anchor
+// on for `anchor=first_unread`. We anchor on `last_read_order_key` itself
+// (inclusive of the boundary in EventsAround's before-slice), so the read
+// marker sits exactly above the first unread event.
+func sessionEventFirstUnreadAnchor(rec *store.ConversationReadStateRecord) string {
+	if rec == nil {
+		return ""
+	}
+	return strings.TrimSpace(rec.LastReadOrderKey)
+}
+
+func (s *appServer) runSessionEventRead(ctx context.Context, eventStore store.SessionEventStore, sessionID string, intent sessionEventReadIntent) (store.SessionEventPage, error) {
+	switch intent.kind {
+	case sessionEventReadTail:
+		return eventStore.LatestEvents(ctx, sessionID, intent.limit)
+	case sessionEventReadAround:
+		return eventStore.EventsAround(ctx, sessionID, intent.anchorOrderKey, intent.numBefore, intent.numAfter)
+	case sessionEventReadBefore:
+		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{
+			BeforeOrderKey: intent.beforeOrderKey,
+			Direction:      "desc",
+		}, intent.limit)
+	case sessionEventReadAfter:
+		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{
+			AfterOrderKey: intent.afterOrderKey,
+		}, intent.limit)
+	case sessionEventReadLegacyForward:
+		fallthrough
+	default:
+		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{}, intent.limit)
+	}
+}
+
+func parseSessionEventIntParam(raw string, fallback, min, max int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 
 func writeSSEJSONEvent(w http.ResponseWriter, eventName, id string, value any) {

@@ -194,19 +194,19 @@ const CHECKS = [
   {
     id: "activity-fold-case-stopping",
     from: "Read path: lifecycle fold",
-    file: "backend-go/cmd/tank-operator/handlers_activity.go",
-    description: "summarizeSessionActivity maps new event to Status = \"stopping\"",
+    file: "backend-go/internal/lifecycleevents/activity.go",
+    description: "DeriveActivitySummary maps new event to Status = \"stopping\"",
     kind: "grep-present",
     pattern: /case "turn\.interrupt_requested":[\s\S]{0,400}?Status\s*=\s*"stopping"/,
   },
   {
     id: "activity-fold-preserves-active-turn",
     from: "Read path: lifecycle fold",
-    file: "backend-go/cmd/tank-operator/handlers_activity.go",
+    file: "backend-go/internal/lifecycleevents/activity.go",
     description: "stopping case does NOT null out ActiveTurnID (turn is still mid-flight)",
     kind: "block-absent",
     blockPattern: /case "turn\.interrupt_requested":[\s\S]{0,400}?(?=case "|\}\s*$)/,
-    absentPattern: /summary\.ActiveTurnID\s*=\s*nil/,
+    absentPattern: /ActiveTurnID\s*=\s*nil/,
   },
 
   // ────────────────────────── Frontend reducer + projection ──────────────────────────
@@ -457,7 +457,7 @@ const CHECKS = [
   {
     id: "test-activity-fold-stopping",
     from: "Tests",
-    file: "backend-go/cmd/tank-operator/handlers_activity_test.go",
+    file: "backend-go/internal/lifecycleevents/activity_test.go",
     description: "activity fold test exercises turn.interrupt_requested → stopping",
     kind: "grep-present",
     pattern: /turn\.interrupt_requested/,
