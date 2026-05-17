@@ -74,6 +74,18 @@ var (
 		Name: "tank_session_event_timeline_failure_total",
 		Help: "Failures of the GET /timeline snapshot used by the SPA to bootstrap a session.",
 	})
+	// sessionEventTimelineRequestTotal labels each /timeline read by the
+	// anchor shape the SPA chose. The `legacy_forward` label exists so a
+	// Prometheus alert can fire if the pre-anchor forward-walk path
+	// reappears after the Stage 2 cutover documented in
+	// docs/quality-timeframes.md ("migration guards prevent old paths
+	// from returning"). Expected steady-state values once Stage 2 lands:
+	// `newest`, `first_unread`, `around`, `before` non-zero;
+	// `legacy_forward` always zero.
+	sessionEventTimelineRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_event_timeline_request_total",
+		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",
+	}, []string{"anchor"})
 	sessionEventStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_emitted_total",
 		Help: "Events emitted to a connected SSE consumer (post-filter).",
@@ -319,6 +331,12 @@ func recordSessionEventStreamError() {
 
 func recordSessionEventTimelineFailure() {
 	sessionEventTimelineFailureTotal.Inc()
+}
+
+// recordSessionEventTimelineRequest tags one /timeline read with the anchor
+// shape the SPA chose. Centralized so the label set stays disciplined.
+func recordSessionEventTimelineRequest(anchor string) {
+	sessionEventTimelineRequestTotal.WithLabelValues(anchor).Inc()
 }
 
 func recordSessionEventPersistSchemaRejected() {
