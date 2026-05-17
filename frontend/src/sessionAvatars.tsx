@@ -12,8 +12,11 @@ export type AgentAvatar = {
 // .run-msg-ai-icon): square frame, object-fit: contain, 24-42px display
 // size. The sidebar surface (.session-avatar) is circle-cropped and runs
 // edge-to-edge with no backdrop or padding, so the source image itself is
-// the visible shape. Source PNGs should be square-ish, transparent
-// background, head-and-shoulders or silhouette framing so they read at 24px.
+// the visible shape. The JP1 sources are scene stills (not transparent
+// silhouettes), so the per-slug CROPS in scripts/normalize-jp1-avatars.py
+// are tuned to put the dark subject in the circle and push bright sky /
+// clothing out of frame — anything brighter than the sidebar bg reads as
+// a filled tile at 42px instead of a floating token.
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
   { id: "jp1-raptor", name: "Velociraptor", src: "/assets/avatars/jp1-raptor.png" },
