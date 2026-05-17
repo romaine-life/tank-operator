@@ -33,11 +33,12 @@ HINTS: dict[str, tuple[float, float]] = {
     "jp1-arnold": (0.62, 0.42),
     # Nedry at his workstation (918×687): face slightly left of centre.
     "jp1-nedry": (0.46, 0.50),
-    # Brachiosaurus — keep more head/neck, less ground.
-    "jp1-brachiosaurus": (0.50, 0.45),
     # Muldoon close-up (1491×1305): face sits upper-left, lots of shirt
     # bottom-right. Bias toward the face so the square crop keeps it.
     "jp1-muldoon": (0.40, 0.35),
+    # Hammond — see CROPS below. The wide portrait kept Hammond's bright
+    # shirt + a sliver of bright sky, which read as a card not a token
+    # at 42px; CROPS narrows it onto the face.
 }
 
 # Explicit pre-resize crop rectangles for slugs where the (x_frac, y_frac)
@@ -45,8 +46,20 @@ HINTS: dict[str, tuple[float, float]] = {
 # *before* the square crop/resize stages. Skip the HINTS step when present.
 #
 # Tuned to the current source images in scripts/sources/ — re-tune if you
-# swap.
-CROPS: dict[str, tuple[int, int, int, int]] = {}
+# swap. The 42×42 .session-avatar surface is the tightest constraint: at
+# that size, anything brighter than the dark sidebar bg reads as a filled
+# tile rather than a silhouette token, so scene stills with light sky or
+# bright clothing need to be cropped onto the dark subject specifically.
+#
+# Coordinates here are in the *fetched* Fandom-source dimensions, so they
+# can't be reproduced from the already-normalized 256×256 PNGs. If the
+# fetch script is re-run, re-tune these against the new source dims.
+CROPS: dict[str, tuple[int, int, int, int]] = {
+    # Hammond — wide portrait dominated by a bright white shirt and a
+    # sliver of bright sky. Tighten onto the face so the silhouette
+    # reads as a token rather than a card.
+    # "jp1-hammond": (left, top, right, bottom) in fetched source coords
+}
 
 
 def square_crop(im: Image.Image, hint: tuple[float, float]) -> Image.Image:

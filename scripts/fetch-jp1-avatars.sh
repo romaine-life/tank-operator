@@ -26,7 +26,10 @@ UA="Mozilla/5.0 (compatible; tank-operator-personal-app/1.0)"
 declare -A URLS=(
   # Dinos
   [jp1-raptor]="https://static.wikia.nocookie.net/jurassicpark/images/7/72/BigOne04.jpg/revision/latest?cb=20120804203143"
-  [jp1-brachiosaurus]="https://static.wikia.nocookie.net/jurassicpark/images/e/e9/JP-Brachiosaur.jpg/revision/latest?cb=20090416060101"
+  # Brachiosaurus was dropped — the JP-Brachiosaur still is a wide
+  # landscape with a small dino body; neither the body-only crop nor the
+  # head-and-neck crop read as a recognizable avatar at 42px (see PR
+  # session-avatar-remove-ring). Pick a tighter source if reintroducing.
   # Humans
   # Iconic scene: Alan Grant in the rain after the T-rex breakout — wide-
   # brim hat, denim jacket, looking off frame-right. Staged locally; the
