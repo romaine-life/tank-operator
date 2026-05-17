@@ -58,11 +58,11 @@ export function StyleguideAvatars() {
           <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
           render contexts ship: <code>.session-avatar</code> in the sidebar
           (42px, circle-cropped, edge-to-edge — no backdrop or padding),{" "}
-          <code>.run-msg-ai-icon</code> on transcript messages (~22px
-          square), <code>.run-status-avatar</code> in the run-status pill
-          (~18px square). The picker swaps all three live so the
-          circle-crop on the sidebar surface — the only one that eats
-          corners — can be vetted per slug.
+          <code>.run-msg-ai-icon</code> on transcript messages (~27px,
+          circle-cropped, edge-to-edge), <code>.run-status-avatar</code>{" "}
+          in the run-status pill (~22px, circle-cropped, edge-to-edge).
+          All three are the source PNG clipped to a circle with no
+          chrome, so the picker drives every surface at once.
         </p>
 
         {selectedAvatar && (
@@ -232,7 +232,7 @@ export function StyleguideAvatars() {
                     marginBottom: 6,
                   }}
                 >
-                  transcript · <code>.run-msg-ai-icon</code> · ~22px · square
+                  transcript · <code>.run-msg-ai-icon</code> · ~27px · circle
                 </div>
                 <div
                   style={{
@@ -269,7 +269,7 @@ export function StyleguideAvatars() {
                     marginBottom: 6,
                   }}
                 >
-                  status pill · <code>.run-status-avatar</code> · ~18px · square
+                  status pill · <code>.run-status-avatar</code> · ~22px · circle
                 </div>
                 <div
                   className="run-status-bar run-status-bar-idle"
