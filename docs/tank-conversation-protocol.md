@@ -188,6 +188,7 @@ Turn lifecycle:
 - `turn.completed`
 - `turn.failed`
 - `turn.command_failed`
+- `turn.interrupt_requested`
 - `turn.interrupted`
 
 Item lifecycle:
@@ -220,6 +221,8 @@ A conversation projection has these UI states:
 - `streaming`: a runner is executing a turn or emitting items.
 - `needs_input`: the runner is paused for approval or other explicit client
   input.
+- `stopping`: a user-initiated stop has landed on the durable ledger; the
+  runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by
   provider failure.
 - `error`: a turn or item failed.
@@ -231,9 +234,15 @@ Turn transitions:
 3. `turn.started` moves the composer and sidebar to `streaming`.
 4. `tool.approval_requested` moves the projection to `needs_input` until
    `tool.approval_resolved`.
-5. `turn.completed` returns to `ready`.
-6. `turn.interrupted` returns to `stopped`.
-7. `turn.failed` returns to `error`.
+5. `turn.interrupt_requested` moves the projection from `submitted`,
+   `streaming`, or `needs_input` to `stopping`; `activeTurnId` is preserved
+   because the turn is still mid-flight. A late-arriving request after a
+   terminal event records the chip but does not downgrade the terminal
+   state.
+6. `turn.completed` returns to `ready` (also from `stopping` when the stop
+   lost the race to a clean completion).
+7. `turn.interrupted` returns to `stopped`.
+8. `turn.failed` returns to `error`.
 
 `item.*` events update transcript units under a turn. Per-token typewriter
 deltas are intentionally not on the Tank event surface: the `item.delta`
@@ -352,13 +361,39 @@ Durable turn interruption:
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/interrupt`
 
-The backend validates ownership and publishes a durable JetStream
-`interrupt_turn` command with `target_turn_id=<turn_id>`. Runners consume the
-command and abort the matching active turn from inside the session pod. The UI
-may show `stopping` after publish succeeds, but it must not mark the run
-stopped or clear the active turn until the durable `turn.interrupted` event
-appears in timeline/SSE. Failed interrupt publish is a visible control error,
-not a local state transition.
+The backend validates ownership, then performs two writes in this order:
+
+1. **Persist `turn.interrupt_requested`** to `session_events` via the same
+   `persistBackendEvent` path the submit boundary uses for
+   `user_message.created` / `turn.submitted`. Event_id is deterministic in
+   `target_turn_id` (`<turnID>:turn.interrupt_requested`) so a double-click
+   POST collapses to one durable row at the Postgres UNIQUE constraint.
+2. **Publish a durable JetStream `interrupt_turn` command** with
+   `target_turn_id=<turn_id>`. Runners consume the command and abort the
+   matching active turn from inside the session pod.
+
+If step 1 fails, the handler returns 500 and step 2 does not execute — the
+ledger never carries a side-effect that wasn't accompanied by a durable
+record. If step 1 succeeds and step 2 fails, the existing
+`turn.command_failed` durable marker is written after the
+`turn.interrupt_requested` row. The reducer resolves the chain to `error`;
+the `turn.interrupt_requested` chip stays on the transcript as honest
+evidence that the user did press Stop.
+
+The UI's `stopping` run status is **strictly a projection** of the durable
+`turn.interrupt_requested` event. No client-side flag, no UI-local mirror.
+A refresh after pressing Stop replays the chip from `/timeline` and the
+projection reconstructs the stopping state without further work.
+`scripts/check-removed-chat-runtime.mjs` blocks reintroduction of the
+retired `stopRequested` / `stoppingTargetRef` UI-mirror; the cancelRun
+function body is pinned free of `setRunStatus("stopping")` by
+`frontend/src/migrationPolicy.test.ts`. Failed interrupt publish is a
+visible control error, not a local state transition.
+
+Provider mapping for the new event: there is no provider mapping.
+`turn.interrupt_requested` is produced by the orchestrator at the `/interrupt`
+boundary, regardless of provider. `actor=system`, `source=tank`. Runners
+remain the sole producers of `turn.interrupted`.
 
 Durable Claude input reply:
 

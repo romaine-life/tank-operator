@@ -62,6 +62,7 @@ export interface ConversationProjection {
   activeToolName: string | null;
   needsInput: boolean;
   failed: boolean;
+  stopping: boolean;
   stopped: boolean;
   lastError: string | null;
   lastUsage: unknown | null;
@@ -106,6 +107,24 @@ export function projectConversationState(
           ]
         : [];
     }),
+    ...state.interruptRequests.map((request, index) => ({
+      index: state.messages.length + state.items.length + index,
+      orderKey: request.orderKey,
+      entry: {
+        id: request.id,
+        kind: "meta" as const,
+        meta: {
+          title: "Stop requested",
+          detail: "Waiting for the runner to wind down.",
+          severity: "info" as const,
+        },
+        turnId: request.turnId,
+        clientNonce: request.clientNonce,
+        time: request.time,
+        sourceEventId: request.id,
+        orderKey: request.orderKey,
+      },
+    })),
   ]);
 
   const activeItem = activeToolItem(state);
@@ -118,6 +137,7 @@ export function projectConversationState(
     activeToolName: activeItem ? toolDisplay(activeItem).toolName : null,
     needsInput: state.needsInput,
     failed: state.failed,
+    stopping: state.runStatus === "stopping",
     stopped: state.runStatus === "stopped",
     lastError: state.lastError,
     lastUsage: state.lastUsage,

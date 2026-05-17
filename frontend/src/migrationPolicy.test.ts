@@ -24,7 +24,14 @@ test("stop control waits for durable turn interruption", () => {
     cancelRunBody.includes('setRunStatus((prev) => (prev === "running" ? "done" : prev))'),
     false,
   );
-  assert.equal(cancelRunBody.includes('setRunStatus("stopping")'), true);
+  // Post-migration: cancelRun does NOT set run status imperatively. The
+  // POST returns 202 only after turn.interrupt_requested is durable, and
+  // applySdkProjectionToUi reads projection.runStatus === "stopping" to
+  // drive the local stopping state. The three negative assertions below
+  // pin the UI-local stop-optimism shape out of cancelRun.
+  assert.equal(cancelRunBody.includes('setRunStatus("stopping")'), false);
+  assert.equal(cancelRunBody.includes("stopRequested"), false);
+  assert.equal(cancelRunBody.includes("stoppingTargetRef"), false);
   assert.equal(appSource.includes("if (!res.ok)"), true);
 });
 

@@ -331,8 +331,14 @@ export class Runner {
       record.target_turn_id || record.client_nonce,
     );
     if (outcome === "interrupted") {
+      // Await the SDK's interrupt() — it sends a {subtype: "interrupt"}
+      // control-plane request to the CLI subprocess and returns when the
+      // CLI has acked. Dropping the promise (the prior shape) meant we
+      // marked the command "completed" before the CLI had stopped, and
+      // any async rejection became an unhandled rejection instead of
+      // hitting the providerErrorTotal counter.
       try {
-        this.sdkQuery?.interrupt();
+        await this.sdkQuery?.interrupt();
       } catch (err) {
         providerErrorTotal.labels("interrupt").inc();
         throw err;

@@ -36,18 +36,19 @@ const (
 type EventType string
 
 const (
-	EventUserMessageCreated EventType = "user_message.created"
-	EventTurnSubmitted      EventType = "turn.submitted"
-	EventTurnStarted        EventType = "turn.started"
-	EventTurnCompleted      EventType = "turn.completed"
-	EventTurnFailed         EventType = "turn.failed"
-	EventTurnCommandFailed  EventType = "turn.command_failed"
-	EventTurnInterrupted    EventType = "turn.interrupted"
-	EventItemStarted        EventType = "item.started"
-	EventItemCompleted      EventType = "item.completed"
-	EventItemFailed         EventType = "item.failed"
-	EventApprovalRequested  EventType = "tool.approval_requested"
-	EventApprovalResolved   EventType = "tool.approval_resolved"
+	EventUserMessageCreated      EventType = "user_message.created"
+	EventTurnSubmitted           EventType = "turn.submitted"
+	EventTurnStarted             EventType = "turn.started"
+	EventTurnCompleted           EventType = "turn.completed"
+	EventTurnFailed              EventType = "turn.failed"
+	EventTurnCommandFailed       EventType = "turn.command_failed"
+	EventTurnInterruptRequested  EventType = "turn.interrupt_requested"
+	EventTurnInterrupted         EventType = "turn.interrupted"
+	EventItemStarted             EventType = "item.started"
+	EventItemCompleted           EventType = "item.completed"
+	EventItemFailed              EventType = "item.failed"
+	EventApprovalRequested       EventType = "tool.approval_requested"
+	EventApprovalResolved        EventType = "tool.approval_resolved"
 )
 
 type ProducerMetadata struct {
@@ -170,6 +171,13 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("turn.command_failed must be actor=system source=tank")
 		}
 		return requirePayloadString(event, "reason")
+	case EventTurnInterruptRequested:
+		if err := requireFields(event, "turn_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("turn.interrupt_requested must be actor=system source=tank")
+		}
 	case EventItemStarted, EventItemCompleted, EventItemFailed:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
@@ -287,6 +295,7 @@ func validEventType(eventType EventType) bool {
 		EventTurnCompleted,
 		EventTurnFailed,
 		EventTurnCommandFailed,
+		EventTurnInterruptRequested,
 		EventTurnInterrupted,
 		EventItemStarted,
 		EventItemCompleted,

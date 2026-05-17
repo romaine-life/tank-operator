@@ -143,6 +143,22 @@ var (
 		Name: "tank_session_list_event_publish_failure_total",
 		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
+
+	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
+	// labeled by outcome at each exit point. Steady-state expectation:
+	// persisted dominates; persist_failed and publish_failed near zero.
+	// Cardinality bounded at 3, respects docs/observability.md budget.
+	// The "stopping" durable-state migration is observable through this
+	// counter — a regression that lets requests slip silently shows up as
+	// a divergence between persisted and the durable session_events ledger
+	// row count.
+	turnInterruptRequestTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_turn_interrupt_request_total",
+			Help: "Stop requests posted to /interrupt, labeled by outcome.",
+		},
+		[]string{"outcome"},
+	)
 )
 
 // --- Service-principal (role=service) request metrics ---

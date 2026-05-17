@@ -40,6 +40,13 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_session_event_stream_lag_seconds` histogram. Same names as the
   prior expvar counters (`_total` suffix added where missing per Prom
   convention).
+- `tank_turn_interrupt_request_total` — counter of stop requests posted
+  to `/interrupt`. Single label `outcome` with three bounded values:
+  `persisted`, `persist_failed`, `publish_failed`. Steady-state
+  expectation: `persisted` dominates; the two failure outcomes are
+  alerted on `> 0` rate. Owned by the durable `turn.interrupt_requested`
+  migration — see `docs/tank-conversation-protocol.md` for the boundary
+  contract.
 - `tank_runner_*` — pod-side runner counters/histograms. Single label:
   `mode` ("claude" or "codex"), bound at module import.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
@@ -94,7 +101,9 @@ declares one rule group per subsystem:
 
 - **HTTP**: 5xx rate, Postgres p99 latency, unmapped operations.
 - **Session bus**: schema-rejected events (steady-state must be zero),
-  wake-publish failures.
+  wake-publish failures, `turn.interrupt_requested` persist/publish
+  failures (the durable stop boundary; non-zero rate means stops are
+  losing durability or never reaching the runner).
 - **NATS**: disconnect storm (>6/min for 5m).
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result).
