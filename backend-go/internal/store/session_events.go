@@ -22,6 +22,18 @@ type SessionEventStore interface {
 	Upsert(ctx context.Context, event map[string]any) error
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 	HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error)
+	// LatestEvents returns the most recent `limit` events for a session in
+	// ASC order_key. Implemented as a DESC LIMIT N indexed scan reversed in
+	// Go; bounded and indexed regardless of ledger size. Powers the SPA's
+	// tail-fetch path so opening a long chat is one round-trip, not a
+	// forward walk from order_key=0.
+	LatestEvents(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error)
+	// EventsAround centers a page on `anchorOrderKey`: numBefore older
+	// events (ASC) plus numAfter newer events (ASC), inclusive of the
+	// anchor when present. Mirrors Zulip's `anchor` + `num_before` +
+	// `num_after`. Used for `anchor=first_unread` and for resuming at a
+	// localStorage-saved position. Two indexed seeks; no full scan.
+	EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
 	// (turn.*, item.failed, tool.approval_*) for a session in ascending
@@ -74,14 +86,32 @@ var UnreadOutputTurnTypes = []string{
 	"turn.interrupted",
 }
 
+// SessionEventCursor describes a half-open range of session events. Callers
+// supply at most one of AfterOrderKey / BeforeOrderKey; ListBySession reads
+// events strictly after AfterOrderKey (ASC by default) or strictly before
+// BeforeOrderKey (DESC, re-reversed to ASC in Go for the caller). Direction
+// is "asc" by default and "desc" when paginating backwards via BeforeOrderKey.
+// The pair (anchor, direction) plus a limit gives the SPA enough surface to
+// implement Slack/Discord/Zulip-style tail-fetch + back-paginate without
+// every read scanning the whole ledger.
 type SessionEventCursor struct {
-	AfterOrderKey string
+	AfterOrderKey  string
+	BeforeOrderKey string
+	Direction      string
 }
 
+// SessionEventPage wraps the events the store returns plus the cursors a
+// caller needs to keep paginating in either direction. NextOrderKey advances
+// a forward (ASC) walk; PrevOrderKey advances a backward (DESC) walk.
+// FoundOldest / FoundNewest tell the SPA when to stop fetching further
+// pages — mirroring Zulip's found_oldest / found_newest semantics.
 type SessionEventPage struct {
 	Events       []map[string]any
 	NextOrderKey string
+	PrevOrderKey string
 	HasMore      bool
+	FoundOldest  bool
+	FoundNewest  bool
 }
 
 type postgresSessionEventStore struct {
@@ -150,13 +180,25 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 	return err
 }
 
-// ListBySession returns events for one session strictly after the canonical
-// Tank order_key cursor. Indexed seek on (tank_session_id, order_key) so no
-// full-session scan on every replay or stream tick.
+// ListBySession reads a single bounded page of events for one session. The
+// cursor is one of:
+//
+//   - AfterOrderKey set, Direction "asc" (or empty): events strictly after
+//     the cursor, ASC by order_key.
+//   - BeforeOrderKey set, Direction "desc": events strictly before the
+//     cursor, DESC by order_key, re-reversed in Go so the caller still
+//     reads them ASC.
+//   - Neither set, Direction "asc" (or empty): the head of the ledger ASC.
+//   - Neither set, Direction "desc": equivalent to LatestEvents — the
+//     tail of the ledger.
+//
+// The (tank_session_id, order_key) index makes both directions indexed
+// seeks; no full-session scan on any read path.
 func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	descending := strings.EqualFold(cursor.Direction, "desc") || cursor.BeforeOrderKey != ""
 
 	const baseQuery = `
 		SELECT payload
@@ -165,10 +207,17 @@ func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessi
 	`
 	q := baseQuery
 	args := []any{storageKey}
-	if cursor.AfterOrderKey != "" {
+	switch {
+	case descending && cursor.BeforeOrderKey != "":
+		q += " AND order_key < $2 ORDER BY order_key DESC LIMIT $3"
+		args = append(args, cursor.BeforeOrderKey, queryLimit)
+	case descending:
+		q += " ORDER BY order_key DESC LIMIT $2"
+		args = append(args, queryLimit)
+	case cursor.AfterOrderKey != "":
 		q += " AND order_key > $2 ORDER BY order_key ASC LIMIT $3"
 		args = append(args, cursor.AfterOrderKey, queryLimit)
-	} else {
+	default:
 		q += " ORDER BY order_key ASC LIMIT $2"
 		args = append(args, queryLimit)
 	}
@@ -203,7 +252,169 @@ func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessi
 	if err := rows.Err(); err != nil {
 		return SessionEventPage{}, err
 	}
-	return sessionEventPageFromOrdered(out, limit), nil
+	if descending {
+		// Caller always reads ASC; reverse the DESC slice in place.
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+		return sessionEventPageFromDescendingScan(out, limit, cursor), nil
+	}
+	return sessionEventPageFromAscendingScan(out, limit, cursor), nil
+}
+
+// LatestEvents returns the most recent `limit` events ASC. Indexed DESC LIMIT
+// scan reversed in Go. Powers the SPA's tail-fetch path.
+func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error) {
+	return s.ListBySession(ctx, tankSessionID, SessionEventCursor{Direction: "desc"}, limit)
+}
+
+// EventsAround centers a page on `anchorOrderKey`: numBefore older events
+// plus numAfter newer events (both ASC), inclusive of the anchor when it
+// exists. Two indexed seeks: one DESC LIMIT for the before-slice, one ASC
+// LIMIT for the after-slice. The anchor itself is included in the before-
+// slice when present so the caller can land Virtuoso's
+// initialTopMostItemIndex on it directly.
+func (s *postgresSessionEventStore) EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error) {
+	numBefore = normalizeSessionEventAroundHalf(numBefore)
+	numAfter = normalizeSessionEventAroundHalf(numAfter)
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+
+	before, foundOldest, err := s.fetchBeforeSlice(ctx, storageKey, anchorOrderKey, numBefore)
+	if err != nil {
+		return SessionEventPage{}, err
+	}
+	after, foundNewest, err := s.fetchAfterSlice(ctx, storageKey, anchorOrderKey, numAfter)
+	if err != nil {
+		return SessionEventPage{}, err
+	}
+
+	events := make([]map[string]any, 0, len(before)+len(after))
+	events = append(events, before...)
+	events = append(events, after...)
+	for _, doc := range events {
+		doc["tank_session_id"] = tankSessionID
+	}
+
+	page := SessionEventPage{
+		Events:      events,
+		FoundOldest: foundOldest,
+		FoundNewest: foundNewest,
+	}
+	if len(events) > 0 {
+		page.PrevOrderKey = eventOrderKey(events[0])
+		page.NextOrderKey = eventOrderKey(events[len(events)-1])
+	}
+	return page, nil
+}
+
+// fetchBeforeSlice reads up to `limit` events with order_key <= anchor (when
+// anchor non-empty) or the tail when anchor is empty, DESC, then reverses to
+// ASC. Returns (slice, foundOldest). foundOldest is true if the slice
+// includes the head of the ledger.
+func (s *postgresSessionEventStore) fetchBeforeSlice(ctx context.Context, storageKey, anchorOrderKey string, limit int) ([]map[string]any, bool, error) {
+	if limit <= 0 {
+		return nil, false, nil
+	}
+	queryLimit := limit + 1
+	q := `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1 AND order_key <> ''
+	`
+	args := []any{storageKey}
+	if anchorOrderKey != "" {
+		q += " AND order_key <= $2 ORDER BY order_key DESC LIMIT $3"
+		args = append(args, anchorOrderKey, queryLimit)
+	} else {
+		q += " ORDER BY order_key DESC LIMIT $2"
+		args = append(args, queryLimit)
+	}
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0, queryLimit)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, false, err
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return nil, false, fmt.Errorf("session-events doc is not JSON: %w", err)
+		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return nil, false, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	foundOldest := len(out) <= limit
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, foundOldest, nil
+}
+
+// fetchAfterSlice reads up to `limit` events with order_key > anchor (the
+// anchor itself is in the before-slice). ASC by definition. Returns
+// (slice, foundNewest). foundNewest is true if the slice includes the tail
+// of the ledger.
+func (s *postgresSessionEventStore) fetchAfterSlice(ctx context.Context, storageKey, anchorOrderKey string, limit int) ([]map[string]any, bool, error) {
+	if limit <= 0 {
+		// No after-slice requested. The caller can still be at the
+		// newest event if the before-slice happens to reach the tail,
+		// but that's a determination for the caller, not us.
+		return nil, false, nil
+	}
+	queryLimit := limit + 1
+	q := `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1 AND order_key <> ''
+	`
+	args := []any{storageKey}
+	if anchorOrderKey != "" {
+		q += " AND order_key > $2 ORDER BY order_key ASC LIMIT $3"
+		args = append(args, anchorOrderKey, queryLimit)
+	} else {
+		q += " ORDER BY order_key ASC LIMIT $2"
+		args = append(args, queryLimit)
+	}
+	rows, err := s.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0, queryLimit)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, false, err
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return nil, false, fmt.Errorf("session-events doc is not JSON: %w", err)
+		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return nil, false, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	foundNewest := len(out) <= limit
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, foundNewest, nil
 }
 
 func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error) {
@@ -380,21 +591,54 @@ func (s *postgresSessionEventStore) countDistinctField(
 	return n, nil
 }
 
-func sessionEventPageFromOrdered(events []map[string]any, limit int) SessionEventPage {
+// sessionEventPageFromAscendingScan packages a forward-walk page. The caller
+// passed an ascending slice with one extra row (`limit + 1`) when `HasMore`
+// is true. FoundOldest is true when the page starts at the very head of the
+// ledger (no AfterOrderKey cursor was provided). FoundNewest is true when
+// the page is shorter than the limit AND no row beyond `limit` was fetched.
+func sessionEventPageFromAscendingScan(events []map[string]any, limit int, cursor SessionEventCursor) SessionEventPage {
 	limit = normalizeSessionEventLimit(limit)
 	hasMore := len(events) > limit
 	if hasMore {
 		events = events[:limit]
 	}
-	nextOrderKey := ""
+	page := SessionEventPage{
+		Events:      append([]map[string]any(nil), events...),
+		HasMore:     hasMore,
+		FoundOldest: cursor.AfterOrderKey == "" && cursor.BeforeOrderKey == "",
+		FoundNewest: !hasMore,
+	}
 	if len(events) > 0 {
-		nextOrderKey = eventOrderKey(events[len(events)-1])
+		page.PrevOrderKey = eventOrderKey(events[0])
+		page.NextOrderKey = eventOrderKey(events[len(events)-1])
 	}
-	return SessionEventPage{
-		Events:       append([]map[string]any(nil), events...),
-		NextOrderKey: nextOrderKey,
-		HasMore:      hasMore,
+	return page
+}
+
+// sessionEventPageFromDescendingScan packages a backward-walk page. The
+// caller already reversed the DESC scan into ASC order in place. FoundNewest
+// is true when no BeforeOrderKey cursor was provided (tail read).
+// FoundOldest is true when the underlying DESC scan returned fewer than
+// `limit + 1` rows, i.e. no row beyond `limit` was available.
+func sessionEventPageFromDescendingScan(events []map[string]any, limit int, cursor SessionEventCursor) SessionEventPage {
+	limit = normalizeSessionEventLimit(limit)
+	hasMore := len(events) > limit
+	if hasMore {
+		// The extra row sits at index 0 after reversal (it was the
+		// (limit+1)th oldest in DESC order). Drop it.
+		events = events[1:]
 	}
+	page := SessionEventPage{
+		Events:      append([]map[string]any(nil), events...),
+		HasMore:     hasMore,
+		FoundOldest: !hasMore,
+		FoundNewest: cursor.BeforeOrderKey == "",
+	}
+	if len(events) > 0 {
+		page.PrevOrderKey = eventOrderKey(events[0])
+		page.NextOrderKey = eventOrderKey(events[len(events)-1])
+	}
+	return page
 }
 
 func eventOrderKey(doc map[string]any) string {
@@ -411,13 +655,46 @@ func normalizeSessionEventLimit(limit int) int {
 	return limit
 }
 
+// normalizeSessionEventAroundHalf caps either side of an EventsAround
+// request. A single anchor read should not return more than 500 events
+// total, so each half is capped at 250.
+func normalizeSessionEventAroundHalf(half int) int {
+	if half < 0 {
+		return 0
+	}
+	if half > 250 {
+		return 250
+	}
+	return half
+}
+
 // Stub for local dev where Postgres isn't configured.
 type StubSessionEventStore struct{}
 
 func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) error { return nil }
 
 func (StubSessionEventStore) ListBySession(_ context.Context, _ string, _ SessionEventCursor, _ int) (SessionEventPage, error) {
-	return SessionEventPage{Events: []map[string]any{}}, nil
+	return SessionEventPage{
+		Events:      []map[string]any{},
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
+}
+
+func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (SessionEventPage, error) {
+	return SessionEventPage{
+		Events:      []map[string]any{},
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
+}
+
+func (StubSessionEventStore) EventsAround(_ context.Context, _, _ string, _, _ int) (SessionEventPage, error) {
+	return SessionEventPage{
+		Events:      []map[string]any{},
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
 }
 
 func (StubSessionEventStore) HasOrderKey(_ context.Context, _, orderKey string) (bool, error) {
