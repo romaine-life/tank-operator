@@ -178,7 +178,7 @@ Project metadata for Glimmung:
     "agent_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd agent-runner && npm run build",
+      "build_command": "cd agent-runner && npm ci && npm run build",
       "source": "agent-runner/dist",
       "target": "/var/run/agent-runner-hot/dist",
       "restart": "SIGHUP",
