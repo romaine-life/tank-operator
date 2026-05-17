@@ -424,8 +424,9 @@ async def run() -> None:
     metrics_port = int(os.environ.get("MCP_AUTH_PROXY_METRICS_PORT", "9990"))
     metrics_runner = await start_metrics_server(metrics_port)
     runners.append(metrics_runner)
-    # Shared across mcp-tank-operator's outbound calls so the cached
-    # JWT (15-min TTL) is reused across many tool calls in a session.
+    # Shared across mcp-tank-operator and mcp-github outbound calls so
+    # the cached JWT (15-min TTL) is reused across many tool calls in a
+    # session.
     auth_romaine_provider = AuthRomaineServiceProvider(http)
 
     try:
@@ -437,7 +438,15 @@ async def run() -> None:
             # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
             if port == GITHUB_MCP_PORT:
-                token_provider = TankGitHubAttestationProvider(http)
+                # mcp-github verifies the auth.romaine.life service JWT
+                # against the IdP's JWKS and resolves the caller's GitHub
+                # App installation by calling tank-operator's
+                # /api/internal/github/installation with this same bearer
+                # forwarded. The legacy Tank-attestation path is still
+                # accepted by mcp-github through the transition; once all
+                # session pods are running this proxy build, removing the
+                # /github/attestation endpoint is safe.
+                token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()
 
