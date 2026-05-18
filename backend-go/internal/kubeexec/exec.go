@@ -49,6 +49,33 @@ func Capture(ctx context.Context, k8s kubernetes.Interface, cfg *rest.Config, na
 	return stdout.Bytes(), nil
 }
 
+// CaptureWithStdin runs a one-shot command in the session container,
+// pipes stdinData to its stdin, and returns its stdout. Use when the
+// payload bytes and the placement decision must happen inside a single
+// exec — e.g. server-side id allocation for screenshot uploads, where
+// the script picks the next free `screenshots/<n>.<ext>` path with
+// O_EXCL and writes the bytes in the same call so two concurrent
+// uploads can't pick the same id.
+func CaptureWithStdin(ctx context.Context, k8s kubernetes.Interface, cfg *rest.Config, namespace, podName string, command []string, stdinData []byte) ([]byte, error) {
+	exec, err := newExecutor(k8s, cfg, namespace, podName, command, true)
+	if err != nil {
+		return nil, fmt.Errorf("exec %v: %w", command, err)
+	}
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdin:  bytes.NewReader(stdinData),
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if stderr.Len() > 0 {
+		slog.Warn("exec stderr", "command", command, "stderr", stderr.String()[:min(stderr.Len(), 500)])
+	}
+	if err != nil {
+		return nil, fmt.Errorf("exec %v: %w", command, err)
+	}
+	return stdout.Bytes(), nil
+}
+
 // WriteFile writes data to path inside the session container.
 func WriteFile(ctx context.Context, k8s kubernetes.Interface, cfg *rest.Config, namespace, podName, filePath string, data []byte) error {
 	quotedPath := shellQuote(filePath)

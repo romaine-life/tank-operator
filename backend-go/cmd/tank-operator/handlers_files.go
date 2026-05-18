@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
@@ -17,7 +19,161 @@ import (
 const (
 	maxFileBytes = 262144  // 256 KiB
 	maxRawBytes  = 8388608 // 8 MiB
+	// screenshotsRelDir is the workspace-relative directory where image
+	// uploads land — pasted screenshots are the main case. The in-pod
+	// script picks the next free `<n>.<ext>` slot under this directory
+	// using O_EXCL, so two concurrent uploads can't collide on the same
+	// id (browsers name every clipboard image `image.png`, and the SPA
+	// fires upload requests for every file in a paste event without
+	// awaiting).
+	screenshotsRelDir = "screenshots"
+	// attachmentsRelDir is the workspace-relative directory non-image
+	// uploads (PDFs, .txt, etc.) land in. Mirrors the Python orchestrator's
+	// pre-Go-rewrite behavior — nanosecond-stamped path keeps repeat
+	// uploads of the same source name from overwriting each other.
+	attachmentsRelDir = ".attachments"
 )
+
+// attachmentNameSanitizer keeps only filesystem-safe ASCII; the rest is
+// folded to `_` so a pasted file named e.g. `Notes 2026-05-16.txt` lands
+// as `Notes_2026-05-16.txt`.
+var attachmentNameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// imageExtensionByMIME maps the image MIME types the SPA can produce
+// (clipboard pastes are always PNG; drag/drop and file-picker uploads
+// can be any of these) to the on-disk extension we want to use. The
+// extension is server-controlled — we never trust a filename extension
+// for the `screenshots/` rename path — to keep the directory's
+// filenames predictable for downstream tools.
+var imageExtensionByMIME = map[string]string{
+	"image/png":     ".png",
+	"image/jpeg":    ".jpg",
+	"image/jpg":     ".jpg",
+	"image/gif":     ".gif",
+	"image/webp":    ".webp",
+	"image/bmp":     ".bmp",
+	"image/svg+xml": ".svg",
+	"image/heic":    ".heic",
+	"image/heif":    ".heif",
+	"image/avif":    ".avif",
+}
+
+// isImageContentType returns true if contentType is an `image/...` MIME
+// type. Case-insensitive on the prefix; parameters (e.g. `; charset=`)
+// are tolerated. Used to route uploads to `screenshots/` vs `.attachments/`.
+func isImageContentType(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	return strings.HasPrefix(ct, "image/")
+}
+
+// screenshotExtension picks the on-disk extension for an image upload.
+// Preference order: known MIME map, sanitized extension off the original
+// filename, hard fallback to `.png`. The fallback is correct because
+// clipboard pastes from every major browser are PNG.
+func screenshotExtension(contentType, rawName string) string {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if ext, ok := imageExtensionByMIME[ct]; ok {
+		return ext
+	}
+	if dot := strings.LastIndexByte(rawName, '.'); dot >= 0 && dot < len(rawName)-1 {
+		ext := strings.ToLower(rawName[dot:])
+		// Allow only short, alnum extensions — keeps a hostile filename
+		// like `image.png/../../evil` from poisoning the on-disk name.
+		if len(ext) <= 6 {
+			ok := true
+			for i := 1; i < len(ext); i++ {
+				c := ext[i]
+				if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return ext
+			}
+		}
+	}
+	return ".png"
+}
+
+// uniqueAttachmentRelPath returns the workspace-relative path a non-image
+// upload should land at — `.attachments/<unix-ns>-<sanitized-name>`.
+// Image uploads go through the in-pod O_EXCL `screenshots/<n>.<ext>`
+// allocator instead; this is the fallback for everything else.
+func uniqueAttachmentRelPath(rawName string, now time.Time) string {
+	name := rawName
+	if name == "" {
+		name = "file"
+	}
+	safe := attachmentNameSanitizer.ReplaceAllString(name, "_")
+	if len(safe) > 100 {
+		safe = safe[:100]
+	}
+	if safe == "" {
+		safe = "file"
+	}
+	return fmt.Sprintf("%s/%d-%s", attachmentsRelDir, now.UnixNano(), safe)
+}
+
+// screenshotAllocatorScript is the in-pod Python script that picks the
+// next free `screenshots/<n><ext>` slot atomically and writes the
+// uploaded bytes to it. Atomicity matters because the SPA's paste
+// handler at `frontend/src/App.tsx` (`for (const f of fs) void
+// uploadAttachment(f)`) fires every clipboard file's upload request
+// without awaiting — two screenshots pasted at once arrive at the
+// orchestrator within microseconds, and a non-atomic "list then write"
+// would collide. O_EXCL on the candidate path is the gate; the loop
+// increments past any race-loser's win.
+//
+// Args (sys.argv): root_dir, extension, expected_size_bytes.
+// Stdout (one line of JSON): {"abs_path": "...", "rel_path": "...", "id": N}.
+const screenshotAllocatorScript = `import json
+import os
+import re
+import sys
+
+root = sys.argv[1]
+ext = sys.argv[2]
+size = int(sys.argv[3])
+
+os.makedirs(root, exist_ok=True)
+existing = []
+for entry in os.listdir(root):
+    m = re.match(r'^(\d+)', entry)
+    if m:
+        try:
+            existing.append(int(m.group(1)))
+        except ValueError:
+            pass
+candidate = (max(existing) + 1) if existing else 1
+
+while True:
+    abs_path = os.path.join(root, f"{candidate}{ext}")
+    try:
+        fd = os.open(abs_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        break
+    except FileExistsError:
+        candidate += 1
+
+try:
+    remaining = size
+    while remaining > 0:
+        chunk = sys.stdin.buffer.read(min(65536, remaining))
+        if not chunk:
+            break
+        os.write(fd, chunk)
+        remaining -= len(chunk)
+finally:
+    os.close(fd)
+
+print(json.dumps({"abs_path": abs_path, "id": candidate}))
+`
 
 type mcpServerEntry struct {
 	Name      string `json:"name"`
@@ -334,11 +490,6 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing name")
 		return
 	}
-	destPath, err := safeWorkspacePath(name)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
 
 	data, err := io.ReadAll(io.LimitReader(r.Body, maxRawBytes))
 	if err != nil {
@@ -346,6 +497,32 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	contentType := r.Header.Get("Content-Type")
+	if isImageContentType(contentType) {
+		destPath, err := allocateScreenshotPath(r.Context(), s, podName, contentType, name, data)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"path":     workspaceRelPath(destPath),
+			"abs_path": destPath,
+			"name":     name,
+			"size":     len(data),
+		})
+		return
+	}
+
+	// Non-image fallback: `.attachments/<ns>-<sanitized>` so two
+	// uploads of the same source name don't overwrite each other.
+	// `safeWorkspacePath` still guards path escapes; the sanitizer
+	// strips `/` and the prefix is server-built.
+	relPath := uniqueAttachmentRelPath(name, time.Now())
+	destPath, err := safeWorkspacePath(relPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := kubeexec.WriteFile(r.Context(), s.k8s, s.restCfg, s.namespace, podName, destPath, data); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -356,6 +533,42 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		"name":     name,
 		"size":     len(data),
 	})
+}
+
+// allocateScreenshotPath runs the in-pod atomic id-allocator, writes the
+// bytes, and returns the absolute path the file landed at. The path
+// shape is `/workspace/screenshots/<n>.<ext>` where `<n>` is the
+// smallest positive integer not already in use; the script picks it via
+// O_EXCL so concurrent uploads can't collide.
+func allocateScreenshotPath(ctx context.Context, s *appServer, podName, contentType, rawName string, data []byte) (string, error) {
+	rootAbs, err := safeWorkspacePath(screenshotsRelDir)
+	if err != nil {
+		return "", err
+	}
+	ext := screenshotExtension(contentType, rawName)
+	cmd := []string{
+		"python3", "-c", screenshotAllocatorScript,
+		rootAbs, ext, fmt.Sprintf("%d", len(data)),
+	}
+	out, err := kubeexec.CaptureWithStdin(ctx, s.k8s, s.restCfg, s.namespace, podName, cmd, data)
+	if err != nil {
+		return "", err
+	}
+	var body struct {
+		AbsPath string `json:"abs_path"`
+		ID      int    `json:"id"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		return "", fmt.Errorf("parse allocator output: %w", err)
+	}
+	if body.AbsPath == "" {
+		return "", fmt.Errorf("allocator returned empty path")
+	}
+	// Defense-in-depth: re-validate that the allocator's chosen path
+	// is still inside the workspace. The script is server-controlled
+	// and its inputs are sanitized, but a fresh `safeWorkspacePath`
+	// keeps the contract explicit at the response boundary.
+	return safeWorkspacePath(body.AbsPath)
 }
 
 // handleWriteFile writes text content to a file.
