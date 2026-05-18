@@ -58,8 +58,9 @@ func TestSpawnQuotaTracker_ZeroCeilingDisablesGate(t *testing.T) {
 func TestSpawnQuotaTracker_EmptySubBypasses(t *testing.T) {
 	// Defensive: if Verifier ever returns a User with an empty Sub
 	// (shouldn't happen — actor_email check would fire first), don't
-	// crash. Don't apply the rate limit either; the actor_email
-	// concurrent-cap is the catch-all for that case.
+	// crash. Don't apply the rate limit either; the rate limit is the
+	// only spawn gate today (the actor_email concurrent-cap was
+	// removed; see quota.go).
 	q := NewSpawnQuotaTracker()
 	for i := 0; i < 100; i++ {
 		if !q.CheckRate("", 5) {
@@ -75,16 +76,6 @@ func TestServiceSpawnRatePerMin_DefaultAndEnvOverride(t *testing.T) {
 	t.Setenv("SERVICE_SPAWN_RATE_PER_MIN", "42")
 	if got := serviceSpawnRatePerMin(); got != 42 {
 		t.Fatalf("env override = %d, want 42", got)
-	}
-}
-
-func TestServiceSpawnConcurrentPerActor_DefaultAndEnvOverride(t *testing.T) {
-	if got, want := serviceSpawnConcurrentPerActor(), defaultServiceSpawnConcurrentPerActor; got != want {
-		t.Fatalf("default = %d, want %d", got, want)
-	}
-	t.Setenv("SERVICE_SPAWN_CONCURRENT_PER_ACTOR", "20")
-	if got := serviceSpawnConcurrentPerActor(); got != 20 {
-		t.Fatalf("env override = %d, want 20", got)
 	}
 }
 
