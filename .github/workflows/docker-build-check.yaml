@@ -73,6 +73,21 @@ jobs:
             image-repo: pi-container
             fingerprint-image: pi
             fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
+          # Standalone mcp-auth-proxy image for sibling consumers
+          # (nelsong6/hermes today). Built from the same package source
+          # Tank session pods bake inline, but published as its own
+          # image so non-Tank pods can sidecar it without pulling a
+          # full session container. See
+          # .github/workflows/mcp-auth-proxy-build.yml for the
+          # push-to-main publish path.
+          - name: mcp-auth-proxy
+            file: claude-container/mcp-auth-proxy/Dockerfile
+            context: .
+            build_args: ""
+            cache-ref: romainecr.azurecr.io/mcp-auth-proxy-build-cache:mcp-auth-proxy
+            image-repo: mcp-auth-proxy
+            fingerprint-image: mcp-auth-proxy
+            fingerprint-paths: claude-container/mcp-auth-proxy/Dockerfile claude-container/mcp-auth-proxy/pyproject.toml claude-container/mcp-auth-proxy/src
     steps:
       - name: Checkout
         uses: actions/checkout@v4
