@@ -181,6 +181,61 @@ func TestListMergesRegistryRecordsWithPods(t *testing.T) {
 	}
 }
 
+// TestListExcludesInvisibleRegistryRowsEvenWhenPodAlive is the
+// regression gate for the symptom that drove tank-operator#525: pod
+// delete is asynchronous (~75s graceful shutdown), so the pod stays in
+// etcd as Terminating while the registry row already says
+// visible=false. Pre-#525 Reader.List built `seen` from visible-only
+// registry rows, so its pod-fallback loop re-appended the
+// just-deleted session for the full grace window. The user saw the
+// row "come back" on every refresh until the pod finished
+// terminating.
+//
+// The fix: registry.List returns visible+invisible rows; Reader.List
+// uses every registered id for `seen` but only emits visible records.
+// Invisible rows whose pod is still alive must NOT be re-added by the
+// pod-fallback loop.
+func TestListExcludesInvisibleRegistryRowsEvenWhenPodAlive(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
+		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, true),
+	)
+	registry := registryRecords{
+		{
+			ID:          "12",
+			Email:       "nelson@romaine.life",
+			Mode:        sessionmodel.CodexGUIMode,
+			PodName:     "session-12",
+			RequestedAt: "2026-05-11T00:00:00+00:00",
+			CreatedAt:   "2026-05-11T00:00:01+00:00",
+			Visible:     true,
+		},
+		{
+			ID:          "13",
+			Email:       "nelson@romaine.life",
+			Mode:        sessionmodel.CodexGUIMode,
+			PodName:     "session-13",
+			RequestedAt: "2026-05-11T00:01:00+00:00",
+			CreatedAt:   "2026-05-11T00:01:01+00:00",
+			// Marked deleted by Manager.Delete; pod is still
+			// Terminating in K8s for another ~75s.
+			Visible: false,
+		},
+	}
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, nil, "default")
+
+	got, err := reader.List(context.Background(), "nelson@romaine.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("session count = %d, want 1 (only the visible row): %#v", len(got), got)
+	}
+	if got[0].ID != "12" {
+		t.Fatalf("visible session id = %q, want 12 (session 13's registry row is visible=false; its still-alive pod must not be re-added via the pod-fallback loop)", got[0].ID)
+	}
+}
+
 // TestPodStatusCompatibility was deleted in tank-operator#83 along with
 // the podStatus() helper it pinned. Status is now derived from the
 // session_lifecycle_events ledger via Reader.hydrateLifecycle and tested

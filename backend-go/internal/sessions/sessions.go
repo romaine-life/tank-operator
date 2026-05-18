@@ -111,6 +111,16 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 	}
 
 	if r.registry != nil {
+		// registry.List returns visible AND invisible rows (see
+		// sessionregistry.Store.List). `seen` is built from every
+		// registered session id so the pod-fallback loop below can tell
+		// "no registry row" (legitimate Manager.Create race window —
+		// Reader returns the pod-derived Info) apart from "registry
+		// row marked deleted" (the post-delete pod is Terminating
+		// during its grace window — Reader must NOT re-append it).
+		// Pre-tank-operator#525 the seen set only contained visible
+		// ids, so Terminating pods for just-deleted sessions reappeared
+		// in the sidebar for the full ~75s graceful-shutdown window.
 		records, err := r.registry.List(ctx, owner)
 		if err != nil {
 			return nil, err
@@ -119,6 +129,9 @@ func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
 		out := make([]Info, 0, len(records)+len(pods.Items))
 		for _, record := range records {
 			seen[record.ID] = struct{}{}
+			if !record.Visible {
+				continue
+			}
 			info := infoFromRecord(owner, record, podsByID[record.ID])
 			r.hydrateLifecycle(ctx, &info)
 			out = append(out, info)

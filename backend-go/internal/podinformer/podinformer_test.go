@@ -50,6 +50,8 @@ func (s *fakeStore) ListByOwner(_ context.Context, _, _ string, _ lifecycleevent
 
 func (s *fakeStore) HasOrderKey(_ context.Context, _, _, _ string) (bool, error) { return true, nil }
 
+func (s *fakeStore) LatestOrderKey(_ context.Context, _, _ string) (string, error) { return "", nil }
+
 func (s *fakeStore) LatestActivity(_ context.Context, _, _ string) (*lifecycleevents.ActivitySummary, error) {
 	return nil, nil
 }

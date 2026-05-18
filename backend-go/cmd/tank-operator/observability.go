@@ -243,6 +243,33 @@ var (
 		Name: "tank_session_list_stream_heartbeat_total",
 		Help: "Heartbeat frames written on idle sidebar SSE streams.",
 	})
+	// sessionListStreamColdOpenFastForwardTotal fires when an SSE
+	// connection opens with no cursor and the server jumps the cursor
+	// to the current lifecycle-ledger tip instead of replaying from
+	// order_key=0. New clients pass the snapshot tip via
+	// Tank-Lifecycle-Tip-Order-Key, so a high rate here indicates
+	// legacy clients (or a client whose snapshot pre-dated the
+	// lifecycle ledger having any rows) — informational, not an alert
+	// signal.
+	sessionListStreamColdOpenFastForwardTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_stream_cold_open_fast_forward_total",
+		Help: "Sidebar SSE opens that jumped an empty cursor to the current tip instead of replaying history.",
+	})
+	// sessionListClientPlaceholderSynthesizedTotal is pushed by the
+	// SPA via POST /api/debug/client-metric whenever the reducer's
+	// applyPodStatusEvent branch synthesizes a Session row for an
+	// unknown session id. Pre-tank-operator#525 that branch fired on
+	// every cold-open replay for deleted sessions because the SSE
+	// catch-up walked history from order_key=0; post-fix the cold-
+	// open fast-forward + the Reader.List visible-filter mean the
+	// branch should only fire in the narrow live-event race window
+	// (pod_ready arriving before session.created in NATS delivery).
+	// A non-zero rate in steady state is the regression-detection
+	// signal that a resurrection path snuck back in.
+	sessionListClientPlaceholderSynthesizedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_client_placeholder_synthesized_total",
+		Help: "SPA-reported placeholder synthesis in the session-list reducer; expected ~0 in steady state post-#525.",
+	})
 	// sessionListCrossScopeEventsDroppedTotal fires when a payload arrives
 	// on the per-(owner, scope) NATS subject whose embedded session_scope
 	// does not match this orchestrator's configured scope. The subject

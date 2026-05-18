@@ -35,18 +35,65 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// stampLifecycleTipHeader writes Tank-Lifecycle-Tip-Order-Key on the
+// response if the lifecycle ledger has any rows for (owner, scope) at
+// call time. Absent header is the correct signal for fresh owners
+// with no history yet; the SPA falls back to letting the SSE handler
+// fast-forward an empty cursor on its own. Errors are logged but
+// non-fatal — the SPA's worst-case behavior on a missing header is a
+// fallback to the server-side fast-forward, which gives the same
+// correctness with a small race window (events landing during the
+// snapshot query). Extracted from handleListSessions so the contract
+// is unit-testable without standing up the full Manager stub.
+func (s *appServer) stampLifecycleTipHeader(ctx context.Context, w http.ResponseWriter, owner string) {
+	if s.lifecycleEvents == nil {
+		return
+	}
+	tip, err := s.lifecycleEvents.LatestOrderKey(ctx, owner, s.sessionScope)
+	if err != nil {
+		slog.Warn("list sessions: lifecycle tip lookup failed",
+			"owner", owner, "scope", s.sessionScope, "error", err)
+		return
+	}
+	if tip == "" {
+		return
+	}
+	w.Header().Set("Tank-Lifecycle-Tip-Order-Key", tip)
+}
+
 // handleListSessions lists sessions for the authenticated user, or for
 // a different owner when an admin passes `?owner=<email>`. The query
 // param is the explicit signal that unlocks the admin cross-user path
 // (intentional opt-in so the default response stays own-only and an
 // admin token isn't a footgun for tools that didn't expect cross-user
 // reads).
+//
+// The Tank-Lifecycle-Tip-Order-Key response header carries the latest
+// session_lifecycle_events order_key for this (owner, scope) at
+// snapshot time. The SPA passes that value as the SSE cursor when it
+// opens /api/sessions/events, so the cursor-resumable catch-up only
+// emits events that landed *after* the snapshot — closing the race
+// between the snapshot query and the SSE open. Without this header,
+// the SSE handler fast-forwards an empty cursor to the current tip;
+// either way, cold opens never replay history. See
+// docs/product-inspirations.md: "Live transport should wake clients
+// and runners; it should not be the only place product state exists" —
+// the snapshot is the source of cold-open state, lifecycle events are
+// deltas on top.
 func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	owner := listSessionsOwner(user, r)
+
+	// Query the snapshot tip BEFORE listing sessions so the cursor is
+	// conservative (older than every event included in the snapshot).
+	// That way, when the SPA hands the tip to the SSE handler, the
+	// catch-up replay covers anything that landed during the snapshot
+	// query itself.
+	s.stampLifecycleTipHeader(r.Context(), w, owner)
+
 	infos, err := s.mgr.ListSessions(r.Context(), owner)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -85,7 +132,36 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	cursor := sessionListCursorFromRequest(r)
-	if s.lifecycleEvents != nil {
+
+	// Cursor-empty cold-open fast-forward: when the client opens with no
+	// Last-Event-ID and no after_order_key query (legacy clients, freshly
+	// cleared state, or a snapshot taken before the lifecycle ledger had
+	// any rows), the server jumps the cursor to the current tip. Cold
+	// opens get their state from GET /api/sessions; replaying historical
+	// session_lifecycle_events past cursor="" is the bug that let
+	// previously-deleted sessions resurrect via the reducer's
+	// placeholder-synthesis branch (pod-status events landing in the
+	// ledger after session.deleted re-added the row in client state).
+	// New clients pass the Tank-Lifecycle-Tip-Order-Key value they
+	// received from the snapshot response, so the catch-up still covers
+	// any events that landed between the snapshot query and the SSE
+	// open.
+	if cursor.AfterOrderKey == "" && s.lifecycleEvents != nil {
+		if tip, err := s.lifecycleEvents.LatestOrderKey(r.Context(), owner, s.sessionScope); err != nil {
+			recordSessionListStreamError()
+			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+				"reason": "tip_lookup_failed",
+				"detail": err.Error(),
+			})
+			flusher.Flush()
+			return
+		} else if tip != "" {
+			cursor.AfterOrderKey = tip
+			sessionListStreamColdOpenFastForwardTotal.Inc()
+		}
+	}
+
+	if s.lifecycleEvents != nil && cursor.AfterOrderKey != "" {
 		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, s.sessionScope, cursor.AfterOrderKey); err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{

@@ -128,7 +128,18 @@ export interface SessionListReducerState<S extends SessionListShape = SessionLis
 export function applySessionListEvent<S extends SessionListShape>(
   state: SessionListReducerState<S>,
   event: SessionListEvent,
-  options: { sessionFactory?: (id: string) => S } = {},
+  options: {
+    sessionFactory?: (id: string) => S;
+    // onPlaceholderSynthesized fires when applyPodStatusEvent has to
+    // synthesize a Session row for an unknown id (legitimate-but-rare
+    // live-event race window — pre-#525 this also fired on every
+    // cold-open replay for sessions that had been deleted). Threaded
+    // as a callback so the reducer stays a pure function for tests;
+    // production wiring in App.tsx posts the
+    // tank_session_list_client_placeholder_synthesized_total beacon so
+    // any regression of the resurrection paths surfaces in metrics.
+    onPlaceholderSynthesized?: (event: SessionListEvent) => void;
+  } = {},
 ): SessionListReducerState<S> {
   const factory = options.sessionFactory ?? defaultSessionFactory<S>();
 
@@ -157,7 +168,7 @@ export function applySessionListEvent<S extends SessionListShape>(
     case "session.pod_not_ready":
     case "session.pod_failed":
     case "session.pod_terminating":
-      return applyPodStatusEvent(state, event, factory);
+      return applyPodStatusEvent(state, event, factory, options.onPlaceholderSynthesized);
     case "session.activity_changed":
       return applyActivityEvent(state, event);
     default:
@@ -232,6 +243,7 @@ function applyPodStatusEvent<S extends SessionListShape>(
   state: SessionListReducerState<S>,
   event: SessionListEvent,
   factory: (id: string) => S,
+  onPlaceholderSynthesized?: (event: SessionListEvent) => void,
 ): SessionListReducerState<S> {
   const status = stringField(event.payload, "status");
   if (!status) return state;
@@ -243,9 +255,17 @@ function applyPodStatusEvent<S extends SessionListShape>(
   });
   const idx = state.sessions.findIndex((s) => s.id === event.session_id);
   if (idx === -1) {
-    // Pod transitioned before the matching /api/sessions row landed.
-    // Synthesize a placeholder so the status renders correctly; the
-    // next snapshot will fill in the missing fields (mode, name, etc).
+    // Pod transitioned before the matching /api/sessions row landed
+    // (legitimate live-event race) — synthesize a placeholder so the
+    // status renders correctly; the next snapshot will fill in the
+    // missing fields. Post-tank-operator#525 this branch should fire
+    // only in that narrow race window; cold-open replay no longer
+    // walks history from order_key=0 and Reader.List excludes pods
+    // whose registry row is visible=false. Telemetry callback lets
+    // App.tsx beacon to the server-side counter so any regression of
+    // the resurrection paths is observable instead of silently
+    // mutating sidebar state.
+    onPlaceholderSynthesized?.(event);
     const placeholder = updateSession(factory(event.session_id));
     placeholder.owner = event.email || placeholder.owner;
     placeholder.pod_name = stringOrNull(event.payload.pod_name) ?? placeholder.pod_name;

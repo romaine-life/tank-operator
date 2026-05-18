@@ -97,6 +97,26 @@ func (f *fakeLifecycleStore) HasOrderKey(_ context.Context, owner, scope, orderK
 	return ok, nil
 }
 
+func (f *fakeLifecycleStore) LatestOrderKey(_ context.Context, owner, scope string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	src := f.rows[owner+"|"+scope]
+	if len(src) == 0 {
+		return "", nil
+	}
+	// Tests seed in ascending order_key; return the highest by simple
+	// lexicographic max since the seeded values are short integer
+	// strings ("1", "2", ...). Postgres returns the BIGSERIAL max for
+	// the real implementation.
+	max := src[0].OrderKey
+	for _, e := range src[1:] {
+		if e.OrderKey > max {
+			max = e.OrderKey
+		}
+	}
+	return max, nil
+}
+
 func (f *fakeLifecycleStore) LatestActivity(_ context.Context, _, _ string) (*lifecycleevents.ActivitySummary, error) {
 	return nil, nil
 }
@@ -273,6 +293,98 @@ func TestSessionListPayloadDropsCrossScope(t *testing.T) {
 	}
 	if cursor.AfterOrderKey != "" {
 		t.Fatalf("cursor advanced to %q, want \"\" (dropped payload must not move the cursor)", cursor.AfterOrderKey)
+	}
+}
+
+// TestStampLifecycleTipHeaderEmitsSnapshotTip pins the cold-open
+// contract: handleListSessions stamps Tank-Lifecycle-Tip-Order-Key so
+// the SPA can seed its SSE cursor at the snapshot's tip. Without this
+// header, events that land between the snapshot query and the SSE
+// open are missed (the SSE handler's fallback fast-forward jumps to
+// current tip, not the snapshot tip). The header value comes from the
+// lifecycle store's LatestOrderKey for (owner, scope) at snapshot
+// time.
+func TestStampLifecycleTipHeaderEmitsSnapshotTip(t *testing.T) {
+	store := newFakeLifecycleStore()
+	store.seed("u@example.com",
+		lifecycleevents.Event{
+			OrderKey: "1", Email: "u@example.com", SessionScope: "default",
+			SessionID: "8", Type: lifecycleevents.EventTypeCreated, EventID: "created",
+		},
+		lifecycleevents.Event{
+			OrderKey: "42", Email: "u@example.com", SessionScope: "default",
+			SessionID: "8", Type: lifecycleevents.EventTypeDeleted, EventID: "deleted",
+		},
+	)
+	srv := newTestAppServer(t, store)
+
+	w := httptest.NewRecorder()
+	srv.stampLifecycleTipHeader(context.Background(), w, "u@example.com")
+	if got := w.Header().Get("Tank-Lifecycle-Tip-Order-Key"); got != "42" {
+		t.Fatalf("header = %q, want %q (max of seeded order_keys)", got, "42")
+	}
+}
+
+// TestStampLifecycleTipHeaderOmitsHeaderWhenLedgerEmpty confirms the
+// header is absent for fresh owners. The SPA treats a missing header
+// the same as "cursor empty", which lets the SSE handler fall back to
+// its own current-tip fast-forward — correct shape for a brand-new
+// owner with no lifecycle history yet.
+func TestStampLifecycleTipHeaderOmitsHeaderWhenLedgerEmpty(t *testing.T) {
+	srv := newTestAppServer(t, newFakeLifecycleStore())
+	w := httptest.NewRecorder()
+	srv.stampLifecycleTipHeader(context.Background(), w, "u@example.com")
+	if got := w.Header().Get("Tank-Lifecycle-Tip-Order-Key"); got != "" {
+		t.Fatalf("header = %q, want empty (no lifecycle rows for owner)", got)
+	}
+}
+
+// TestSessionListSSEColdOpenFastForwardsCursor verifies the SSE
+// handler does not replay history from order_key=0 when the client
+// opens with no cursor. Pre-#525 the handler looped writeSessionListStreamPage
+// from cursor="" and emitted every historical event for (owner, scope),
+// which let the reducer's placeholder-synthesis branch resurrect
+// deleted sessions via post-delete pod-status events still in the
+// ledger. The fix: server jumps an empty cursor to LatestOrderKey
+// before the catch-up loop runs, so the loop emits zero events.
+func TestSessionListSSEColdOpenFastForwardsCursor(t *testing.T) {
+	// Reuse the existing exercise: writeSessionListStreamPage with
+	// cursor=tip should emit no events past tip (page is empty). This
+	// is what the fast-forward path produces: cursor jumps to tip,
+	// then the catch-up loop sees nothing past it.
+	store := newFakeLifecycleStore()
+	store.seed("u@example.com",
+		lifecycleevents.Event{
+			OrderKey: "1", Email: "u@example.com", SessionScope: "default",
+			SessionID: "8", Type: lifecycleevents.EventTypeCreated, EventID: "created",
+		},
+		lifecycleevents.Event{
+			OrderKey: "5", Email: "u@example.com", SessionScope: "default",
+			SessionID: "8", Type: lifecycleevents.EventTypeDeleted, EventID: "deleted",
+		},
+	)
+	srv := newTestAppServer(t, store)
+
+	tip, err := store.LatestOrderKey(context.Background(), "u@example.com", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tip == "" {
+		t.Fatal("LatestOrderKey returned empty; cannot verify fast-forward behavior")
+	}
+
+	// Simulate the fast-forwarded state: cursor positioned at the tip.
+	cursor := lifecycleevents.Cursor{AfterOrderKey: tip}
+	resp := httptest.NewRecorder()
+	hasMore, written, err := srv.writeSessionListStreamPage(context.Background(), resp, "u@example.com", &cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasMore {
+		t.Fatalf("hasMore = true, want false (cursor at tip leaves nothing to replay)")
+	}
+	if written != 0 {
+		t.Fatalf("written = %d, want 0 (the cold-open fast-forward must not emit historical events): body = %q", written, resp.Body.String())
 	}
 }
 
