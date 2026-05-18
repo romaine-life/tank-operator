@@ -150,3 +150,28 @@ export function controlSubject(sessionStorageKey: string, provider: string): str
 export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;
+
+// PR 3 of nelsong6/tank-operator#532. See runner-shared/sessionBus.js
+// for the contract docstring. Truncates oversized string fields in a
+// Tank conversation event so its JSON-encoded size fits under the
+// transport budget (NATS max_payload is 1 MiB by default; runner
+// threshold defaults to 900 KiB). The returned event has the same
+// shape as the input — only string values change. `truncated` is true
+// when any field was modified.
+export interface TruncationFieldRecord {
+  path: string;
+  original_bytes: number;
+}
+export interface TruncationResult<T> {
+  event: T;
+  truncated: boolean;
+  originalBytes: number;
+  finalBytes: number;
+  fields: TruncationFieldRecord[];
+  reason?: "strings-truncated" | "payload-dropped";
+  payloadDropped?: boolean;
+}
+export function truncateEventIfOversized<T extends Record<string, unknown>>(
+  event: T,
+  options?: { maxBytes?: number; stringThreshold?: number },
+): TruncationResult<T>;

@@ -949,6 +949,76 @@ const CHECKS = [
     // silent-ack regression.
     pattern: /acceptInterrupt[\s\S]{0,2500}?\}\s*\n\s*await\s+this\.commandBus\.markCompleted\(record\);\s*\n\s*\}/,
   },
+
+  // ────────────────────── Oversized-event truncation (PR 3 of #532) ──────────────────────
+  //
+  // Pre-#532 a Tank conversation event whose JSON-encoded body exceeded
+  // NATS's max_payload (1 MiB by default) silently went into the void:
+  // dispatch() caught the synchronous throw from the protocol handler
+  // and the runner moved on. Session 19's 7 publish failures across the
+  // pod's lifetime were exactly this shape. PR 3 adds a transport-budget
+  // truncation utility in runner-shared that replaces oversized strings
+  // with a typed marker; both runners' dispatch wrappers call it before
+  // every publish and increment tank_runner_event_truncated_total when
+  // it fires. The persister-side ValidateEventMap accepts the marker as
+  // an ordinary string, so the durable ledger never loses an event due
+  // to size.
+  {
+    id: "shared-truncate-utility",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "runner-shared/sessionBus.js",
+    description: "truncateEventIfOversized exists in runner-shared/sessionBus.js",
+    kind: "grep-present",
+    pattern: /export function truncateEventIfOversized/,
+  },
+  {
+    id: "shared-truncate-dts",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "runner-shared/sessionBus.d.ts",
+    description: "truncateEventIfOversized type declaration exported alongside the implementation",
+    kind: "grep-present",
+    pattern: /export function truncateEventIfOversized/,
+  },
+  {
+    id: "shared-publishevent-uses-truncation",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "runner-shared/sessionBus.js",
+    description: "publishEvent applies truncateEventIfOversized defensively before js.publish",
+    kind: "grep-present",
+    pattern: /publishEvent\(event[\s\S]{0,800}?truncateEventIfOversized/,
+  },
+  {
+    id: "agent-runner-dispatch-truncates",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "agent-runner/src/runner.ts",
+    description: "agent-runner's dispatch() runs truncateEventIfOversized before sink.upsert and increments the counter",
+    kind: "grep-present",
+    pattern: /dispatch[\s\S]{0,1200}?truncateEventIfOversized[\s\S]{0,400}?eventTruncatedTotal/,
+  },
+  {
+    id: "codex-runner-dispatch-truncates",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "codex-runner/src/runner.ts",
+    description: "codex-runner's dispatch() runs truncateEventIfOversized before sink.upsert and increments the counter",
+    kind: "grep-present",
+    pattern: /dispatch[\s\S]{0,1200}?truncateEventIfOversized[\s\S]{0,400}?eventTruncatedTotal/,
+  },
+  {
+    id: "agent-runner-truncated-counter",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "agent-runner/src/metrics.ts",
+    description: "tank_runner_event_truncated_total counter is registered with event_type + severity labels",
+    kind: "grep-present",
+    pattern: /name:\s*"tank_runner_event_truncated_total"[\s\S]{0,400}?labelNames:\s*\[\s*"event_type",\s*"severity"\s*\]/,
+  },
+  {
+    id: "codex-runner-truncated-counter",
+    from: "Oversized-event truncation (PR 3 of #532)",
+    file: "codex-runner/src/metrics.ts",
+    description: "codex-runner exposes the matching tank_runner_event_truncated_total counter",
+    kind: "grep-present",
+    pattern: /name:\s*"tank_runner_event_truncated_total"[\s\S]{0,400}?labelNames:\s*\[\s*"event_type",\s*"severity"\s*\]/,
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

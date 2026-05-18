@@ -47,8 +47,10 @@ import {
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
+import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import {
   commandsConsumedTotal,
+  eventTruncatedTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
@@ -137,8 +139,30 @@ export async function dispatch(
     // Live-only or otherwise non-durable Tank events are not persisted.
     return true;
   }
+  // Stage 3 of nelsong6/tank-operator#532: see agent-runner's dispatch
+  // for the contract. Codex tool outputs can easily exceed NATS's 1 MiB
+  // max_payload (large stdout, generated patches, etc.). Truncate before
+  // publish so a single oversized event doesn't fail the publish and
+  // hole the durable ledger.
+  const sizeGuard = truncateEventIfOversized(
+    stamped as unknown as Record<string, unknown>,
+  );
+  if (sizeGuard.truncated) {
+    const severity = sizeGuard.payloadDropped ? "payload-dropped" : "strings-truncated";
+    eventTruncatedTotal.labels(stamped.type, severity).inc();
+    console.warn(
+      "session bus event truncated:",
+      JSON.stringify({
+        event_type: stamped.type,
+        original_bytes: sizeGuard.originalBytes,
+        final_bytes: sizeGuard.finalBytes,
+        fields: sizeGuard.fields,
+        severity,
+      }),
+    );
+  }
   try {
-    await sink.upsert(stamped);
+    await sink.upsert(sizeGuard.event as unknown as StampedTankEvent);
   } catch (err) {
     console.error("session bus publish failed:", err);
     natsPublishFailureTotal.inc();

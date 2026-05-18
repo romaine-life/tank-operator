@@ -461,6 +461,40 @@ spec:
               redelivery will retry on ack_wait expiry; this alert clears
               once one delivery succeeds.
 
+        # Stage 5 (post-#532 PR 3) — sustained payload-dropped truncations.
+        # An event was so large that even aggressive string truncation
+        # couldn't fit it under the transport budget; the entire payload
+        # was replaced with a __payload_dropped marker. The durable
+        # ledger still records the event envelope, but the body is
+        # unrecoverable from the wire path. One-off events from
+        # legitimate giant outputs (Read of a 10 MB file) are expected;
+        # a sustained rate means a producer is emitting bodies that need
+        # to chunk or stream rather than land as one Tank event.
+        #
+        # Severity is `warning` (not critical) because the durable ledger
+        # is intact and the user-visible transcript degrades gracefully;
+        # the alert is the signal that a producer needs work, not that
+        # the system is broken.
+        - alert: TankEventPayloadDropped
+          expr: sum by (event_type) (rate(tank_runner_event_truncated_total{severity="payload-dropped"}[15m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Sustained tank_runner_event_truncated_total{severity=payload-dropped} for {{ $labels.event_type }}"
+            runbook: |
+              An event_type producer is emitting payloads so large that
+              even string-by-string truncation can't fit them under
+              SESSION_EVENT_MAX_BYTES (default 900 KiB). The durable
+              ledger contains the envelope plus a __payload_dropped
+              marker; the body is gone. Look at the adapter or
+              tool-result path for {{ $labels.event_type }} and either
+              chunk the source (tool_result.output streaming, Read with
+              an offset/limit window) or raise SESSION_EVENT_MAX_BYTES
+              if the upstream transport can accept it (NATS
+              max_payload would need to rise in lockstep — currently
+              1 MiB default).
+
     # Session spawn observability. The user-visible latency budget for
     # `POST /sessions` -> ContainersReady is "fast unless the chosen node
     # has to pull a ~700MB session image." Recording rules below collapse

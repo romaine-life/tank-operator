@@ -148,8 +148,17 @@ export class SharedSessionBus {
     async publishEvent(event, options = {}) {
         await this.ensureConnected();
         const doc = this.eventDoc(event);
-        const ack = await this.js.publish(eventSubject(this.sessionStorageKey), encodeJSON(doc), {
-            msgID: doc.id,
+        // Defensive: the runner-side dispatch wrapper truncates oversized
+        // events before they reach here (see truncateEventIfOversized
+        // below and nelsong6/tank-operator#532 Stage 3 for the contract).
+        // This belt-and-braces check guarantees no wire publish exceeds
+        // the transport budget even if a future code path bypasses the
+        // dispatch wrapper. NATS's default max_payload is 1 MiB; the
+        // 900 KiB threshold leaves headroom for JetStream/protocol
+        // framing.
+        const safe = truncateEventIfOversized(doc).event;
+        const ack = await this.js.publish(eventSubject(this.sessionStorageKey), encodeJSON(safe), {
+            msgID: safe.id,
         });
         return ack.duplicate ? "exists" : "created";
     }
@@ -448,4 +457,138 @@ function errorText(err) {
 function parsePositiveInt(value, fallback) {
     const parsed = parseInt(value?.trim() || "", 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Oversized-event truncation (PR 3 of nelsong6/tank-operator#532)
+//
+// NATS clients throw `InvalidArgumentError: 'payload' max_payload size
+// exceeded` synchronously when an encoded message exceeds the server's
+// max_payload (1 MiB by default). The throw is deterministic; retries
+// don't help. Pre-#532 a Tank conversation event whose payload exceeded
+// the limit (typically a tool_result.output from Read of a large file
+// or Bash with a long output) silently went into the void: dispatch()
+// caught the throw and the runner moved on, leaving a hole in the
+// durable ledger and triggering downstream symptoms (UI stuck because a
+// turn.interrupted event for a different turn also got dropped, etc.).
+//
+// Session 19's evidence in #532: 7 publish failures total across the
+// pod's lifetime, each killing one event. Small in absolute count but
+// each one is a hole. After PR 1 (#535) the stop control became self-
+// telling even when publishes fail — but the underlying transport-layer
+// issue stayed. This stage's contract: NO Tank event payload reaches the
+// wire with body > maxBytes. Oversized strings are replaced with a
+// typed marker that names the original size and a SHA256 prefix, so the
+// durable record's shape is preserved and the user-visible transcript
+// degrades gracefully ("[…N bytes truncated]") rather than vanishing.
+//
+// The output shape is intentionally a STRING (not a structured object)
+// because callers downstream — adapters, the persister, the frontend
+// renderer — read these fields as strings. Replacing a string with an
+// object would shift the schema; the marker keeps the shape stable and
+// is human-readable on inspection.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_MAX_EVENT_BYTES = parsePositiveInt(
+    process.env.SESSION_EVENT_MAX_BYTES,
+    900_000,
+);
+const DEFAULT_STRING_TRUNCATE_THRESHOLD = parsePositiveInt(
+    process.env.SESSION_EVENT_STRING_THRESHOLD,
+    50_000,
+);
+
+export function truncateEventIfOversized(event, options = {}) {
+    const maxBytes = options.maxBytes ?? DEFAULT_MAX_EVENT_BYTES;
+    const stringThreshold = options.stringThreshold ?? DEFAULT_STRING_TRUNCATE_THRESHOLD;
+    const initialBytes = encodeJSON(event).length;
+    if (initialBytes <= maxBytes) {
+        return { event, truncated: false, originalBytes: initialBytes, finalBytes: initialBytes, fields: [] };
+    }
+    // Deep clone so we don't mutate the caller's stamped event.
+    const working = JSON.parse(JSON.stringify(event));
+    const fields = [];
+    truncateLargeStrings(working, stringThreshold, fields, [""]);
+    let bytes = encodeJSON(working).length;
+    // Aggressive pass: lower the per-string threshold until we fit or we
+    // run out of strings worth cutting. Geometric reduction with a 1 KiB
+    // floor so we don't churn forever on a payload made of many small
+    // strings.
+    let aggressive = Math.max(1024, Math.floor(stringThreshold / 4));
+    while (bytes > maxBytes && aggressive >= 1024) {
+        const before = fields.length;
+        truncateLargeStrings(working, aggressive, fields, [""]);
+        bytes = encodeJSON(working).length;
+        if (fields.length === before) break; // nothing more to cut at this threshold
+        aggressive = Math.floor(aggressive / 2);
+    }
+    if (bytes <= maxBytes) {
+        return {
+            event: working,
+            truncated: true,
+            originalBytes: initialBytes,
+            finalBytes: bytes,
+            fields,
+            reason: "strings-truncated",
+        };
+    }
+    // Last resort: drop the payload entirely so the durable ledger still
+    // gets a record that "an event existed here" with its envelope
+    // (type, turn_id, event_id, etc.) intact. The persister-side
+    // ValidateEventMap accepts a payload of any shape; the SPA renderer
+    // can show the marker as a degraded item.
+    working.payload = {
+        __payload_dropped: true,
+        original_bytes: initialBytes,
+        reason: "event_oversized_after_truncation",
+    };
+    bytes = encodeJSON(working).length;
+    return {
+        event: working,
+        truncated: true,
+        originalBytes: initialBytes,
+        finalBytes: bytes,
+        fields,
+        reason: "payload-dropped",
+        payloadDropped: true,
+    };
+}
+
+function truncateLargeStrings(node, threshold, accumulator, pathParts) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+            const v = node[i];
+            if (typeof v === "string" && v.length > threshold) {
+                accumulator.push({
+                    path: `${pathParts.join(".")}[${i}]`,
+                    original_bytes: v.length,
+                });
+                node[i] = truncationMarker(v);
+            } else if (v && typeof v === "object") {
+                pathParts.push(`[${i}]`);
+                truncateLargeStrings(v, threshold, accumulator, pathParts);
+                pathParts.pop();
+            }
+        }
+        return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+        if (typeof value === "string" && value.length > threshold) {
+            accumulator.push({
+                path: pathParts.join(".") + (pathParts.length > 0 ? "." : "") + key,
+                original_bytes: value.length,
+            });
+            node[key] = truncationMarker(value);
+        } else if (value && typeof value === "object") {
+            pathParts.push(key);
+            truncateLargeStrings(value, threshold, accumulator, pathParts);
+            pathParts.pop();
+        }
+    }
+}
+
+function truncationMarker(value) {
+    const hash = createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+    return `[truncated: ${value.length} bytes original; sha256_16=${hash}; reason=event-too-large for transport]`;
 }

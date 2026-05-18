@@ -450,6 +450,48 @@ the issue for the post-mortem evidence (Postgres `session_events` rows
 for session 19 showing 20 of 24 item completions landing AFTER a stop
 click, with no `turn.interrupted` ever emitted).
 
+**Oversized-event truncation contract (post-#532 Stage 3).** Tank
+conversation events whose JSON-encoded body would exceed NATS's
+`max_payload` (1 MiB default) are truncated by
+`runner-shared/sessionBus.js::truncateEventIfOversized` before reaching
+the JetStream publish. The default per-runner budget is 900 KiB
+(`SESSION_EVENT_MAX_BYTES`); strings longer than 50 KiB are eligible
+for replacement (`SESSION_EVENT_STRING_THRESHOLD`). Two truncation
+shapes apply, in order:
+
+1. **`strings-truncated`** — one or more string fields are replaced
+   with a typed marker: `[truncated: <N> bytes original;
+   sha256_16=<16 hex chars>; reason=event-too-large for transport]`.
+   Schema shape is preserved (the field stays a string); downstream
+   adapters/persister/SPA need no special handling. The marker carries
+   the original byte count and a SHA256 prefix for forensic recovery
+   from upstream caches (Claude/Codex CLI's on-disk JSONL transcript).
+2. **`payload-dropped`** — even after aggressive string truncation the
+   event was still over budget; the entire `payload` is replaced with
+   `{__payload_dropped: true, original_bytes, reason: "event_oversized_after_truncation"}`.
+   The event envelope (type, turn_id, event_id, conversation_id,
+   producer, etc.) stays intact so the durable ledger still records
+   "an event of this type existed for this turn at this order_key" —
+   the body is unrecoverable from the wire path but the structural
+   event survives.
+
+Each truncation increments `tank_runner_event_truncated_total
+{event_type, severity}`. Severity `strings-truncated` is informational;
+`payload-dropped` is alert-worthy because sustained `payload-dropped`
+traffic means a producer (typically a `tool_result.output` from `Read`
+of a large file or `Bash` with massive stdout) needs to chunk or
+stream rather than emit one giant Tank event. Pre-#532 the same
+oversized payload would throw `payload max_payload size exceeded`
+synchronously inside the NATS client, the runner's `dispatch()` would
+catch it, and the event would silently vanish — Session 19's seven
+publish failures across the pod's lifetime were exactly this shape.
+
+Subjective rule for renderers: an `__payload_dropped` marker should
+render as a "[content too large to display]" affordance, ideally with
+the `original_bytes` field shown so the user has a forensic breadcrumb.
+A `[truncated: …]` string inside a normal text field should render
+inline as the string itself (it already reads as a marker).
+
 The UI's `stopping` run status is **strictly a projection** of the durable
 `turn.interrupt_requested` event. No client-side flag, no UI-local mirror.
 A refresh after pressing Stop replays the chip from `/timeline` and the
