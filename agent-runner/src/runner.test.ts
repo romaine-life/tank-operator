@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  buildInputReplyMessage,
   dispatch,
+  inputReplyAnnotations,
+  inputReplyAnswers,
   inputReplyTargetProviderItemID,
-  inputReplyText,
+  joinAnswersForSDK,
   Runner,
 } from "./runner.js";
 import {
@@ -145,30 +146,51 @@ test("userSubmissionEvents produces Tank-shape boundary events", () => {
   }
 });
 
-test("input reply records map to Claude tool_result messages", () => {
-  const message = buildInputReplyMessage("toolu_ask", "Continue");
-
-  assert.equal((message as { type?: string }).type, "user");
-  assert.equal((message as { parent_tool_use_id?: string }).parent_tool_use_id, "toolu_ask");
-  assert.deepEqual((message as { message?: { content: unknown[] } }).message?.content, [
-    {
-      type: "tool_result",
-      tool_use_id: "toolu_ask",
-      content: "Continue",
-    },
-  ]);
-});
-
-test("input reply record helpers trim durable control fields", () => {
+test("inputReplyAnswers parses durable command answers map and drops empties", () => {
   const record = {
     target_provider_item_id: " toolu_ask ",
-    input_reply: " Continue ",
-    prompt: "fallback",
+    answers: {
+      "  Which auth method?  ": ["  OAuth  ", ""],
+      "  ": ["ignored"],
+      "Drop me": [],
+    },
   };
 
   assert.equal(inputReplyTargetProviderItemID(record as never), "toolu_ask");
-  assert.equal(inputReplyText(record as never), "Continue");
-  assert.equal(inputReplyText({ ...record, input_reply: "" } as never), "");
+  assert.deepEqual(inputReplyAnswers(record as never), { "Which auth method?": ["OAuth"] });
+});
+
+test("inputReplyAnswers tolerates a missing or malformed answers field", () => {
+  assert.deepEqual(inputReplyAnswers({} as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: null } as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: "not-a-map" } as never), {});
+  assert.deepEqual(inputReplyAnswers({ answers: [] } as never), {});
+});
+
+test("inputReplyAnnotations trims preview and notes, drops empty entries", () => {
+  const record = {
+    annotations: {
+      "Q1": { preview: "  <div/>  ", notes: "  hi  " },
+      "Q2": { notes: "" },
+      "  ": { preview: "x" },
+    },
+  };
+  assert.deepEqual(inputReplyAnnotations(record as never), {
+    Q1: { preview: "<div/>", notes: "hi" },
+  });
+});
+
+test("joinAnswersForSDK joins multi-select arrays with the SDK preprocess separator", () => {
+  assert.deepEqual(
+    joinAnswersForSDK({
+      "Single": ["OAuth"],
+      "Multi": ["A", "B", "C"],
+    }),
+    {
+      Single: "OAuth",
+      Multi: "A, B, C",
+    },
+  );
 });
 
 // Regression test for the "Stop doesn't interrupt deep tool-use loops"
@@ -264,6 +286,88 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
     calls,
     ["acceptInterrupt"],
     "interrupt must reach acceptInterrupt independently of the data-plane consumer's slot state",
+  );
+  ctl.abort();
+});
+
+// dispatchInputReplyIndependentlyOfSubmit pins the exact same architectural
+// guarantee for input_reply that the previous test pins for interrupts. The
+// failure mode is also identical: an input_reply only ever exists *while*
+// a submit_turn is parked in canUseTool (the AskUserQuestion gate) — and
+// that exact submit_turn is the message holding the data-plane consumer's
+// single max_ack_pending=1 slot. If input_reply were routed to the data
+// plane, JetStream would queue it behind the parked submit_turn and never
+// deliver it; the runner would wait forever for an input_reply that's
+// stuck behind the submit_turn that's waiting for the input_reply. A
+// classic dispatch deadlock. The fix runs input_reply on the control
+// consumer the same way interrupt_turn does. This test pins that:
+// input_reply on the control handler triggers acceptInputReply with
+// acceptCommandTurn never running.
+test("dispatchInputReplyIndependentlyOfSubmit: control handler dispatches input_reply without waiting for the data plane", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    commandBus: {
+      startCommandConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
+      startControlConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
+      markCompleted: () => Promise<void>;
+    };
+    startCommandConsumer: (signal: AbortSignal) => () => void;
+    startControlConsumer: (signal: AbortSignal) => () => void;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+    acceptCommandTurn: (record: unknown) => Promise<void>;
+    acceptInputReply: (record: unknown) => Promise<void>;
+  };
+
+  type RecordHandler = (record: unknown) => Promise<void>;
+  const handlers: { data: RecordHandler | null; control: RecordHandler | null } = {
+    data: null,
+    control: null,
+  };
+  const calls: string[] = [];
+
+  runner.commandBus = {
+    async startCommandConsumer(h: RecordHandler) {
+      handlers.data = h;
+      return async () => {};
+    },
+    async startControlConsumer(h: RecordHandler) {
+      handlers.control = h;
+      return async () => {};
+    },
+    async markCompleted() {
+      calls.push("ack");
+    },
+  };
+  runner.acceptInterrupt = async () => {
+    calls.push("acceptInterrupt");
+  };
+  runner.acceptCommandTurn = async () => {
+    calls.push("acceptCommandTurn");
+  };
+  runner.acceptInputReply = async () => {
+    calls.push("acceptInputReply");
+  };
+
+  const ctl = new AbortController();
+  runner.startCommandConsumer(ctl.signal);
+  runner.startControlConsumer(ctl.signal);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const dataFn = handlers.data;
+  const controlFn = handlers.control;
+  if (!dataFn) throw new Error("startCommandConsumer should register a data handler");
+  if (!controlFn) throw new Error("startControlConsumer should register a separate control handler");
+
+  await controlFn({
+    type: "input_reply",
+    id: "control-input-1",
+    target_turn_id: "turn-active",
+    answers: { Q: ["A"] },
+  });
+
+  assert.deepEqual(
+    calls,
+    ["acceptInputReply"],
+    "input_reply must reach acceptInputReply on the control consumer; routing it to the data plane is the deadlock the split prevents",
   );
   ctl.abort();
 });

@@ -25,6 +25,11 @@ export interface SessionBusDependencies {
   nanos: (millis: number) => unknown;
 }
 
+export interface InputReplyAnnotation {
+  preview?: string;
+  notes?: string;
+}
+
 export interface SessionCommand {
   id: string;
   command_id: string;
@@ -38,7 +43,12 @@ export interface SessionCommand {
   target_turn_id?: string;
   target_timeline_id?: string;
   target_provider_item_id?: string;
-  input_reply?: string;
+  // answers carries the user's AskUserQuestion selections keyed by
+  // question text. Values are arrays so single-select and multi-select
+  // questions share one shape; runners join multi-element arrays at the
+  // SDK boundary.
+  answers?: Record<string, string[]>;
+  annotations?: Record<string, InputReplyAnnotation>;
   prompt?: string;
   model?: string;
   /**
@@ -76,7 +86,8 @@ export class SessionCommandRecord implements SessionCommand {
   target_turn_id?: string;
   target_timeline_id?: string;
   target_provider_item_id?: string;
-  input_reply?: string;
+  answers?: Record<string, string[]>;
+  annotations?: Record<string, InputReplyAnnotation>;
   prompt?: string;
   model?: string;
   effort?: string;

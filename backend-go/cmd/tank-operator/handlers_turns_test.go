@@ -279,7 +279,17 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"  Continue  "}`)
+	body := `{
+		"provider_item_id": "toolu_123",
+		"timeline_id": "turn-active_123:item:toolu_123",
+		"answers": {
+			"Which auth method should we use?": ["  OAuth  "]
+		},
+		"annotations": {
+			"Which auth method should we use?": {"notes": "matches existing IdP"}
+		}
+	}`
+	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
 	app.handleInputReplySessionTurn(resp, req)
@@ -294,15 +304,22 @@ func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 	if got.Type != sessionbus.CommandInputReply || got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
 		t.Fatalf("input reply routing fields = %#v", got)
 	}
-	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" || got.InputReply != "Continue" || got.Prompt != "Continue" {
-		t.Fatalf("input reply payload fields = %#v", got)
+	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" {
+		t.Fatalf("input reply target fields = %#v", got)
+	}
+	if len(got.Answers) != 1 || len(got.Answers["Which auth method should we use?"]) != 1 || got.Answers["Which auth method should we use?"][0] != "OAuth" {
+		t.Fatalf("input reply answers = %#v, want {<question>: [\"OAuth\"]}", got.Answers)
+	}
+	if got.Annotations["Which auth method should we use?"].Notes != "matches existing IdP" {
+		t.Fatalf("input reply annotations = %#v", got.Annotations)
 	}
 }
 
 func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
-	req := authedInputReplyRequest(t, "64", "turn-active_123", `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
+	req := authedInputReplyRequest(t, "64", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
 	app.handleInputReplySessionTurn(resp, req)
@@ -318,7 +335,25 @@ func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
 func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	req := authedInputReplyRequest(t, "63", "turn-active_123", `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","text":"Continue"}`)
+	body := `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
+	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
+	resp := httptest.NewRecorder()
+
+	app.handleInputReplySessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+func TestInputReplySessionTurnRejectsEmptyAnswers(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{}}`
+	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
 	app.handleInputReplySessionTurn(resp, req)

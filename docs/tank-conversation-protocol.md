@@ -414,7 +414,7 @@ Provider mapping for the new event: there is no provider mapping.
 boundary, regardless of provider. `actor=system`, `source=tank`. Runners
 remain the sole producers of `turn.interrupted`.
 
-Durable Claude input reply:
+Durable Claude AskUserQuestion answer (`input_reply` command):
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`
 
@@ -424,19 +424,43 @@ Body:
 {
   "provider_item_id": "toolu_...",
   "timeline_id": "item_...",
-  "text": "Use option A"
+  "answers": {
+    "Which auth method should we use?": ["OAuth"]
+  },
+  "annotations": {
+    "Which auth method should we use?": { "notes": "matches the existing IdP" }
+  }
 }
 ```
 
-The backend validates ownership, Claude GUI mode, target ids, and text size,
-then publishes a durable JetStream `input_reply` command with
-`target_turn_id=<turn_id>`, `target_provider_item_id=<provider_item_id>`,
-`target_timeline_id=<timeline_id>`, and `input_reply=<text>`. The Claude runner
-accepts the command only when the target turn is active and waiting for that
-provider item, pushes a provider tool-result message, and acks the command
-only after the durable `tool.approval_resolved` event is produced. Codex does
-not support this command and fails it explicitly. Browser tabs must not send
-AskUserQuestion answers through a runner socket or any non-durable control channel.
+`answers` is `Record<questionText, answerLabel[]>` — always an array so
+multi-select questions and single-select questions share one shape.
+`annotations` is optional `Record<questionText, { preview?, notes? }>` from
+the Claude Agent SDK's AskUserQuestion schema and carries free-text notes
+the user attached to a selected option.
+
+The backend validates ownership, Claude GUI mode, target ids, that the
+answers map is non-empty, and total payload size, then publishes a durable
+JetStream `input_reply` command with `target_turn_id=<turn_id>`,
+`target_provider_item_id=<provider_item_id>`,
+`target_timeline_id=<timeline_id>`, `answers`, and (optionally)
+`annotations`.
+
+The Claude runner accepts the command only when the target turn is active
+and the matching AskUserQuestion tool call is waiting on a `canUseTool`
+permission decision. The runner does not synthesize a `tool_result` user
+message: AskUserQuestion answer delivery rides on the SDK's
+`canUseTool({behavior:"allow", updatedInput:{questions, answers,
+annotations}})` contract, and the SDK's own tool definition formats the
+canonical `tool_result` content from `updatedInput`. The runner acks the
+durable command only after publishing `tool.approval_resolved` whose payload
+mirrors the answers (and annotations, if any) that resolved the call.
+
+Codex does not implement AskUserQuestion: there is no provider tool the
+codex-runner could route the `input_reply` payload into, so the codex-runner
+explicitly fails the command rather than ignoring it. Browser tabs must
+not send AskUserQuestion answers through a runner socket or any other
+non-durable control channel.
 
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while

@@ -142,6 +142,11 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex" | "pi";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
+type AskUserQuestionAnswer = {
+  labels: string[];
+  notes?: string;
+  preview?: string;
+};
 type TranscriptEntry = SandboxTranscriptEntry & {
   toolKind?: ToolKind;
   toolServer?: string;
@@ -159,6 +164,11 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   // place of the human's Gravatar so cross-session handoffs read as
   // agent-authored, not user-authored.
   originSessionId?: string;
+  // Durable AskUserQuestion answers + annotations, sourced from the
+  // `tool.approval_resolved` event payload via conversationProjection.
+  // ToolAskUserBody reads this for the answered state so the UI matches
+  // the durable ledger and not local React optimism.
+  askUserAnswers?: Record<string, AskUserQuestionAnswer>;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
@@ -3036,8 +3046,13 @@ function RunMarkdown({ children }: { children: string }) {
   );
 }
 
+interface InputReplyPayload {
+  answers: Record<string, string[]>;
+  annotations?: Record<string, { preview?: string; notes?: string }>;
+}
+
 const RunContext = createContext<{
-  sendInputReply: (entry: TranscriptEntry, text: string) => Promise<void>;
+  sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
 }>({
   sendInputReply: async () => {},
@@ -3261,6 +3276,32 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
   return <ToolDefaultBody entry={entry} input={input} />;
 }
 
+interface AskUserQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: Array<{ label: string; description?: string; preview?: string }>;
+}
+
+function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQuestion[] {
+  if (!Array.isArray(input?.questions)) return [];
+  return (input.questions as Array<Record<string, unknown>>).map((q) => {
+    const options = Array.isArray(q.options)
+      ? (q.options as Array<Record<string, unknown>>).map((opt) => ({
+          label: String(opt.label ?? ""),
+          description: typeof opt.description === "string" ? opt.description : undefined,
+          preview: typeof opt.preview === "string" ? opt.preview : undefined,
+        }))
+      : [];
+    return {
+      question: String(q.question ?? ""),
+      header: typeof q.header === "string" && q.header ? q.header : undefined,
+      multiSelect: q.multiSelect === true,
+      options,
+    } satisfies AskUserQuestion;
+  });
+}
+
 function ToolAskUserBody({
   entry,
   input,
@@ -3269,71 +3310,163 @@ function ToolAskUserBody({
   input: Record<string, unknown> | null;
 }) {
   const { sendInputReply } = useContext(RunContext);
-  const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
-  const [pendingAnswer, setPendingAnswer] = useState<string | null>(null);
+  // Per-question selections (multi-select carries an array; single-select
+  // is a single-element array or empty). Submission converts to the wire
+  // shape `Record<questionText, string[]>` so single + multi share a
+  // payload.
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
 
-  const questions = Array.isArray(input?.questions)
-    ? (input.questions as Array<Record<string, unknown>>)
-    : [];
+  const questions = parseAskUserQuestions(input);
 
-  const answered = selectedAnswer !== null || entry.toolStatus === "completed";
-  const displayAnswer = selectedAnswer ?? entry.toolOutput ?? null;
+  // durableAnswers is the canonical source of truth for the answered
+  // state — it comes from the `tool.approval_resolved` event's payload
+  // via projection, so a fresh tab opened after the user answered (in
+  // this or any other tab) still renders the selections. Local
+  // `selections` state only powers the in-flight click-to-submit UX.
+  const durableAnswers = entry.askUserAnswers;
+  const answered =
+    (durableAnswers && Object.keys(durableAnswers).length > 0) ||
+    entry.toolStatus === "completed";
 
   if (answered) {
     return (
       <div className="run-tool-body run-tool-ask">
-        <span className="run-tool-ask-answered">{displayAnswer ?? "answered"}</span>
+        {durableAnswers && Object.entries(durableAnswers).length > 0 ? (
+          <ul className="run-tool-ask-answered-list">
+            {Object.entries(durableAnswers).map(([question, answer]) => (
+              <li key={question} className="run-tool-ask-answered-item">
+                <span className="run-tool-ask-answered-question">{question}</span>
+                <span className="run-tool-ask-answered-arrow"> → </span>
+                <span className="run-tool-ask-answered-labels">{answer.labels.join(", ")}</span>
+                {answer.notes && (
+                  <span className="run-tool-ask-answered-notes"> ({answer.notes})</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="run-tool-ask-answered">answered</span>
+        )}
       </div>
     );
+  }
+
+  const isReady =
+    questions.length > 0 &&
+    questions.every((q) => (selections[q.question]?.length ?? 0) > 0);
+
+  function toggleSelection(q: AskUserQuestion, label: string): void {
+    setSelections((prev) => {
+      const current = prev[q.question] ?? [];
+      if (q.multiSelect) {
+        const next = current.includes(label)
+          ? current.filter((l) => l !== label)
+          : [...current, label];
+        return { ...prev, [q.question]: next };
+      }
+      // Single-select: clicking always selects exactly that label
+      // (re-clicking selected option is a no-op submit affordance).
+      return { ...prev, [q.question]: [label] };
+    });
+  }
+
+  function setNoteFor(question: string, value: string): void {
+    setNotes((prev) => ({ ...prev, [question]: value }));
+  }
+
+  async function submit(): Promise<void> {
+    if (submitting || !isReady) return;
+    setSubmitting(true);
+    setReplyError(null);
+    const answers: Record<string, string[]> = {};
+    const annotations: Record<string, { preview?: string; notes?: string }> = {};
+    for (const q of questions) {
+      const labels = selections[q.question];
+      if (!labels || labels.length === 0) continue;
+      answers[q.question] = labels;
+      const notesText = notes[q.question]?.trim();
+      const preview = q.options.find((opt) => labels.includes(opt.label))?.preview;
+      const ann: { preview?: string; notes?: string } = {};
+      if (preview) ann.preview = preview;
+      if (notesText) ann.notes = notesText;
+      if (ann.preview || ann.notes) annotations[q.question] = ann;
+    }
+    try {
+      await sendInputReply(entry, { answers, annotations });
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
     <div className="run-tool-body run-tool-ask">
       {questions.map((q, qi) => {
-        const questionText = String(q.question ?? "");
-        const options = Array.isArray(q.options)
-          ? (q.options as Array<Record<string, unknown>>)
-          : [];
+        const selectedLabels = selections[q.question] ?? [];
         return (
           <div key={qi} className="run-tool-ask-question">
-            {questionText && <p className="run-tool-ask-text">{questionText}</p>}
+            {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
+            {q.question && <p className="run-tool-ask-text">{q.question}</p>}
             <div className="run-tool-ask-options">
-              {options.map((opt, oi) => {
-                const label = String(opt.label ?? "");
-                const pending = pendingAnswer === label;
+              {q.options.map((opt, oi) => {
+                const selected = selectedLabels.includes(opt.label);
                 return (
                   <button
                     key={oi}
                     type="button"
-                    className="run-tool-ask-option"
-                    disabled={pendingAnswer !== null}
-                    onClick={() => {
-                      setPendingAnswer(label);
-                      setReplyError(null);
-                      void sendInputReply(entry, label)
-                        .then(() => setSelectedAnswer(label))
-                        .catch((err) =>
-                          setReplyError(err instanceof Error ? err.message : String(err)),
-                        )
-                        .finally(() => setPendingAnswer(null));
-                    }}
+                    className={`run-tool-ask-option${selected ? " run-tool-ask-option-selected" : ""}`}
+                    aria-pressed={selected}
+                    disabled={submitting}
+                    onClick={() => toggleSelection(q, opt.label)}
                   >
                     <span className="run-tool-ask-option-label">
-                      {pending ? "Sending..." : label}
+                      {q.multiSelect ? (selected ? "☑ " : "☐ ") : ""}
+                      {opt.label}
                     </span>
-                    {typeof opt.description === "string" && opt.description && (
-                      <span className="run-tool-ask-option-desc">
-                        {opt.description}
-                      </span>
+                    {opt.description && (
+                      <span className="run-tool-ask-option-desc">{opt.description}</span>
+                    )}
+                    {opt.preview && selected && (
+                      <span
+                        className="run-tool-ask-option-preview"
+                        // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
+                        dangerouslySetInnerHTML={{ __html: opt.preview }}
+                      />
                     )}
                   </button>
                 );
               })}
             </div>
+            {selectedLabels.length > 0 && q.options.some((opt) => opt.preview) && (
+              <label className="run-tool-ask-notes-label">
+                <span>Notes (optional)</span>
+                <textarea
+                  className="run-tool-ask-notes"
+                  rows={2}
+                  value={notes[q.question] ?? ""}
+                  disabled={submitting}
+                  onChange={(e) => setNoteFor(q.question, e.target.value)}
+                  placeholder="Add any context Claude should consider…"
+                />
+              </label>
+            )}
           </div>
         );
       })}
+      <div className="run-tool-ask-submit-row">
+        <button
+          type="button"
+          className="run-tool-ask-submit"
+          disabled={!isReady || submitting}
+          onClick={() => void submit()}
+        >
+          {submitting ? "Sending…" : "Submit answer"}
+        </button>
+      </div>
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
   );
@@ -5809,29 +5942,39 @@ function ChatPane({
     : STREAM_VERBS[verbIndex];
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
 
-  async function sendInputReply(entry: TranscriptEntry, text: string): Promise<void> {
+  async function sendInputReply(
+    entry: TranscriptEntry,
+    payload: InputReplyPayload,
+  ): Promise<void> {
     const turnID = entry.turnId?.trim();
     const providerItemID = entry.providerItemId?.trim();
     if (!turnID || !providerItemID) {
       throw new Error("input reply target is not available");
+    }
+    if (!payload.answers || Object.keys(payload.answers).length === 0) {
+      throw new Error("input reply requires at least one answer");
+    }
+    const body: Record<string, unknown> = {
+      provider_item_id: providerItemID,
+      timeline_id: entry.id,
+      answers: payload.answers,
+    };
+    if (payload.annotations && Object.keys(payload.annotations).length > 0) {
+      body.annotations = payload.annotations;
     }
     const res = await authedFetch(
       `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/input-reply`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider_item_id: providerItemID,
-          timeline_id: entry.id,
-          text,
-        }),
+        body: JSON.stringify(body),
       },
     );
     if (!res.ok) {
       let detail = `input reply failed: ${res.status}`;
       try {
-        const body = await res.json();
-        if (typeof body?.detail === "string") detail = body.detail;
+        const data = await res.json();
+        if (typeof data?.detail === "string") detail = data.detail;
       } catch {
         // Keep the status-only detail when the response is not JSON.
       }
