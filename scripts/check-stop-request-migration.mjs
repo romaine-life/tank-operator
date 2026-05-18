@@ -881,6 +881,74 @@ const CHECKS = [
     kind: "grep-present",
     pattern: /docs\/diagnostic-discipline\.md/,
   },
+
+  // ────────────────────── Four-outcome contract: codex-runner side (PR 2 of #532) ──────────────────────
+  //
+  // codex-runner mirrors agent-runner's buffer-and-apply shape. The codex
+  // runner's interrupt flow uses two buffers (pendingInterrupts for the
+  // case where the submit_turn is already tracked; orphanInterrupts for
+  // the pre-submit race that pre-#532 silently ack'd). The checks below
+  // pin every load-bearing piece on the codex side.
+  {
+    id: "codex-interrupt-outcome-counter",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/metrics.ts",
+    description: "codex-runner exposes tank_runner_interrupt_outcome_total (mode=codex via setDefaultLabels)",
+    kind: "grep-present",
+    pattern: /name:\s*"tank_runner_interrupt_outcome_total"[\s\S]{0,400}?labelNames:\s*\[\s*"outcome"\s*\]/,
+  },
+  {
+    id: "codex-orphan-interrupts-buffer",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "orphanInterrupts buffer exists so a pre-submit-race stop is not silently dropped",
+    kind: "grep-present",
+    pattern: /orphanInterrupts:\s*OrphanInterrupt\[\]/,
+  },
+  {
+    id: "codex-orphan-drain-on-track",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "trackCommandTurnTarget drains orphan-buffered interrupts when the matching submit_turn arrives",
+    kind: "grep-present",
+    pattern: /trackCommandTurnTarget[\s\S]{0,800}?this\.drainOrphanInterruptsFor/,
+  },
+  {
+    id: "codex-publish-retry-helper",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "publishTerminalWithRetry exists and retries dispatch with backoff",
+    kind: "grep-present",
+    pattern: /publishTerminalWithRetry[\s\S]{0,400}?TERMINAL_PUBLISH_ATTEMPTS/,
+  },
+  {
+    id: "codex-publish-fallback-on-interrupt",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "run-loop catch branch falls back to turn.failed{publish_interrupt_failed} when turn.interrupted publish exhausts retries",
+    kind: "grep-present",
+    pattern: /publish_interrupt_failed/,
+  },
+  {
+    id: "codex-orphan-terminal",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "expireOrphanInterrupt emits turn.failed{interrupt_orphaned} so an orphan resolves the UI to a durable terminal",
+    kind: "grep-present",
+    pattern: /interrupt_orphaned/,
+  },
+  {
+    id: "codex-no-silent-ack",
+    from: "Four-outcome contract (post-#532)",
+    file: "codex-runner/src/runner.ts",
+    description: "codex-runner acceptInterrupt does NOT silently ack the no-match case (the pre-#532 silent-stranding path)",
+    kind: "grep-absent",
+    // Pre-#532 shape ended with `await this.commandBus.markCompleted(record);`
+    // as the no-match fallback inside acceptInterrupt. Post-#532 the
+    // fallback is bufferOrphanInterrupt; this guard forbids the
+    // silent-ack regression.
+    pattern: /acceptInterrupt[\s\S]{0,2500}?\}\s*\n\s*await\s+this\.commandBus\.markCompleted\(record\);\s*\n\s*\}/,
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

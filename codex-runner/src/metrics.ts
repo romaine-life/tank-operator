@@ -38,6 +38,44 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+// interruptOutcomeTotal records the disposition of every `interrupt_turn`
+// command this runner accepts. Sibling of the agent-runner counter
+// shipped with #535 (PR 1 of #532); same labels and same four-outcome
+// contract so the per-stop SLO alert can sum across both runners.
+//
+// See agent-runner/src/metrics.ts for the bucket-by-bucket docstring;
+// the contract is also pinned in
+// docs/tank-conversation-protocol.md → "Four-outcome contract on the
+// runner side". The codex-runner's mapping to the buckets:
+//
+//   - `terminated_via_sdk` — interrupt arrived during an in-flight
+//     codex thread; AbortController.abort() propagates through
+//     thread.runStreamed and the catch branch publishes turn.interrupted.
+//   - `terminated_pre_sdk` — interrupt arrived before the codex thread
+//     consumed the turn (matched via pendingInterrupts in the run-loop
+//     dequeue); the AbortController fires before thread.runStreamed
+//     emits any event, and the catch branch publishes turn.interrupted.
+//   - `buffered` — interrupt arrived with no matching active or pending
+//     turn; held in orphanInterrupts awaiting either a matching submit
+//     or the orphan timer.
+//   - `orphaned` — buffered interrupt's matching submit_turn never
+//     arrived within SESSION_INTERRUPT_BUFFER_MS; turn.failed
+//     {interrupt_orphaned} published so the UI resolves.
+//   - `publish_failed` — publishTerminalWithRetry exhausted both the
+//     happy-path turn.interrupted and the fallback turn.failed
+//     {publish_interrupt_failed} attempts.
+//   - `turn_already_terminal` — interrupt arrived after the targeted
+//     turn already emitted its own terminal; durable ledger shows the
+//     natural terminal; race is legitimate.
+//   - `invalid_target` — interrupt missing both target_turn_id and
+//     client_nonce. Backend bug; should be zero.
+export const interruptOutcomeTotal = new Counter({
+  name: "tank_runner_interrupt_outcome_total",
+  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and nelsong6/tank-operator#532 for the four-outcome contract.",
+  labelNames: ["outcome"],
+  registers: [registry],
+});
+
 export const pendingWakeupsGauge = new Gauge({
   name: "tank_runner_pending_wakeups",
   help: "Currently-pending ScheduleWakeup timers held in this runner process.",

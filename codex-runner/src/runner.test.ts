@@ -206,3 +206,160 @@ test("terminal Codex interrupts ack submit and interrupt commands after publish"
   assert.equal(turn.interruptRecords, undefined);
   assert.equal(turn.stopCommandHeartbeat, undefined);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// nelsong6/tank-operator#532 — four-outcome contract for accepted interrupts
+// on the codex-runner. Sibling of agent-runner's contract tests; same shape
+// but exercising the codex-runner's acceptInterrupt → orphanInterrupts /
+// pendingInterrupts paths.
+// ───────────────────────────────────────────────────────────────────────────
+
+function makeCodexInterruptHarness(): {
+  runner: Runner;
+  events: TankConversationEvent[];
+  bus: string[];
+  setSinkFailureCount: (n: number) => void;
+} {
+  const events: TankConversationEvent[] = [];
+  const bus: string[] = [];
+  let sinkFailuresLeft = 0;
+  const runner = new Runner(runnerConfig());
+  const internals = runner as unknown as {
+    sink: {
+      upsert: (e: TankConversationEvent) => Promise<void>;
+      findTurnTerminal?: (turnID: string) => Promise<TankConversationEvent | null>;
+    };
+    commandBus: {
+      markCompleted: (r?: unknown) => Promise<void>;
+      markFailed: (r?: unknown, err?: unknown) => Promise<void>;
+      startCommandHeartbeat: (r?: unknown) => () => void;
+    };
+  };
+  internals.sink = {
+    async upsert(event: TankConversationEvent) {
+      if (sinkFailuresLeft > 0) {
+        sinkFailuresLeft -= 1;
+        throw new Error("simulated dispatch failure");
+      }
+      events.push(event);
+    },
+    async findTurnTerminal() {
+      return null;
+    },
+  };
+  internals.commandBus = {
+    async markCompleted() {
+      bus.push("ack");
+    },
+    async markFailed() {
+      bus.push("fail");
+    },
+    startCommandHeartbeat() {
+      return () => {};
+    },
+  };
+  return {
+    runner,
+    events,
+    bus,
+    setSinkFailureCount(n: number) {
+      sinkFailuresLeft = n;
+    },
+  };
+}
+
+test("acceptInterrupt during in-flight codex turn: aborts immediately, queues record on currentTurn", async () => {
+  const { runner, bus, events } = makeCodexInterruptHarness();
+  const r = runner as unknown as {
+    currentTurn: { turnID: string; clientNonce: string; interruptRecords?: unknown[] } | null;
+    currentAbort: { abort: () => void } | null;
+    interruptRequested: boolean;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
+  let aborted = false;
+  r.currentAbort = { abort: () => { aborted = true; } };
+  r.currentTurn = { turnID: "turn_abc-123", clientNonce: "abc-123" };
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "abc-123",
+    client_nonce: "abc-123",
+  });
+
+  assert.equal(aborted, true, "AbortController must fire");
+  assert.equal(r.interruptRequested, true, "interruptRequested flag must be set");
+  assert.equal(r.currentTurn?.interruptRecords?.length, 1, "record queued on currentTurn for terminal-time ack");
+  // The terminal publish + ack happens in the run-loop catch branch, not
+  // in acceptInterrupt. So no immediate ack/event here.
+  assert.equal(events.length, 0);
+  assert.equal(bus.length, 0);
+});
+
+test("acceptInterrupt with no matching turn: orphan-buffered with timer + heartbeat", async () => {
+  const { runner } = makeCodexInterruptHarness();
+  const r = runner as unknown as {
+    currentTurn: unknown;
+    pendingCommandTurnTargets: Set<string>;
+    orphanInterrupts: Array<{ record: unknown; targetKey: string; orphanTimer: ReturnType<typeof setTimeout> }>;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
+  r.currentTurn = null;
+  r.pendingCommandTurnTargets.clear();
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "abc-123",
+    client_nonce: "abc-123",
+  });
+
+  assert.equal(r.orphanInterrupts.length, 1, "interrupt with no matching turn must be orphan-buffered, not silently ack'd");
+  assert.equal(r.orphanInterrupts[0]!.targetKey, "abc-123");
+  // Clear the timer so the test doesn't leak a setTimeout.
+  clearTimeout(r.orphanInterrupts[0]!.orphanTimer);
+});
+
+test("trackCommandTurnTarget drains matching orphan interrupts into pendingInterrupts", async () => {
+  const { runner } = makeCodexInterruptHarness();
+  const r = runner as unknown as {
+    currentTurn: unknown;
+    pendingCommandTurnTargets: Set<string>;
+    orphanInterrupts: Array<{ record: unknown; targetKey: string; orphanTimer: ReturnType<typeof setTimeout> }>;
+    pendingInterrupts: unknown[];
+    acceptInterrupt: (record: unknown) => Promise<void>;
+    trackCommandTurnTarget: (clientNonce: string) => void;
+  };
+  r.currentTurn = null;
+
+  // Stop click arrives first (target_turn_id = bare uuid form, which
+  // is what the backend's /interrupt handler sends).
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "abc-123",
+    client_nonce: "abc-123",
+  });
+  assert.equal(r.orphanInterrupts.length, 1, "orphan-buffered (no matching submit yet)");
+
+  // Then the submit_turn lands and the data-plane consumer tracks it.
+  r.trackCommandTurnTarget("abc-123");
+
+  assert.equal(r.orphanInterrupts.length, 0, "orphan buffer drained");
+  assert.equal(r.pendingInterrupts.length, 1, "moved into pendingInterrupts for dequeue-side application");
+});
+
+test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {
+  const { runner, bus, events } = makeCodexInterruptHarness();
+  const r = runner as unknown as { acceptInterrupt: (record: unknown) => Promise<void> };
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "",
+    client_nonce: "",
+  });
+
+  assert.deepEqual(bus, ["fail"], "missing target must produce a visible failure, not a silent ack");
+  assert.equal(events.length, 0);
+});
