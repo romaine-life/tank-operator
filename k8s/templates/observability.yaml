@@ -481,14 +481,14 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Sustained tank_runner_event_truncated_total{severity=payload-dropped} for {{ $labels.event_type }}"
+            summary: "Sustained tank_runner_event_truncated_total{severity=payload-dropped} for {{`{{ $labels.event_type }}`}}"
             runbook: |
               An event_type producer is emitting payloads so large that
               even string-by-string truncation can't fit them under
               SESSION_EVENT_MAX_BYTES (default 900 KiB). The durable
               ledger contains the envelope plus a __payload_dropped
               marker; the body is gone. Look at the adapter or
-              tool-result path for {{ $labels.event_type }} and either
+              tool-result path for {{`{{ $labels.event_type }}`}} and either
               chunk the source (tool_result.output streaming, Read with
               an offset/limit window) or raise SESSION_EVENT_MAX_BYTES
               if the upstream transport can accept it (NATS
