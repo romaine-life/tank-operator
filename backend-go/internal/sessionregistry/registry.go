@@ -26,8 +26,18 @@ func NewPostgresStore(pool *pgxpool.Pool, scope string) *Store {
 	return &Store{pool: pool, scope: scope}
 }
 
-// List returns the visible session records for an owner in this scope,
-// ordered oldest-first by created_at to match the Cosmos impl.
+// List returns every session record for an owner in this scope (visible
+// and invisible), ordered oldest-first by created_at. Callers that only
+// want visible rows must filter on SessionRecord.Visible.
+//
+// Returning invisible rows is load-bearing for Reader.List: it needs to
+// know which session IDs have a registry row at all (regardless of
+// visibility) so its pod-fallback loop doesn't append phantom rows for
+// pods whose registry row is visible=false. Pre-tank-operator#525 this
+// query filtered `AND visible = true` and the Reader could not
+// distinguish "no registry row" from "registry row marked deleted",
+// which let Terminating pods (and any pod whose K8s delete failed)
+// reappear in the sidebar via the pod-fallback path.
 func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
 	normalized := strings.ToLower(strings.TrimSpace(owner))
 	if normalized == "" {
@@ -39,7 +49,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			COALESCE(to_char(created_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(updated_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at
 		FROM sessions
-		WHERE email = $1 AND session_scope = $2 AND visible = true
+		WHERE email = $1 AND session_scope = $2
 		ORDER BY created_at ASC
 	`
 	rows, err := s.pool.Query(ctx, q, normalized, s.scope)

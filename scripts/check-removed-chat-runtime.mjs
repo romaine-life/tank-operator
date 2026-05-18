@@ -344,6 +344,37 @@ const blocked = [
     // is the regression.
     pattern: /session_scope[\s\S]{0,40}\?\?\s*["']default["']/,
   },
+  // tank-operator#525 — the session-list cold-open replay path was
+  // resurrecting deleted sessions because (a) Reader.List's pod-fallback
+  // re-appended pods whose registry row was visible=false during the
+  // ~75s pod-termination window, and (b) the SSE handler replayed
+  // session_lifecycle_events from order_key=0 when the client opened
+  // with an empty cursor, letting pod-status events landing after
+  // session.deleted in the ledger re-add the row via the reducer's
+  // placeholder-synthesis branch. The fix made registry.List return
+  // visible+invisible rows (the Reader filters output by Visible but
+  // uses every id for `seen`), and made the SSE handler fast-forward
+  // an empty cursor to current tip. Block reintroduction of the
+  // visible-only registry SQL shape and the cursor="" loop-from-zero.
+  {
+    name: "retired registry visible-only SQL filter",
+    // The sessions-table read query used to filter `AND visible = true`
+    // at SQL time, which hid invisible rows from Reader.List's seen
+    // set and let the pod-fallback re-append Terminating pods.
+    // Reader is now responsible for filtering by SessionRecord.Visible
+    // at output time; the SQL must return all rows for the partition.
+    pattern: /FROM sessions[\s\S]{0,200}?AND\s+visible\s*=\s*true/,
+  },
+  {
+    name: "retired SSE replay-from-zero on empty cursor",
+    // Pre-#525 handleSessionsEvents looped writeSessionListStreamPage
+    // when cursor.AfterOrderKey was empty; the loop emitted every
+    // historical event for (email, scope) on cold open. Cold opens now
+    // fast-forward the cursor to LatestOrderKey before any catch-up
+    // emission. Block reintroduction of an explicit empty-cursor
+    // catch-up entry point.
+    pattern: /writeSessionListStreamPage\([\s\S]{0,200}?AfterOrderKey:\s*""/,
+  },
   // Interrupt-on-data-plane (the retired single-consumer architecture).
   // Until this PR, both runners dispatched isInterruptCommand →
   // acceptInterrupt from inside the data-plane command consumer. That's

@@ -126,6 +126,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
 
+	// Client-side telemetry beacon (allowlisted Prometheus counters
+	// the SPA pushes when its reducer hits a code path that should be
+	// cold post-tank-operator#525 — see handlers_debug_client_metric.go).
+	mux.HandleFunc("POST /api/debug/client-metric", s.handleClientMetric)
+
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
 	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)

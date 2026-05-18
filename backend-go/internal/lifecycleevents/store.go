@@ -50,6 +50,19 @@ type Store interface {
 	// cross-scope read window naturally miss here and trigger resync.
 	HasOrderKey(ctx context.Context, owner, scope, orderKey string) (bool, error)
 
+	// LatestOrderKey returns the highest order_key in
+	// session_lifecycle_events for one (owner, scope), or "" if the
+	// owner has no rows. Used by handleListSessions to stamp the
+	// Tank-Lifecycle-Tip-Order-Key response header at snapshot time,
+	// and by the SSE handler to fast-forward an empty cursor to the
+	// current tip (so cold opens don't replay history from
+	// order_key=0). Replaces the pre-tank-operator#525 cold-open behavior
+	// where the SSE handler emitted every historical event past
+	// cursor="", which let pod-status events that landed after a
+	// session.deleted in the ledger resurrect the row via the
+	// reducer's placeholder-synthesis branch.
+	LatestOrderKey(ctx context.Context, owner, scope string) (string, error)
+
 	// LatestActivity returns the most recent session.activity_changed
 	// payload for one session, or nil if none exists yet. Used by both
 	// GET /api/sessions (initial-state hydration) and the persister
@@ -235,6 +248,30 @@ func (s *postgresStore) ListByOwner(ctx context.Context, owner, scope string, cu
 		next = out[len(out)-1].OrderKey
 	}
 	return Page{Events: out, NextOrderKey: next, HasMore: hasMore}, nil
+}
+
+func (s *postgresStore) LatestOrderKey(ctx context.Context, owner, scope string) (string, error) {
+	owner = normalizeOwner(owner)
+	scope = strings.TrimSpace(scope)
+	if owner == "" || scope == "" {
+		return "", nil
+	}
+	const q = `
+		SELECT order_key
+		FROM session_lifecycle_events
+		WHERE email = $1 AND session_scope = $2
+		ORDER BY order_key DESC
+		LIMIT 1
+	`
+	var orderKey int64
+	err := s.pool.QueryRow(ctx, q, owner, scope).Scan(&orderKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return formatOrderKey(orderKey), nil
 }
 
 func (s *postgresStore) HasOrderKey(ctx context.Context, owner, scope, orderKey string) (bool, error) {
@@ -433,6 +470,10 @@ func (StubStore) ListByOwner(_ context.Context, _, _ string, _ Cursor, _ int) (P
 
 func (StubStore) HasOrderKey(_ context.Context, _, _, orderKey string) (bool, error) {
 	return strings.TrimSpace(orderKey) == "", nil
+}
+
+func (StubStore) LatestOrderKey(_ context.Context, _, _ string) (string, error) {
+	return "", nil
 }
 
 func (StubStore) LatestActivity(_ context.Context, _, _ string) (*ActivitySummary, error) {

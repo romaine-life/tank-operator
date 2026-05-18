@@ -107,6 +107,13 @@ import {
   type SessionListReducerState,
 } from "./sessionListEvents";
 import {
+  logSessionListEvent,
+  logSessionListSnapshot,
+  logSessionListSseOpen,
+  logSessionListStreamSignal,
+  notePlaceholderSynthesized,
+} from "./sessionListTelemetry";
+import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
   type TankConversationEvent,
@@ -7231,6 +7238,14 @@ export function App() {
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
   const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>({});
+  // lifecycleTipRef holds the Tank-Lifecycle-Tip-Order-Key header value
+  // from the most recent /api/sessions snapshot. The SSE useEffect seeds
+  // its cursor from this on cold open so the server's catch-up replay
+  // only emits events that landed AFTER the snapshot — without it, the
+  // SSE handler fast-forwards an empty cursor to current tip but loses
+  // any events that landed during the snapshot query itself. Updated by
+  // refresh() after each successful snapshot fetch.
+  const lifecycleTipRef = useRef<string | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -7306,7 +7321,22 @@ export function App() {
     try {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
+      // The server stamps the latest session_lifecycle_events order_key
+      // for this (owner, scope) at snapshot time. Threading it into the
+      // SSE cursor before /api/sessions/events opens means catch-up only
+      // emits events strictly after the snapshot — closes the race
+      // window without replaying history. See
+      // docs/product-inspirations.md: "Reconnect resumes from a cursor
+      // over persisted events" — that cursor must start at the snapshot
+      // tip on cold open, not at order_key=0.
+      const tip = res.headers.get("Tank-Lifecycle-Tip-Order-Key");
+      lifecycleTipRef.current = tip && tip.trim() !== "" ? tip : null;
       const listed: Session[] = (await res.json()).map(normalizeSession);
+      logSessionListSnapshot({
+        tip: lifecycleTipRef.current,
+        sessionCount: listed.length,
+        source: "initial",
+      });
       setSessions((prev) => {
         const previousById = new Map(prev.map((session) => [session.id, session]));
         const merged = listed.map((session) =>
@@ -7411,8 +7441,20 @@ export function App() {
 
     const open = () => {
       if (cancelled) return;
+      // Cold open: seed the cursor from the snapshot's
+      // Tank-Lifecycle-Tip-Order-Key. The server's catch-up will then
+      // emit only events strictly after that cursor — no
+      // replay-from-zero, no resurrection of deleted sessions via the
+      // reducer's placeholder-synthesis branch on stale pod events. If
+      // the snapshot didn't carry a tip (e.g. first request after
+      // backend roll, or the lifecycle ledger is empty), the server
+      // fast-forwards an empty cursor itself.
+      if (!cursorRef.current && lifecycleTipRef.current) {
+        cursorRef.current = lifecycleTipRef.current;
+      }
       const params = new URLSearchParams();
       if (cursorRef.current) params.set("last_order_key", cursorRef.current);
+      logSessionListSseOpen(cursorRef.current);
       const query = params.toString();
       source = new EventSource(`/api/sessions/events${query ? `?${query}` : ""}`, {
         withCredentials: true,
@@ -7427,15 +7469,21 @@ export function App() {
         }
         const normalized = normalizeSessionListEvent(parsed);
         if (!normalized) return;
+        logSessionListEvent(normalized);
         cursorRef.current = normalized.order_key;
         // Reducer mutates both the sessions list and the activities
         // map in one pass; React batches the two setState calls into a
-        // single render.
+        // single render. The onPlaceholderSynthesized callback fires
+        // the bug-detection beacon (see sessionListTelemetry); the
+        // reducer itself stays pure for unit tests, which don't pass
+        // the callback.
         const state: SessionListReducerState<Session> = {
           sessions: sessionsRef.current,
           activities: sessionActivitiesRef.current,
         };
-        const next = applySessionListEvent(state, normalized);
+        const next = applySessionListEvent(state, normalized, {
+          onPlaceholderSynthesized: notePlaceholderSynthesized,
+        });
         if (next.sessions !== state.sessions) {
           setSessions(
             user
@@ -7447,7 +7495,25 @@ export function App() {
           setSessionActivities(next.activities);
         }
       });
-      source.addEventListener("resync_required", () => {
+      source.addEventListener("ready", (event) => {
+        const message = event as MessageEvent;
+        let parsed: Record<string, unknown> | undefined;
+        try {
+          parsed = JSON.parse(String(message.data));
+        } catch {
+          parsed = undefined;
+        }
+        logSessionListStreamSignal({ signal: "ready", detail: parsed });
+      });
+      source.addEventListener("resync_required", (event) => {
+        const message = event as MessageEvent;
+        let parsed: Record<string, unknown> | undefined;
+        try {
+          parsed = JSON.parse(String(message.data));
+        } catch {
+          parsed = undefined;
+        }
+        logSessionListStreamSignal({ signal: "resync_required", detail: parsed });
         cursorRef.current = null;
         source?.close();
         source = null;
@@ -7456,7 +7522,15 @@ export function App() {
         // from a fresh cursor on the next tick.
         reopenTimer = window.setTimeout(open, 250);
       });
-      source.addEventListener("stream-error", () => {
+      source.addEventListener("stream-error", (event) => {
+        const message = event as MessageEvent;
+        let parsed: Record<string, unknown> | undefined;
+        try {
+          parsed = JSON.parse(String(message.data));
+        } catch {
+          parsed = undefined;
+        }
+        logSessionListStreamSignal({ signal: "stream-error", detail: parsed });
         // Server-acknowledged error; close and let onerror restart.
         source?.close();
         source = null;
