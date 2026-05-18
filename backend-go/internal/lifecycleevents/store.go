@@ -28,19 +28,27 @@ type Store interface {
 	// publish on NATS" decision.
 	Append(ctx context.Context, event Event) (assigned Event, alreadyExists bool, err error)
 
-	// ListByOwner returns events for one owner strictly after cursor in
-	// ascending order_key, up to limit. The page contains at most `limit`
-	// rows; HasMore signals there's at least one further row. Used by both
-	// the snapshot bootstrap (GET /api/sessions/timeline) and the catch-up
-	// pass that runs at SSE-stream open before the NATS subscription.
-	ListByOwner(ctx context.Context, owner string, cursor Cursor, limit int) (Page, error)
+	// ListByOwner returns events for one (owner, scope) strictly after
+	// cursor in ascending order_key, up to limit. The page contains at
+	// most `limit` rows; HasMore signals there's at least one further
+	// row. Used by both the snapshot bootstrap (GET
+	// /api/sessions/timeline) and the catch-up pass that runs at
+	// SSE-stream open before the NATS subscription.
+	//
+	// Scope is mandatory: the durable partition is (email, session_scope,
+	// order_key), and an email-only read was the bug class behind
+	// tank-operator#83's cross-environment leak — slot lifecycle events
+	// rendering in prod's sidebar because the read forgot the same
+	// session_scope column the write path enforces.
+	ListByOwner(ctx context.Context, owner, scope string, cursor Cursor, limit int) (Page, error)
 
 	// HasOrderKey is the cursor-validation hook used by the SSE handler.
 	// An empty order_key counts as valid (snapshot bootstrap). A non-empty
-	// order_key that no row matches forces a resync_required SSE event so
-	// the client re-fetches /api/sessions instead of silently skipping a
-	// gap.
-	HasOrderKey(ctx context.Context, owner, orderKey string) (bool, error)
+	// order_key that no row matches inside (owner, scope) forces a
+	// resync_required SSE event so the client re-fetches the timeline
+	// instead of silently skipping a gap. Old cursors from the pre-#83
+	// cross-scope read window naturally miss here and trigger resync.
+	HasOrderKey(ctx context.Context, owner, scope, orderKey string) (bool, error)
 
 	// LatestActivity returns the most recent session.activity_changed
 	// payload for one session, or nil if none exists yet. Used by both
@@ -140,33 +148,36 @@ func (s *postgresStore) Append(ctx context.Context, event Event) (Event, bool, e
 	}
 }
 
-func (s *postgresStore) ListByOwner(ctx context.Context, owner string, cursor Cursor, limit int) (Page, error) {
+func (s *postgresStore) ListByOwner(ctx context.Context, owner, scope string, cursor Cursor, limit int) (Page, error) {
 	limit = normalizeLimit(limit)
 	owner = normalizeOwner(owner)
-	if owner == "" {
+	scope = strings.TrimSpace(scope)
+	if owner == "" || scope == "" {
 		return Page{}, nil
 	}
 
 	// Read limit+1 to set HasMore without a second COUNT — mirrors the
-	// session_events pagination shape.
+	// session_events pagination shape. WHERE filters on
+	// (email, session_scope); the session_lifecycle_events_owner_order
+	// index supports the (=, =, range) predicate shape.
 	queryLimit := limit + 1
 	const baseQ = `
 		SELECT order_key, email, session_scope, session_id, event_type,
 		       event_id, payload, occurred_at
 		FROM session_lifecycle_events
-		WHERE email = $1
+		WHERE email = $1 AND session_scope = $2
 	`
 	q := baseQ
-	args := []any{owner}
+	args := []any{owner, scope}
 	if cursor.AfterOrderKey != "" {
 		after, err := parseOrderKey(cursor.AfterOrderKey)
 		if err != nil {
 			return Page{}, err
 		}
-		q += " AND order_key > $2 ORDER BY order_key ASC LIMIT $3"
+		q += " AND order_key > $3 ORDER BY order_key ASC LIMIT $4"
 		args = append(args, after, queryLimit)
 	} else {
-		q += " ORDER BY order_key ASC LIMIT $2"
+		q += " ORDER BY order_key ASC LIMIT $3"
 		args = append(args, queryLimit)
 	}
 
@@ -226,7 +237,7 @@ func (s *postgresStore) ListByOwner(ctx context.Context, owner string, cursor Cu
 	return Page{Events: out, NextOrderKey: next, HasMore: hasMore}, nil
 }
 
-func (s *postgresStore) HasOrderKey(ctx context.Context, owner, orderKey string) (bool, error) {
+func (s *postgresStore) HasOrderKey(ctx context.Context, owner, scope, orderKey string) (bool, error) {
 	if strings.TrimSpace(orderKey) == "" {
 		return true, nil
 	}
@@ -234,14 +245,19 @@ func (s *postgresStore) HasOrderKey(ctx context.Context, owner, orderKey string)
 	if err != nil {
 		return false, nil
 	}
+	owner = normalizeOwner(owner)
+	scope = strings.TrimSpace(scope)
+	if owner == "" || scope == "" {
+		return false, nil
+	}
 	const q = `
 		SELECT 1
 		FROM session_lifecycle_events
-		WHERE email = $1 AND order_key = $2
+		WHERE email = $1 AND session_scope = $2 AND order_key = $3
 		LIMIT 1
 	`
 	var one int
-	err = s.pool.QueryRow(ctx, q, normalizeOwner(owner), parsed).Scan(&one)
+	err = s.pool.QueryRow(ctx, q, owner, scope, parsed).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -411,11 +427,11 @@ func (StubStore) Append(_ context.Context, event Event) (Event, bool, error) {
 	return event, false, nil
 }
 
-func (StubStore) ListByOwner(_ context.Context, _ string, _ Cursor, _ int) (Page, error) {
+func (StubStore) ListByOwner(_ context.Context, _, _ string, _ Cursor, _ int) (Page, error) {
 	return Page{}, nil
 }
 
-func (StubStore) HasOrderKey(_ context.Context, _, orderKey string) (bool, error) {
+func (StubStore) HasOrderKey(_ context.Context, _, _, orderKey string) (bool, error) {
 	return strings.TrimSpace(orderKey) == "", nil
 }
 

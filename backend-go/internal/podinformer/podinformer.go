@@ -54,11 +54,14 @@ func (noopMetrics) RecordLag(_ float64)       {}
 func (noopMetrics) RecordLeaderStatus(_ bool) {}
 
 // EventPublisher publishes one already-marshaled lifecycle-event payload
-// onto the per-owner NATS session-list events subject. Implemented by
-// *sessionbus.Bus. Kept as a narrow interface so the informer can be
-// tested without spinning up NATS.
+// onto the per-(owner, scope) NATS session-list events subject.
+// Implemented by *sessionbus.Bus. Kept as a narrow interface so the
+// informer can be tested without spinning up NATS. Scope mirrors the
+// row's session_scope so the wire shape matches the durable partition;
+// publishing with a different scope than the row carries is the bug
+// class the (owner, scope) subject prevents at the wire layer.
 type EventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email string, payload []byte) error
+	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
 }
 
 // Config wires the informer with everything it needs to produce durable
@@ -395,9 +398,10 @@ func (t *transitionTracker) emit(ctx context.Context, event lifecycleevents.Even
 		)
 		return
 	}
-	if err := t.publisher.PublishSessionListEvent(ctx, assigned.Email, payload); err != nil {
+	if err := t.publisher.PublishSessionListEvent(ctx, assigned.Email, assigned.SessionScope, payload); err != nil {
 		slog.Warn("podinformer: publish failed",
 			"session_id", event.SessionID,
+			"scope", assigned.SessionScope,
 			"type", event.Type,
 			"error", err,
 		)

@@ -65,11 +65,11 @@ func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan stru
 // tank-operator#83. Tests don't drive the sidebar SSE so the recorder
 // no-ops both; replace these stubs with capturing variants in dedicated
 // session-list tests when those land.
-func (*recordingSessionBus) PublishSessionListEvent(context.Context, string, []byte) error {
+func (*recordingSessionBus) PublishSessionListEvent(context.Context, string, string, []byte) error {
 	return nil
 }
 
-func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string) (<-chan []byte, func(), error) {
+func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string, string) (<-chan []byte, func(), error) {
 	return make(chan []byte), func() {}, nil
 }
 

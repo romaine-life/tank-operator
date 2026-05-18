@@ -61,8 +61,8 @@ func WakeSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.wake", liveRoot, StorageToken(sessionStorageKey))
 }
 
-// SessionListEventSubject names the per-owner typed-event subject that
-// carries session_lifecycle_events Append payloads to the sidebar SSE
+// SessionListEventSubject names the per-(owner, scope) typed-event subject
+// that carries session_lifecycle_events Append payloads to the sidebar SSE
 // handlers. Replaces the prior opaque wake subject (an empty-payload
 // resync trigger) per tank-operator#83 — see
 // docs/product-inspirations.md "Work delivery should use a real
@@ -70,9 +70,25 @@ func WakeSubject(sessionStorageKey string) string {
 // database polling are not the normal live path for app-managed GUI
 // chat." The wire payload is one lifecycleevents.Event JSON document;
 // SSE handlers forward it to clients verbatim.
-func SessionListEventSubject(email string) string {
-	normalized := strings.TrimSpace(strings.ToLower(email))
-	return fmt.Sprintf("%s.sessions.%s.events", liveRoot, base64.RawURLEncoding.EncodeToString([]byte(normalized)))
+//
+// Scope is part of the subject because every other partition of the
+// durable system uses (email, session_scope) as the natural key — the
+// session_lifecycle_events row PK, the registry PK, the per-scope
+// session_id allocator. An email-only subject conflated prod and slot
+// environments that share the same Postgres + NATS broker (one row in
+// prod's sidebar per slot session, deletes that came back when a slot
+// republished session.created on resync). The subject now matches the
+// durable partition so cross-scope events are unreachable on the wire,
+// not filtered after delivery.
+func SessionListEventSubject(email, scope string) string {
+	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
+	normalizedScope := strings.TrimSpace(scope)
+	return fmt.Sprintf(
+		"%s.sessions.%s.%s.events",
+		liveRoot,
+		base64.RawURLEncoding.EncodeToString([]byte(normalizedEmail)),
+		base64.RawURLEncoding.EncodeToString([]byte(normalizedScope)),
+	)
 }
 
 func sanitizeSubjectToken(value string) string {

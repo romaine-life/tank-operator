@@ -18,7 +18,7 @@ import (
 // PublishSessionListEvent. Kept as an interface here so unit tests can
 // substitute an in-memory recorder.
 type lifecycleListEventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email string, payload []byte) error
+	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
 }
 
 // lifecycleEmitter bridges chat-event upserts into sidebar
@@ -188,12 +188,13 @@ func (e *lifecycleEmitter) EmitChatActivityDelta(ctx context.Context, event map[
 		e.metrics.RecordActivityFailure()
 		return fmt.Errorf("lifecycle emitter: marshal wire payload: %w", err)
 	}
-	if err := e.publisher.PublishSessionListEvent(ctx, owner, wirePayload); err != nil {
+	if err := e.publisher.PublishSessionListEvent(ctx, owner, e.scope, wirePayload); err != nil {
 		// Non-fatal: durable row already written; sidebar will catch up
 		// on cursor-resume.
 		slog.Warn("lifecycle emitter: publish failed",
 			"session_id", publicID,
 			"owner", owner,
+			"scope", e.scope,
 			"order_key", assigned.OrderKey,
 			"error", err,
 		)

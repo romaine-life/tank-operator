@@ -58,8 +58,8 @@ type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
 	PublishSessionEventWake(context.Context, string) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
-	PublishSessionListEvent(context.Context, string, []byte) error
-	SubscribeSessionListEvents(context.Context, string) (<-chan []byte, func(), error)
+	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
+	SubscribeSessionListEvents(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
