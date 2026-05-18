@@ -29,22 +29,26 @@ var (
 )
 
 type Info struct {
-	ID           string                            `json:"id"`
-	PodName      *string                           `json:"pod_name"`
-	Owner        string                            `json:"owner"`
-	Status       string                            `json:"status"`
-	Mode         string                            `json:"mode"`
-	RequestedAt  *string                           `json:"requested_at"`
-	CreatedAt    *string                           `json:"created_at"`
-	ReadyAt      *string                           `json:"ready_at"`
-	Name         *string                           `json:"name"`
-	TestState    map[string]any                    `json:"test_state"`
-	RolloutState map[string]any                    `json:"rollout_state"`
-	// Activity is the chat-derived sidebar indicator block. Populated by
-	// the ListByOwner read path from the latest session.activity_changed
-	// lifecycle event for this session; nil for sessions that haven't
-	// produced any chat activity yet. Replaces the per-session response of
-	// the deleted activity-polling endpoint.
+	ID           string         `json:"id"`
+	PodName      *string        `json:"pod_name"`
+	Owner        string         `json:"owner"`
+	Status       string         `json:"status"`
+	Mode         string         `json:"mode"`
+	RequestedAt  *string        `json:"requested_at"`
+	CreatedAt    *string        `json:"created_at"`
+	ReadyAt      *string        `json:"ready_at"`
+	Name         *string        `json:"name"`
+	TestState    map[string]any `json:"test_state"`
+	RolloutState map[string]any `json:"rollout_state"`
+	// RowVersion is the per-(owner, scope) monotonic cursor each
+	// sessions row carries (docs/session-list-redesign.md Phase 1).
+	// The SPA's SessionStore reads this to seed its EventSource
+	// cursor on snapshot bootstrap so the row-update catch-up only
+	// emits changes that landed AFTER the snapshot.
+	RowVersion int64 `json:"row_version"`
+	// Activity is the chat-derived sidebar indicator block. Sourced
+	// from the sessions.activity_summary column (Phase 2);
+	// nil for sessions that haven't produced any chat activity yet.
 	Activity *lifecycleevents.ActivitySummary `json:"activity,omitempty"`
 }
 
@@ -207,6 +211,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Name:         record.Name,
 		TestState:    record.TestState,
 		RolloutState: record.RolloutState,
+		RowVersion:   record.RowVersion,
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
 		info.Activity = activity

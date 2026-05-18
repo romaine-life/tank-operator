@@ -60,16 +60,14 @@ func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan stru
 	return make(chan struct{}), func() {}, nil
 }
 
-// PublishSessionListEvent + SubscribeSessionListEvents are the typed-event
-// successors of the prior opaque wake publish/subscribe pair retired in
-// tank-operator#83. Tests don't drive the sidebar SSE so the recorder
-// no-ops both; replace these stubs with capturing variants in dedicated
-// session-list tests when those land.
-func (*recordingSessionBus) PublishSessionListEvent(context.Context, string, string, []byte) error {
+// PublishSessionRowUpdate + SubscribeSessionRowUpdates are the row-
+// update wire surface (Phase 3 of docs/session-list-redesign.md).
+// Tests don't drive the sidebar SSE so the recorder no-ops both.
+func (*recordingSessionBus) PublishSessionRowUpdate(context.Context, string, string, []byte) error {
 	return nil
 }
 
-func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string, string) (<-chan []byte, func(), error) {
+func (*recordingSessionBus) SubscribeSessionRowUpdates(context.Context, string, string) (<-chan []byte, func(), error) {
 	return make(chan []byte), func() {}, nil
 }
 

@@ -1,27 +1,24 @@
 // Package sessioncontroller — RowWriter is the single write path that
-// all three lifecycle producers (K8s watch, chat-activity emitter,
-// and user-action Manager) call into. It owns the dual-write contract
-// for Phase 1 of docs/session-list-redesign.md:
+// the K8s watch and chat-activity emitter call into for pod-state and
+// chat-activity transitions. Per docs/session-list-redesign.md Phase
+// 3 it owns:
 //
-//  1. Append the durable session_lifecycle_events row (old path,
-//     consumed by today's SSE wire).
-//  2. UPDATE sessions row's new sidebar-visible columns (status,
-//     ready_at, terminating_at, activity_summary) plus row_version
-//     bump (new path, prepares Phase 2's row-direct snapshot and
-//     Phase 3's per-row UPDATE wire).
-//  3. Publish the typed lifecycle event on NATS (old path).
+//  1. The durable session_lifecycle_events append (retained until
+//     Phase 4 drops the table; not on the wire path).
+//  2. The sessions row UPDATE for the columns derived from the event
+//     (status, ready_at, terminating_at, activity_summary) plus the
+//     row_version bump.
+//  3. A row-update fan-out on the NATS row-update subject via
+//     RowPublisher, carrying the post-write row state.
 //
-// Phase 2 will drop step 1's read side (snapshot reads columns
-// instead of folding the ledger). Phase 3 will replace step 3's wire
-// shape. Phase 4 will drop step 1 entirely. Step 2 is the new
-// permanent write target.
+// User-action mutations (Manager.Create/Delete/SetName/etc.) take a
+// parallel path: they call the registry methods directly and the
+// Manager emits a row update via the same RowPublisher. The publish
+// shape is identical on both paths — the SPA never knows which
+// producer fired.
 //
 // Errors on step 2 are logged but non-fatal: the durable ledger row
-// already committed, so the SPA sees consistent state through the old
-// wire path. Phase 2's verification gate is the steady-state
-// invariant that no transition leaves the row out of sync, so failures
-// here MUST surface as a counter (Metrics.RecordRowUpdateFailure) and
-// alert.
+// already committed and Phase 4 will drop that fallback anyway.
 package sessioncontroller
 
 import (
@@ -36,13 +33,6 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 )
-
-// EventPublisher publishes one already-marshaled lifecycle-event
-// payload on the per-(owner, scope) NATS session-list events subject.
-// Satisfied by *sessionbus.Bus.
-type EventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
-}
 
 // RowWriterMetrics exposes the dual-write observability surface.
 // Wired to prometheus in cmd/tank-operator/observability.go. Steady-
@@ -82,28 +72,37 @@ const (
 	TransitionPublishFailed TransitionOutcome = "publish-failed"
 )
 
-// RowWriter is constructed once and called by all three producers
-// (K8s watch, chat-activity emitter, Manager). Safe for concurrent
-// use — every call site is its own goroutine. Postgres serializes
-// the row UPDATEs by primary key; the lifecycle store's Append is
-// idempotent via its unique constraint; NATS publish is fire-and-
-// forget per call.
+// RowEmitter is the narrow interface RowWriter calls to fan a row
+// update out to SSE clients. Satisfied by *RowPublisher in production;
+// tests pass a capture stub. Phase 3 deliberately decouples the
+// writer from the concrete publisher so the wire shape (NATS subject,
+// row marshaling) can be tested at one layer and the writer's
+// dual-write contract at another.
+type RowEmitter interface {
+	PublishCurrentRow(ctx context.Context, owner, sessionID string)
+}
+
+// RowWriter is constructed once and called by the K8s watch and
+// chat-activity emitter. Safe for concurrent use — every call site is
+// its own goroutine. Postgres serializes the row UPDATEs by primary
+// key; the lifecycle store's Append is idempotent via its unique
+// constraint; row-update publishes are fire-and-forget per call.
 type RowWriter struct {
-	Store     lifecycleevents.Store
-	Publisher EventPublisher
-	Pool      *pgxpool.Pool
-	Metrics   RowWriterMetrics
+	Store   lifecycleevents.Store
+	Emitter RowEmitter
+	Pool    *pgxpool.Pool
+	Metrics RowWriterMetrics
 }
 
 // NewRowWriter validates the required dependencies and applies metric
 // defaults. Returns an error rather than panicking so the orchestrator
 // startup path can surface misconfiguration clearly.
-func NewRowWriter(store lifecycleevents.Store, publisher EventPublisher, pool *pgxpool.Pool, metrics RowWriterMetrics) (*RowWriter, error) {
+func NewRowWriter(store lifecycleevents.Store, emitter RowEmitter, pool *pgxpool.Pool, metrics RowWriterMetrics) (*RowWriter, error) {
 	if store == nil {
 		return nil, fmt.Errorf("sessioncontroller: RowWriter requires a lifecycleevents.Store")
 	}
-	if publisher == nil {
-		return nil, fmt.Errorf("sessioncontroller: RowWriter requires an EventPublisher")
+	if emitter == nil {
+		return nil, fmt.Errorf("sessioncontroller: RowWriter requires a RowEmitter")
 	}
 	// pool may be nil in stub-mode local dev: row-column updates
 	// silently skip in that case (the ledger + NATS path remains
@@ -113,10 +112,10 @@ func NewRowWriter(store lifecycleevents.Store, publisher EventPublisher, pool *p
 		metrics = noopRowWriterMetrics{}
 	}
 	return &RowWriter{
-		Store:     store,
-		Publisher: publisher,
-		Pool:      pool,
-		Metrics:   metrics,
+		Store:   store,
+		Emitter: emitter,
+		Pool:    pool,
+		Metrics: metrics,
 	}, nil
 }
 
@@ -162,25 +161,19 @@ func (w *RowWriter) RecordTransition(ctx context.Context, event lifecycleevents.
 	}
 
 	if alreadyExists {
-		// Resync or replica race — the previous emit already published.
-		// Skipping the wire publish here is what prevents re-rendering
-		// an old transition on connected clients.
+		// Resync or replica race — the previous emit already published
+		// the row. Skipping the wire publish here is what prevents the
+		// SPA from re-rendering an already-seen transition on connected
+		// clients.
 		return TransitionDeduped, nil
 	}
 
-	payload, err := json.Marshal(assigned)
-	if err != nil {
-		return "", fmt.Errorf("sessioncontroller: marshal wire payload: %w", err)
-	}
-	if err := w.Publisher.PublishSessionListEvent(ctx, assigned.Email, assigned.SessionScope, payload); err != nil {
-		slog.Warn("sessioncontroller: publish failed",
-			"session_id", assigned.SessionID,
-			"scope", assigned.SessionScope,
-			"type", assigned.Type,
-			"error", err,
-		)
-		return TransitionPublishFailed, nil
-	}
+	// Publish the row's current state to the SPA. The post-update row
+	// is fetched fresh so the wire payload reflects the latest
+	// committed state across BOTH the column update above AND any
+	// concurrent registry mutation (e.g., Manager.SetName racing with a
+	// K8s pod_ready transition). The fetch is one indexed PK lookup.
+	w.Emitter.PublishCurrentRow(ctx, assigned.Email, assigned.SessionID)
 	return TransitionEmitted, nil
 }
 

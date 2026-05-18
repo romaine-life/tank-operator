@@ -226,8 +226,9 @@ spec:
               this physically unreachable in steady state, so this is a
               producer-side regression — most likely
               `sessioncontroller.RowWriter.RecordTransition` or one of
-              its callers passing a stale scope to
-              `PublishSessionListEvent`. Inspect orchestrator logs for
+              its callers passing a stale scope to the row-update
+              publisher. Inspect orchestrator logs for
+              `session row payload dropped: scope mismatch` or
               `session list payload dropped: scope mismatch`.
 
     - name: tank-operator.nats

@@ -104,16 +104,15 @@ import {
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
-  applySessionListEvent,
-  normalizeSessionListEvent,
-  type SessionListReducerState,
-} from "./sessionListEvents";
+  SessionStore,
+  normalizeSessionRowUpdate,
+  type SessionRow,
+} from "./sessionStore";
 import {
   logSessionListEvent,
   logSessionListSnapshot,
   logSessionListSseOpen,
   logSessionListStreamSignal,
-  notePlaceholderSynthesized,
 } from "./sessionListTelemetry";
 import {
   isDurableTankConversationEvent,
@@ -7447,14 +7446,13 @@ export function App() {
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
   const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>({});
-  // lifecycleTipRef holds the Tank-Lifecycle-Tip-Order-Key header value
-  // from the most recent /api/sessions snapshot. The SSE useEffect seeds
-  // its cursor from this on cold open so the server's catch-up replay
-  // only emits events that landed AFTER the snapshot — without it, the
-  // SSE handler fast-forwards an empty cursor to current tip but loses
-  // any events that landed during the snapshot query itself. Updated by
-  // refresh() after each successful snapshot fetch.
-  const lifecycleTipRef = useRef<string | null>(null);
+  // sessionStoreRef holds the client-side reconciler for the sidebar
+  // (docs/session-list-redesign.md Phase 3). It owns the row cache,
+  // the tombstone set, and the cursor. React state (sessions /
+  // sessionActivities) is derived from store.list() on every store
+  // event; the optimistic-delete handshake goes through
+  // store.optimisticDelete BEFORE the DELETE API call.
+  const sessionStoreRef = useRef<SessionStore>(new SessionStore());
   // Bootstrap-suppression for the turn-complete sound. With lifecycleTipRef
   // seeding the SSE cursor, the server no longer replays the full ledger
   // on cold open — only events past the tip. Still, refresh() races with
@@ -7535,23 +7533,75 @@ export function App() {
   // endpoint is gone (tank-operator#83). Steady-state updates after the
   // initial snapshot flow through the typed SSE stream; refresh() is
   // only used for first-load and post-resync reseeding.
+  // rowToSession projects one SessionStore row back into the
+  // SPA's Session shape for React-state consumption. The wire row's
+  // fields align one-for-one with Session's so this is mostly a
+  // field-copy with type coercions for the optional fields.
+  function rowToSession(row: SessionRow): Session {
+    return {
+      id: row.id,
+      pod_name: row.pod_name ?? null,
+      owner: row.owner,
+      status: row.status,
+      mode: row.mode as SessionMode,
+      requested_at: row.requested_at ?? null,
+      created_at: row.created_at ?? null,
+      ready_at: row.ready_at ?? null,
+      name: row.name ?? null,
+      test_state: (row.test_state as TestState | undefined) ?? null,
+      rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      activity: undefined, // activities live in the parallel sessionActivities map
+    };
+  }
+
+  // infoJSONToSessionRow converts one item from GET /api/sessions
+  // into the wire-shape row the SessionStore caches. Field names align
+  // one-for-one with the backend rowWireShape (Phase 3) so this is a
+  // copy with snapshot-only defaults (visible=true; session_scope
+  // unused at render).
+  function infoJSONToSessionRow(raw: any): SessionRow {
+    return {
+      id: String(raw.id ?? ""),
+      owner: String(raw.owner ?? ""),
+      mode: String(raw.mode ?? "claude_gui"),
+      session_scope: "default",
+      pod_name: raw.pod_name ?? undefined,
+      name: raw.name ?? null,
+      visible: true,
+      status: String(raw.status ?? "Pending"),
+      requested_at: raw.requested_at ?? undefined,
+      created_at: raw.created_at ?? undefined,
+      ready_at: raw.ready_at ?? undefined,
+      activity_summary: raw.activity ?? undefined,
+      test_state: raw.test_state ?? undefined,
+      rollout_state: raw.rollout_state ?? undefined,
+      row_version: typeof raw.row_version === "number" ? raw.row_version : 0,
+    };
+  }
+
   async function refresh() {
     try {
       const res = await authedFetch("/api/sessions");
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
-      // The server stamps the latest session_lifecycle_events order_key
-      // for this (owner, scope) at snapshot time. Threading it into the
-      // SSE cursor before /api/sessions/events opens means catch-up only
-      // emits events strictly after the snapshot — closes the race
-      // window without replaying history. See
-      // docs/product-inspirations.md: "Reconnect resumes from a cursor
-      // over persisted events" — that cursor must start at the snapshot
-      // tip on cold open, not at order_key=0.
-      const tip = res.headers.get("Tank-Lifecycle-Tip-Order-Key");
-      lifecycleTipRef.current = tip && tip.trim() !== "" ? tip : null;
-      const listed: Session[] = (await res.json()).map(normalizeSession);
+      // Tank-Sessions-Snapshot-Cursor carries MAX(row_version) at
+      // snapshot time. Seeding the SessionStore with it closes the
+      // race between the snapshot query and the SSE open — the
+      // row-update catch-up only emits changes after the snapshot's
+      // cursor. See docs/product-inspirations.md: "Reconnect resumes
+      // from a cursor over persisted events."
+      const snapshotCursor = res.headers.get("Tank-Sessions-Snapshot-Cursor");
+      const rawList = await res.json();
+      const listed: Session[] = rawList.map(normalizeSession);
+      // Feed the SessionStore from the same Info[] payload so the
+      // row cache, tombstones, and cursor stay in lockstep with what
+      // the SPA renders. The infoJSONToSessionRow helper maps Info
+      // JSON onto the wire-shape SessionRow.
+      sessionStoreRef.current.applySnapshot(
+        rawList.map(infoJSONToSessionRow),
+        snapshotCursor,
+      );
       logSessionListSnapshot({
-        tip: lifecycleTipRef.current,
+        tip: snapshotCursor,
         sessionCount: listed.length,
         source: "initial",
       });
@@ -7683,25 +7733,24 @@ export function App() {
 
     const open = () => {
       if (cancelled) return;
-      // Cold open: seed the cursor from the snapshot's
-      // Tank-Lifecycle-Tip-Order-Key. The server's catch-up will then
-      // emit only events strictly after that cursor — no
-      // replay-from-zero, no resurrection of deleted sessions via the
-      // reducer's placeholder-synthesis branch on stale pod events. If
-      // the snapshot didn't carry a tip (e.g. first request after
-      // backend roll, or the lifecycle ledger is empty), the server
-      // fast-forwards an empty cursor itself.
-      if (!cursorRef.current && lifecycleTipRef.current) {
-        cursorRef.current = lifecycleTipRef.current;
+      // Cold open: seed the cursor from the SessionStore (which was
+      // primed by the snapshot's Tank-Sessions-Snapshot-Cursor
+      // header). The server's catch-up will then emit only row
+      // updates strictly after that cursor — no replay-from-zero,
+      // no resurrection of deleted sessions. If the store has no
+      // cursor (first request after backend roll, fresh owner),
+      // the server fast-forwards an empty cursor itself.
+      if (!cursorRef.current) {
+        cursorRef.current = sessionStoreRef.current.getCursor();
       }
       const params = new URLSearchParams();
-      if (cursorRef.current) params.set("last_order_key", cursorRef.current);
+      if (cursorRef.current) params.set("after_row_version", cursorRef.current);
       logSessionListSseOpen(cursorRef.current);
       const query = params.toString();
       source = new EventSource(`/api/sessions/events${query ? `?${query}` : ""}`, {
         withCredentials: true,
       });
-      source.addEventListener("session-event", (event) => {
+      source.addEventListener("session-row", (event) => {
         const message = event as MessageEvent;
         let parsed: unknown;
         try {
@@ -7709,96 +7758,69 @@ export function App() {
         } catch {
           return;
         }
-        const normalized = normalizeSessionListEvent(parsed);
-        if (!normalized) return;
-        logSessionListEvent(normalized);
-        cursorRef.current = normalized.order_key;
-        // Reducer mutates both the sessions list and the activities
-        // map in one pass; React batches the two setState calls into a
-        // single render. The onPlaceholderSynthesized callback fires
-        // the bug-detection beacon (see sessionListTelemetry); the
-        // reducer itself stays pure for unit tests, which don't pass
-        // the callback.
-        const state: SessionListReducerState<Session> = {
-          sessions: sessionsRef.current,
-          activities: sessionActivitiesRef.current,
-        };
-        const priorActivity = state.activities[normalized.session_id];
-        const next = applySessionListEvent(state, normalized, {
-          onPlaceholderSynthesized: notePlaceholderSynthesized,
+        const payload = normalizeSessionRowUpdate(parsed);
+        if (!payload) return;
+        logSessionListEvent({
+          type: "session.row_update",
+          session_id: payload.row.id,
+          session_scope: payload.row.session_scope,
+          order_key: payload.cursor,
         });
-        if (next.sessions !== state.sessions) {
-          const ordered = user
-            ? orderSessions(next.sessions, readSessionOrder(sessionOrderStorageKey(user)))
-            : next.sessions;
-          setSessions(ordered);
-          // Synchronously mirror to the ref. The ref-sync useEffect
-          // below only fires after React's next render, which can lag
-          // an entire SSE burst — see the activities comment for the
-          // race that broke the turn-complete sound.
-          sessionsRef.current = ordered;
+        cursorRef.current = payload.cursor;
+
+        // Capture pre-apply state so the turn-complete sound logic
+        // can compare prior vs next activity. Once store.applyRowUpdate
+        // runs, the prior row is gone.
+        const store = sessionStoreRef.current;
+        const priorActivity = store.activityForRender(payload.row.id);
+
+        const changed = store.applyRowUpdate(payload);
+        if (!changed) {
+          return; // tombstoned drop or unchanged — no React state churn
         }
-        if (next.activities !== state.activities) {
-          setSessionActivities(next.activities);
-          // CRITICAL: sync ref synchronously. Without this, back-to-back
-          // session.activity_changed events arriving in microseconds
-          // (turn lifecycle is submitted → streaming → ready, three
-          // events in rapid succession) all read the same stale prior
-          // from this ref because the ref-sync useEffect only runs
-          // after React's next render. That made every transition look
-          // like "ready → ready" / "ready → submitted" / "ready →
-          // streaming" and the predicate ("prior must be working") never
-          // fired. The Test button still worked because it bypasses the
-          // predicate. Fixing the race here is what makes the sound ring.
-          sessionActivitiesRef.current = next.activities;
+
+        // Derive sessions[] + activities from the store. The
+        // ordering pass mirrors what refresh() does on snapshot.
+        const rows = store.list();
+        const sessionsFromStore: Session[] = rows.map(rowToSession);
+        const ordered = user
+          ? orderSessions(sessionsFromStore, readSessionOrder(sessionOrderStorageKey(user)))
+          : sessionsFromStore;
+        setSessions(ordered);
+        sessionsRef.current = ordered;
+
+        const nextActivities: Record<string, SessionActivitySummary> = {};
+        for (const id of rows.map((r) => r.id)) {
+          const act = store.activityForRender(id);
+          if (act) nextActivities[id] = act;
         }
-        // Turn-complete sound. The activity_changed event is the
-        // canonical "your turn now" signal on the always-on
-        // /api/sessions/events stream; routing the sound through here
-        // (rather than ChatPane's per-session SSE) is what fixes the
-        // "only rings when I return to the session" regression. Gates:
-        //   1. snapshot-applied: silence the cursor-empty replay that
-        //      arrives on every fresh page load.
-        //   2. per-session last_order_key dedup: silence events whose
-        //      chat-ledger order is already represented in the snapshot
-        //      or a prior ring. Replays after reconnect can't re-ring.
-        //   3. shouldRingForActivityTransition: predicate restricts to
-        //      working -> user-action transitions (see test matrix).
-        //   4. turnCompleteSoundOnVisible: respect the "ping on open
-        //      chats" pref (default on). Mattermost/Element suppress
-        //      the chat ping when actively viewing the channel; we let
-        //      the user pick because the sound here is a "your turn"
-        //      state signal, not a message-arrival ping.
+        setSessionActivities(nextActivities);
+        sessionActivitiesRef.current = nextActivities;
+
+        // Turn-complete sound. Adapted to the row-update wire: the
+        // row's activity_summary field carries the same activity
+        // shape sessionActivities renders against. Compare prior
+        // activity (snapshot before applyRowUpdate) against next.
+        // Gates unchanged: snapshot-applied, per-session
+        // last_order_key dedup, shouldRingForActivityTransition,
+        // turnCompleteSoundOnVisible.
+        const nextActivity = store.activityForRender(payload.row.id);
         if (
-          normalized.type === "session.activity_changed" &&
-          activitySnapshotAppliedRef.current
+          activitySnapshotAppliedRef.current &&
+          nextActivity &&
+          nextActivity.last_order_key
         ) {
-          const nextActivity = next.activities[normalized.session_id];
-          const nextLastOrderKey = nextActivity?.last_order_key ?? null;
-          if (nextActivity && nextLastOrderKey) {
-            const priorRing = lastSoundedOrderKeyRef.current.get(
-              normalized.session_id,
-            );
-            // Numeric compare via orderKeyAfter — lexicographic string
-            // compare ("100" <= "99" is true) silenced every transition
-            // that crossed a power-of-ten ledger order_key boundary.
-            const alreadyRepresented =
-              priorRing != null && !orderKeyAfter(nextLastOrderKey, priorRing);
-            if (!alreadyRepresented) {
-              // Always advance the dedup watermark so a stuck-at state
-              // (e.g. repeated needs_input) can't ring twice for the
-              // same chat order even if predicate logic widens later.
-              lastSoundedOrderKeyRef.current.set(
-                normalized.session_id,
-                nextLastOrderKey,
-              );
-              if (shouldRingForActivityTransition(priorActivity, nextActivity)) {
-                const isVisible = activeRef.current === normalized.session_id;
-                const suppressForVisible =
-                  isVisible && !runPrefsRef.current.turnCompleteSoundOnVisible;
-                if (!suppressForVisible) {
-                  playTurnCompleteSound();
-                }
+          const priorRing = lastSoundedOrderKeyRef.current.get(payload.row.id);
+          const alreadyRepresented =
+            priorRing != null && !orderKeyAfter(nextActivity.last_order_key, priorRing);
+          if (!alreadyRepresented) {
+            lastSoundedOrderKeyRef.current.set(payload.row.id, nextActivity.last_order_key);
+            if (shouldRingForActivityTransition(priorActivity ?? undefined, nextActivity)) {
+              const isVisible = activeRef.current === payload.row.id;
+              const suppressForVisible =
+                isVisible && !runPrefsRef.current.turnCompleteSoundOnVisible;
+              if (!suppressForVisible) {
+                playTurnCompleteSound();
               }
             }
           }
@@ -8196,6 +8218,13 @@ export function App() {
   async function deleteSession(id: string) {
     if (closingIds.has(id)) return;
     setError(null);
+    // Optimistic delete in the SessionStore (Phase 3): tombstones the
+    // id immediately, so any subsequent server-side wire payload for
+    // this id (post-delete pod-informer events, etc.) is dropped at
+    // the store boundary. If the DELETE API call fails, refresh()
+    // will rehydrate from the snapshot and clear the tombstone for
+    // ids the server still considers visible — recovery for free.
+    sessionStoreRef.current.optimisticDelete(id);
     setClosingIds((prev) => new Set(prev).add(id));
     setMounted((prev) => {
       if (!prev.has(id)) return prev;

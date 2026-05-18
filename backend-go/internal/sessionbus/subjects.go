@@ -72,30 +72,27 @@ func WakeSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.wake", liveRoot, StorageToken(sessionStorageKey))
 }
 
-// SessionListEventSubject names the per-(owner, scope) typed-event subject
-// that carries session_lifecycle_events Append payloads to the sidebar SSE
-// handlers. Replaces the prior opaque wake subject (an empty-payload
-// resync trigger) per tank-operator#83 — see
-// docs/product-inspirations.md "Work delivery should use a real
-// command/event fabric. Browser polling, process memory fanout, and
-// database polling are not the normal live path for app-managed GUI
-// chat." The wire payload is one lifecycleevents.Event JSON document;
-// SSE handlers forward it to clients verbatim.
+// SessionRowUpdateSubject names the per-(owner, scope) row-update
+// subject that carries one sessions-table row's current state to the
+// sidebar SSE handlers. Per docs/session-list-redesign.md Phase 3
+// this replaces the typed-event subject the post-#83 architecture
+// used; the wire payload is now the row itself (a snapshot of the
+// current state for one session_id), not a typed event. The SPA's
+// SessionStore is a row cache that replaces-by-id on each delivery —
+// no event-type switch, no placeholder synthesis, no reducer
+// resurrection paths.
 //
-// Scope is part of the subject because every other partition of the
-// durable system uses (email, session_scope) as the natural key — the
-// session_lifecycle_events row PK, the registry PK, the per-scope
-// session_id allocator. An email-only subject conflated prod and slot
-// environments that share the same Postgres + NATS broker (one row in
-// prod's sidebar per slot session, deletes that came back when a slot
-// republished session.created on resync). The subject now matches the
-// durable partition so cross-scope events are unreachable on the wire,
-// not filtered after delivery.
-func SessionListEventSubject(email, scope string) string {
+// Scope is part of the subject because the durable partition is
+// (email, session_scope): the sessions row PK, the per-scope
+// session_id allocator. Cross-scope environments sharing one
+// Postgres + NATS broker (prod + test slots) cannot deliver row
+// updates to each other on the wire — the cross-scope leak class is
+// physically impossible at the subject layer.
+func SessionRowUpdateSubject(email, scope string) string {
 	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
 	normalizedScope := strings.TrimSpace(scope)
 	return fmt.Sprintf(
-		"%s.sessions.%s.%s.events",
+		"%s.sessions.%s.%s.rows",
 		liveRoot,
 		base64.RawURLEncoding.EncodeToString([]byte(normalizedEmail)),
 		base64.RawURLEncoding.EncodeToString([]byte(normalizedScope)),

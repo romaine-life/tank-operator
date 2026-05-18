@@ -52,15 +52,10 @@ type Store interface {
 
 	// LatestOrderKey returns the highest order_key in
 	// session_lifecycle_events for one (owner, scope), or "" if the
-	// owner has no rows. Used by handleListSessions to stamp the
-	// Tank-Lifecycle-Tip-Order-Key response header at snapshot time,
-	// and by the SSE handler to fast-forward an empty cursor to the
-	// current tip (so cold opens don't replay history from
-	// order_key=0). Replaces the pre-tank-operator#525 cold-open behavior
-	// where the SSE handler emitted every historical event past
-	// cursor="", which let pod-status events that landed after a
-	// session.deleted in the ledger resurrect the row via the
-	// reducer's placeholder-synthesis branch.
+	// owner has no rows. Retired from the live wire path after
+	// docs/session-list-redesign.md Phase 3 (the row-update wire
+	// uses sessions.row_version as its cursor); kept on the
+	// interface until Phase 4 drops the lifecycle store entirely.
 	LatestOrderKey(ctx context.Context, owner, scope string) (string, error)
 
 	// LatestActivity returns the most recent session.activity_changed

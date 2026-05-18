@@ -24,10 +24,10 @@ type Config struct {
 	Replicas int
 	// WakeMetrics is optional. When set, publish failures inside
 	// PublishSessionEventWake (chat per-session wake) and
-	// PublishSessionListEvent (typed sidebar event) increment the
-	// supplied counters before returning the error to the caller, so
-	// silent fire-and-forget call sites still produce telemetry on a
-	// NATS outage.
+	// PublishSessionRowUpdate (sidebar row-update wire) increment
+	// the supplied counters before returning the error to the
+	// caller, so silent fire-and-forget call sites still produce
+	// telemetry on a NATS outage.
 	WakeMetrics WakeMetrics
 	// ConnectionMetrics is optional. When set, the bus wires the NATS
 	// disconnect / reconnect / async-error connection callbacks to the
@@ -57,10 +57,10 @@ type EventStore interface {
 
 // LifecycleEmitter is the hook the persister calls after a successful
 // chat-event upsert so a session.activity_changed lifecycle row can be
-// derived and published on the per-owner session-list events subject.
-// The implementation lives in cmd/tank-operator and bridges
-// lifecycleevents.Store + Bus.PublishSessionListEvent — kept as an
-// interface here so this package doesn't depend on lifecycleevents.
+// derived and published on the per-owner row-update subject. The
+// implementation lives in internal/sessioncontroller and bridges
+// lifecycleevents.Store + the RowPublisher — kept as an interface
+// here so this package doesn't depend on lifecycleevents.
 //
 // Emit-or-skip is the emitter's decision (a no-op delta returns nil
 // without writing). Errors are logged by the persister and otherwise
@@ -263,21 +263,24 @@ func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey strin
 	return nil
 }
 
-// PublishSessionListEvent publishes one typed lifecycle-event payload on
-// the per-(owner, scope) session-list events subject. The SSE handler on
+// PublishSessionRowUpdate publishes one sessions-row snapshot on the
+// per-(owner, scope) row-update subject. The SSE handler on
 // /api/sessions/events forwards the payload verbatim to subscribed
-// clients — there is no separate wake-and-refetch step. Replaces the
-// prior opaque resync-trigger publish per tank-operator#83. Steady-state
-// expectation: zero publish failures; a failure here means NATS is down,
-// in which case SSE clients fall back to the durable Postgres replay on
-// reconnect.
+// clients; the SPA's SessionStore replaces its row cache by
+// session_id. Per docs/session-list-redesign.md Phase 3, this
+// replaces the typed-event publish path entirely; the wire is the
+// row, not an event-type discriminator.
 //
-// Scope must match the lifecycleevents row's session_scope field. Passing
+// Steady-state expectation: zero publish failures; a failure here
+// means NATS is down, in which case SSE clients fall back to the
+// durable Postgres replay (sessions table) on reconnect.
+//
+// Scope must match the sessions row's session_scope field. Passing
 // the wrong scope here is the failure mode the (email, scope) subject
-// shape is designed to make impossible — events publish to a subject no
-// other-scope subscriber is listening on, so cross-scope leakage is a
-// wire-shape impossibility instead of a delivery-time filter.
-func (b *Bus) PublishSessionListEvent(_ context.Context, email, scope string, payload []byte) error {
+// shape is designed to make impossible — payloads publish to a
+// subject no other-scope subscriber is listening on, so cross-scope
+// leakage is a wire-shape impossibility.
+func (b *Bus) PublishSessionRowUpdate(_ context.Context, email, scope string, payload []byte) error {
 	if b == nil {
 		return fmt.Errorf("session bus unavailable")
 	}
@@ -285,36 +288,35 @@ func (b *Bus) PublishSessionListEvent(_ context.Context, email, scope string, pa
 		return nil
 	}
 	if strings.TrimSpace(scope) == "" {
-		return fmt.Errorf("session list event scope is required")
+		return fmt.Errorf("session row update scope is required")
 	}
 	if len(payload) == 0 {
-		return fmt.Errorf("session list event payload is empty")
+		return fmt.Errorf("session row update payload is empty")
 	}
-	if err := b.nc.Publish(SessionListEventSubject(email, scope), payload); err != nil {
+	if err := b.nc.Publish(SessionRowUpdateSubject(email, scope), payload); err != nil {
 		b.wakeMetrics.RecordSessionListEventPublishFailed()
-		slog.Warn("session list event publish failed",
+		slog.Warn("session row update publish failed",
 			"email", email, "scope", scope, "error", err)
 		return err
 	}
 	return nil
 }
 
-// SubscribeSessionListEvents returns a channel that receives each typed
-// lifecycle-event payload published for the (owner, scope) pair. Channel
-// cap is 64 to absorb short bursts (pod-informer can emit several
-// transitions in quick succession during pod startup); if the consumer
-// falls further behind, payloads are dropped at the NATS-subscription
-// callback and the consumer's next reconnect cursor-resume catches up
-// from Postgres.
-func (b *Bus) SubscribeSessionListEvents(ctx context.Context, email, scope string) (<-chan []byte, func(), error) {
+// SubscribeSessionRowUpdates returns a channel that receives each
+// sessions-row snapshot published for the (owner, scope) pair.
+// Channel cap is 64 to absorb short bursts; if the consumer falls
+// further behind, payloads are dropped at the NATS-subscription
+// callback and the consumer's next reconnect cursor-resume catches
+// up from the sessions table.
+func (b *Bus) SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
 	if strings.TrimSpace(scope) == "" {
-		return nil, func() {}, fmt.Errorf("session list event scope is required")
+		return nil, func() {}, fmt.Errorf("session row update scope is required")
 	}
 	ch := make(chan []byte, 64)
-	sub, err := b.nc.Subscribe(SessionListEventSubject(email, scope), func(msg *nats.Msg) {
+	sub, err := b.nc.Subscribe(SessionRowUpdateSubject(email, scope), func(msg *nats.Msg) {
 		// Copy the data slice — the NATS client reuses the underlying
 		// buffer across deliveries.
 		payload := make([]byte, len(msg.Data))
