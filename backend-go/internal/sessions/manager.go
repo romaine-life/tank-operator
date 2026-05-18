@@ -34,6 +34,8 @@ type SessionRegistry interface {
 	NextSessionID(ctx context.Context) (string, error)
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
+	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -301,8 +303,44 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		return Info{}, fmt.Errorf("manifest unmarshal: %w", err)
 	}
 
+	// Phase 2 write-order inversion (docs/session-list-redesign.md):
+	// registry row goes in BEFORE the K8s pod create. The pre-Phase-2
+	// order was pod-create-first, registry-second, which left a brief
+	// race window where Reader.List would see a pod without a registry
+	// row and fall through to the pod-fallback path — the path that
+	// resurrected just-deleted sessions during the ~75s pod-termination
+	// window. Reader.List no longer reads pods at all, so this window
+	// becomes "session created but not yet visible to the snapshot,"
+	// which is fine: the POST response carries the Info directly to
+	// the SPA which adds it optimistically; the next snapshot finds it.
+	//
+	// On pod-create failure after the registry write succeeds, we mark
+	// the row visible=false so the snapshot stops returning it.
+	podName := "session-" + sessionID
+	if m.registry != nil {
+		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
+			ID:          sessionID,
+			Email:       owner,
+			Mode:        mode,
+			Scope:       m.manifestOpts.SessionScope,
+			PodName:     podName,
+			Visible:     true,
+			RequestedAt: requestedAt,
+			UpdatedAt:   requestedAt,
+		}); regErr != nil {
+			slog.Warn("create registry upsert failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+
 	created, err := m.client.CoreV1().Pods(m.namespace).Create(ctx, &pod, metav1.CreateOptions{})
 	if err != nil {
+		if m.registry != nil {
+			if delErr := m.registry.MarkDeleted(ctx, owner, sessionID); delErr != nil {
+				slog.Warn("create rollback: registry mark-deleted failed",
+					"session_id", sessionID, "owner", owner, "error", delErr)
+			}
+		}
 		return Info{}, fmt.Errorf("create pod: %w", err)
 	}
 
@@ -316,7 +354,6 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		s := created.CreationTimestamp.UTC().Format("2006-01-02T15:04:05+00:00")
 		createdAt = &s
 	}
-	podName := created.Name
 
 	info := Info{
 		ID:          sessionID,
@@ -328,7 +365,9 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		CreatedAt:   createdAt,
 	}
 
-	if m.registry != nil {
+	// Refresh the registry row with the K8s-assigned created_at so the
+	// snapshot's CreatedAt matches the pod object's creation timestamp.
+	if m.registry != nil && createdAt != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
 			ID:          sessionID,
 			Email:       owner,
@@ -337,10 +376,10 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 			PodName:     podName,
 			Visible:     true,
 			RequestedAt: requestedAt,
-			CreatedAt:   orEmpty(createdAt),
+			CreatedAt:   *createdAt,
 			UpdatedAt:   requestedAt,
 		}); regErr != nil {
-			slog.Warn("create registry upsert failed",
+			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
@@ -444,7 +483,11 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
-// SetTestState updates the test-state annotation on the pod.
+// SetTestState updates the row's test_state column AND patches the
+// matching pod annotation (the session-agent reads the annotation via
+// the projected downward-API volume). Both writes are load-bearing in
+// steady state: the column is the snapshot-facing replica;
+// the annotation is what the agent code path consults.
 func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, active bool, slotIndex *int, url *string) (Info, error) {
 	state := map[string]any{"active": active}
 	if slotIndex != nil {
@@ -454,25 +497,39 @@ func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, act
 		state["url"] = *url
 	}
 	raw, _ := json.Marshal(state)
-	return m.patchAnnotation(ctx, owner, sessionID,
+	return m.patchStateAnnotation(ctx, owner, sessionID,
 		"tank-operator/test-state", string(raw),
-		lifecycleevents.EventTypeTestStateChanged, "test_state_changed", state)
+		lifecycleevents.EventTypeTestStateChanged, "test_state_changed", state,
+		func(c context.Context) error {
+			if m.registry == nil {
+				return nil
+			}
+			return m.registry.SetTestState(c, owner, sessionID, state)
+		})
 }
 
-// SetRolloutState updates the rollout-state annotation on the pod.
+// SetRolloutState updates the row's rollout_state column AND patches
+// the matching pod annotation. Same shape as SetTestState.
 func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, active bool) (Info, error) {
 	state := map[string]any{"active": active}
 	raw, _ := json.Marshal(state)
-	return m.patchAnnotation(ctx, owner, sessionID,
+	return m.patchStateAnnotation(ctx, owner, sessionID,
 		"tank-operator/rollout-state", string(raw),
-		lifecycleevents.EventTypeRolloutStateChanged, "rollout_state_changed", state)
+		lifecycleevents.EventTypeRolloutStateChanged, "rollout_state_changed", state,
+		func(c context.Context) error {
+			if m.registry == nil {
+				return nil
+			}
+			return m.registry.SetRolloutState(c, owner, sessionID, state)
+		})
 }
 
-func (m *Manager) patchAnnotation(
+func (m *Manager) patchStateAnnotation(
 	ctx context.Context,
 	owner, sessionID, annotation, value string,
 	eventType, eventIDPrefix string,
 	payload map[string]any,
+	writeColumn func(context.Context) error,
 ) (Info, error) {
 	patch := map[string]any{
 		"metadata": map[string]any{
@@ -486,6 +543,13 @@ func (m *Manager) patchAnnotation(
 	}
 	if _, patchErr := m.client.CoreV1().Pods(m.namespace).Patch(ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{}); patchErr != nil && !k8serrors.IsNotFound(patchErr) {
 		return Info{}, fmt.Errorf("patch annotation %s: %w", annotation, patchErr)
+	}
+	if writeColumn != nil {
+		if err := writeColumn(ctx); err != nil {
+			slog.Warn("session-state column write failed",
+				"session_id", sessionID, "owner", owner,
+				"annotation", annotation, "error", err)
+		}
 	}
 	m.emitLifecycle(ctx, lifecycleevents.Event{
 		Email:        owner,
@@ -623,11 +687,7 @@ func (m *Manager) reader() *Reader {
 	if m.registry != nil {
 		reg = &registryAdapter{m.registry}
 	}
-	var lifecycleSrc LifecycleStatusSource
-	if statusSrc, ok := m.lifecycle.(LifecycleStatusSource); ok {
-		lifecycleSrc = statusSrc
-	}
-	return NewReaderFull(m.client, m.namespace, reg, lifecycleSrc, m.scope)
+	return NewReaderFull(m.client, m.namespace, reg, m.scope)
 }
 
 // registryAdapter wraps the write-capable SessionRegistry into a read-only Registry.

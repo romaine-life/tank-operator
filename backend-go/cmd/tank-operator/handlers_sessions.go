@@ -45,6 +45,12 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 // correctness with a small race window (events landing during the
 // snapshot query). Extracted from handleListSessions so the contract
 // is unit-testable without standing up the full Manager stub.
+//
+// Phase 3 of docs/session-list-redesign.md retires this header in
+// favor of stampSnapshotCursorHeader (the per-row-UPDATE wire reads
+// row_version, not order_key). Both headers are stamped during Phase
+// 2 so the SPA can be cut over in Phase 3's PR without a wire-shape
+// rollout race.
 func (s *appServer) stampLifecycleTipHeader(ctx context.Context, w http.ResponseWriter, owner string) {
 	if s.lifecycleEvents == nil {
 		return
@@ -59,6 +65,34 @@ func (s *appServer) stampLifecycleTipHeader(ctx context.Context, w http.Response
 		return
 	}
 	w.Header().Set("Tank-Lifecycle-Tip-Order-Key", tip)
+}
+
+// stampSnapshotCursorHeader writes Tank-Sessions-Snapshot-Cursor —
+// the per-row-UPDATE wire's cursor, MAX(row_version) for (owner,
+// scope) at snapshot time. Phase 3 of docs/session-list-redesign.md
+// wires the SPA to read this header and seed its SSE cursor from it,
+// replacing the lifecycle-ledger-based cursor entirely. Emitted now
+// (Phase 2) so the wire-shape rollout in Phase 3 doesn't depend on a
+// coordinated client+server cutover.
+func (s *appServer) stampSnapshotCursorHeader(ctx context.Context, w http.ResponseWriter, owner string) {
+	if s.pgPool == nil {
+		return
+	}
+	const q = `
+		SELECT COALESCE(MAX(row_version), 0)
+		FROM sessions
+		WHERE email = $1 AND session_scope = $2
+	`
+	var cursor int64
+	if err := s.pgPool.QueryRow(ctx, q, owner, s.sessionScope).Scan(&cursor); err != nil {
+		slog.Warn("list sessions: snapshot cursor lookup failed",
+			"owner", owner, "scope", s.sessionScope, "error", err)
+		return
+	}
+	if cursor == 0 {
+		return
+	}
+	w.Header().Set("Tank-Sessions-Snapshot-Cursor", fmt.Sprintf("%d", cursor))
 }
 
 // handleListSessions lists sessions for the authenticated user, or for
@@ -93,6 +127,7 @@ func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	// catch-up replay covers anything that landed during the snapshot
 	// query itself.
 	s.stampLifecycleTipHeader(r.Context(), w, owner)
+	s.stampSnapshotCursorHeader(r.Context(), w, owner)
 
 	infos, err := s.mgr.ListSessions(r.Context(), owner)
 	if err != nil {

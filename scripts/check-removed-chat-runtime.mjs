@@ -422,6 +422,20 @@ const blocked = [
     // new exported type with a parallel implementation.
     pattern: /\blifecycleEmitter\b/,
   },
+  // docs/session-list-redesign.md Phase 2 — Reader.List cut over to
+  // reading every sidebar-visible field from the sessions row, dropping
+  // the K8s pod list and the lifecycle-store hydration entirely. The
+  // hydrate path was the read-side of the multi-pipe architecture the
+  // redesign retires; reintroducing it would resurrect the merge-
+  // boundary bug class.
+  {
+    name: "removed LifecycleStatusSource interface",
+    pattern: /\bLifecycleStatusSource\b/,
+  },
+  {
+    name: "removed Reader.hydrateLifecycle method",
+    pattern: /\bhydrateLifecycle\b/,
+  },
   // Interrupt-on-data-plane (the retired single-consumer architecture).
   // Until this PR, both runners dispatched isInterruptCommand →
   // acceptInterrupt from inside the data-plane command consumer. That's

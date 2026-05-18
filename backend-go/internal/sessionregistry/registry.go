@@ -2,6 +2,7 @@ package sessionregistry
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -45,9 +46,16 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	}
 	const q = `
 		SELECT session_id, mode, pod_name, name, visible,
-			COALESCE(to_char(requested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
-			COALESCE(to_char(created_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
-			COALESCE(to_char(updated_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at
+			COALESCE(to_char(requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
+			COALESCE(to_char(created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
+			COALESCE(to_char(updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
+			status,
+			COALESCE(to_char(ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
+			COALESCE(to_char(terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
+			activity_summary,
+			test_state,
+			rollout_state,
+			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2
 		ORDER BY created_at ASC
@@ -62,27 +70,57 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	for rows.Next() {
 		var (
 			sessionID, mode, podName, requestedAt, createdAt, updatedAt string
+			status, readyAt, terminatingAt                              string
 			name                                                        *string
 			visible                                                     bool
+			activitySummary, testState, rolloutState                    []byte
+			rowVersion                                                  int64
 		)
-		if err := rows.Scan(&sessionID, &mode, &podName, &name, &visible, &requestedAt, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(
+			&sessionID, &mode, &podName, &name, &visible,
+			&requestedAt, &createdAt, &updatedAt,
+			&status, &readyAt, &terminatingAt,
+			&activitySummary, &testState, &rolloutState,
+			&rowVersion,
+		); err != nil {
 			return nil, err
 		}
 		if mode == "" {
 			mode = sessionmodel.DefaultSessionMode
 		}
 		records = append(records, sessionmodel.SessionRecord{
-			ID:          sessionID,
-			Email:       normalized,
-			Mode:        mode,
-			Scope:       s.scope,
-			PodName:     podName,
-			Name:        name,
-			Visible:     visible,
-			RequestedAt: requestedAt,
-			CreatedAt:   createdAt,
-			UpdatedAt:   updatedAt,
+			ID:              sessionID,
+			Email:           normalized,
+			Mode:            mode,
+			Scope:           s.scope,
+			PodName:         podName,
+			Name:            name,
+			Visible:         visible,
+			RequestedAt:     requestedAt,
+			CreatedAt:       createdAt,
+			UpdatedAt:       updatedAt,
+			Status:          status,
+			ReadyAt:         readyAt,
+			TerminatingAt:   terminatingAt,
+			ActivitySummary: activitySummary,
+			TestState:       unmarshalJSONB(testState),
+			RolloutState:    unmarshalJSONB(rolloutState),
+			RowVersion:      rowVersion,
 		})
 	}
 	return records, rows.Err()
+}
+
+// unmarshalJSONB turns a jsonb column's raw bytes into the
+// map[string]any the snapshot handler expects to render. Empty/NULL
+// columns return nil, which the SPA renders as "no state set."
+func unmarshalJSONB(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
 }

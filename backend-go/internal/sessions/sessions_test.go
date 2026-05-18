@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -11,45 +12,41 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
-// fakeLifecycleSource is the test stand-in for the production
-// lifecycleevents.Store that drives the Reader's Status + Activity
-// hydration. Maps session_id → canned values; missing entries return
-// nil/nil so the Reader leaves the default Status alone (the legacy
-// behavior).
-type fakeLifecycleSource struct {
-	pod      map[string]*lifecycleevents.PodStatusSummary
-	activity map[string]*lifecycleevents.ActivitySummary
-}
-
-func (f fakeLifecycleSource) LatestPodStatus(_ context.Context, _, sessionID string) (*lifecycleevents.PodStatusSummary, error) {
-	return f.pod[sessionID], nil
-}
-
-func (f fakeLifecycleSource) LatestActivity(_ context.Context, _, sessionID string) (*lifecycleevents.ActivitySummary, error) {
-	return f.activity[sessionID], nil
-}
-
-// readyAtPtr / activeSummary build the fixtures the merge test expects.
-func readyAtPtr(t string) *string { v := t; return &v }
-
-func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
-		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, false),
-		sessionPod("14", "other@example.com", corev1.PodRunning, true),
-	)
-	// Status comes from the lifecycle ledger now (tank-operator#83); seed
-	// the test source with a "ready" entry for session 12.
-	lifecycle := fakeLifecycleSource{
-		pod: map[string]*lifecycleevents.PodStatusSummary{
-			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
+// TestListReadsEverythingFromTheRegistryRow is the Phase 2 cutover
+// contract: Reader.List returns the sidebar snapshot purely from the
+// sessions row. K8s is not consulted (a fake client with zero pods
+// still produces the full Info); no lifecycle-store hydration is
+// involved; status / ready_at / test_state / rollout_state /
+// activity_summary all come straight off the row columns Phase 1
+// populated.
+func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
+	activity, _ := json.Marshal(map[string]any{
+		"status":       "running",
+		"unread_count": 3,
+	})
+	registry := registryRecords{
+		{
+			ID:            "12",
+			Email:         "nelson@romaine.life",
+			Mode:          sessionmodel.CodexGUIMode,
+			PodName:       "session-12",
+			Name:          stringPtr("Workbench"),
+			Visible:       true,
+			RequestedAt:   "2026-05-11T00:00:00+00:00",
+			CreatedAt:     "2026-05-11T00:00:01+00:00",
+			Status:        "Active",
+			ReadyAt:       "2026-05-11T00:00:03+00:00",
+			ActivitySummary: activity,
+			TestState:     map[string]any{"active": true},
+			RolloutState:  map[string]any{"active": true},
 		},
 	}
-	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, nil, lifecycle, "default")
+	// Empty K8s client — proves the snapshot doesn't touch K8s.
+	client := fake.NewSimpleClientset()
+	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, "default")
 
 	got, err := reader.List(context.Background(), "nelson@romaine.life")
 	if err != nil {
@@ -59,20 +56,17 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 		t.Fatalf("session count = %d, want 1: %#v", len(got), got)
 	}
 	session := got[0]
-	if session.ID != "12" {
-		t.Fatalf("session id = %q, want 12", session.ID)
+	if session.ID != "12" || session.Status != "Active" || session.Mode != sessionmodel.CodexGUIMode {
+		t.Fatalf("session = %#v", session)
 	}
-	if session.Status != "Active" {
-		t.Fatalf("session status = %q, want Active", session.Status)
-	}
-	if session.Mode != sessionmodel.CodexGUIMode {
-		t.Fatalf("session mode = %q, want %q", session.Mode, sessionmodel.CodexGUIMode)
+	if session.Name == nil || *session.Name != "Workbench" {
+		t.Fatalf("name = %#v, want Workbench", session.Name)
 	}
 	if session.PodName == nil || *session.PodName != "session-12" {
 		t.Fatalf("pod name = %#v, want session-12", session.PodName)
 	}
-	if session.Name == nil || *session.Name != "Workbench" {
-		t.Fatalf("name = %#v, want Workbench", session.Name)
+	if session.ReadyAt == nil || *session.ReadyAt != "2026-05-11T00:00:03+00:00" {
+		t.Fatalf("ready_at = %#v", session.ReadyAt)
 	}
 	if session.TestState["active"] != true {
 		t.Fatalf("test state = %#v, want active true", session.TestState)
@@ -80,11 +74,71 @@ func TestListReturnsOwnedSandboxAgentPods(t *testing.T) {
 	if session.RolloutState["active"] != true {
 		t.Fatalf("rollout state = %#v, want active true", session.RolloutState)
 	}
-	if session.CreatedAt == nil || *session.CreatedAt != "2026-05-11T00:00:01+00:00" {
-		t.Fatalf("created_at = %#v", session.CreatedAt)
+	if session.Activity == nil || session.Activity.UnreadCount != 3 {
+		t.Fatalf("activity = %#v, want unread_count=3", session.Activity)
 	}
-	if session.ReadyAt == nil || *session.ReadyAt != "2026-05-11T00:00:03+00:00" {
-		t.Fatalf("ready_at = %#v", session.ReadyAt)
+	// Verify no K8s API calls were made.
+	if actions := client.Actions(); len(actions) > 0 {
+		t.Fatalf("Reader.List made %d K8s calls; the Phase 2 snapshot must not touch K8s: %#v", len(actions), actions)
+	}
+}
+
+// TestListSkipsInvisibleRows confirms visible=false rows are excluded
+// from the snapshot. Together with TestListReadsEverythingFromTheRegistryRow,
+// this nails down the row-only read shape that retired the pod-
+// fallback loop responsible for tank-operator#525's 75s resurrection
+// window.
+func TestListSkipsInvisibleRows(t *testing.T) {
+	registry := registryRecords{
+		{
+			ID:      "12",
+			Email:   "nelson@romaine.life",
+			Mode:    sessionmodel.CodexGUIMode,
+			Visible: true,
+			Status:  "Active",
+		},
+		{
+			ID:      "13",
+			Email:   "nelson@romaine.life",
+			Mode:    sessionmodel.CodexGUIMode,
+			Visible: false, // Manager.Delete just ran; pod may still be Terminating
+			Status:  "Failed",
+		},
+	}
+	reader := NewReaderFull(fake.NewSimpleClientset(), sessionmodel.SessionsNamespace, registry, "default")
+	got, err := reader.List(context.Background(), "nelson@romaine.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("count = %d, want 1 (only visible row): %#v", len(got), got)
+	}
+	if got[0].ID != "12" {
+		t.Fatalf("id = %q, want 12", got[0].ID)
+	}
+}
+
+// TestListSortsByRegistryOrder pins that the snapshot preserves the
+// row order returned by registry.List (oldest-first by created_at).
+// The SPA does its own ordering on top, but the snapshot's stable
+// order is what makes the SSE reducer's "find row by id" predictable.
+func TestListSortsByRegistryOrder(t *testing.T) {
+	registry := registryRecords{
+		{ID: "11", Email: "u@example.com", Visible: true, Status: "Active"},
+		{ID: "21", Email: "u@example.com", Visible: true, Status: "Active"},
+		{ID: "31", Email: "u@example.com", Visible: true, Status: "Active"},
+	}
+	reader := NewReaderFull(fake.NewSimpleClientset(), sessionmodel.SessionsNamespace, registry, "default")
+	got, err := reader.List(context.Background(), "u@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(got))
+	for _, info := range got {
+		ids = append(ids, info.ID)
+	}
+	if !slices.Equal(ids, []string{"11", "21", "31"}) {
+		t.Fatalf("ids = %v, want [11 21 31] in registry order", ids)
 	}
 }
 
@@ -113,136 +167,7 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
-func TestListMergesRegistryRecordsWithPods(t *testing.T) {
-	recordedName := "Saved name"
-	client := fake.NewSimpleClientset(
-		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
-		sessionPod("16", "nelson@romaine.life", corev1.PodRunning, true),
-	)
-	registry := registryRecords{
-		{
-			ID:          "12",
-			Email:       "nelson@romaine.life",
-			Mode:        sessionmodel.CodexGUIMode,
-			PodName:     "session-12",
-			Name:        &recordedName,
-			RequestedAt: "2026-05-11T00:00:00+00:00",
-			CreatedAt:   "2026-05-11T00:00:01+00:00",
-			Visible:     true,
-		},
-		{
-			ID:          "15",
-			Email:       "nelson@romaine.life",
-			Mode:        sessionmodel.ClaudeCLIMode,
-			PodName:     "session-15",
-			RequestedAt: "2026-05-10T00:00:00+00:00",
-			CreatedAt:   "2026-05-10T00:00:01+00:00",
-			Visible:     true,
-		},
-	}
-	lifecycle := fakeLifecycleSource{
-		pod: map[string]*lifecycleevents.PodStatusSummary{
-			"12": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
-			"16": {Status: "Active", ReadyAt: readyAtPtr("2026-05-11T00:00:03+00:00")},
-			// 15 has no pod and no lifecycle row — the infoFromRecord
-			// fallback path stamps "Failed", which is what the test
-			// expects.
-		},
-	}
-	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, lifecycle, "default")
-
-	got, err := reader.List(context.Background(), "nelson@romaine.life")
-	if err != nil {
-		t.Fatal(err)
-	}
-	slices.SortFunc(got, func(a, b Info) int {
-		if a.ID < b.ID {
-			return -1
-		}
-		if a.ID > b.ID {
-			return 1
-		}
-		return 0
-	})
-	if len(got) != 3 {
-		t.Fatalf("session count = %d, want 3: %#v", len(got), got)
-	}
-	if got[0].ID != "12" || got[0].Status != "Active" || got[0].Name == nil || *got[0].Name != recordedName {
-		t.Fatalf("merged session = %#v", got[0])
-	}
-	if got[0].RequestedAt == nil || *got[0].RequestedAt != "2026-05-11T00:00:00+00:00" {
-		t.Fatalf("merged requested_at = %#v", got[0].RequestedAt)
-	}
-	if got[1].ID != "15" || got[1].Status != "Failed" || got[1].Mode != sessionmodel.ClaudeCLIMode {
-		t.Fatalf("registry-only session = %#v", got[1])
-	}
-	if got[2].ID != "16" || got[2].Status != "Active" {
-		t.Fatalf("pod-only session = %#v", got[2])
-	}
-}
-
-// TestListExcludesInvisibleRegistryRowsEvenWhenPodAlive is the
-// regression gate for the symptom that drove tank-operator#525: pod
-// delete is asynchronous (~75s graceful shutdown), so the pod stays in
-// etcd as Terminating while the registry row already says
-// visible=false. Pre-#525 Reader.List built `seen` from visible-only
-// registry rows, so its pod-fallback loop re-appended the
-// just-deleted session for the full grace window. The user saw the
-// row "come back" on every refresh until the pod finished
-// terminating.
-//
-// The fix: registry.List returns visible+invisible rows; Reader.List
-// uses every registered id for `seen` but only emits visible records.
-// Invisible rows whose pod is still alive must NOT be re-added by the
-// pod-fallback loop.
-func TestListExcludesInvisibleRegistryRowsEvenWhenPodAlive(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		sessionPod("12", "nelson@romaine.life", corev1.PodRunning, true),
-		sessionPod("13", "nelson@romaine.life", corev1.PodRunning, true),
-	)
-	registry := registryRecords{
-		{
-			ID:          "12",
-			Email:       "nelson@romaine.life",
-			Mode:        sessionmodel.CodexGUIMode,
-			PodName:     "session-12",
-			RequestedAt: "2026-05-11T00:00:00+00:00",
-			CreatedAt:   "2026-05-11T00:00:01+00:00",
-			Visible:     true,
-		},
-		{
-			ID:          "13",
-			Email:       "nelson@romaine.life",
-			Mode:        sessionmodel.CodexGUIMode,
-			PodName:     "session-13",
-			RequestedAt: "2026-05-11T00:01:00+00:00",
-			CreatedAt:   "2026-05-11T00:01:01+00:00",
-			// Marked deleted by Manager.Delete; pod is still
-			// Terminating in K8s for another ~75s.
-			Visible: false,
-		},
-	}
-	reader := NewReaderFull(client, sessionmodel.SessionsNamespace, registry, nil, "default")
-
-	got, err := reader.List(context.Background(), "nelson@romaine.life")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("session count = %d, want 1 (only the visible row): %#v", len(got), got)
-	}
-	if got[0].ID != "12" {
-		t.Fatalf("visible session id = %q, want 12 (session 13's registry row is visible=false; its still-alive pod must not be re-added via the pod-fallback loop)", got[0].ID)
-	}
-}
-
-// TestPodStatusCompatibility was deleted in tank-operator#83 along with
-// the podStatus() helper it pinned. Status is now derived from the
-// session_lifecycle_events ledger via Reader.hydrateLifecycle and tested
-// end-to-end through TestListReturnsOwnedSandboxAgentPods (which wires a
-// fakeLifecycleSource). Re-introducing this test would resurrect the
-// retired path the migration-guard forbids; the equivalent pod-state
-// derivation is now tested in internal/sessioncontroller.
+func stringPtr(s string) *string { return &s }
 
 type registryRecords []sessionmodel.SessionRecord
 

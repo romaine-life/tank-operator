@@ -2,6 +2,7 @@ package sessionregistry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -36,9 +37,13 @@ func (s *Store) NextSessionID(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%d", allocated), nil
 }
 
-// Upsert writes or overwrites a session record. created_at/updated_at default
-// to now() on insert; on conflict (same primary key) we keep the existing
-// created_at and only advance updated_at.
+// Upsert writes or overwrites a session record. created_at/updated_at
+// default to now() on insert; on conflict (same primary key) we keep
+// the existing created_at, advance updated_at, and bump row_version so
+// downstream cursor readers see the change. The row_version bump on
+// UPDATE is what makes Manager-driven mutations (create-with-existing-
+// id, name set, mark-deleted) visible to the Phase 3 per-row UPDATE
+// wire alongside the SessionController-driven writes.
 func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) error {
 	normalized := strings.ToLower(record.Email)
 	scope := record.Scope
@@ -74,7 +79,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			name         = EXCLUDED.name,
 			visible      = EXCLUDED.visible,
 			requested_at = COALESCE(EXCLUDED.requested_at, sessions.requested_at),
-			updated_at   = EXCLUDED.updated_at
+			updated_at   = EXCLUDED.updated_at,
+			row_version  = nextval('sessions_row_version_seq')
 	`
 	_, err := s.pool.Exec(ctx, q,
 		normalized,
@@ -91,8 +97,9 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	return err
 }
 
-// SetName updates the display name. Missing-session is a no-op (matches the
-// previous Cosmos impl, which swallowed not-found there).
+// SetName updates the display name. Missing-session is a no-op
+// (matches the previous Cosmos impl, which swallowed not-found there).
+// Bumps row_version so the per-row update cursor advances.
 func (s *Store) SetName(ctx context.Context, email, sessionID string, name *string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -100,10 +107,54 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 	}
 	const q = `
 		UPDATE sessions
-		SET name = $4, updated_at = now()
+		SET name        = $4,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, name)
+	return err
+}
+
+// SetTestState replaces the row's test_state jsonb. nil clears the
+// column. Pod annotations are patched separately by Manager — the
+// session-agent reads the annotation at runtime via the projected
+// downward-API volume; this column is the snapshot-facing replica so
+// Reader.List doesn't need a pod read. Bumps row_version.
+func (s *Store) SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error {
+	return s.setJSONBColumn(ctx, "test_state", email, sessionID, state)
+}
+
+// SetRolloutState replaces the row's rollout_state jsonb. Same shape
+// and rationale as SetTestState.
+func (s *Store) SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error {
+	return s.setJSONBColumn(ctx, "rollout_state", email, sessionID, state)
+}
+
+func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID string, state map[string]any) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	var payload any
+	if state != nil {
+		raw, err := json.Marshal(state)
+		if err != nil {
+			return fmt.Errorf("sessionregistry: marshal %s: %w", column, err)
+		}
+		payload = raw
+	}
+	// Column is parameterized via constant strings only; no SQL
+	// injection risk because the caller supplies a literal column
+	// name from two known values.
+	q := fmt.Sprintf(`
+		UPDATE sessions
+		SET %s        = $4,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`, column)
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, payload)
 	return err
 }
 
@@ -139,7 +190,11 @@ func (s *Store) OwnerForSession(ctx context.Context, scope, sessionID string) (s
 	}
 }
 
-// MarkDeleted sets visible=false. Missing-session is a no-op.
+// MarkDeleted sets visible=false. Missing-session is a no-op. Bumps
+// row_version so the per-row update cursor surfaces the deletion to
+// the Phase 3 wire — that's how the SPA's SessionStore learns to
+// tombstone the id on the live transport (alongside the existing
+// session.deleted lifecycle event during the dual-write window).
 func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -147,7 +202,9 @@ func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error 
 	}
 	const q = `
 		UPDATE sessions
-		SET visible = false, updated_at = now()
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID)

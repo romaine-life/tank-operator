@@ -75,6 +75,17 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS sessions_email_scope_row_version
 		ON sessions (email, session_scope, row_version)`,
 
+	// Phase 2 (docs/session-list-redesign.md) — test_state and
+	// rollout_state move onto the row so Reader.List can build the
+	// snapshot Info without a K8s pod read. Pod annotations are still
+	// patched by Manager.SetTestState/SetRolloutState (the session-
+	// agent reads them at runtime via the projected downward-API
+	// volume); the column is the snapshot-facing replica.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS test_state jsonb`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS rollout_state jsonb`,
+
 	// `session_events` — the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.

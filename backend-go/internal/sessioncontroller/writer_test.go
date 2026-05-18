@@ -12,7 +12,7 @@ import (
 // invariant: every lifecycle event type that the controller emits
 // produces the exact row-column mapping the Phase 2 snapshot cutover
 // will read against. The mapping must match what the existing
-// Reader.hydrateLifecycle / LatestPodStatus / LatestActivity path
+// pre-Phase-2 ledger-hydration / LatestPodStatus / LatestActivity path
 // computes today, so Phase 2 can switch the read source over without
 // changing what the SPA renders.
 func TestDeriveRowColumnChangesPerEventType(t *testing.T) {

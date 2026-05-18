@@ -248,6 +248,7 @@ func main() {
 		profiles:                 profileStore,
 		sessionEvents:            sessionEventsStore,
 		lifecycleEvents:          lifecycleStore,
+		pgPool:                   pgPool,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
 		verifier:                 verifier,
@@ -481,7 +482,13 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 	return nil
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
-func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error        { return nil }
+func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *stubSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
 
 func envDefault(name, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(name))

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -34,6 +35,7 @@ type appServer struct {
 	profiles                 profilesStore
 	sessionEvents            store.SessionEventStore
 	lifecycleEvents          lifecycleevents.Store
+	pgPool                   *pgxpool.Pool
 	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
 	verifier                 *auth.Verifier
