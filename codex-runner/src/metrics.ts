@@ -88,6 +88,18 @@ export const natsPublishFailureTotal = new Counter({
   registers: [registry],
 });
 
+// eventTruncatedTotal — see agent-runner/src/metrics.ts for the
+// docstring. Sibling counter; the mode label distinguishes runners.
+// Bucketed by event_type so the operator can see "huge Read tool
+// outputs" vs. "huge assistant.message.text" at a glance. Per #532
+// Stage 3.
+export const eventTruncatedTotal = new Counter({
+  name: "tank_runner_event_truncated_total",
+  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See nelsong6/tank-operator#532 Stage 3.",
+  labelNames: ["event_type", "severity"],
+  registers: [registry],
+});
+
 const turnStartTimes = new Map<string, number>();
 
 export function recordTurnStart(turnID: string): void {

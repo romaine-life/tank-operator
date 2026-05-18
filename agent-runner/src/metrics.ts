@@ -92,6 +92,34 @@ export const natsPublishFailureTotal = new Counter({
   registers: [registry],
 });
 
+// eventTruncatedTotal counts Tank conversation events whose stamped
+// JSON-encoded size exceeded the per-runner transport budget (default
+// 900 KiB, configurable via SESSION_EVENT_MAX_BYTES) and were
+// truncated by runner-shared/sessionBus.js's truncateEventIfOversized
+// before reaching the JetStream publish. Severity:
+//
+//   - `strings-truncated` — one or more oversized string fields were
+//     replaced with a typed marker; the event's envelope (turn_id,
+//     event_id, type, payload shape) is preserved. The transcript
+//     renders a "[truncated N bytes]" marker for the affected field.
+//   - `payload-dropped` — even after aggressive string truncation the
+//     event was still over budget; the entire payload was replaced
+//     with `{__payload_dropped: true, original_bytes, reason}`. The
+//     event still lands durably (the user sees that an event existed)
+//     but the body is unrecoverable from the wire path. Alert-worthy.
+//
+// Each increment corresponds to one Tank event lost-or-degraded
+// because of payload size; sustained `payload-dropped` traffic
+// indicates a producer (typically a tool_result.output) that needs to
+// chunk or stream rather than emit one giant event. See
+// nelsong6/tank-operator#532 Stage 3 for context.
+export const eventTruncatedTotal = new Counter({
+  name: "tank_runner_event_truncated_total",
+  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See nelsong6/tank-operator#532 Stage 3.",
+  labelNames: ["event_type", "severity"],
+  registers: [registry],
+});
+
 // optionsPinnedTotal records the model/effort decision the runner made
 // on its first observable submit_turn. Cardinality is bounded by the
 // SDK's EffortLevel enum (5 values + "default") and the small set of

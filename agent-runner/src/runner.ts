@@ -51,10 +51,12 @@ import {
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
+import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import {
   askUserQuestionPendingGauge,
   askUserQuestionWaitSeconds,
   commandsConsumedTotal,
+  eventTruncatedTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
@@ -85,8 +87,31 @@ export async function dispatch(
   if (!isDurableTankConversationEvent(stamped)) {
     return true;
   }
+  // Stage 3 of #532: keep Tank events under the transport budget so a
+  // single oversized tool_result.output (Read of a large file, Bash with
+  // a massive stdout) doesn't throw `payload max_payload size exceeded`
+  // and silently lose the event. The truncation utility replaces big
+  // string fields with a typed marker that preserves the schema shape;
+  // see runner-shared/sessionBus.js for the contract.
+  const sizeGuard = truncateEventIfOversized(
+    stamped as unknown as Record<string, unknown>,
+  );
+  if (sizeGuard.truncated) {
+    const severity = sizeGuard.payloadDropped ? "payload-dropped" : "strings-truncated";
+    eventTruncatedTotal.labels(stamped.type, severity).inc();
+    console.warn(
+      "session bus event truncated:",
+      JSON.stringify({
+        event_type: stamped.type,
+        original_bytes: sizeGuard.originalBytes,
+        final_bytes: sizeGuard.finalBytes,
+        fields: sizeGuard.fields,
+        severity,
+      }),
+    );
+  }
   try {
-    await sink.upsert(stamped);
+    await sink.upsert(sizeGuard.event as unknown as StampedTankEvent);
   } catch (err) {
     console.error("session bus publish failed:", err);
     natsPublishFailureTotal.inc();

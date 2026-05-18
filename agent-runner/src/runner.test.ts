@@ -23,6 +23,7 @@ import {
   turnEvent,
   userSubmissionEvents,
 } from "../../runner-shared/conversation-builders.js";
+import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 
 type Order = string[];
 
@@ -862,4 +863,76 @@ test("acceptInterrupt with missing target: fails command explicitly instead of s
 
   assert.deepEqual(harness.bus, ["fail"], "missing target must produce a visible failure, not a silent ack");
   assert.equal(harness.events.length, 0);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// nelsong6/tank-operator#532 Stage 3 — oversized-event truncation contract.
+// truncateEventIfOversized must keep Tank conversation events under the
+// transport budget so NATS's `payload max_payload size exceeded`
+// throw doesn't silently hole the durable ledger (the seven publish
+// failures observed on session 19 across the pod's lifetime were
+// exactly this shape).
+// ───────────────────────────────────────────────────────────────────────────
+
+test("truncateEventIfOversized passes through events under the budget unchanged", () => {
+  const tiny = {
+    event_id: "turn_t1:turn.interrupted:client_interrupt",
+    type: "turn.interrupted",
+    turn_id: "turn_t1",
+    payload: { reason: "client_interrupt" },
+  };
+  const result = truncateEventIfOversized(tiny);
+  assert.equal(result.truncated, false);
+  assert.equal(result.event, tiny, "should return the same reference when no work is needed");
+  assert.equal(result.fields.length, 0);
+});
+
+test("truncateEventIfOversized replaces oversized string fields with a typed marker", () => {
+  const huge = "x".repeat(200_000); // 200 KiB single string
+  const event = {
+    event_id: "turn_t1:item.completed:abc",
+    type: "item.completed",
+    turn_id: "turn_t1",
+    payload: {
+      kind: "tool_result",
+      output: huge,
+    },
+  };
+  const result = truncateEventIfOversized(event, { maxBytes: 50_000, stringThreshold: 1024 });
+  assert.equal(result.truncated, true);
+  assert.equal(result.payloadDropped, undefined, "envelope should be preserved when string truncation suffices");
+  assert.ok(result.finalBytes <= 50_000, `result must fit under budget; got ${result.finalBytes}`);
+  // Original event is not mutated; clone-modify is required for shared
+  // event objects.
+  assert.equal((event.payload as { output: string }).output.length, 200_000);
+  // Truncated string carries the original size + a sha256_16 prefix.
+  const truncated = (result.event.payload as { output: string }).output;
+  assert.ok(truncated.startsWith("[truncated: 200000 bytes"), `unexpected marker: ${truncated.slice(0, 80)}`);
+  assert.ok(/sha256_16=[0-9a-f]{16}/.test(truncated));
+  // Schema of the field stays a string — downstream renderers reading
+  // payload.output don't need to type-check.
+  assert.equal(typeof truncated, "string");
+});
+
+test("truncateEventIfOversized drops payload entirely when string truncation cannot fit the budget", () => {
+  // A payload made of MANY small strings — none individually large
+  // enough to be the obvious truncation target — that collectively
+  // exceed the budget. The aggressive-pass loop should lower the
+  // threshold, fail to find enough headroom, and replace the whole
+  // payload with the dropped marker.
+  const payload: Record<string, string> = {};
+  for (let i = 0; i < 100; i++) {
+    payload[`field_${i}`] = "y".repeat(2_000);
+  }
+  const event = { event_id: "e1", type: "item.completed", turn_id: "t1", payload };
+  const result = truncateEventIfOversized(event, { maxBytes: 5_000, stringThreshold: 100_000 });
+  assert.equal(result.truncated, true);
+  assert.equal(result.payloadDropped, true, "must fall back to payload-dropped when strings alone can't fit");
+  assert.ok(result.finalBytes <= 5_000);
+  assert.equal((result.event.payload as unknown as { __payload_dropped: boolean }).__payload_dropped, true);
+  // Envelope fields stay intact so the durable ledger still records
+  // "an event of this type existed for this turn."
+  assert.equal(result.event.type, "item.completed");
+  assert.equal(result.event.event_id, "e1");
+  assert.equal(result.event.turn_id, "t1");
 });
