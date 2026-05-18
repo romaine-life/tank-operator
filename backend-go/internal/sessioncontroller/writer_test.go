@@ -3,21 +3,17 @@ package sessioncontroller
 import (
 	"context"
 	"testing"
-
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 )
 
-// TestDeriveRowColumnChangesPerEventType is the Phase 1 dual-write
-// invariant: every lifecycle event type that the controller emits
-// produces the exact row-column mapping the Phase 2 snapshot cutover
-// will read against. The mapping must match what the existing
-// pre-Phase-2 ledger-hydration / LatestPodStatus / LatestActivity path
-// computes today, so Phase 2 can switch the read source over without
-// changing what the SPA renders.
+// TestDeriveRowColumnChangesPerEventType pins the per-event-type
+// column mapping the K8s watch and chat-activity emitter drive
+// through RowWriter. Post-Phase-4 this is the single durable shape
+// the SPA renders against; if a new event type lands, this table
+// must grow with it.
 func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 	cases := []struct {
 		name        string
-		event       lifecycleevents.Event
+		event       Event
 		wantOK      bool
 		wantStatus  string
 		wantReady   bool
@@ -26,14 +22,14 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 	}{
 		{
 			name:       "pod_scheduled → status Pending",
-			event:      lifecycleevents.Event{Type: lifecycleevents.EventTypePodScheduled},
+			event:      Event{Type: EventTypePodScheduled},
 			wantOK:     true,
 			wantStatus: "Pending",
 		},
 		{
 			name: "pod_ready → status Active + ready_at",
-			event: lifecycleevents.Event{
-				Type:    lifecycleevents.EventTypePodReady,
+			event: Event{
+				Type:    EventTypePodReady,
 				Payload: map[string]any{"ready_at": "2026-05-18T04:30:00Z"},
 			},
 			wantOK:     true,
@@ -42,20 +38,20 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 		},
 		{
 			name:       "pod_not_ready → status Pending",
-			event:      lifecycleevents.Event{Type: lifecycleevents.EventTypePodNotReady},
+			event:      Event{Type: EventTypePodNotReady},
 			wantOK:     true,
 			wantStatus: "Pending",
 		},
 		{
 			name:       "pod_failed → status Failed",
-			event:      lifecycleevents.Event{Type: lifecycleevents.EventTypePodFailed},
+			event:      Event{Type: EventTypePodFailed},
 			wantOK:     true,
 			wantStatus: "Failed",
 		},
 		{
 			name: "pod_terminating → status Failed + terminating_at",
-			event: lifecycleevents.Event{
-				Type:       lifecycleevents.EventTypePodTerminating,
+			event: Event{
+				Type:       EventTypePodTerminating,
 				OccurredAt: "2026-05-18T04:30:00Z",
 			},
 			wantOK:     true,
@@ -64,36 +60,32 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 		},
 		{
 			name: "activity_changed → activity_summary",
-			event: lifecycleevents.Event{
-				Type:    lifecycleevents.EventTypeActivityChanged,
+			event: Event{
+				Type:    EventTypeActivityChanged,
 				Payload: map[string]any{"status": "ready", "unread_count": 0},
 			},
 			wantOK:      true,
 			wantSummary: true,
 		},
 		{
-			// session.created has no row-column effect — the
-			// registry.Upsert call earlier in Manager.Create writes
-			// the row's identity columns. The controller's dual-write
-			// path correctly returns false here so we don't double-
-			// write.
+			// session.created has no row-column effect — Manager.Create
+			// owns the row identity columns via registry.Upsert.
 			name:   "session.created → no row update",
-			event:  lifecycleevents.Event{Type: lifecycleevents.EventTypeCreated},
+			event:  Event{Type: EventTypeCreated},
 			wantOK: false,
 		},
 		{
-			// session.deleted has no row-column effect either —
-			// registry.MarkDeleted writes visible=false in its own
-			// call. Phase 4 of the redesign will fold delete into the
-			// row directly; for Phase 1 the registry mutation owns
-			// the row.
+			// session.deleted is owned by registry.MarkDeleted (sets
+			// visible=false, bumps row_version). RowWriter has no role
+			// here — Manager publishes the row directly through
+			// RowPublisher.
 			name:   "session.deleted → no row update",
-			event:  lifecycleevents.Event{Type: lifecycleevents.EventTypeDeleted},
+			event:  Event{Type: EventTypeDeleted},
 			wantOK: false,
 		},
 		{
 			name:   "session.name_changed → no row update",
-			event:  lifecycleevents.Event{Type: lifecycleevents.EventTypeNameChanged},
+			event:  Event{Type: EventTypeNameChanged},
 			wantOK: false,
 		},
 	}
@@ -123,71 +115,50 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 	}
 }
 
-// TestRowWriterRecordTransitionDedupes verifies the (scope, session_id,
-// event_id) idempotency contract: a repeated emit of the same event
-// (informer resync, replica race) returns TransitionDeduped and skips
-// the row-update publish. This is the invariant the pre-consolidation
-// K8s watch test pinned, now asserted through the RowWriter surface.
-func TestRowWriterRecordTransitionDedupes(t *testing.T) {
-	store := newFakeStore()
+// TestRowWriterRecordTransitionNoOpSkipsPublish verifies that an
+// event with no row-column effect (e.g. session.created — owned by
+// the registry) returns TransitionNoOp AND skips the publish. Without
+// this guard, every user-action event the chat-activity emitter
+// observed before the registry write landed would fan out a stale
+// row state on NATS.
+func TestRowWriterRecordTransitionNoOpSkipsPublish(t *testing.T) {
 	emitter := &fakeEmitter{}
-	writer, err := NewRowWriter(store, emitter, nil, nil)
+	writer, err := NewRowWriter(emitter, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	event := lifecycleevents.Event{
+	event := Event{
 		Email:        "u@example.com",
 		SessionScope: "default",
 		SessionID:    "42",
-		Type:         lifecycleevents.EventTypePodReady,
-		EventID:      "pod_ready:uid:0",
-		OccurredAt:   "2026-05-18T04:30:00Z",
-		Payload:      map[string]any{"status": "Active", "ready_at": "2026-05-18T04:30:00Z"},
+		Type:         EventTypeCreated,
 	}
-
 	outcome, err := writer.RecordTransition(context.Background(), event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != TransitionEmitted {
-		t.Fatalf("first outcome = %q, want emitted", outcome)
+	if outcome != TransitionNoOp {
+		t.Fatalf("outcome = %q, want no-op", outcome)
 	}
-	if len(emitter.calls) != 1 {
-		t.Fatalf("first publish count = %d, want 1", len(emitter.calls))
-	}
-	if emitter.calls[0].sessionID != "42" {
-		t.Fatalf("PublishCurrentRow session = %q, want 42", emitter.calls[0].sessionID)
-	}
-
-	outcome2, err := writer.RecordTransition(context.Background(), event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome2 != TransitionDeduped {
-		t.Fatalf("repeat outcome = %q, want deduped", outcome2)
-	}
-	if len(emitter.calls) != 1 {
-		t.Fatalf("repeat publish count = %d, want 1 (deduped must skip the row-update publish)", len(emitter.calls))
+	if len(emitter.calls) != 0 {
+		t.Fatalf("publish count = %d, want 0 (no-op events must not publish)", len(emitter.calls))
 	}
 }
 
-// TestRowWriterPublishesByID confirms the writer hands the session id
-// to the row publisher (not the event payload). The publisher reads
-// the row's current state from the registry — passing the wrong id
-// would publish the wrong row, which is the failure mode this test
-// is the gate against.
+// TestRowWriterPublishesByID confirms the writer hands the session
+// id to the row publisher. The publisher reads the row's current
+// state from the registry — passing the wrong id would publish the
+// wrong row, which is the failure mode this test is the gate against.
 func TestRowWriterPublishesByID(t *testing.T) {
-	store := newFakeStore()
 	emitter := &fakeEmitter{}
-	writer, _ := NewRowWriter(store, emitter, nil, nil)
+	writer, _ := NewRowWriter(emitter, nil, nil)
 
-	event := lifecycleevents.Event{
+	event := Event{
 		Email:        "u@example.com",
 		SessionScope: "default",
 		SessionID:    "42",
-		Type:         lifecycleevents.EventTypePodScheduled,
-		EventID:      "pod_scheduled:uid:0",
+		Type:         EventTypePodScheduled,
 	}
 	_, err := writer.RecordTransition(context.Background(), event)
 	if err != nil {

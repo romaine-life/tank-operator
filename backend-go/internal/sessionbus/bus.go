@@ -56,11 +56,12 @@ type EventStore interface {
 }
 
 // LifecycleEmitter is the hook the persister calls after a successful
-// chat-event upsert so a session.activity_changed lifecycle row can be
+// chat-event upsert so a session.activity_changed row update can be
 // derived and published on the per-owner row-update subject. The
-// implementation lives in internal/sessioncontroller and bridges
-// lifecycleevents.Store + the RowPublisher — kept as an interface
-// here so this package doesn't depend on lifecycleevents.
+// implementation lives in internal/sessioncontroller and writes the
+// activity_summary column through RowWriter + fans the post-write row
+// out via RowPublisher — kept as an interface here so this package
+// doesn't depend on sessioncontroller.
 //
 // Emit-or-skip is the emitter's decision (a no-op delta returns nil
 // without writing). Errors are logged by the persister and otherwise

@@ -35,8 +35,8 @@ roleRef:
 # Orchestrator-local scratch state. Keep this narrow: the server uses it for
 # the styleguide element-selection handoff between browser and agent.
 # Also holds the coordination.k8s.io Lease that single-writes the
-# session-controller K8s watch loop for session_lifecycle_events
-# (replicas=2 → need a lease to dedupe). See
+# session-controller K8s watch (replicas=2 → need a lease to dedupe
+# pod-transition row UPDATEs across replicas). See
 # backend-go/internal/sessioncontroller and docs/observability.md.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

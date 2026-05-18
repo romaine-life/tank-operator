@@ -51,6 +51,12 @@ const ignoredRelativePaths = new Set([
   // migration targets — it is documentation of the deletion, not a
   // resurrection. Same exemption shape as docs/tank-conversation-protocol.md.
   "docs/session-list-redesign.md",
+  // pgstore migrations.go carries the idempotent `DROP TABLE IF
+  // EXISTS session_lifecycle_events` cleanup statement — the name has
+  // to appear in the SQL for the DROP to mean anything. Excluded so
+  // the migration guard doesn't fire on the deletion statement
+  // itself.
+  "backend-go/internal/pgstore/migrations.go",
 ]);
 
 const blocked = [
@@ -479,6 +485,131 @@ const blocked = [
   {
     name: "removed Reader.hydrateLifecycle method",
     pattern: /\bhydrateLifecycle\b/,
+  },
+  // docs/session-list-redesign.md Phase 4 — the durable
+  // session_lifecycle_events ledger was deleted. The sessions row is
+  // now the only persistent state on the sidebar path; every transition
+  // lands as a column update + row-update fan-out via RowWriter, with
+  // in-memory dedup in the K8s watch's transitionTracker rather than a
+  // unique-constraint dedup at the ledger. Block reintroduction of the
+  // package, the table, every exported symbol, the dedup contract, and
+  // the deleted metric / alert names so a future refactor can't quietly
+  // resurrect the multi-pipe shape the redesign retires.
+  {
+    name: "removed internal/lifecycleevents package import",
+    pattern: /\binternal\/lifecycleevents\b/,
+  },
+  {
+    name: "removed internal/lifecycleevents package keyword",
+    pattern: /^\s*package lifecycleevents\b/m,
+  },
+  {
+    name: "removed session_lifecycle_events CREATE TABLE",
+    // Block the literal SQL that would recreate the table. Historical
+    // comments referencing the old name are fine — the regression
+    // vector is bringing back the table itself or a query against it.
+    // The DROP TABLE in migrations.go is exempted via
+    // ignoredRelativePaths.
+    pattern: /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?session_lifecycle_events\b/i,
+  },
+  {
+    name: "removed session_lifecycle_events SQL query",
+    // INSERT/UPDATE/DELETE/SELECT against the retired table. Same
+    // structural guard as the CREATE TABLE rule above.
+    pattern: /(?:FROM|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+session_lifecycle_events\b/i,
+  },
+  {
+    name: "removed lifecycleevents.Event type",
+    pattern: /\blifecycleevents\.Event\b/,
+  },
+  {
+    name: "removed lifecycleevents.Store interface",
+    pattern: /\blifecycleevents\.Store\b/,
+  },
+  {
+    name: "removed lifecycleevents.ActivitySummary alias",
+    pattern: /\blifecycleevents\.ActivitySummary\b/,
+  },
+  {
+    name: "removed lifecycleevents.PodStatusSummary type",
+    pattern: /\blifecycleevents\.PodStatusSummary\b/,
+  },
+  {
+    name: "removed lifecycleevents.NewPostgresStore constructor",
+    pattern: /\blifecycleevents\.NewPostgresStore\b/,
+  },
+  {
+    name: "removed lifecycleevents.StubStore stand-in",
+    pattern: /\blifecycleevents\.StubStore\b/,
+  },
+  {
+    name: "removed lifecycleevents.Cursor type",
+    pattern: /\blifecycleevents\.Cursor\b/,
+  },
+  {
+    name: "removed lifecycleevents.Page type",
+    pattern: /\blifecycleevents\.Page\b/,
+  },
+  {
+    name: "removed LifecycleAppender interface (sessions.Manager dep)",
+    pattern: /\bLifecycleAppender\b/,
+  },
+  {
+    name: "removed buildLifecycleEventStore wiring helper",
+    pattern: /\bbuildLifecycleEventStore\b/,
+  },
+  {
+    name: "removed lifecycleEvents appServer field",
+    pattern: /\blifecycleEvents\s+lifecycleevents\.Store\b/,
+  },
+  {
+    name: "removed TransitionDeduped outcome (ledger dedup is gone)",
+    pattern: /\bTransitionDeduped\b/,
+  },
+  {
+    name: "removed RowWriter ledger Store param",
+    // Pre-Phase-4 RowWriter constructor took (store, emitter, pool,
+    // metrics). The store param is gone; this pattern matches the
+    // four-arg shape so a refactor can't quietly bring it back.
+    pattern: /\bNewRowWriter\(\s*[^)]*?lifecycleevents\b/,
+  },
+  {
+    name: "removed Event.EventID field (ledger uniqueness contract)",
+    pattern: /\bEvent\{[\s\S]{0,300}?EventID:/,
+  },
+  {
+    name: "removed Event.OrderKey field (ledger ordering)",
+    pattern: /\bEvent\{[\s\S]{0,300}?OrderKey:/,
+  },
+  {
+    name: "removed LatestActivity ledger reader",
+    // The lifecycle ledger's per-session activity fold. Now lives on
+    // the sessions row's activity_summary column; the row read path
+    // unmarshals the bytes directly. No legitimate use elsewhere.
+    pattern: /\bLatestActivity\(/,
+  },
+  {
+    name: "removed LatestPodStatus ledger reader",
+    // The lifecycle ledger's per-session pod-status fold. Now sourced
+    // from the sessions row's status / ready_at / terminating_at
+    // columns.
+    pattern: /\bLatestPodStatus\(/,
+  },
+  {
+    name: "removed tank_session_lifecycle_event_writes_total metric",
+    pattern: /\btank_session_lifecycle_event_writes_total\b/,
+  },
+  {
+    name: "removed tank_session_pod_informer_lag_seconds metric",
+    pattern: /\btank_session_pod_informer_lag_seconds\b/,
+  },
+  {
+    name: "removed tank_session_lifecycle_activity_emit_total metric",
+    pattern: /\btank_session_lifecycle_activity_emit_total\b/,
+  },
+  {
+    name: "removed tank_session_lifecycle_activity_failure_total metric",
+    pattern: /\btank_session_lifecycle_activity_failure_total\b/,
   },
   // Interrupt-on-data-plane (the retired single-consumer architecture).
   // Until this PR, both runners dispatched isInterruptCommand →

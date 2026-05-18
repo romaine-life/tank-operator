@@ -1,4 +1,4 @@
-package lifecycleevents
+package sessionactivity
 
 import (
 	"testing"

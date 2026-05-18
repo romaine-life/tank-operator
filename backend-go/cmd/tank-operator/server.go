@@ -19,7 +19,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -34,7 +33,6 @@ type appServer struct {
 	mgr                      *sessions.Manager
 	profiles                 profilesStore
 	sessionEvents            store.SessionEventStore
-	lifecycleEvents          lifecycleevents.Store
 	pgPool                   *pgxpool.Pool
 	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
@@ -87,11 +85,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
-	// /api/sessions/events streams typed session_lifecycle_events to the
-	// SPA sidebar (per-owner cursor-resumable SSE). /api/sessions/timeline
-	// returns the same ledger as a paginated REST snapshot for initial
-	// load + resync. Together they replace the deleted activity polling
-	// endpoint and the prior wake-and-refetch SSE shape.
+	// /api/sessions/events streams per-row UPDATEs to the SPA sidebar
+	// (per-owner row-version-cursor-resumable SSE). After Phase 4 of
+	// docs/session-list-redesign.md the wire is post-write sessions row
+	// state, not the retired typed session_lifecycle_events ledger; the
+	// SPA's SessionStore reconciles by primary key.
 	mux.HandleFunc("GET /api/sessions/events", s.handleSessionsEvents)
 	// Admin-only debug surface for sidebar diagnosis. Returns the
 	// server's view of (owner, scope) — every registry row including

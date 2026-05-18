@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -49,7 +49,7 @@ type Info struct {
 	// Activity is the chat-derived sidebar indicator block. Sourced
 	// from the sessions.activity_summary column (Phase 2);
 	// nil for sessions that haven't produced any chat activity yet.
-	Activity *lifecycleevents.ActivitySummary `json:"activity,omitempty"`
+	Activity *sessionactivity.ActivitySummary `json:"activity,omitempty"`
 }
 
 type Reader struct {
@@ -220,14 +220,14 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 }
 
 // parseActivitySummary decodes the row's activity_summary jsonb into
-// the lifecycleevents.ActivitySummary the Info field expects. Empty
+// the sessionactivity.ActivitySummary the Info field expects. Empty
 // columns return nil so the sidebar renders "no activity yet" for
 // fresh sessions.
-func parseActivitySummary(raw []byte) *lifecycleevents.ActivitySummary {
+func parseActivitySummary(raw []byte) *sessionactivity.ActivitySummary {
 	if len(raw) == 0 {
 		return nil
 	}
-	var out lifecycleevents.ActivitySummary
+	var out sessionactivity.ActivitySummary
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil
 	}

@@ -158,27 +158,28 @@ spec:
             summary: "tank-operator wake/event publishes to NATS are failing"
             runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
 
-    - name: tank-operator.session-lifecycle
+    - name: tank-operator.session-list
       rules:
-        # Pod-informer producer is leader-elected. The lease should be held
-        # by exactly one orchestrator replica at all times; sum across
-        # replicas should be 1. Zero for an extended window means the
-        # lease never got re-acquired after a roll, and pod transitions
-        # are no longer producing lifecycle rows — the sidebar will go
-        # silent on pod_failed/pod_ready events. Critical.
-        - alert: TankPodInformerLeaderMissing
+        # K8s-watch producer is leader-elected. The lease should be
+        # held by exactly one orchestrator replica at all times; sum
+        # across replicas should be 1. Zero for an extended window
+        # means the lease never got re-acquired after a roll, and pod
+        # transitions are no longer driving sessions row updates — the
+        # sidebar will go silent on pod_failed / pod_ready events.
+        # Critical.
+        - alert: TankSessionControllerLeaderMissing
           expr: sum(tank_session_pod_informer_leader_held) < 1
           for: 2m
           labels:
             severity: critical
           annotations:
-            summary: "no replica is holding the pod-informer lease — sidebar SSE will stop reflecting pod transitions"
+            summary: "no replica is holding the session-controller lease — sidebar SSE will stop reflecting pod transitions"
             runbook: |
-              The leader-elected pod-informer that writes session_lifecycle_events
-              rows on Kubernetes pod transitions is not running on any
-              orchestrator replica. Pod evictions, readiness flips, and pod
-              deletions will not propagate to the sidebar until the lease is
-              re-acquired. Inspect orchestrator logs for
+              The leader-elected K8s watch that writes pod-state column
+              updates to the sessions row is not running on any
+              orchestrator replica. Pod evictions, readiness flips, and
+              pod deletions will not propagate to the sidebar until the
+              lease is re-acquired. Inspect orchestrator logs for
               `sessioncontroller k8s-watch: started leading` /
               `sessioncontroller k8s-watch: leader run failed`; verify
               the `tank-operator-session-controller` Lease in the
@@ -187,11 +188,12 @@ spec:
 
         # Activity-delta emitter is the chat→sidebar bridge. A non-zero
         # failure rate means something between the chat-event persister
-        # and the lifecycle ledger is broken — chat sessions will still
-        # work end-to-end (the per-session SSE remains durable) but the
-        # sidebar's status/unread indicators will go stale.
-        - alert: TankLifecycleActivityEmitterFailing
-          expr: rate(tank_session_lifecycle_activity_failure_total[10m]) > 0
+        # and the sessions row activity_summary update is broken — chat
+        # sessions will still work end-to-end (the per-session SSE
+        # remains durable) but the sidebar's status / unread indicators
+        # will go stale.
+        - alert: TankSessionActivityEmitterFailing
+          expr: rate(tank_session_activity_delta_failure_total[10m]) > 0
           for: 10m
           labels:
             severity: warning
@@ -199,10 +201,31 @@ spec:
             summary: "chat→sidebar activity-delta emitter is failing"
             runbook: |
               The persister hook that turns chat events into
-              session.activity_changed lifecycle rows is hitting store or
+              session.activity_changed row updates is hitting store or
               publish errors. The sidebar's run-status / needs-input /
-              unread-count indicators will lag actual chat state. Inspect
-              orchestrator logs for `chat-activity emitter:` lines.
+              unread-count indicators will lag actual chat state.
+              Inspect orchestrator logs for `chat-activity emitter:`
+              lines.
+
+        # Row-update producer outcome. RowWriter is the single seam
+        # the K8s watch and activity emitter write through; a non-zero
+        # failure rate means the sessions row column update SQL is
+        # erroring out and the sidebar will render stale state.
+        - alert: TankSessionRowUpdatesFailing
+          expr: rate(tank_session_row_updates_total{outcome="failed"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "sessions row UPDATE is failing — sidebar columns will drift"
+            runbook: |
+              RowWriter is failing to apply per-transition column
+              updates (status / ready_at / terminating_at /
+              activity_summary). The pre-write transition was already
+              durable in the producer (K8s watch or persister), but
+              the row's column values will lag observed state.
+              Inspect logs for `sessioncontroller: row column update
+              failed`.
 
         # Cross-scope event leak guard. The per-(owner, scope) NATS
         # subject prevents cross-scope delivery in steady state; if a
@@ -220,16 +243,15 @@ spec:
           annotations:
             summary: "session-list NATS payload arrived with the wrong session_scope"
             runbook: |
-              A publisher emitted a session_lifecycle_events payload whose
+              A publisher emitted a session row-update payload whose
               embedded session_scope does not match the receiving
-              orchestrator's scope. The (email, scope) subject shape makes
-              this physically unreachable in steady state, so this is a
-              producer-side regression — most likely
-              `sessioncontroller.RowWriter.RecordTransition` or one of
-              its callers passing a stale scope to the row-update
-              publisher. Inspect orchestrator logs for
-              `session row payload dropped: scope mismatch` or
-              `session list payload dropped: scope mismatch`.
+              orchestrator's scope. The (email, scope) subject shape
+              makes this physically unreachable in steady state, so
+              this is a producer-side regression — most likely
+              `sessioncontroller.RowWriter.RecordTransition` or one
+              of its callers passing a stale scope to the row-update
+              publisher. Inspect orchestrator logs for `session row
+              payload dropped: scope mismatch`.
 
     - name: tank-operator.nats
       rules:

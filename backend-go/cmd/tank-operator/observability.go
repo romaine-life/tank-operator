@@ -269,51 +269,47 @@ var (
 	})
 )
 
-// --- Pod-informer producer metrics. ---
+// --- Session controller producer metrics. ---
+//
+// Post-Phase-4 the sessions row is the only durable state on the
+// sidebar path; these metrics track the producers that write it.
 
 var (
-	// sessionLifecycleEventWritesTotal counts every durable ledger write
-	// (whether by Manager, the persister-driven ChatActivityEmitter, or the
-	// pod-informer leader). The type label is bounded by the small fixed
-	// set of EventType constants — cardinality budget is fine.
-	sessionLifecycleEventWritesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "tank_session_lifecycle_event_writes_total",
-		Help: "Durable session_lifecycle_events rows written, labeled by event type.",
-	}, []string{"type"})
-	sessionPodInformerLagSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "tank_session_pod_informer_lag_seconds",
-		Help:    "End-to-end lag between an observed pod transition and the lifecycle ledger row insert.",
+	sessionRowUpdateLagSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_session_row_update_lag_seconds",
+		Help:    "End-to-end lag between an observed K8s pod transition and the sessions row column update.",
 		Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
 	})
-	// sessionPodInformerLeaderHeld is the single-writer health signal.
-	// 1 on the replica currently holding the lease, 0 elsewhere. If the
-	// SUM across replicas is 0 for an extended window the alert fires.
+	// sessionPodInformerLeaderHeld is the single-writer health
+	// signal. 1 on the replica currently holding the lease, 0
+	// elsewhere. If the SUM across replicas is 0 for an extended
+	// window the alert fires. Name retained for grafana / alert
+	// continuity; the producer is the K8s watch leader.
 	sessionPodInformerLeaderHeld = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "tank_session_pod_informer_leader_held",
-		Help: "1 when this replica currently holds the pod-informer Lease; 0 otherwise.",
+		Help: "1 when this replica currently holds the session-controller Lease; 0 otherwise.",
 	})
-	// sessionLifecycleActivityEmitTotal: emitted-or-skipped breakdown of
-	// the persister-driven session.activity_changed deltas. The "skipped"
-	// counter dominates in steady state (most chat events are turn-status
-	// indicator no-ops); a sudden surge in "emitted" without a matching
-	// pattern in user activity is a regression signal.
-	sessionLifecycleActivityEmitTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "tank_session_lifecycle_activity_emit_total",
-		Help: "Persister activity-summary delta decisions, labeled by outcome (emitted/skipped).",
+	// sessionActivityDeltaTotal: emitted-or-skipped breakdown of the
+	// persister-driven session.activity_changed deltas. The "skipped"
+	// counter dominates in steady state (most chat events are turn-
+	// status indicator no-ops); a sudden surge in "emitted" without a
+	// matching pattern in user activity is a regression signal.
+	sessionActivityDeltaTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_activity_delta_total",
+		Help: "Activity-summary delta decisions from the chat-activity emitter, labeled by outcome (emitted/skipped).",
 	}, []string{"outcome"})
-	sessionLifecycleActivityFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "tank_session_lifecycle_activity_failure_total",
-		Help: "Persister activity-summary delta derivation failures (store/publish errors).",
+	sessionActivityDeltaFailureTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_activity_delta_failure_total",
+		Help: "Activity-summary delta derivation failures (store/publish errors).",
 	})
 	// sessionRowUpdatesTotal counts sessioncontroller.RowWriter's
-	// per-event dual-write outcomes on the sessions row. Outcome=ok
-	// dominates in steady state; outcome=failed > 0 means the row has
-	// drifted from the lifecycle ledger and Phase 2's snapshot would
-	// return stale state. Alerts in
+	// per-event outcomes on the sessions row. Outcome=ok dominates in
+	// steady state; outcome=failed > 0 means the sidebar's column
+	// values are drifting from observed pod state. Alerts in
 	// k8s/templates/observability.yaml.
 	sessionRowUpdatesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_session_row_updates_total",
-		Help: "sessions row column updates from RowWriter, labeled by lifecycle event type and outcome.",
+		Help: "sessions row column updates from RowWriter, labeled by event type and outcome.",
 	}, []string{"type", "outcome"})
 )
 
@@ -331,15 +327,17 @@ func recordSessionListStreamError() {
 // package.
 type promK8sWatchMetrics struct{}
 
-func (promK8sWatchMetrics) RecordTransition(eventType string) {
-	sessionLifecycleEventWritesTotal.WithLabelValues(eventType).Inc()
+func (promK8sWatchMetrics) RecordTransition(_ string) {
+	// Per-transition counts are now owned by RowWriter via
+	// tank_session_row_updates_total{type,outcome} — keeping a
+	// separate K8s-watch counter would double-count the same emit.
 }
 
 func (promK8sWatchMetrics) RecordLag(seconds float64) {
 	if seconds < 0 {
 		seconds = 0
 	}
-	sessionPodInformerLagSeconds.Observe(seconds)
+	sessionRowUpdateLagSeconds.Observe(seconds)
 }
 
 func (promK8sWatchMetrics) RecordLeaderStatus(isLeader bool) {
@@ -351,9 +349,9 @@ func (promK8sWatchMetrics) RecordLeaderStatus(isLeader bool) {
 }
 
 // promRowWriterMetrics satisfies sessioncontroller.RowWriterMetrics —
-// the dual-write contract's per-event observability surface. Phase 2's
-// snapshot cutover depends on row-update failure rate being zero;
-// non-zero here means the row drifted from the lifecycle ledger.
+// the per-event observability surface on the sessions row write path.
+// Post-Phase-4 the sidebar renders directly from the row, so a
+// non-zero failure rate here is user-visible as stale columns.
 type promRowWriterMetrics struct{}
 
 func (promRowWriterMetrics) RecordRowUpdate(eventType string) {
@@ -364,22 +362,25 @@ func (promRowWriterMetrics) RecordRowUpdateFailure(eventType string) {
 	sessionRowUpdatesTotal.WithLabelValues(eventType, "failed").Inc()
 }
 
-// promLifecycleEmitterMetrics satisfies sessioncontroller.LifecycleEmitterMetrics for the
-// chat→activity_changed bridge. Emitted=true increments
-// {outcome="emitted"}, false → {outcome="skipped"}.
+// promLifecycleEmitterMetrics satisfies
+// sessioncontroller.LifecycleEmitterMetrics for the chat→activity-
+// summary bridge. Emitted=true increments {outcome="emitted"}, false
+// → {outcome="skipped"}. The RowWriter's tank_session_row_updates_total
+// counter covers the actual sessions row write that follows an
+// emitted=true call; this metric covers the emitter's own dedup
+// decision (most chat events resolve to no-op).
 type promLifecycleEmitterMetrics struct{}
 
 func (promLifecycleEmitterMetrics) RecordActivityDelta(emitted bool) {
 	outcome := "skipped"
 	if emitted {
 		outcome = "emitted"
-		sessionLifecycleEventWritesTotal.WithLabelValues("session.activity_changed").Inc()
 	}
-	sessionLifecycleActivityEmitTotal.WithLabelValues(outcome).Inc()
+	sessionActivityDeltaTotal.WithLabelValues(outcome).Inc()
 }
 
 func (promLifecycleEmitterMetrics) RecordActivityFailure() {
-	sessionLifecycleActivityFailureTotal.Inc()
+	sessionActivityDeltaFailureTotal.Inc()
 }
 
 // --- Postgres query tracer metrics ---

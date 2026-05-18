@@ -70,7 +70,6 @@ func adminTestServer(t *testing.T) *appServer {
 			sessionmodel.SessionsNamespace,
 			nil,
 			nil,
-			nil,
 			sessions.ManagerOptions{},
 		),
 		sessionEvents: store.StubSessionEventStore{},

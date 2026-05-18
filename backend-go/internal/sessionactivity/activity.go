@@ -1,8 +1,31 @@
-package lifecycleevents
+// Package sessionactivity is the chat-event → sidebar-indicator fold:
+// the per-session "what state is the conversation in right now"
+// summary rendered by the sidebar's per-row chips and dots. The
+// session-bus persister calls DeriveActivitySummary after upserting
+// a chat event so the SessionController's chat-activity emitter can
+// decide whether to update the sessions row's activity_summary
+// column.
+//
+// History: this fold used to live alongside the durable typed-event
+// ledger that docs/session-list-redesign.md retires. Phase 4 lifted
+// the activity types into their own package so the chat-activity
+// logic stays while the ledger goes away.
+package sessionactivity
 
 import (
 	"strings"
 )
+
+// ActivitySummary is the per-session fold the sidebar renders.
+type ActivitySummary struct {
+	Status       string  `json:"status"`
+	ActiveTurnID *string `json:"active_turn_id"`
+	NeedsInput   bool    `json:"needs_input"`
+	Failed       bool    `json:"failed"`
+	LastOrderKey *string `json:"last_order_key"`
+	UnreadCount  int     `json:"unread_count"`
+	UpdatedAt    *string `json:"updated_at"`
+}
 
 // DeriveActivitySummary applies the chat-event lifecycle fold the sidebar
 // used to compute on every poll of the retired activity-polling
