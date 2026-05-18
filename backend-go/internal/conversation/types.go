@@ -25,6 +25,12 @@ const (
 	SourceTank   Source = "tank"
 	SourceClaude Source = "claude"
 	SourceCodex  Source = "codex"
+	// SourceHermes is the bridge in backend-go/internal/hermes/ emitting
+	// translated events on Hermes Agent's behalf for hermes_gui sessions.
+	// Hermes runs in a separate StatefulSet; the bridge consumes its
+	// /v1/runs/:id/events SSE and translates to this schema. See
+	// nelsong6/tank-operator#540.
+	SourceHermes Source = "hermes"
 )
 
 type Visibility string
@@ -276,7 +282,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex:
+	case SourceTank, SourceClaude, SourceCodex, SourceHermes:
 		return true
 	default:
 		return false

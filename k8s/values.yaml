@@ -197,6 +197,19 @@ superAdmins:
 internalApi:
   tankUiHost: "https://tank.romaine.life"
 
+# Hermes Agent integration. Tank's backend drives Hermes' OpenAI-compatible
+# API server for `hermes_gui` session turns (cluster-internal, no public
+# ingress on Hermes' side). The bearer is shared with nelsong6/hermes —
+# both pull from the same KV secret. See nelsong6/tank-operator#540.
+hermes:
+  apiURL: "http://hermes-api.hermes.svc.cluster.local:8642"
+  bearerSecret:
+    # ExternalSecret synced from KV `hermes-api-bearer`. Tank's
+    # orchestrator and Hermes' StatefulSet read the same secret; rotating
+    # in KV updates both sides on the next ExternalSecret refresh.
+    name: hermes-api-bearer
+    key: API_SERVER_KEY
+
 externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore

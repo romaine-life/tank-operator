@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
@@ -29,6 +30,50 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
+
+// buildHermesBridge constructs the hermes bridge from env config. Returns
+// nil when HERMES_API_URL or HERMES_API_BEARER is unset; handlers branch
+// on nil and return 503 so a missing-config surfaces as a visible error
+// rather than a silent NPE. See nelsong6/tank-operator#540 for the env wiring.
+//
+// The bridge's row-publish hook is unset for now: hermes_gui sessions
+// don't yet wire activity-summary updates onto the SPA sidebar's row
+// stream. Tracked as a follow-up; the existing per-turn-terminal row
+// publish on the pod-backed path is what users see today, so omitting it
+// for hermes_gui matches the current "activity-summary follows the turn"
+// behavior at degraded fidelity (no live count, but the chat itself works).
+func buildHermesBridge(eventStore store.SessionEventStore, scope string) *hermes.Bridge {
+	baseURL := strings.TrimSpace(os.Getenv("HERMES_API_URL"))
+	bearer := strings.TrimSpace(os.Getenv("HERMES_API_BEARER"))
+	if baseURL == "" || bearer == "" {
+		slog.Warn("hermes bridge disabled (missing HERMES_API_URL or HERMES_API_BEARER); hermes_gui sessions will return 503")
+		return nil
+	}
+	client := hermes.NewClient(hermes.Options{BaseURL: baseURL, Bearer: bearer})
+	return hermes.NewBridge(hermes.BridgeOptions{
+		Client:   client,
+		Store:    eventStore,
+		Scope:    scope,
+		Recorder: promHermesRecorder{},
+	})
+}
+
+// promHermesRecorder bridges the hermes.Recorder interface to the
+// tank_hermes_* prometheus counters defined in observability.go.
+type promHermesRecorder struct{}
+
+func (promHermesRecorder) RunCreated() {
+	hermesRunTotal.WithLabelValues("created").Inc()
+}
+func (promHermesRecorder) RunCreateFailed() {
+	hermesRunTotal.WithLabelValues("failed_to_create").Inc()
+}
+func (promHermesRecorder) RunTerminal(terminal string) {
+	hermesRunTerminalTotal.WithLabelValues(terminal).Inc()
+}
+func (promHermesRecorder) TranslatorError(reason string) {
+	hermesTranslatorErrorTotal.WithLabelValues(reason).Inc()
+}
 
 func main() {
 	addr := envDefault("TANK_OPERATOR_ADDR", ":8000")
@@ -264,6 +309,7 @@ func main() {
 		sessionServiceAccount:    sessionServiceAccount,
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
+		hermesBridge:             buildHermesBridge(sessionEventsStore, sessionScope),
 	}
 	srv.registerRoutes(mux)
 
