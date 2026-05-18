@@ -94,6 +94,56 @@ export async function dispatch(
   return true;
 }
 
+// logUnhandledSdkMessage emits a structured JSON log line for SDK messages
+// whose `type` is not one the adapter converts into Tank conversation
+// events. canonicalEventsForClaudeMessage handles only "assistant", "user",
+// and "result"; "stream_event" is the partial-typing surface and is
+// intentionally noisy, so we skip it too. Everything else — task lifecycle
+// (system/task_started, system/task_progress, system/task_notification,
+// system/task_updated), hooks, status changes, plugin installs — currently
+// has no observable surface in tank's session_events or the UI. This log
+// is the cheapest path to learning what the SDK is reporting that we drop:
+// once a Monitor-stuck session reproduces, `kubectl logs -c agent-runner
+// | jq 'select(.msg=="sdk_message_unhandled")'` shows the SDK's verdict
+// (e.g. subtype=task_notification, status=failed) without a schema change.
+// Fields included are the small set of identifying ones that show up
+// across SDK message variants; the full payload is still in the on-disk
+// JSONL transcript for deeper digs.
+const UNHANDLED_LOG_FIELDS = [
+  "subtype",
+  "task_id",
+  "tool_use_id",
+  "status",
+  "summary",
+  "description",
+  "last_tool_name",
+  "error",
+  "patch",
+  "uuid",
+] as const;
+
+export function logUnhandledSdkMessage(message: SDKMessage): void {
+  const m = message as Record<string, unknown> & { type?: unknown };
+  const type = typeof m.type === "string" ? m.type : "";
+  if (
+    type === "assistant" ||
+    type === "user" ||
+    type === "result" ||
+    type === "stream_event"
+  ) {
+    return;
+  }
+  const fields: Record<string, unknown> = {
+    msg: "sdk_message_unhandled",
+    type,
+  };
+  for (const key of UNHANDLED_LOG_FIELDS) {
+    const v = m[key];
+    if (v !== undefined) fields[key] = v;
+  }
+  console.log(JSON.stringify(fields));
+}
+
 export interface PendingTurn {
   turnID: string;
   clientNonce: string;
@@ -454,7 +504,11 @@ export class Runner {
   private async handleEvent(message: SDKMessage): Promise<void> {
     // Claude SDK events are adapter inputs, not bus content. The adapter
     // converts them into Tank conversation events; only those reach the
-    // durable session bus.
+    // durable session bus. Anything the adapter does not understand
+    // (task lifecycle, hooks, status, etc.) is logged via
+    // logUnhandledSdkMessage so the diagnostic surface exists in kubectl
+    // logs without growing the durable event schema.
+    logUnhandledSdkMessage(message);
     const providerEvent = message as ClaudeProviderEvent;
     const activeTurn = await this.ensureActiveTurn(providerEvent);
 

@@ -10,6 +10,7 @@ import {
   inputReplyAnswers,
   inputReplyTargetProviderItemID,
   joinAnswersForSDK,
+  logUnhandledSdkMessage,
   Runner,
 } from "./runner.js";
 import {
@@ -178,6 +179,93 @@ test("inputReplyAnnotations trims preview and notes, drops empty entries", () =>
   assert.deepEqual(inputReplyAnnotations(record as never), {
     Q1: { preview: "<div/>", notes: "hi" },
   });
+});
+
+// logUnhandledSdkMessage is the cheapest possible surface for "what is the
+// SDK telling us that the adapter throws away?" — task lifecycle events
+// (Monitor's status=completed/failed/stopped notification, the immediate
+// task_started ack, periodic task_progress) all arrive as `type:"system"`
+// with a `subtype` and never reach Tank conversation events. The test
+// pins two contracts at once:
+//   - canonical types the adapter already converts ("assistant", "user",
+//     "result", and the partial-typing "stream_event") MUST stay silent
+//     so we don't double-log them and don't flood kubectl logs with the
+//     per-token partial stream.
+//   - every other type MUST log one JSON line carrying the small set of
+//     identifying fields a debugger needs (subtype, task_id, tool_use_id,
+//     status, summary) without bringing the full payload along.
+// If a future patch promotes any of these types to first-class Tank
+// events, the adapter handler lands first and this test's expected
+// silent-type set gets the new entry — otherwise we'd double-emit.
+function captureConsoleLog<T>(fn: () => T): { result: T; lines: string[] } {
+  const lines: string[] = [];
+  const original = console.log;
+  console.log = (msg: unknown) => {
+    lines.push(String(msg));
+  };
+  try {
+    const result = fn();
+    return { result, lines };
+  } finally {
+    console.log = original;
+  }
+}
+
+test("logUnhandledSdkMessage emits a structured JSON line for task_notification", () => {
+  const { lines } = captureConsoleLog(() =>
+    logUnhandledSdkMessage({
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-abc",
+      tool_use_id: "toolu_xyz",
+      status: "failed",
+      summary: "Monitor stream ended without condition match",
+      uuid: "u-1",
+      session_id: "s-1",
+    } as never),
+  );
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.msg, "sdk_message_unhandled");
+  assert.equal(parsed.type, "system");
+  assert.equal(parsed.subtype, "task_notification");
+  assert.equal(parsed.task_id, "task-abc");
+  assert.equal(parsed.tool_use_id, "toolu_xyz");
+  assert.equal(parsed.status, "failed");
+  assert.equal(parsed.summary, "Monitor stream ended without condition match");
+  assert.equal(parsed.uuid, "u-1");
+  // session_id is intentionally not in UNHANDLED_LOG_FIELDS — the runner
+  // only ever serves one session_id so the surrounding pod context covers
+  // it. If a future change broadens scope (multi-session pod), revisit.
+  assert.equal(parsed.session_id, undefined);
+});
+
+test("logUnhandledSdkMessage is silent for types the adapter already handles", () => {
+  const { lines } = captureConsoleLog(() => {
+    for (const type of ["assistant", "user", "result", "stream_event"]) {
+      logUnhandledSdkMessage({ type } as never);
+    }
+  });
+  assert.equal(
+    lines.length,
+    0,
+    "adapter-handled types must not produce a duplicate diagnostic log",
+  );
+});
+
+test("logUnhandledSdkMessage logs unknown types even with no identifying fields", () => {
+  // A future SDK version may add types we haven't enumerated. The contract
+  // is "anything our adapter ignores becomes a single log line so it is
+  // discoverable" — not "log only the types we already know about." This
+  // pins the open-ended behavior so a forward-incompatible SDK message
+  // doesn't go silent.
+  const { lines } = captureConsoleLog(() =>
+    logUnhandledSdkMessage({ type: "future_unknown_kind" } as never),
+  );
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.msg, "sdk_message_unhandled");
+  assert.equal(parsed.type, "future_unknown_kind");
 });
 
 test("joinAnswersForSDK joins multi-select arrays with the SDK preprocess separator", () => {
