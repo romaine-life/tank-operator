@@ -2,6 +2,7 @@
 // @anthropic-ai/claude-agent-sdk for one session pod's lifetime and publishes
 // canonical transcript events to the session bus.
 
+import { readClaudeCliVersion } from "./cliVersion.js";
 import { loadConfig } from "./config.js";
 import { startMetricsServer } from "./metrics.js";
 import { Runner } from "./runner.js";
@@ -22,6 +23,11 @@ async function main(): Promise<void> {
       nats_url: cfg.natsURL,
       nats_stream: cfg.natsStream,
       workspace: cfg.workspace,
+      // CC version floats with npm-latest at image-build time (no pin in
+      // claude-container/Dockerfile). Captured here so a future "which
+      // version was running when X broke?" lookup is a one-liner against
+      // kubectl logs instead of a chart-bump-to-build-log archaeology.
+      claude_cli_version: readClaudeCliVersion(),
     }),
   );
 
