@@ -4142,6 +4142,40 @@ textarea.run-files-viewer-editor:focus {
   color: var(--cyan);
 }
 
+/* Match the cyan accent on fork so the two "navigation" affordances
+   read as a set. Hovering still ramps to text-primary via the base
+   .run-msg-action:hover rule. */
+.run-msg-link {
+  color: var(--cyan);
+}
+
+/* Deep-link landing pulse. Applied via data-highlight on the message
+   bubble for ~2.4s after Virtuoso scrolls to it, then cleared by the
+   timer in RunMessages. Box-shadow ring works on both user and
+   assistant variants without leaking into the timings column. */
+@keyframes run-msg-highlight-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.0);
+  }
+  20% {
+    box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.0);
+  }
+}
+
+.run-transcript-message[data-highlight="true"] .run-transcript-message-content {
+  animation: run-msg-highlight-pulse 2.2s ease-out 1;
+  border-radius: 0.5rem;
+}
+
+/* While the highlight is up keep the footer visible so the user sees
+   the link button that produced the jump, even before mouse hover. */
+.run-transcript-message[data-highlight="true"] .run-msg-footer {
+  opacity: 1;
+}
+
 /* Reasoning accordion — collapsible thinking block. */
 .run-reasoning {
   grid-column: 2;
