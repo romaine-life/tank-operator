@@ -597,3 +597,269 @@ test("terminal turn failures ack the durable submit command", async () => {
   assert.equal(turn.commandRecord, undefined);
   assert.equal(turn.stopCommandHeartbeat, undefined);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// nelsong6/tank-operator#532 — four-outcome contract for accepted interrupts.
+//
+// Every interrupt_turn command the runner accepts MUST resolve to exactly
+// one terminal-outcome increment on tank_runner_interrupt_outcome_total
+// within bounded time. The pre-#532 shape had two silent strandings:
+//
+//   1. Race: interrupt arrives before submit_turn is dispatched. The old
+//      interruptActiveTurn returned "not_found" silently and the stop
+//      click was lost — the SDK never got an interrupt, no durable
+//      terminal ever landed, the UI hung in "stopping".
+//   2. Publish failure: turn.interrupted dispatch failed. The old shape
+//      gated sdkQuery.interrupt() on the durable publish succeeding, so
+//      a transient publish failure let the model keep generating tool
+//      calls until natural completion. Same shape: no durable terminal,
+//      UI hangs.
+//
+// These tests pin the buffer-and-apply contract that closes both silent
+// paths. Each test asserts the visible terminal events emitted plus the
+// command bus ack/fail outcomes; they intentionally don't assert on the
+// interruptOutcomeTotal counter directly (it's a process-global Counter
+// from prom-client, which doesn't play well with parallel tests).
+// ───────────────────────────────────────────────────────────────────────────
+
+interface InterruptTestHarness {
+  events: TankConversationEvent[];
+  bus: string[];
+  sdkInterrupts: number;
+  heartbeats: number;
+  setSinkFailureCount: (n: number) => void;
+}
+
+function makeInterruptHarness(runnerCfg = runnerConfig()): {
+  runner: Runner;
+  harness: InterruptTestHarness;
+} {
+  const events: TankConversationEvent[] = [];
+  const bus: string[] = [];
+  let sdkInterrupts = 0;
+  let heartbeats = 0;
+  let sinkFailuresLeft = 0;
+  const harness: InterruptTestHarness = {
+    events,
+    bus,
+    get sdkInterrupts() {
+      return sdkInterrupts;
+    },
+    get heartbeats() {
+      return heartbeats;
+    },
+    setSinkFailureCount(n: number) {
+      sinkFailuresLeft = n;
+    },
+  } as InterruptTestHarness;
+  const runner = new Runner(runnerCfg);
+  const internals = runner as unknown as {
+    sink: { upsert: (e: TankConversationEvent) => Promise<void>; findTurnTerminal?: () => Promise<null> };
+    commandBus: {
+      markCompleted: (r?: unknown) => Promise<void>;
+      markFailed: (r?: unknown, err?: unknown) => Promise<void>;
+      startCommandHeartbeat: (r?: unknown) => () => void;
+      attemptsExceeded: (r?: unknown) => boolean;
+    };
+    sdkQuery: { interrupt: () => Promise<void> } | null;
+  };
+  internals.sink = {
+    async upsert(event: TankConversationEvent) {
+      if (sinkFailuresLeft > 0) {
+        sinkFailuresLeft -= 1;
+        throw new Error("simulated dispatch failure");
+      }
+      events.push(event);
+    },
+  };
+  internals.commandBus = {
+    async markCompleted() {
+      bus.push("ack");
+    },
+    async markFailed() {
+      bus.push("fail");
+    },
+    startCommandHeartbeat() {
+      heartbeats += 1;
+      return () => {
+        heartbeats -= 1;
+      };
+    },
+    attemptsExceeded() {
+      return false;
+    },
+  };
+  internals.sdkQuery = {
+    async interrupt() {
+      sdkInterrupts += 1;
+    },
+  };
+  return { runner, harness };
+}
+
+test("acceptInterrupt during in-flight turn: sdkQuery.interrupt() called first, turn.interrupted published", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
+  const turn = {
+    turnID: "turn_abc-123",
+    clientNonce: "abc-123",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+  };
+  r.activeTurn = turn;
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "abc-123",
+    client_nonce: "abc-123",
+  });
+
+  assert.equal(harness.sdkInterrupts, 1, "SDK interrupt must be called");
+  assert.equal(harness.events.length, 1, "exactly one durable terminal must be published");
+  assert.equal(harness.events[0]!.type, "turn.interrupted");
+  assert.equal((harness.events[0] as { turn_id: string }).turn_id, "turn_abc-123");
+  assert.deepEqual(harness.bus, ["ack"], "interrupt command must be acked");
+});
+
+test("acceptInterrupt with no matching turn: buffered, applied when submit_turn arrives, never feeds SDK", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    pendingInterrupts: unknown[];
+    acceptInterrupt: (record: unknown) => Promise<void>;
+    acceptCommandTurn: (record: unknown) => Promise<void>;
+    ensureSdkQuery: (record: unknown) => void;
+    finalizeCommandIfAlreadyTerminal: () => Promise<boolean>;
+    sink: { findTurnTerminal: () => Promise<null> };
+    userQueue: { push: (m: unknown) => void };
+  };
+  r.activeTurn = null;
+  r.ensureSdkQuery = () => {};
+  (r.sink as { findTurnTerminal: () => Promise<null> }).findTurnTerminal = async () => null;
+  // Spy on userQueue.push to confirm the SDK is never fed.
+  const sdkFed: unknown[] = [];
+  r.userQueue = {
+    push(message: unknown) {
+      sdkFed.push(message);
+    },
+  };
+
+  // Stop click arrives first.
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "abc-123",
+    client_nonce: "abc-123",
+  });
+  assert.equal(r.pendingInterrupts.length, 1, "interrupt must be buffered (no matching turn yet)");
+  assert.equal(harness.events.length, 0, "no durable terminal yet — waiting for the matching submit_turn");
+  assert.deepEqual(harness.bus, [], "no ack/fail yet — the JetStream record is parked");
+
+  // Now the matching submit_turn lands.
+  await r.acceptCommandTurn({
+    type: "submit_turn",
+    id: "cmd-2",
+    prompt: "hello",
+    client_nonce: "abc-123",
+    target_turn_id: "abc-123",
+  });
+
+  assert.equal(r.pendingInterrupts.length, 0, "buffer must drain on matching submit_turn");
+  assert.equal(harness.sdkInterrupts, 0, "SDK must not be interrupted — it was never fed the prompt");
+  assert.equal(sdkFed.length, 0, "SDK userQueue must not receive the aborted-before-start turn");
+  assert.equal(harness.events.length, 1, "synthetic turn.interrupted must be published");
+  assert.equal(harness.events[0]!.type, "turn.interrupted");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+    "client_interrupt_before_start",
+    "reason must distinguish the pre-SDK path from the during-turn path",
+  );
+});
+
+test("acceptInterrupt with publish failure: durable terminal still lands via fallback turn.failed", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
+  const turn = {
+    turnID: "turn_xyz-9",
+    clientNonce: "xyz-9",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+  };
+  r.activeTurn = turn;
+  // Fail every turn.interrupted publish attempt (3 retries) plus the
+  // fallback turn.failed publish attempts — until exactly the LAST
+  // fallback succeeds. This isolates the contract: even when the
+  // happy-path terminal can't land, the runner MUST emit *some*
+  // durable terminal so the UI's "stopping" state resolves.
+  harness.setSinkFailureCount(3 + 2); // 3 retries on interrupted, then 2 of 3 on fallback
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "xyz-9",
+    client_nonce: "xyz-9",
+  });
+
+  assert.equal(harness.sdkInterrupts, 1, "SDK interrupt must still be called regardless of publish outcome");
+  assert.equal(harness.events.length, 1, "exactly one durable terminal must eventually land");
+  assert.equal(harness.events[0]!.type, "turn.failed", "fallback shape is turn.failed");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+    "publish_interrupt_failed",
+    "fallback reason must name the cause so the post-mortem isn't a mystery",
+  );
+  assert.deepEqual(harness.bus, ["fail"], "command bus must be marked failed when the happy terminal didn't land");
+});
+
+test("acceptInterrupt when turn already terminal: ack without re-emitting a terminal", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
+  r.activeTurn = {
+    turnID: "turn_done-1",
+    clientNonce: "done-1",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: true, // turn raced to completion before the interrupt landed
+  };
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "done-1",
+    client_nonce: "done-1",
+  });
+
+  assert.equal(harness.sdkInterrupts, 0, "no SDK call — nothing to interrupt");
+  assert.equal(harness.events.length, 0, "no new terminal — the natural terminal already exists");
+  assert.deepEqual(harness.bus, ["ack"], "interrupt command still acked (it was delivered correctly)");
+});
+
+test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as { acceptInterrupt: (record: unknown) => Promise<void> };
+
+  await r.acceptInterrupt({
+    type: "interrupt_turn",
+    id: "cmd-1",
+    target_turn_id: "",
+    client_nonce: "",
+  });
+
+  assert.deepEqual(harness.bus, ["fail"], "missing target must produce a visible failure, not a silent ack");
+  assert.equal(harness.events.length, 0);
+});

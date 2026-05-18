@@ -38,6 +38,48 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+// interruptOutcomeTotal records the disposition of every `interrupt_turn`
+// command this runner accepts. The four-outcome contract (see
+// docs/tank-conversation-protocol.md → "Durable turn interruption" and
+// nelsong6/tank-operator#532) is the invariant this counter pins:
+//
+//   - `terminated_via_sdk` — interrupt arrived during an in-flight turn;
+//     sdkQuery.interrupt() was awaited and turn.interrupted published.
+//   - `terminated_pre_sdk` — interrupt arrived before the runner had
+//     dispatched the matching submit_turn to the SDK; the turn was never
+//     fed to query() and turn.interrupted published synthetically.
+//   - `buffered` — interrupt arrived with no matching active/pending turn;
+//     held in the in-process pendingInterrupts buffer awaiting a
+//     submit_turn or the orphan timeout. Transient state; every `buffered`
+//     increment must drain to exactly one of the other outcomes.
+//   - `orphaned` — buffered interrupt never matched a submit_turn within
+//     the buffer window; emitted turn.failed{reason:"interrupt_orphaned"}
+//     so the UI's "stopping" projection resolves to a durable terminal.
+//   - `publish_failed` — sdkQuery.interrupt() was attempted (or skipped
+//     because no SDK), but every retry to publish the durable terminal
+//     failed. A fallback turn.failed{reason:"publish_interrupt_failed"}
+//     attempt was made on the same channel; this outcome means the
+//     fallback also failed. JetStream redelivery will retry; until then
+//     the UI is stuck. Alert-worthy.
+//   - `turn_already_terminal` — interrupt arrived after the targeted
+//     turn had already emitted its own terminal (turn.completed or
+//     turn.failed). The race is legitimate; the durable ledger shows
+//     the natural terminal; no follow-up is needed.
+//   - `invalid_target` — interrupt command missing both target_turn_id
+//     and client_nonce. Backend bug; should be zero in production.
+//
+// The PromQL invariant this enables: every backend
+// tank_turn_interrupt_request_total{outcome="persisted"} should be
+// followed within bounded time by exactly one increment of this counter
+// in a terminal-outcome bucket. The `buffered` bucket counts arrivals,
+// not terminals; subtract it when alerting.
+export const interruptOutcomeTotal = new Counter({
+  name: "tank_runner_interrupt_outcome_total",
+  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and nelsong6/tank-operator#532 for the four-outcome contract.",
+  labelNames: ["outcome"],
+  registers: [registry],
+});
+
 export const pendingWakeupsGauge = new Gauge({
   name: "tank_runner_pending_wakeups",
   help: "Currently-pending ScheduleWakeup timers held in this runner process.",

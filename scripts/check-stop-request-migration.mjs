@@ -765,6 +765,122 @@ const CHECKS = [
     command: ["npm", "test"],
     cwd: "frontend",
   },
+
+  // ────────────────────── Four-outcome contract (post-#532) ──────────────────────
+  //
+  // #532 closed two silent-stranding paths in the runner's interrupt
+  // acceptance (the pre-submit race and the publish-gated SDK interrupt).
+  // The replacement contract is: every accepted interrupt_turn produces
+  // exactly one terminal-outcome increment on
+  // tank_runner_interrupt_outcome_total. The checks below pin the load-
+  // bearing pieces of that contract so a future refactor can't reintroduce
+  // the silent-return shapes. See nelsong6/tank-operator#532 and
+  // docs/tank-conversation-protocol.md → "Four-outcome contract on the
+  // runner side" for the prose contract.
+  {
+    id: "runner-interrupt-outcome-counter",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/metrics.ts",
+    description: "tank_runner_interrupt_outcome_total counter is registered with the outcome label",
+    kind: "grep-present",
+    pattern: /name:\s*"tank_runner_interrupt_outcome_total"[\s\S]{0,400}?labelNames:\s*\[\s*"outcome"\s*\]/,
+  },
+  {
+    id: "runner-pending-interrupts-buffer",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "pendingInterrupts buffer exists so an interrupt arriving before its submit_turn is not silently dropped",
+    kind: "grep-present",
+    pattern: /pendingInterrupts:\s*BufferedInterrupt\[\]/,
+  },
+  {
+    id: "runner-buffer-drain-helper",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "drainPendingInterruptsFor applies pre-arrived stops at submit_turn dispatch time",
+    kind: "grep-present",
+    pattern: /drainPendingInterruptsFor\(turn:\s*PendingTurn\)/,
+  },
+  {
+    id: "runner-sdk-interrupt-first",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "applyInterruptToTurn calls sdkQuery.interrupt() BEFORE publishing the durable terminal (load-bearing ordering)",
+    kind: "grep-present",
+    // sdkQuery.interrupt() must appear before publishTerminalWithRetry
+    // inside applyInterruptToTurn. The match is intentionally loose so
+    // formatting / comments / try-catch can vary.
+    pattern: /applyInterruptToTurn[\s\S]{0,2000}?this\.sdkQuery\?\.\s*interrupt\(\)[\s\S]{0,1200}?publishTerminalWithRetry/,
+  },
+  {
+    id: "runner-publish-retry-fallback",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "applyInterruptToTurn falls back to turn.failed{publish_interrupt_failed} when turn.interrupted publish exhausts retries",
+    kind: "grep-present",
+    pattern: /publish_interrupt_failed/,
+  },
+  {
+    id: "runner-orphan-terminal",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "expireBufferedInterrupt emits turn.failed{interrupt_orphaned} so a buffered interrupt without a matching submit_turn resolves to a durable terminal",
+    kind: "grep-present",
+    pattern: /interrupt_orphaned/,
+  },
+  {
+    id: "runner-no-silent-not-found",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "acceptInterrupt does NOT return silently with 'not_found' (the pre-#532 silent-stranding path)",
+    kind: "grep-absent",
+    // The shutdown-path interruptActiveTurn still uses InterruptOutcome
+    // and may return "not_found"; what's forbidden is acceptInterrupt
+    // (the client-driven path) silently early-exiting on no-match.
+    // Pin the regression by forbidding `return "not_found"` inside
+    // acceptInterrupt's body.
+    pattern: /private\s+async\s+acceptInterrupt[\s\S]{0,2500}?return\s+"not_found"/,
+  },
+  {
+    id: "observability-stop-outcome-stranded",
+    from: "Four-outcome contract (post-#532)",
+    file: "k8s/templates/observability.yaml",
+    description: "TankStopOutcomeStranded alert composes the new counter buckets",
+    kind: "grep-present",
+    pattern: /alert:\s*TankStopOutcomeStranded[\s\S]{0,1200}?tank_runner_interrupt_outcome_total\{outcome="buffered"\}/,
+  },
+  {
+    id: "observability-stop-publish-failed",
+    from: "Four-outcome contract (post-#532)",
+    file: "k8s/templates/observability.yaml",
+    description: "TankStopPublishFailed alert fires on tank_runner_interrupt_outcome_total{outcome=\"publish_failed\"}",
+    kind: "grep-present",
+    pattern: /alert:\s*TankStopPublishFailed[\s\S]{0,800}?outcome="publish_failed"/,
+  },
+  {
+    id: "docs-protocol-four-outcome-contract",
+    from: "Four-outcome contract (post-#532)",
+    file: "docs/tank-conversation-protocol.md",
+    description: "tank-conversation-protocol.md documents the four-outcome contract by name",
+    kind: "grep-present",
+    pattern: /Four-outcome contract on the runner side/,
+  },
+  {
+    id: "docs-diagnostic-discipline",
+    from: "Four-outcome contract (post-#532)",
+    file: "docs/diagnostic-discipline.md",
+    description: "diagnostic-discipline doc exists (load-bearing investigation policy that should have prevented #532's misdiagnosis)",
+    kind: "grep-present",
+    pattern: /durable ledger is the source of truth/,
+  },
+  {
+    id: "claudemd-diagnostic-pointer",
+    from: "Four-outcome contract (post-#532)",
+    file: "CLAUDE.md",
+    description: "CLAUDE.md references the new diagnostic-discipline doc",
+    kind: "grep-present",
+    pattern: /docs\/diagnostic-discipline\.md/,
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
