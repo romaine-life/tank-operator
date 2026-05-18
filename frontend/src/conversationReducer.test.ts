@@ -85,6 +85,38 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
   assert.equal(state.activeTurnId, null);
 });
 
+test("origin_session_id on user message flows onto ConversationMessage", () => {
+  // Cross-session handoff path: a sibling tank-operator session
+  // (id=42) posted this turn via mcp-tank-operator. The orchestrator
+  // stamps the originating id onto the event envelope so the renderer
+  // can pick the parent session's avatar for the user bubble instead
+  // of the human owner's Gravatar.
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "handoff-1",
+      payload: { text: "fix the avatar bug" },
+      origin_session_id: "42",
+    } as Partial<TankConversationEvent>),
+  ]);
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.originSessionId, "42");
+});
+
+test("user message without origin_session_id leaves originSessionId undefined", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "human-1",
+      payload: { text: "I typed this myself" },
+    }),
+  ]);
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.originSessionId, undefined);
+});
+
 test("Tool lifecycle replays to a completed tool item", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started"),

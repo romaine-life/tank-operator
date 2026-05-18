@@ -60,6 +60,11 @@
       "type": "string",
       "minLength": 1
     },
+    "origin_session_id": {
+      "description": "When a user-role message was authored by a sibling tank-operator session (via the mcp-tank-operator send_prompt / spawn_run_session tools) rather than typed by the human owner, this carries the originating session id. The frontend renders the user bubble with the parent session's deterministic avatar instead of the human's Gravatar so cross-session handoffs read as agent-authored, not user-authored. Owner attribution stays on `email` — both the human owner and the spawning session are owned by the same human. Empty/absent for normal human-typed turns.",
+      "type": "string",
+      "minLength": 1
+    },
     "turn_id": {
       "type": "string",
       "minLength": 1

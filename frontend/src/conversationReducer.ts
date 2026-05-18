@@ -21,6 +21,13 @@ export interface ConversationMessage {
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
+  // Originating tank-operator session id for user messages authored by
+  // a sibling session via the mcp-tank-operator send_prompt /
+  // spawn_run_session handoff path. Drives the user-bubble avatar in the
+  // renderer: when set, the parent session's deterministic avatar
+  // replaces the human owner's Gravatar so the handoff reads as
+  // agent-authored. Absent for normal human-typed turns.
+  originSessionId?: string;
 }
 
 export interface ConversationItem {
@@ -241,6 +248,7 @@ function applyUserMessage(
   }
   const text = stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
   if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text) return state;
+  const originSessionId = stringTopLevel(event, "origin_session_id");
   const message: ConversationMessage = {
     id: event.timeline_id,
     role: "user",
@@ -251,6 +259,7 @@ function applyUserMessage(
     orderKey: event.order_key,
     sourceEventId: event.event_id,
     createdAt: event.created_at,
+    ...(originSessionId ? { originSessionId } : {}),
   };
   return {
     ...state,
@@ -312,6 +321,18 @@ function defaultItemKind(event: TankConversationEvent): string {
 function stringPayload(event: TankConversationEvent, key: string): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+// stringTopLevel reads a top-level (envelope) string field from a Tank event.
+// Used for fields like `origin_session_id` that ride on the envelope rather
+// than inside `payload`, mirroring how `email` and `tank_session_id` are
+// stamped server-side. The TankConversationEvent type has
+// `[key: string]: unknown` so the lookup is well-typed.
+function stringTopLevel(event: TankConversationEvent, key: string): string | undefined {
+  const value = (event as Record<string, unknown>)[key];
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | undefined {

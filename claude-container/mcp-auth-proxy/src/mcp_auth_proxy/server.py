@@ -80,6 +80,21 @@ AUTH_ROMAINE_EXCHANGE_URL = os.environ.get(
 # Changing it requires a cross-repo coordinated deploy.
 AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 
+# Originating tank-operator session id forwarded on outbound calls to
+# mcp-tank-operator. Set from this pod's SESSION_ID env var (sourced
+# from the `tank-operator/session-id` Pod label). mcp-tank-operator
+# threads it into ORIGIN_SESSION_ID and forwards it on to the
+# orchestrator, which stamps it onto the persisted user_message.created
+# event so the frontend renders the parent session's avatar on the
+# user bubble in the target session. Empty env (e.g. local dev without
+# the downward-API mount) is fine — the header is omitted and the
+# orchestrator falls back to the human-Gravatar rendering. Header name
+# shared with mcp-tank-operator/src/mcp_tank_operator/caller.py and
+# tank-operator/backend-go/cmd/tank-operator/handlers_internal.go;
+# changing it requires a coordinated cross-repo deploy.
+ORIGIN_SESSION_FORWARD_HEADER = "X-Tank-Origin-Session-Id"
+ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
+
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
@@ -258,6 +273,7 @@ def _make_handler(
     token_provider,
     *,
     extra_header_provider=None,
+    static_headers=None,
 ):
     """Build the request handler for an MCP upstream.
 
@@ -270,6 +286,15 @@ def _make_handler(
     call, will reject any service-principal-gated route with 401, and
     the caller surfaces the error end-to-end. See
     nelsong6/tank-operator#486.
+
+    `static_headers`, when supplied, is a mapping of header-name → value
+    injected verbatim on every outbound request to this upstream.
+    Synchronous and per-process-constant — used for identity inputs
+    sourced from the pod environment that don't change at runtime
+    (today: X-Tank-Origin-Session-Id from SESSION_ID). Empty or None
+    values are omitted so the upstream sees the request without the
+    header, matching the orchestrator's "fall back to human Gravatar"
+    behavior when the field is absent.
     """
     upstream = upstream.rstrip("/")
     mcp_label = _mcp_server_label(upstream)
@@ -286,6 +311,11 @@ def _make_handler(
             k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS
         }
         forwarded_headers["Authorization"] = f"Bearer {token}"
+
+        if static_headers:
+            for name, value in static_headers.items():
+                if name and value:
+                    forwarded_headers[name] = value
 
         if extra_header_provider is not None:
             try:
@@ -395,6 +425,20 @@ async def run() -> None:
                     return AUTH_ROMAINE_FORWARD_HEADER, await provider.token()
                 extra_header_provider = _provide_auth_romaine_header
 
+            # Tell mcp-tank-operator which session pod is calling so it
+            # can forward the originating session id to the orchestrator,
+            # which stamps it onto user_message.created events and lets
+            # the frontend render the parent session's avatar on the
+            # user bubble in the target session. Only meaningful for the
+            # tank-operator handoff path (send_prompt / spawn_run_session)
+            # — other upstreams ignore the header. SESSION_ID is sourced
+            # from the pod's downward-API env var; when unset we omit
+            # the header and the orchestrator falls back to the
+            # human-Gravatar rendering.
+            static_headers = None
+            if port == TANK_OPERATOR_MCP_PORT and ORIGIN_SESSION_ID:
+                static_headers = {ORIGIN_SESSION_FORWARD_HEADER: ORIGIN_SESSION_ID}
+
             app.router.add_route(
                 "*",
                 "/{tail:.*}",
@@ -403,6 +447,7 @@ async def run() -> None:
                     http,
                     token_provider,
                     extra_header_provider=extra_header_provider,
+                    static_headers=static_headers,
                 ),
             )
             runner = web.AppRunner(app)

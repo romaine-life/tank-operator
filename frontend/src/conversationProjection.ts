@@ -16,6 +16,11 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   role: "user" | "assistant" | "system";
   text: string;
   display?: UserMessageDisplay;
+  // Set when a user-role message was posted by a sibling tank-operator
+  // session via the mcp-tank-operator handoff path. The renderer uses
+  // this to pick the parent session's avatar instead of the human
+  // owner's Gravatar. See conversationReducer.applyUserMessage.
+  originSessionId?: string;
 }
 
 export interface ConversationToolEntry extends ConversationEntryBase {
@@ -91,6 +96,7 @@ export function projectConversationState(
             time: message.createdAt ?? "",
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,
+            ...(message.originSessionId ? { originSessionId: message.originSessionId } : {}),
           },
         },
       ];

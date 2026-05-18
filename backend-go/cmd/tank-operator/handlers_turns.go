@@ -292,6 +292,13 @@ type sdkTurnRequest struct {
 	PermissionMode string
 	SkillName      string
 	FollowUp       bool
+	// OriginSessionID identifies the sibling tank-operator session that
+	// authored this turn via an MCP handoff. Set only on the
+	// service-principal path (handleInternalSendMessage); the human-typed
+	// browser path leaves it empty. Threaded into UserSubmissionArgs so
+	// the persisted user_message.created event carries it for the
+	// frontend's avatar selection.
+	OriginSessionID string
 }
 
 func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]string, int, string) {
@@ -363,6 +370,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Message:           map[string]any{"role": "user", "content": prompt},
 		Runtime:           provider,
 		SkillName:         skillName,
+		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
 		Now:               time.Now().UTC(),
 	})
 	if err != nil {

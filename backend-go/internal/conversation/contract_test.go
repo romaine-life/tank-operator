@@ -81,6 +81,50 @@ func TestFixtureEventsValidate(t *testing.T) {
 	}
 }
 
+func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
+	// Origin-stamping case: a sibling tank-operator session posted this
+	// turn via the mcp-tank-operator handoff path. The orchestrator
+	// stamps `origin_session_id` on both emitted events so the frontend
+	// can pick the parent session's deterministic avatar for the user
+	// bubble. Self-handoff (origin == target) and absent origin both
+	// leave the field off, mirroring how a human-typed browser turn
+	// looks today.
+	target := "63"
+	tests := []struct {
+		name     string
+		origin   string
+		expected string
+	}{
+		{name: "sibling handoff", origin: "42", expected: "42"},
+		{name: "absent origin", origin: "", expected: ""},
+		{name: "self handoff", origin: target, expected: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, events, err := UserSubmissionEventMaps(UserSubmissionArgs{
+				SessionID:       target,
+				Email:           "human@example.com",
+				ClientNonce:     "nonce-1",
+				Text:            "hello",
+				Runtime:         "claude",
+				OriginSessionID: tt.origin,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("want 2 events, got %d", len(events))
+			}
+			for _, event := range events {
+				got, _ := event["origin_session_id"].(string)
+				if got != tt.expected {
+					t.Fatalf("event %q origin_session_id = %q, want %q", event["type"], got, tt.expected)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 	valid := map[string]any{
 		"event_id":     "evt-1",
