@@ -203,9 +203,9 @@ export function StyleguideAvatars() {
                         className="status-dot status-active"
                         aria-label="status active"
                       />
-                      <button className="session-open" type="button">
+                      <span className="session-open">
                         <span className="session-id">{selectedAvatar.name}</span>
-                      </button>
+                      </span>
                     </div>
                     <div className="session-row-bottom">
                       <span

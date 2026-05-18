@@ -1121,6 +1121,10 @@ button:disabled {
   box-shadow: inset 2px 0 0 var(--accent-fg), inset 0 0 0 1px #d6a16b3d;
 }
 
+/* .session-open is the session-name label inside each sidebar row.
+   Historically a <button> that opened an inline rename; now a non-interactive
+   <span> — the row itself is the click target. Rename moved to the chat-pane
+   header (run-header-title). */
 .session-open {
   background: transparent;
   display: flex;
@@ -1134,12 +1138,10 @@ button:disabled {
   max-width: 100%;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  cursor: text;
 }
 
 .sessions li.is-open:not(.is-closing) .session-open { color: var(--text-primary); }
-.session-open:hover:not(:disabled) { color: var(--text-primary); }
-.session-open:disabled { cursor: default; color: var(--text-faint); }
+.sessions li.is-closing .session-open { color: var(--text-faint); }
 
 .session-id {
   flex: 0 1 auto;
@@ -1269,8 +1271,7 @@ button:disabled {
 .sidebar.is-collapsed .session-open,
 .sidebar.is-collapsed .session-delete,
 .sidebar.is-collapsed .session-stats,
-.sidebar.is-collapsed .session-row-bottom,
-.sidebar.is-collapsed .session-name-input {
+.sidebar.is-collapsed .session-row-bottom {
   display: none;
 }
 
@@ -2106,22 +2107,6 @@ button:disabled {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
   pointer-events: none;
 }
-
-/* Inline rename input — replaces the session-id span after clicking the name. */
-.session-name-input {
-  flex: 1 1 auto;
-  background: transparent;
-  border: 1px solid var(--gray-700);
-  border-radius: var(--radius-sm);
-  padding: 1px var(--space-2);
-  font-family: var(--font-primary);
-  font-size: 13px;
-  color: var(--text-primary);
-  min-width: 7rem;
-  outline: none;
-}
-.session-name-input:focus { border-color: var(--accent); }
-.session-name-input::placeholder { color: var(--text-faint); opacity: 1; }
 
 .terminals {
   flex: 1;

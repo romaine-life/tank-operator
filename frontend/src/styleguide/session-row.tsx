@@ -32,9 +32,9 @@ export function StyleguideSessionRow() {
               <AgentAvatarIcon avatar={getSessionAvatar("my-session")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-active" aria-label="status active" />
-                <button className="session-open" type="button">
+                <span className="session-open">
                   <span className="session-id">my-session</span>
-                </button>
+                </span>
                 <span className="session-stats">
                   <span className="session-stat" title="ready 32s after request">
                     <span aria-hidden="true">↓</span>
@@ -69,9 +69,9 @@ export function StyleguideSessionRow() {
               <AgentAvatarIcon avatar={getSessionAvatar("starting")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="status-dot status-pending" aria-label="status pending" />
-                <button className="session-open" type="button">
+                <span className="session-open">
                   <span className="session-id">starting…</span>
-                </button>
+                </span>
                 <span className="session-stats">
                   <span className="session-stat" title="starting for 18s since request">
                     <span aria-hidden="true">↓</span>

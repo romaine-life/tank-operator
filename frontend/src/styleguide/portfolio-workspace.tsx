@@ -81,9 +81,9 @@ function PortfolioWorkspaceScene() {
             <li className="is-open">
               <div className="session-row-top">
                 <span className="status-dot status-active" aria-label="status active" />
-                <button className="session-open" type="button">
+                <span className="session-open">
                   <span className="session-id">design-showcase</span>
-                </button>
+                </span>
                 <button className="session-delete" aria-label="delete session" type="button">×</button>
               </div>
               <div className="session-row-bottom">
@@ -99,9 +99,9 @@ function PortfolioWorkspaceScene() {
             <li>
               <div className="session-row-top">
                 <span className="status-dot status-pending" aria-label="status pending" />
-                <button className="session-open" type="button">
+                <span className="session-open">
                   <span className="session-id">avatar-review</span>
-                </button>
+                </span>
                 <button className="session-delete" aria-label="delete session" type="button">×</button>
               </div>
               <div className="session-row-bottom">

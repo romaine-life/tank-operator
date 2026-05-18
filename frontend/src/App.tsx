@@ -3814,6 +3814,8 @@ function ChatPane({
   runPrefs,
   setRunPref,
   user,
+  autoRename,
+  onAutoRenameConsumed,
 }: {
   session: Session;
   visible: boolean;
@@ -3828,6 +3830,8 @@ function ChatPane({
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
+  autoRename: boolean;
+  onAutoRenameConsumed: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -3839,6 +3843,18 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
+
+  // Parent-driven auto-rename. When App sets autoRenameSessionId to this
+  // session's id (freshly created, or F2 pressed), the chat-pane title
+  // input opens with the current name pre-loaded. We ack via
+  // onAutoRenameConsumed so the signal is single-shot and re-runs cleanly
+  // on a subsequent F2.
+  useEffect(() => {
+    if (!autoRename) return;
+    setEditingTitleValue(session.name ?? "");
+    setEditingTitle(true);
+    onAutoRenameConsumed();
+  }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
@@ -7225,10 +7241,12 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
-  // Inline rename state. The idle name control is intentionally only as wide
-  // as the label plus a small floor so the rest of the row remains a tab target.
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingValue, setEditingValue] = useState("");
+  // When non-null, the chat pane for this session id auto-opens its title
+  // rename input on its next render. Used to make freshly-created sessions
+  // land directly in the chat pane with the title editor focused, and to
+  // wire the F2 keyboard shortcut to the same surface. Cleared by ChatPane
+  // via onAutoRenameConsumed once it has applied the signal.
+  const [autoRenameSessionId, setAutoRenameSessionId] = useState<string | null>(null);
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
@@ -7530,19 +7548,20 @@ export function App() {
   useEffect(() => {
     const renameHighlightedSession = (event: KeyboardEvent) => {
       if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (editingId) return;
       const targetId = shortcutSessionId(event.target) ?? active;
       if (!targetId || closingIds.has(targetId)) return;
       const session = sessions.find((s) => s.id === targetId);
       if (!session) return;
       event.preventDefault();
       event.stopPropagation();
-      setSidebarCollapsed(false);
-      startEditing(session.id, session.name);
+      // Rename now lives in the chat-pane header. Make sure the pane is
+      // active (so the header is mounted) and ask it to enter edit mode.
+      activate(session.id);
+      setAutoRenameSessionId(session.id);
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
     return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
-  }, [sessions, active, closingIds, editingId]);
+  }, [sessions, active, closingIds]);
 
   function activate(id: string) {
     setActive(id);
@@ -7616,9 +7635,27 @@ export function App() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
-      await refresh();
+      // Insert the freshly-created session into the local list and focus the
+      // chat pane immediately, without waiting on /api/sessions to re-list or
+      // on the pod becoming Ready. The backend returned the full session row
+      // synchronously (status: "Pending"), so the sidebar entry and the chat
+      // pane header can render against it right now; the session_lifecycle
+      // SSE will reconcile status, runtimeLabel, etc. as they arrive. The
+      // prior shape awaited a list refresh before activating, which made the
+      // new pane appear "on the side" — sidebar entry showing up while the
+      // main pane stayed on whatever was already open — and also gated the
+      // rename UI behind the same delay.
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === created.id)) return prev;
+        const merged = [created, ...prev];
+        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+      });
       activate(created.id);
-      startEditing(created.id, created.name);
+      setAutoRenameSessionId(created.id);
+      // Belt-and-braces reconcile in the background — the lifecycle SSE
+      // wake from session.created should beat this in practice. Does not
+      // gate the UI.
+      void refresh();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -7761,27 +7798,6 @@ export function App() {
     );
   }
 
-  function startEditing(id: string, current: string | null) {
-    setEditingId(id);
-    setEditingValue(current ?? "");
-  }
-
-  function commitEditing() {
-    if (editingId) {
-      const trimmed = editingValue.trim();
-      const session = sessions.find((s) => s.id === editingId);
-      const nextName = trimmed === "" && session ? defaultSessionName(session) : trimmed;
-      void renameSession(editingId, nextName === "" ? null : nextName);
-    }
-    setEditingId(null);
-    setEditingValue("");
-  }
-
-  function cancelEditing() {
-    setEditingId(null);
-    setEditingValue("");
-  }
-
   async function deleteSession(id: string) {
     if (closingIds.has(id)) return;
     setError(null);
@@ -7792,7 +7808,7 @@ export function App() {
       next.delete(id);
       return next;
     });
-    setEditingId((prev) => (prev === id ? null : prev));
+    setAutoRenameSessionId((prev) => (prev === id ? null : prev));
     setActive((prev) => {
       if (prev !== id) return prev;
       const idx = sessions.findIndex((s) => s.id === id);
@@ -7999,7 +8015,6 @@ export function App() {
           <ul className="sessions">
             {sessions.length === 0 && <li className="sessions-empty">no sessions</li>}
             {sessions.map((s) => {
-              const isEditing = editingId === s.id;
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
@@ -8015,12 +8030,12 @@ export function App() {
                   key={s.id}
                   data-session-id={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isEditing && !isClosing}
+                  draggable={!isClosing}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
                   onDrop={(e) => dropSession(s.id, e)}
                   onDragEnd={dragSessionEnd}
-                  onClick={isEditing || isClosing ? undefined : (e) => openSession(s.id, e)}
+                  onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
@@ -8030,41 +8045,18 @@ export function App() {
                       title={statusLabel}
                       aria-label={`status: ${statusLabel}`}
                     />
-                    {isEditing ? (
-                      <input
-                        className="session-name-input"
-                        value={editingValue}
-                        autoFocus
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setEditingValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitEditing();
-                          else if (e.key === "Escape") cancelEditing();
-                        }}
-                        onBlur={commitEditing}
-                        placeholder={defaultSessionName(s)}
-                        maxLength={80}
-                      />
-                    ) : (
-                      <button
-                        className="session-open"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isClosing) return;
-                          startEditing(s.id, s.name);
-                        }}
-                        disabled={isClosing}
-                        title={
-                          isClosing
-                            ? "session is closing"
-                            : s.name
-                              ? `${defaultSessionName(s)} — click to rename`
-                              : "click to rename"
-                        }
-                      >
-                        <span className="session-id">{sessionDisplayName(s)}</span>
-                      </button>
-                    )}
+                    {/* Session name is now a read-only label here; rename
+                        lives in the chat-pane header (see ChatPane's
+                        run-header-title). This avoids the prior
+                        sidebar-inline-edit input that opened on a row click
+                        and lost typed characters whenever the pod-state
+                        re-render or refresh fired underneath it. */}
+                    <span
+                      className="session-open"
+                      title={isClosing ? "session is closing" : defaultSessionName(s)}
+                    >
+                      <span className="session-id">{sessionDisplayName(s)}</span>
+                    </span>
                     {(bootLabel || runtimeLabel) && (
                       <span className="session-stats">
                         {bootLabel && (
@@ -8292,6 +8284,8 @@ export function App() {
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
+                      autoRename={autoRenameSessionId === s.id}
+                      onAutoRenameConsumed={() => setAutoRenameSessionId(null)}
                     />
                   </div>
                 ) : (
