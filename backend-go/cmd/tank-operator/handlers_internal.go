@@ -163,22 +163,14 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusCreated, info)
 }
 
-// gateSpawnQuota enforces the per-`sub` rate limit and per-`actor_email`
-// concurrent cap before a session-creation handler hits the manager.
-// Returns true to proceed, false when one of the caps fired (the
-// response has been written, including the throttle counter).
-func (s *appServer) gateSpawnQuota(w http.ResponseWriter, r *http.Request, user *auth.User) bool {
+// gateSpawnQuota enforces the per-`sub` rate limit before a
+// session-creation handler hits the manager. Returns true to proceed,
+// false when the rate limit fired (the response has been written,
+// including the throttle counter). The per-`actor_email` concurrent-cap
+// previously enforced here was removed — see quota.go for the rationale.
+func (s *appServer) gateSpawnQuota(w http.ResponseWriter, _ *http.Request, user *auth.User) bool {
 	if s.spawnQuota != nil && !s.spawnQuota.CheckRate(user.Sub, serviceSpawnRatePerMin()) {
 		writeError(w, http.StatusTooManyRequests, "spawn rate limit exceeded for this service-principal sub")
-		return false
-	}
-	ok, err := CheckConcurrentCap(r.Context(), s.mgr, user.ActorEmail, serviceSpawnConcurrentPerActor())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "could not check active session count: "+err.Error())
-		return false
-	}
-	if !ok {
-		writeError(w, http.StatusTooManyRequests, "actor has reached the concurrent active session cap")
 		return false
 	}
 	return true
