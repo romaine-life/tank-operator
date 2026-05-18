@@ -136,6 +136,21 @@ const forbidden = [
     pattern: /\brecord\.input_reply\b|\brecord\[\s*["']input_reply["']\s*\]/,
   },
 
+  // --- Removed input_reply branch on the data-plane command consumer --------
+  //
+  // input_reply now arrives on the control consumer (see the required
+  // patterns block, `control consumer dispatches input_reply`). A branch
+  // for input_reply inside startCommandConsumer is the half-revert state
+  // that re-introduces the dispatch deadlock — the runner pulls
+  // input_reply from a consumer whose single ack slot is held by the
+  // submit_turn that's waiting for that exact input_reply. Pin that the
+  // data-plane handler does NOT dispatch input_reply anymore.
+  {
+    name: "no input_reply branch on the data-plane startCommandConsumer (control plane is the only place input_reply dispatches)",
+    pattern:
+      /startCommandConsumer\([\s\S]{0,1500}isInputReplyCommand[\s\S]{0,200}this\.acceptInputReply\(/,
+  },
+
   // --- Removed bypassPermissions for AskUserQuestion's gating path ----------
   //
   // The runner's SDK options used to set `permissionMode: "bypassPermissions"`
@@ -216,6 +231,39 @@ const required = [
     file: "backend-go/internal/sessionbus/commands.go",
     name: "input_reply command carries an Answers field",
     pattern: /\bAnswers\s+map\[string\]\[\]string\b/,
+  },
+
+  // --- input_reply routes through the control plane -------------------------
+  //
+  // An input_reply only exists *while* a submit_turn is parked in canUseTool,
+  // and that exact submit_turn is the JetStream message holding the data-
+  // plane consumer's single max_ack_pending slot. If input_reply ever
+  // publishes to the data-plane subject the dispatch deadlocks: the runner
+  // waits forever for an input_reply queued behind the parked submit_turn,
+  // and the submit_turn won't release the slot until the input_reply
+  // arrives. Same architectural shape as the original interrupt_turn
+  // deadlock, same cutover (control plane). These two pins keep the
+  // publish-side (SubjectForCommand) and the consume-side (control
+  // consumer branch) in lockstep so a future PR can't quietly half-revert
+  // one half of the split.
+  {
+    file: "backend-go/internal/sessionbus/subjects.go",
+    name: "SubjectForCommand routes input_reply through ControlSubject",
+    // Allow either ordering of the alternation and either spacing style
+    // so trivial reformats don't trip the guard, but require both tokens
+    // to live inside a `SubjectForCommand` body that calls ControlSubject.
+    pattern:
+      /func\s+SubjectForCommand[\s\S]{0,500}CommandInputReply[\s\S]{0,300}ControlSubject\(|func\s+SubjectForCommand[\s\S]{0,500}CommandInterrupt[\s\S]{0,100}\|\|\s*[\s\S]{0,200}CommandInputReply[\s\S]{0,200}ControlSubject\(/,
+  },
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "control consumer dispatches input_reply (the runner's half of the cutover)",
+    // The control consumer branch must call acceptInputReply. The
+    // exact textual shape is `isInputReplyCommand(record))\s*{...acceptInputReply`
+    // inside startControlConsumer. We match conservatively on the
+    // call-site to acceptInputReply living inside startControlConsumer.
+    pattern:
+      /startControlConsumer\([\s\S]{0,2000}isInputReplyCommand[\s\S]{0,200}this\.acceptInputReply\(/,
   },
 
   // --- Frontend: renders the question / options / new fields ----------------

@@ -42,16 +42,27 @@ func ControlSubject(sessionStorageKey, provider string) string {
 }
 
 // SubjectForCommand selects the publish subject for a command based on its
-// Type. Control-plane commands (interrupts) MUST go to ControlSubject so
-// they are not delivered behind the in-flight ack of a long submit_turn;
-// data-plane commands (submit_turn, input_reply, anything else) go to
-// CommandSubject and are serialized by the runner's single-in-flight
-// command consumer. The split is the load-bearing fix for the "Stop
-// doesn't interrupt deep tool-use loops" failure mode where a JetStream
-// `max_ack_pending: 1` consumer held interrupt_turn behind submit_turn
-// for the full duration of the turn.
+// Type. Control-plane commands MUST go to ControlSubject so they are not
+// delivered behind the in-flight ack of a long submit_turn; data-plane
+// commands (submit_turn, anything else) go to CommandSubject and are
+// serialized by the runner's single-in-flight command consumer. The split
+// is the load-bearing fix for the "Stop doesn't interrupt deep tool-use
+// loops" failure mode where a JetStream `max_ack_pending: 1` consumer
+// held interrupt_turn behind submit_turn for the full duration of the
+// turn.
+//
+// input_reply is also control-plane: an input_reply is only meaningful
+// *while a submit_turn is parked in canUseTool* (the AskUserQuestion
+// gate), and that exact parked submit_turn is what's holding the
+// data-plane consumer's single ack slot. Delivering input_reply on the
+// data plane would mean it can never reach the runner — JetStream would
+// hold it behind the parked submit_turn, and the parked submit_turn
+// would hold forever waiting for the input_reply it just got stuck
+// behind. Same shape as the original interrupt deadlock; same fix
+// (control plane). Pinned by TestSubjectForCommandRoutesInputReplyToControlPlane
+// in bus_test.go.
 func SubjectForCommand(command Command) string {
-	if command.Type == CommandInterrupt {
+	if command.Type == CommandInterrupt || command.Type == CommandInputReply {
 		return ControlSubject(command.SessionStorageKey, command.Provider)
 	}
 	return CommandSubject(command.SessionStorageKey, command.Provider)

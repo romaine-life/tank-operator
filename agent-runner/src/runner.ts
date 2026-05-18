@@ -492,18 +492,18 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startCommandConsumer(async (record) => {
-        if (isInputReplyCommand(record)) {
-          await this.acceptInputReply(record);
-          return;
-        }
-        // Interrupts MUST arrive via startControlConsumer (separate
-        // JetStream consumer on the control subject). The data-plane
-        // consumer has max_ack_pending=1 by design, so an interrupt
-        // delivered here would block behind the in-flight submit_turn
-        // for the full duration of the turn — the exact regression the
-        // split fixes. The shared sessionBus drops stray interrupts on
-        // the data subject before they reach this handler; this branch
-        // exists only to keep the dispatch table exhaustive.
+        // Interrupts and input_reply MUST arrive via startControlConsumer
+        // (separate JetStream consumer on the control subject). The
+        // data-plane consumer has max_ack_pending=1 by design; any control
+        // command delivered here would block behind the in-flight
+        // submit_turn for the full duration of the turn — the exact
+        // regression the split fixes. Stray control commands on the data
+        // subject are either pre-cutover stragglers in the JetStream
+        // replay buffer or a backend regression. The shared sessionBus
+        // drops them with a structured warn before they reach this
+        // handler; the explicit branch here is removed to keep the
+        // dispatch table honest — the only branch that should ever fire
+        // on data plane is submit_turn.
         await this.acceptCommandTurn(record);
       }, signal)
       .then((stop) => {
@@ -516,15 +516,24 @@ export class Runner {
   }
 
   // startControlConsumer drives the control-plane JetStream consumer.
-  // Today: interrupt_turn. Future control signals (resume, cancel-with-
-  // reason, etc.) should land here as additional branches, not on the
-  // data-plane consumer.
+  // Today: interrupt_turn + input_reply. Future low-latency control
+  // signals (resume, cancel-with-reason, etc.) should land here as
+  // additional branches, not on the data-plane consumer. input_reply
+  // is control-plane because it resolves a canUseTool gate inside an
+  // already-running submit_turn that is, by construction, holding the
+  // data plane's single max_ack_pending slot — see
+  // backend-go/internal/sessionbus/subjects.go → SubjectForCommand for
+  // the publish-side reasoning that pairs with this consumer branch.
   private startControlConsumer(signal: AbortSignal): () => void {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
         if (isInterruptCommand(record)) {
           await this.acceptInterrupt(record);
+          return;
+        }
+        if (isInputReplyCommand(record)) {
+          await this.acceptInputReply(record);
           return;
         }
         // Unknown control command type. Ack to clear the slot; log so

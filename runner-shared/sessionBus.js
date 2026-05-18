@@ -64,18 +64,20 @@ export class SharedSessionBus {
                 if (stopped || signal?.aborted) break;
                 const command = this.commandFromMessage(msg);
                 const record = new SessionCommandRecord(command, msg);
-                // Cutover hygiene: interrupts are control-plane and MUST
-                // arrive on the control consumer (see startControlConsumer).
-                // A stray interrupt on the data-plane subject is either a
-                // pre-cutover straggler in the JetStream replay buffer or a
-                // backend regression. Ack-and-drop with a structured warn so
-                // the message doesn't block the serial submit_turn consumer
-                // (max_ack_pending=1) and the regression is visible in logs.
-                // This is NOT a fallback path — the handler is never invoked
-                // for the interrupt; the control plane is the only place it
-                // can take effect.
-                if (isInterruptCommand(command)) {
-                    console.warn("session bus: dropped stray interrupt_turn on data plane (control plane is the supported path)", {
+                // Cutover hygiene: interrupts and input_reply are
+                // control-plane and MUST arrive on the control consumer
+                // (see startControlConsumer). A stray control command on
+                // the data-plane subject is either a pre-cutover straggler
+                // in the JetStream replay buffer or a backend regression.
+                // Ack-and-drop with a structured warn so the message
+                // doesn't block the serial submit_turn consumer
+                // (max_ack_pending=1) and the regression is visible in
+                // logs. This is NOT a fallback path — the data-plane
+                // handler is never invoked for these; the control plane
+                // is the only place they can take effect.
+                if (isInterruptCommand(command) || isInputReplyCommand(command)) {
+                    console.warn("session bus: dropped stray control command on data plane (control plane is the supported path)", {
+                        type: command.type,
                         command_id: command.command_id,
                         target_turn_id: command.target_turn_id,
                     });

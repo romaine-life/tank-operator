@@ -206,13 +206,13 @@ func TestSubjectForCommandRoutesInterruptToControlPlane(t *testing.T) {
 }
 
 // TestSubjectForCommandRoutesDataPlane keeps the existing data-plane
-// commands (submit_turn, input_reply, anything not explicitly control)
-// on the command subject, where the runner's per-session serial consumer
-// processes them one at a time.
+// commands (submit_turn, anything not explicitly control) on the command
+// subject, where the runner's per-session serial consumer processes them
+// one at a time.
 func TestSubjectForCommandRoutesDataPlane(t *testing.T) {
 	storage := "session-storage-key"
 	provider := "claude"
-	for _, ty := range []string{CommandSubmitTurn, CommandInputReply, "unknown_future"} {
+	for _, ty := range []string{CommandSubmitTurn, "unknown_future"} {
 		cmd := Command{
 			Type:              ty,
 			SessionStorageKey: storage,
@@ -223,6 +223,33 @@ func TestSubjectForCommandRoutesDataPlane(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s subject = %q, want %q (data plane)", ty, got, want)
 		}
+	}
+}
+
+// TestSubjectForCommandRoutesInputReplyToControlPlane pins the routing
+// decision for input_reply commands. They MUST publish to the control
+// subject — not the data-plane command subject — because an input_reply
+// only ever resolves an AskUserQuestion gate inside an already-running
+// submit_turn that is, by construction, holding the data-plane consumer's
+// single max_ack_pending slot. Routing input_reply to the data plane would
+// deadlock: the runner is parked in canUseTool waiting for the input_reply,
+// but the input_reply can't be delivered because the parked submit_turn
+// hasn't acked. Same architectural shape as the original interrupt fix.
+func TestSubjectForCommandRoutesInputReplyToControlPlane(t *testing.T) {
+	storage := "session-storage-key"
+	provider := "claude"
+	reply := Command{
+		Type:              CommandInputReply,
+		SessionStorageKey: storage,
+		Provider:          provider,
+	}
+	got := SubjectForCommand(reply)
+	want := ControlSubject(storage, provider)
+	if got != want {
+		t.Fatalf("input_reply subject = %q, want %q (control-plane)", got, want)
+	}
+	if got == CommandSubject(storage, provider) {
+		t.Fatalf("input_reply MUST NOT publish to the command subject %q", got)
 	}
 }
 
