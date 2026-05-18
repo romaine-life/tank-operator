@@ -74,7 +74,7 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 	const slotNamespace = "tank-operator-slot-1-sessions"
 
 	client := fake.NewSimpleClientset()
-	mgr := NewManager(client, nil, slotNamespace, nil, nil, nil, ManagerOptions{
+	mgr := NewManager(client, nil, slotNamespace, nil, nil, ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:      "claude-image",
 			CodexSessionImage: "codex-image",

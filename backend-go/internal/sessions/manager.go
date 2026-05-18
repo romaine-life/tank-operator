@@ -18,7 +18,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -49,21 +48,12 @@ type RowEmitter interface {
 	PublishCurrentRow(ctx context.Context, owner, sessionID string)
 }
 
-// LifecycleAppender is the durable side of the producer pipeline.
-// Manager mutations append a typed row here before publishing on the bus
-// so the SSE cursor-resume path on reconnect catches up from Postgres
-// even if the NATS publish was lost. Satisfied by lifecycleevents.Store.
-type LifecycleAppender interface {
-	Append(ctx context.Context, event lifecycleevents.Event) (lifecycleevents.Event, bool, error)
-}
-
 // Manager owns session lifecycle: create, delete, patch, reaper.
 type Manager struct {
 	client    kubernetes.Interface
 	restCfg   *rest.Config
 	namespace string
 	registry  SessionRegistry
-	lifecycle LifecycleAppender
 	emitter   RowEmitter
 	scope     string
 
@@ -96,7 +86,7 @@ type ManagerOptions struct {
 	CodexAPIProxyHost string
 }
 
-func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, lifecycle LifecycleAppender, emitter RowEmitter, opts ManagerOptions) *Manager {
+func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, emitter RowEmitter, opts ManagerOptions) *Manager {
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = defaultIdleTimeout
 		if v := os.Getenv("IDLE_TIMEOUT_SECONDS"); v != "" {
@@ -121,7 +111,6 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		restCfg:        restCfg,
 		namespace:      namespace,
 		registry:       registry,
-		lifecycle:      lifecycle,
 		emitter:        emitter,
 		scope:          opts.ManifestOpts.SessionScope,
 		manifestOpts:   opts.ManifestOpts,
@@ -217,17 +206,7 @@ func (m *Manager) reapIdle(ctx context.Context) {
 					"session_id", sessionID, "owner", owner, "error", regErr)
 			}
 		}
-		m.emitLifecycle(ctx, lifecycleevents.Event{
-			Email:        owner,
-			SessionScope: m.scope,
-			SessionID:    sessionID,
-			Type:         lifecycleevents.EventTypeDeleted,
-			EventID:      "deleted",
-			Payload: map[string]any{
-				"pod_name": pod.Name,
-				"source":   "reaper",
-			},
-		})
+		m.publishRow(ctx, owner, sessionID)
 	}
 }
 
@@ -383,19 +362,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		}
 	}
 
-	m.emitLifecycle(ctx, lifecycleevents.Event{
-		Email:        owner,
-		SessionScope: m.scope,
-		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypeCreated,
-		EventID:      "created",
-		Payload: map[string]any{
-			"mode":         mode,
-			"pod_name":     podName,
-			"requested_at": requestedAt,
-			"created_at":   orEmpty(createdAt),
-		},
-	})
+	m.publishRow(ctx, owner, sessionID)
 	return info, nil
 }
 
@@ -422,18 +389,7 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
-	deletedPayload := map[string]any{"source": "user"}
-	if pod != nil {
-		deletedPayload["pod_name"] = pod.Name
-	}
-	m.emitLifecycle(ctx, lifecycleevents.Event{
-		Email:        owner,
-		SessionScope: m.scope,
-		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypeDeleted,
-		EventID:      "deleted",
-		Payload:      deletedPayload,
-	})
+	m.publishRow(ctx, owner, sessionID)
 	return nil
 }
 
@@ -469,24 +425,16 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
-	namePayload := map[string]any{"name": annotationValue}
-	m.emitLifecycle(ctx, lifecycleevents.Event{
-		Email:        owner,
-		SessionScope: m.scope,
-		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypeNameChanged,
-		EventID:      fmt.Sprintf("name_changed:%d", time.Now().UnixNano()),
-		Payload:      namePayload,
-	})
+	m.publishRow(ctx, owner, sessionID)
 
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
 // SetTestState updates the row's test_state column AND patches the
 // matching pod annotation (the session-agent reads the annotation via
-// the projected downward-API volume). Both writes are load-bearing in
-// steady state: the column is the snapshot-facing replica;
-// the annotation is what the agent code path consults.
+// the projected downward-API volume). Both writes are load-bearing
+// in steady state: the column is the snapshot-facing replica; the
+// annotation is what the agent code path consults.
 func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, active bool, slotIndex *int, url *string) (Info, error) {
 	state := map[string]any{"active": active}
 	if slotIndex != nil {
@@ -498,7 +446,6 @@ func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, act
 	raw, _ := json.Marshal(state)
 	return m.patchStateAnnotation(ctx, owner, sessionID,
 		"tank-operator/test-state", string(raw),
-		lifecycleevents.EventTypeTestStateChanged, "test_state_changed", state,
 		func(c context.Context) error {
 			if m.registry == nil {
 				return nil
@@ -514,7 +461,6 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 	raw, _ := json.Marshal(state)
 	return m.patchStateAnnotation(ctx, owner, sessionID,
 		"tank-operator/rollout-state", string(raw),
-		lifecycleevents.EventTypeRolloutStateChanged, "rollout_state_changed", state,
 		func(c context.Context) error {
 			if m.registry == nil {
 				return nil
@@ -526,8 +472,6 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 func (m *Manager) patchStateAnnotation(
 	ctx context.Context,
 	owner, sessionID, annotation, value string,
-	eventType, eventIDPrefix string,
-	payload map[string]any,
 	writeColumn func(context.Context) error,
 ) (Info, error) {
 	patch := map[string]any{
@@ -550,14 +494,9 @@ func (m *Manager) patchStateAnnotation(
 				"annotation", annotation, "error", err)
 		}
 	}
-	m.emitLifecycle(ctx, lifecycleevents.Event{
-		Email:        owner,
-		SessionScope: m.scope,
-		SessionID:    sessionID,
-		Type:         eventType,
-		EventID:      fmt.Sprintf("%s:%d", eventIDPrefix, time.Now().UnixNano()),
-		Payload:      payload,
-	})
+	if m.emitter != nil {
+		m.emitter.PublishCurrentRow(ctx, owner, sessionID)
+	}
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
@@ -696,39 +635,16 @@ func (a *registryAdapter) List(ctx context.Context, owner string) ([]sessionmode
 	return a.r.List(ctx, owner)
 }
 
-// emitLifecycle is the Manager-side bridge from a user-action mutation
-// to the per-owner durable lifecycle ledger + NATS event stream. Failures
-// are logged but never block the parent mutation: the registry write +
-// pod patch are the source of truth; the ledger row drives the sidebar's
-// live update but the next SSE reconnect will resync from Postgres
-// anyway. Identical event_id collapses with the pod-informer leader's
-// row for the same transition via the unique constraint.
-func (m *Manager) emitLifecycle(ctx context.Context, event lifecycleevents.Event) {
-	if event.Type == "" || event.SessionID == "" || event.Email == "" {
+// publishRow is the Manager-side bridge from a user-action mutation
+// to the per-owner row-update wire. Failures are logged inside the
+// emitter; the registry write is the source of truth so a missed
+// publish is recoverable on the SPA's next SSE reconnect (catch-up
+// reads the sessions table directly).
+func (m *Manager) publishRow(ctx context.Context, owner, sessionID string) {
+	if m.emitter == nil || owner == "" || sessionID == "" {
 		return
 	}
-	// Append to the durable lifecycle ledger (kept until Phase 4 drops
-	// the table). Phase 3 retired the ledger from the read/wire paths,
-	// but Append is still where each user-action transition gets a
-	// stable event_id for replica-race dedup against the K8s watch's
-	// matching event_id (e.g., session.deleted emitted by both
-	// Manager.Delete and the pod-informer's handleDelete).
-	if m.lifecycle != nil {
-		if _, _, err := m.lifecycle.Append(ctx, event); err != nil {
-			slog.Warn("manager lifecycle append failed",
-				"session_id", event.SessionID,
-				"type", event.Type,
-				"error", err,
-			)
-		}
-	}
-	// Publish the row's current state on the row-update wire. The
-	// post-write row reflects every column registry.* methods just
-	// committed (visible / name / status / etc.). RowEmitter handles
-	// the fetch-and-publish; failures are logged inside.
-	if m.emitter != nil {
-		m.emitter.PublishCurrentRow(ctx, event.Email, event.SessionID)
-	}
+	m.emitter.PublishCurrentRow(ctx, owner, sessionID)
 }
 
 func nowISO() string {

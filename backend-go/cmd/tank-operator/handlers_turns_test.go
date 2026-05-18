@@ -535,7 +535,7 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 	ns := sessionmodel.SessionsNamespace
 	return &appServer{
 		k8s:           k8s,
-		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, nil, sessions.ManagerOptions{}),
+		mgr:           sessions.NewManager(k8s, nil, ns, nil, nil, sessions.ManagerOptions{}),
 		sessionBus:    bus,
 		sessionEvents: &recordingSessionEventStore{},
 		verifier:      auth.NewVerifier(testJWT(t)),

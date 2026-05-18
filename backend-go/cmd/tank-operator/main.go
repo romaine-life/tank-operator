@@ -20,7 +20,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
@@ -78,11 +77,6 @@ func main() {
 	// 6. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(pgPool, sessionScope)
 
-	// 6b. Init the session_lifecycle_events store. This is the durable
-	// per-owner ledger that backs the sidebar SSE stream — see
-	// docs/product-inspirations.md and tank-operator#83.
-	lifecycleStore := buildLifecycleEventStore(pgPool)
-
 	// 7. Init NATS JetStream session bus for SDK commands/events.
 	sessionBus := buildSessionBus(sessionScope)
 
@@ -130,7 +124,7 @@ func main() {
 		Scope:     sessionScope,
 	}
 
-	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, lifecycleStore, rowPublisher, sessions.ManagerOptions{
+	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionsNamespace:       namespace,
 			SessionServiceAccount:   sessionServiceAccount,
@@ -183,17 +177,16 @@ func main() {
 	// 11. Start reaper.
 	ctx := context.Background()
 	mgr.StartReaper(ctx)
-	// Build the shared RowWriter that all three lifecycle producers
-	// (chat-activity emitter, K8s watch, Manager.emitLifecycle) write
-	// through. Per docs/session-list-redesign.md Phase 1, this is the
-	// dual-write seam: every transition lands in the lifecycle ledger
-	// (old wire path, still consumed by today's SSE) AND updates the
-	// new sessions row columns (status / ready_at / terminating_at /
-	// activity_summary / row_version) for Phase 2's snapshot cutover.
+	// Build the shared RowWriter that the K8s watch and chat-activity
+	// emitter call through. Per docs/session-list-redesign.md Phase 4
+	// the durable sessions row is the only persistent state — the prior
+	// session_lifecycle_events ledger is gone. RowWriter updates the
+	// row columns (status / ready_at / terminating_at / activity_summary
+	// + row_version bump) and fans the post-write row state out on the
+	// NATS row-update subject.
 	var rowWriter *sessioncontroller.RowWriter
 	if sessionBus != nil {
 		rw, err := sessioncontroller.NewRowWriter(
-			lifecycleStore,
 			rowPublisher,
 			pgPool,
 			promRowWriterMetrics{},
@@ -215,6 +208,7 @@ func main() {
 			ChatEvents: sessionEventsStore,
 			ReadStates: readStateStore,
 			Registry:   buildSessionRegistryOwnerResolver(sessionReg),
+			Rows:       rowFetcherFor(sessionReg),
 			Metrics:    promLifecycleEmitterMetrics{},
 			Scope:      sessionScope,
 		}
@@ -260,7 +254,6 @@ func main() {
 		mgr:                      mgr,
 		profiles:                 profileStore,
 		sessionEvents:            sessionEventsStore,
-		lifecycleEvents:          lifecycleStore,
 		pgPool:                   pgPool,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
@@ -375,17 +368,6 @@ func buildSessionEventStore(pool *pgxpool.Pool, scope string) store.SessionEvent
 		return store.StubSessionEventStore{}
 	}
 	return store.NewPostgresSessionEventStore(pool, scope)
-}
-
-// buildLifecycleEventStore returns the session_lifecycle_events store.
-// Nil pool (POSTGRES_HOST unset) falls back to the StubStore — there's no
-// pod informer and no SSE consumer in that mode, so the no-op behavior
-// keeps the rest of the system bootable.
-func buildLifecycleEventStore(pool *pgxpool.Pool) lifecycleevents.Store {
-	if pool == nil {
-		return lifecycleevents.StubStore{}
-	}
-	return lifecycleevents.NewPostgresStore(pool)
 }
 
 // rowFetcherFor adapts the SessionRegistry interface to the narrower

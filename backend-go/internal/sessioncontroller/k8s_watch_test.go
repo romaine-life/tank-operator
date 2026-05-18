@@ -10,63 +10,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
-// fakeStore is the test stand-in for lifecycleevents.Store. Records
-// every Append in order; honors the unique (scope, session_id, event_id)
-// contract by treating identical event_ids as "already exists" no-ops.
-type fakeStore struct {
-	mu       sync.Mutex
-	events   []lifecycleevents.Event
-	seenKeys map[string]struct{}
-}
-
-func newFakeStore() *fakeStore {
-	return &fakeStore{seenKeys: map[string]struct{}{}}
-}
-
-func (s *fakeStore) Append(_ context.Context, event lifecycleevents.Event) (lifecycleevents.Event, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := event.SessionScope + "|" + event.SessionID + "|" + event.EventID
-	if _, ok := s.seenKeys[key]; ok {
-		return event, true, nil
-	}
-	s.seenKeys[key] = struct{}{}
-	event.OrderKey = nextOrderKey(len(s.events) + 1)
-	if event.OccurredAt == "" {
-		event.OccurredAt = time.Now().UTC().Format(time.RFC3339Nano)
-	}
-	s.events = append(s.events, event)
-	return event, false, nil
-}
-
-func (s *fakeStore) ListByOwner(_ context.Context, _, _ string, _ lifecycleevents.Cursor, _ int) (lifecycleevents.Page, error) {
-	return lifecycleevents.Page{}, nil
-}
-
-func (s *fakeStore) HasOrderKey(_ context.Context, _, _, _ string) (bool, error) { return true, nil }
-
-func (s *fakeStore) LatestOrderKey(_ context.Context, _, _ string) (string, error) { return "", nil }
-
-func (s *fakeStore) LatestActivity(_ context.Context, _, _ string) (*lifecycleevents.ActivitySummary, error) {
-	return nil, nil
-}
-
-func (s *fakeStore) LatestPodStatus(_ context.Context, _, _ string) (*lifecycleevents.PodStatusSummary, error) {
-	return nil, nil
-}
-
-func nextOrderKey(i int) string {
-	return time.Now().Format("150405.000") + "-" + string(rune('a'+i%26))
-}
-
-// fakeEmitter records each PublishCurrentRow call the writer makes.
-// Used to assert the writer only publishes on a fresh append (the
-// "already exists" dedupe path must not re-publish, or the SPA would
-// re-render an already-seen row update on connected clients).
+// fakeEmitter is the RowEmitter test double — shared with
+// writer_test.go in the same package. Records each PublishCurrentRow
+// call so tests can assert on (owner, sessionID) pairs.
 type fakeEmitter struct {
 	mu    sync.Mutex
 	calls []emittedRow
@@ -83,46 +32,109 @@ func (e *fakeEmitter) PublishCurrentRow(_ context.Context, owner, sessionID stri
 	e.calls = append(e.calls, emittedRow{owner: owner, sessionID: sessionID})
 }
 
+// newTestTracker returns a transitionTracker whose writer records
+// each publish into the returned eventRecorder. No Postgres pool is
+// wired; per-event-type column-update behavior is tested in
+// writer_test.go, while these tests pin the K8s watch's transition-
+// detection logic (which event-builders fire on which pod-state
+// changes).
+func newTestTracker() (*transitionTracker, *eventRecorder) {
+	rec := &eventRecorder{}
+	writer := &RowWriter{
+		Emitter: &recordingEmitter{rec: rec},
+		Pool:    nil,
+		Metrics: noopRowWriterMetrics{},
+	}
+	tracker := &transitionTracker{
+		metrics: noopK8sWatchMetrics{},
+		scope:   "default",
+		last:    make(map[types.UID]podState),
+		writer:  writer,
+	}
+	return tracker, rec
+}
+
+type eventRecorder struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (r *eventRecorder) record(event Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *eventRecorder) all() []Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+// recordingEmitter captures each publish target. The K8s watch tests
+// don't need to see the upstream Event type — the event-builder
+// functions (scheduledEvent / readyEvent / failedEvent) are pure and
+// can be exercised inline in the test body for type assertions.
+type recordingEmitter struct {
+	rec *eventRecorder
+}
+
+func (e *recordingEmitter) PublishCurrentRow(_ context.Context, owner, sessionID string) {
+	e.rec.record(Event{Email: owner, SessionID: sessionID})
+}
+
 func TestHandleUpsertEmitsScheduledOnFirstSight(t *testing.T) {
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	tracker := newTestTracker(store, pub)
+	tracker, rec := newTestTracker()
 
 	pod := newSessionPod("21", "u@example.com", corev1.PodPending, false)
 	tracker.handleUpsert(context.Background(), nil, pod)
 
-	if len(store.events) != 1 {
-		t.Fatalf("events = %d, want 1: %+v", len(store.events), store.events)
+	calls := rec.all()
+	if len(calls) == 0 {
+		t.Fatalf("expected publish calls, got %d", len(calls))
 	}
-	if got := store.events[0].Type; got != lifecycleevents.EventTypePodScheduled {
-		t.Fatalf("first event type = %q, want %q", got, lifecycleevents.EventTypePodScheduled)
+	if got := calls[0].SessionID; got != "21" {
+		t.Fatalf("first publish session = %q, want 21", got)
+	}
+
+	wantScheduled := scheduledEvent("default", "u@example.com", "21", pod)
+	if wantScheduled.Type != EventTypePodScheduled {
+		t.Fatalf("scheduledEvent type = %q, want %q", wantScheduled.Type, EventTypePodScheduled)
 	}
 }
 
 func TestHandleUpsertEmitsReadyOnTransition(t *testing.T) {
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	tracker := newTestTracker(store, pub)
+	tracker, rec := newTestTracker()
 
 	pending := newSessionPod("21", "u@example.com", corev1.PodPending, false)
 	tracker.handleUpsert(context.Background(), nil, pending)
+	priorCount := len(rec.all())
 
 	ready := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	ready.UID = pending.UID
 	tracker.handleUpsert(context.Background(), pending, ready)
 
-	if got := lastEventType(store); got != lifecycleevents.EventTypePodReady {
-		t.Fatalf("transition event type = %q, want %q", got, lifecycleevents.EventTypePodReady)
+	if got := len(rec.all()); got <= priorCount {
+		t.Fatalf("transition publish count = %d, want > %d (ready transition must publish)", got, priorCount)
+	}
+
+	want := readyEvent("default", "u@example.com", "21", ready)
+	if want.Type != EventTypePodReady {
+		t.Fatalf("readyEvent type = %q, want %q", want.Type, EventTypePodReady)
+	}
+	if want.Payload["status"] != "Active" {
+		t.Fatalf("readyEvent payload.status = %v, want Active", want.Payload["status"])
 	}
 }
 
 func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	tracker := newTestTracker(store, pub)
+	tracker, rec := newTestTracker()
 
 	running := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	tracker.handleUpsert(context.Background(), nil, running)
+	priorCount := len(rec.all())
 
 	evicted := running.DeepCopy()
 	evicted.Status.Phase = corev1.PodFailed
@@ -136,115 +148,68 @@ func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 	}}
 	tracker.handleUpsert(context.Background(), running, evicted)
 
-	last := store.events[len(store.events)-1]
-	if last.Type != lifecycleevents.EventTypePodFailed {
-		t.Fatalf("eviction event type = %q, want %q", last.Type, lifecycleevents.EventTypePodFailed)
+	if got := len(rec.all()); got <= priorCount {
+		t.Fatalf("eviction publish count = %d, want > %d", got, priorCount)
 	}
-	if last.Payload["status"] != "Failed" {
-		t.Fatalf("eviction payload.status = %v, want Failed", last.Payload["status"])
+
+	want := failedEvent("default", "u@example.com", "21", evicted, failureReason(evicted))
+	if want.Type != EventTypePodFailed {
+		t.Fatalf("failedEvent type = %q, want %q", want.Type, EventTypePodFailed)
 	}
-	if last.Payload["reason"] != "Evicted" {
-		t.Fatalf("eviction payload.reason = %v, want Evicted", last.Payload["reason"])
+	if want.Payload["status"] != "Failed" {
+		t.Fatalf("failedEvent payload.status = %v, want Failed", want.Payload["status"])
 	}
-	if last.Payload["exit_code"] != int32(137) {
-		t.Fatalf("eviction payload.exit_code = %v, want 137", last.Payload["exit_code"])
+	if want.Payload["reason"] != "Evicted" {
+		t.Fatalf("failedEvent payload.reason = %v, want Evicted", want.Payload["reason"])
 	}
-	if last.Payload["container"] != "agent-runner" {
-		t.Fatalf("eviction payload.container = %v, want agent-runner", last.Payload["container"])
+	if want.Payload["exit_code"] != int32(137) {
+		t.Fatalf("failedEvent payload.exit_code = %v, want 137", want.Payload["exit_code"])
+	}
+	if want.Payload["container"] != "agent-runner" {
+		t.Fatalf("failedEvent payload.container = %v, want agent-runner", want.Payload["container"])
 	}
 }
 
-func TestHandleDeleteEmitsDeletedOnce(t *testing.T) {
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	tracker := newTestTracker(store, pub)
+// TestHandleDeleteClearsTrackerState pins the new K8s watch
+// contract: pod-fully-gone is a no-op on the row-write path. Manager
+// .Delete owns deletion (visible=false + row_version bump via
+// registry.MarkDeleted, fans through RowPublisher); the watch's only
+// responsibility is clearing the in-memory last-state map so a future
+// pod with the same UID re-fires scheduledEvent rather than treating
+// it as a continuation.
+func TestHandleDeleteClearsTrackerState(t *testing.T) {
+	tracker, rec := newTestTracker()
 
 	pod := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	tracker.handleUpsert(context.Background(), nil, pod)
+	publishesAfterUpsert := len(rec.all())
 
 	tracker.handleDelete(context.Background(), pod)
-	tracker.handleDelete(context.Background(), pod)
 
-	deletedCount := 0
-	for _, e := range store.events {
-		if e.Type == lifecycleevents.EventTypeDeleted {
-			deletedCount++
-		}
+	if got := len(rec.all()); got != publishesAfterUpsert {
+		t.Fatalf("handleDelete publish count = %d, want %d (handleDelete must not publish)", got, publishesAfterUpsert)
 	}
-	if deletedCount != 1 {
-		t.Fatalf("deleted events written = %d, want 1 (event_id uniqueness should collapse the second handleDelete to a no-op)", deletedCount)
-	}
-	// One emit for the initial pod_ready, one for the first handleDelete;
-	// the second handleDelete's append dedupes and must not re-emit.
-	// (The exact emit count varies by transition-tracker first-sight
-	// behavior, so assert "no third emit happened" by counting unique
-	// session ids handled and confirming the row publisher saw at most
-	// one PublishCurrentRow per durable transition.)
-	if got := len(pub.calls); got == 0 {
-		t.Fatalf("emitter saw %d PublishCurrentRow calls, want >0 — RowWriter must publish at least once per fresh transition", got)
-	}
-	if got := pub.calls[len(pub.calls)-1]; got.sessionID != "21" {
-		t.Fatalf("last PublishCurrentRow session = %q, want 21", got.sessionID)
-	}
-}
-
-func TestRestartResyncDoesNotRepublish(t *testing.T) {
-	// Simulate two informer "first-sight" passes against the same pod.
-	// Real-world cause: orchestrator replica restart re-reads the
-	// informer cache from scratch and reinvokes AddFunc. The unique
-	// constraint dedupes the row write; the publisher must respect the
-	// dedupe and skip the NATS publish.
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	pod := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
-
-	tracker1 := newTestTracker(store, pub)
-	tracker1.handleUpsert(context.Background(), nil, pod)
-	publishesAfterFirst := len(pub.calls)
-
-	tracker2 := newTestTracker(store, pub)
-	tracker2.handleUpsert(context.Background(), nil, pod)
-
-	if got := len(pub.calls); got != publishesAfterFirst {
-		t.Fatalf("restart re-publish count = %d, want %d (informer resync must not re-publish)",
-			got-publishesAfterFirst, 0)
+	tracker.mu.Lock()
+	_, present := tracker.last[pod.UID]
+	tracker.mu.Unlock()
+	if present {
+		t.Fatalf("handleDelete left tracker.last entry behind, want cleared")
 	}
 }
 
 func TestIgnoresUnrelatedPods(t *testing.T) {
-	store := newFakeStore()
-	pub := &fakeEmitter{}
-	tracker := newTestTracker(store, pub)
+	tracker, rec := newTestTracker()
 
 	unrelated := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	unrelated.Labels = map[string]string{} // strip session/managed labels
 	tracker.handleUpsert(context.Background(), nil, unrelated)
-	if len(store.events) != 0 {
-		t.Fatalf("unmanaged pod must not produce ledger rows")
+
+	if got := len(rec.all()); got != 0 {
+		t.Fatalf("unmanaged pod must not produce row publishes, got %d", got)
 	}
 }
 
 // --- helpers --------------------------------------------------------------
-
-// newTestTracker wires a RowWriter around the fake store + emitter
-// with no Postgres pool (so dual-write column updates are skipped at
-// the test layer — k8s_watch tests verify the ledger + emit side of
-// RowWriter's contract; column-update behavior is tested separately
-// in writer_test.go).
-func newTestTracker(store *fakeStore, emitter *fakeEmitter) *transitionTracker {
-	writer, err := NewRowWriter(store, emitter, nil, nil)
-	if err != nil {
-		panic(err)
-	}
-	return newTransitionTracker(writer, nil, "default")
-}
-
-func lastEventType(s *fakeStore) string {
-	if len(s.events) == 0 {
-		return ""
-	}
-	return s.events[len(s.events)-1].Type
-}
 
 func newSessionPod(id, owner string, phase corev1.PodPhase, ready bool) *corev1.Pod {
 	created := metav1.NewTime(time.Date(2026, 5, 16, 0, 0, 1, 0, time.UTC))

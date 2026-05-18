@@ -1,24 +1,27 @@
 // K8s watch loop for the session controller. Single-writer Kubernetes
-// pod watcher that feeds session_lifecycle_events with pod-state
-// transitions, updates the sessions row's status / ready_at /
-// terminating_at columns through RowWriter, and republishes each row
-// on the per-owner NATS session-list events subject. The orchestrator
-// deployment runs with replicas=2 (k8s/values.yaml), so the watch
-// holds a coordination.k8s.io/Lease via the standard leaderelection
-// library and only the leader writes; the follower keeps a warm K8s
-// client and SSE serving stays available everywhere.
+// pod watcher that derives pod-state transitions and updates the
+// sessions row columns (status / ready_at / terminating_at) through
+// RowWriter, then republishes the post-write row on the per-owner
+// NATS row-update subject. The orchestrator deployment runs with
+// replicas=2 (k8s/values.yaml), so the watch holds a
+// coordination.k8s.io/Lease via the standard leaderelection library
+// and only the leader writes; the follower keeps a warm K8s client
+// and SSE serving stays available everywhere.
 //
 // History: this code was a separate package until
 // docs/session-list-redesign.md Phase 1 consolidated it into
 // sessioncontroller alongside chat_activity.go so the three writers
-// (user-action, K8s, chat) converge through a single RowWriter.
+// (user-action, K8s, chat) converge through a single RowWriter. Phase
+// 4 dropped the durable session_lifecycle_events ledger entirely —
+// re-observation dedup is in-process now (transitionTracker.last);
+// the post-restart re-emit pattern is harmless because each emit
+// converges the row to observed state and the SPA reconciles by
+// primary key.
 
 package sessioncontroller
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -34,7 +37,6 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -244,10 +246,11 @@ func applyK8sWatchDefaults(cfg K8sWatchConfig) K8sWatchConfig {
 }
 
 // transitionTracker keeps per-pod last-emitted state so the watch
-// emits one durable row per real state change. Restart-safe: on first
+// emits one row UPDATE per real state change. Restart-safe: on first
 // sight of a pod we re-derive the current state and attempt to emit;
-// the unique (session_scope, session_id, event_id) constraint in the
-// ledger collapses re-emits to no-ops.
+// each emit converges the sessions row's column values toward observed
+// state, so a duplicate emit lands an idempotent UPDATE (same column
+// values, row_version still bumps and clients re-render cleanly).
 type transitionTracker struct {
 	writer  *RowWriter
 	metrics K8sWatchMetrics
@@ -339,22 +342,23 @@ func (t *transitionTracker) emitCurrentConditions(ctx context.Context, owner, se
 	}
 }
 
-func (t *transitionTracker) handleDelete(ctx context.Context, pod *corev1.Pod) {
+// handleDelete clears the in-memory tracker entry when the informer
+// reports a pod removed from etcd. The sessions row's deletion is
+// owned by sessions.Manager.Delete via registry.MarkDeleted (visible
+// flips false, row_version bumps, SPA drops the row). There is no
+// K8s-watch row write on pod-fully-gone — by the time the informer
+// fires, Manager has already published the deleted-row update, and
+// any pod-terminating row update fired during graceful shutdown.
+func (t *transitionTracker) handleDelete(_ context.Context, pod *corev1.Pod) {
 	if !isManagedSessionPod(pod) {
-		return
-	}
-	owner := ownerEmail(pod)
-	sessionID := sessionID(pod)
-	if owner == "" || sessionID == "" {
 		return
 	}
 	t.mu.Lock()
 	delete(t.last, pod.UID)
 	t.mu.Unlock()
-	t.emit(ctx, deletedEvent(t.scope, owner, sessionID, pod))
 }
 
-func (t *transitionTracker) emit(ctx context.Context, event lifecycleevents.Event) {
+func (t *transitionTracker) emit(ctx context.Context, event Event) {
 	if event.Type == "" || event.SessionID == "" {
 		return
 	}
@@ -367,10 +371,7 @@ func (t *transitionTracker) emit(ctx context.Context, event lifecycleevents.Even
 		)
 		return
 	}
-	if outcome == TransitionDeduped {
-		// Restart resync or duplicate observation — RowWriter already
-		// skipped the publish so we don't re-render an old transition
-		// on connected clients.
+	if outcome == TransitionNoOp {
 		return
 	}
 	t.metrics.RecordTransition(event.Type)
@@ -440,14 +441,13 @@ func failureReason(pod *corev1.Pod) string {
 
 // --- event builders -------------------------------------------------------
 
-func scheduledEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents.Event {
+func scheduledEvent(scope, owner, sessionID string, pod *corev1.Pod) Event {
 	occurredAt := pod.CreationTimestamp.UTC().Format(time.RFC3339Nano)
-	return lifecycleevents.Event{
+	return Event{
 		Email:        owner,
 		SessionScope: scope,
 		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypePodScheduled,
-		EventID:      fmt.Sprintf("pod_scheduled:%s", pod.UID),
+		Type:         EventTypePodScheduled,
 		OccurredAt:   occurredAt,
 		Payload: map[string]any{
 			"status":   "Pending",
@@ -457,15 +457,14 @@ func scheduledEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleev
 	}
 }
 
-func readyEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents.Event {
+func readyEvent(scope, owner, sessionID string, pod *corev1.Pod) Event {
 	transitionAt := readyConditionTransitionTime(pod)
 	readyAt := transitionAt.UTC().Format(time.RFC3339Nano)
-	return lifecycleevents.Event{
+	return Event{
 		Email:        owner,
 		SessionScope: scope,
 		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypePodReady,
-		EventID:      fmt.Sprintf("pod_ready:%s:%d", pod.UID, transitionAt.UnixNano()),
+		Type:         EventTypePodReady,
 		OccurredAt:   readyAt,
 		Payload: map[string]any{
 			"status":   "Active",
@@ -476,14 +475,13 @@ func readyEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents
 	}
 }
 
-func notReadyEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents.Event {
+func notReadyEvent(scope, owner, sessionID string, pod *corev1.Pod) Event {
 	transitionAt := readyConditionTransitionTime(pod)
-	return lifecycleevents.Event{
+	return Event{
 		Email:        owner,
 		SessionScope: scope,
 		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypePodNotReady,
-		EventID:      fmt.Sprintf("pod_not_ready:%s:%d", pod.UID, transitionAt.UnixNano()),
+		Type:         EventTypePodNotReady,
 		OccurredAt:   transitionAt.UTC().Format(time.RFC3339Nano),
 		Payload: map[string]any{
 			"status":   "Pending",
@@ -493,7 +491,7 @@ func notReadyEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleeve
 	}
 }
 
-func failedEvent(scope, owner, sessionID string, pod *corev1.Pod, reason string) lifecycleevents.Event {
+func failedEvent(scope, owner, sessionID string, pod *corev1.Pod, reason string) Event {
 	exitCode, container, message := failureDetails(pod)
 	if reason == "" {
 		reason = "Failed"
@@ -517,55 +515,31 @@ func failedEvent(scope, owner, sessionID string, pod *corev1.Pod, reason string)
 	if pod.Status.StartTime != nil {
 		occurredAt = pod.Status.StartTime.UTC().Format(time.RFC3339Nano)
 	}
-	return lifecycleevents.Event{
+	return Event{
 		Email:        owner,
 		SessionScope: scope,
 		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypePodFailed,
-		// Event_id keys on UID + reason — a single pod can transition
-		// Failed once, but include the reason hash so a future change in
-		// the producer's reason classification doesn't silently dedupe a
-		// genuinely different fault.
-		EventID:    fmt.Sprintf("pod_failed:%s:%s", pod.UID, shortHash(reason)),
-		OccurredAt: occurredAt,
-		Payload:    payload,
+		Type:         EventTypePodFailed,
+		OccurredAt:   occurredAt,
+		Payload:      payload,
 	}
 }
 
-func terminatingEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents.Event {
+func terminatingEvent(scope, owner, sessionID string, pod *corev1.Pod) Event {
 	occurredAt := time.Now().UTC().Format(time.RFC3339Nano)
 	if pod.DeletionTimestamp != nil {
 		occurredAt = pod.DeletionTimestamp.UTC().Format(time.RFC3339Nano)
 	}
-	return lifecycleevents.Event{
+	return Event{
 		Email:        owner,
 		SessionScope: scope,
 		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypePodTerminating,
-		EventID:      fmt.Sprintf("pod_terminating:%s", pod.UID),
+		Type:         EventTypePodTerminating,
 		OccurredAt:   occurredAt,
 		Payload: map[string]any{
 			"status":   "Failed",
 			"pod_name": pod.Name,
 			"pod_uid":  string(pod.UID),
-		},
-	}
-}
-
-func deletedEvent(scope, owner, sessionID string, pod *corev1.Pod) lifecycleevents.Event {
-	occurredAt := time.Now().UTC().Format(time.RFC3339Nano)
-	return lifecycleevents.Event{
-		Email:        owner,
-		SessionScope: scope,
-		SessionID:    sessionID,
-		Type:         lifecycleevents.EventTypeDeleted,
-		// session.deleted is one-shot per session — Manager.Delete also
-		// writes the same event_id, whichever wins the race idempotently
-		// represents the deletion.
-		EventID:    "deleted",
-		OccurredAt: occurredAt,
-		Payload: map[string]any{
-			"pod_name": pod.Name,
 		},
 	}
 }
@@ -627,7 +601,3 @@ func failureDetails(pod *corev1.Pod) (int32, string, string) {
 	return 0, "", ""
 }
 
-func shortHash(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:6])
-}
