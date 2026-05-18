@@ -49,11 +49,41 @@ import {
 } from "./sessionCommands.js";
 import {
   commandsConsumedTotal,
+  interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
   recordTurnStart,
   recordTurnTerminal,
 } from "./metrics.js";
+
+// INTERRUPT_BUFFER_MS bounds how long an interrupt_turn record can sit
+// in orphanInterrupts waiting for a matching submit_turn before the
+// runner gives up and emits turn.failed{interrupt_orphaned}. Mirrors
+// agent-runner's constant of the same name; documented in
+// docs/tank-conversation-protocol.md → "Four-outcome contract on the
+// runner side" and nelsong6/tank-operator#532.
+const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
+  process.env.SESSION_INTERRUPT_BUFFER_MS,
+  30_000,
+);
+
+// TERMINAL_PUBLISH_* bound how hard we retry a durable terminal publish
+// (turn.interrupted, or the turn.failed{publish_interrupt_failed}
+// fallback). Same defaults as agent-runner so an env-override applies
+// uniformly across both runners in the same pod image. See #532.
+const TERMINAL_PUBLISH_ATTEMPTS = parsePositiveEnvInt(
+  process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS,
+  3,
+);
+const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
+  process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS,
+  500,
+);
+
+function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 // AsyncQueue — one writer, one consumer. Session commands push; the
 // run loop awaits the next value. Same shape as agent-runner's queue.
@@ -133,7 +163,33 @@ export type AcceptedTurn = CodexAdapterTurn & {
   commandRecord?: SessionCommandRecord;
   interruptRecords?: SessionCommandRecord[];
   stopCommandHeartbeat?: () => void;
+  // Set true when the run-loop dequeues a turn and finds a pre-arrived
+  // interrupt waiting in pendingInterrupts; the AbortController is
+  // pre-fired and the codex thread's runStreamed rejects without
+  // emitting any turn events. Distinguishes the terminated_pre_sdk
+  // counter bucket from terminated_via_sdk (interrupt arrived during
+  // an in-flight thread). See nelsong6/tank-operator#532.
+  interruptOnStart?: boolean;
 };
+
+// OrphanInterrupt parks an interrupt_turn record that arrived before
+// the runner saw the matching submit_turn. The race resolution and
+// terminal-outcome contract are documented in
+// docs/tank-conversation-protocol.md → "Four-outcome contract on the
+// runner side" and nelsong6/tank-operator#532. Sibling of agent-
+// runner's BufferedInterrupt.
+interface OrphanInterrupt {
+  record: SessionCommandRecord;
+  // target_turn_id || client_nonce on the record. Used to match against
+  // the bare-uuid and "turn_"-prefixed shapes that coexist on the wire.
+  targetKey: string;
+  receivedAtMs: number;
+  // Keeps the JetStream delivery un-acked so a runner crash redelivers
+  // it. applyInterruptToTurn (via drain) or expireOrphanInterrupt take
+  // ownership of the ack.
+  stopCommandHeartbeat: () => void;
+  orphanTimer: ReturnType<typeof setTimeout>;
+}
 
 export function interruptTargetMatchesTurn(
   targetTurnID: string,
@@ -175,6 +231,20 @@ export class Runner {
   private currentTurn: AcceptedTurn | null = null;
   private interruptRequested = false;
   private readonly pendingInterrupts: SessionCommandRecord[] = [];
+  // orphanInterrupts holds interrupt_turn records whose target_turn_id
+  // matches neither the current turn nor any submit_turn the data-plane
+  // consumer has seen yet. The race exists because #511 split control
+  // and data planes so they don't synchronize past JetStream delivery —
+  // a Stop click on a freshly-submitted turn can race the data
+  // consumer's handler call to trackCommandTurnTarget. Pre-#532 this
+  // case silently ack'd and the user's stop was lost; #532 makes us
+  // buffer the record with a heartbeat (so a runner crash redelivers)
+  // and an orphan timer (so the buffer always drains to a durable
+  // terminal). When trackCommandTurnTarget eventually fires for the
+  // matching submit_turn, drainOrphanInterruptsFor moves the record
+  // into pendingInterrupts so the existing dequeue-side interrupt
+  // path picks it up.
+  private readonly orphanInterrupts: OrphanInterrupt[] = [];
   private readonly pendingCommandTurnTargets = new Set<string>();
   private turnSeq = 0;
 
@@ -284,6 +354,7 @@ export class Runner {
         if (pendingInterrupt) {
           this.interruptRequested = true;
           turn.interruptRecords = [pendingInterrupt as SessionCommandRecord];
+          turn.interruptOnStart = true;
           this.currentAbort.abort();
         }
         // If the outer signal aborts mid-turn, also abort the in-flight
@@ -320,21 +391,61 @@ export class Runner {
           const interrupted =
             this.currentAbort.signal.aborted && isAbortError(err);
           if (interrupted) {
-            const dispatched = await dispatch(
-              this.sink,
+            // Per the four-outcome contract (#532), the durable
+            // turn.interrupted publish is retried; on retry exhaustion
+            // we fall back to turn.failed{publish_interrupt_failed} so
+            // the UI's "stopping" projection always resolves. The
+            // outcome counter is incremented exactly once per
+            // interrupt_turn record that contributed to this terminal.
+            const reason = this.interruptRequested
+              ? "client_interrupt"
+              : "runner_shutdown";
+            const published = await this.publishTerminalWithRetry(
               turnEvent({
                 sessionID: this.cfg.sessionId,
                 turnID: turn.turnID,
                 clientNonce: turn.clientNonce,
                 source: "codex",
                 type: "turn.interrupted",
-                reason: this.interruptRequested
-                  ? "client_interrupt"
-                  : "runner_shutdown",
+                reason,
               }),
             );
-            if (dispatched) {
+            if (published) {
               await this.markCommandTerminal(turn, "turn.interrupted");
+              // Count one terminal-outcome bucket per interrupt record
+              // that drove this turn down. If the user double-Stop'd
+              // and both records contributed, both increment.
+              const interruptCount = turn.interruptRecords?.length ?? 0;
+              if (interruptCount > 0 && reason === "client_interrupt") {
+                const bucket = turn.interruptOnStart
+                  ? "terminated_pre_sdk"
+                  : "terminated_via_sdk";
+                for (let i = 0; i < interruptCount; i++) {
+                  interruptOutcomeTotal.labels(bucket).inc();
+                }
+              }
+            } else {
+              // Both turn.interrupted retries and the turn.failed
+              // fallback below failed. Mark every contributing
+              // interrupt record as failed on the command bus so
+              // JetStream redelivery retries the whole flow.
+              const fallback = await this.publishTerminalWithRetry(
+                turnEvent({
+                  sessionID: this.cfg.sessionId,
+                  turnID: turn.turnID,
+                  clientNonce: turn.clientNonce,
+                  source: "codex",
+                  type: "turn.failed",
+                  reason: "publish_interrupt_failed",
+                }),
+              );
+              if (fallback) {
+                await this.markCommandTerminal(turn, "turn.failed");
+              }
+              const interruptCount = turn.interruptRecords?.length ?? 0;
+              for (let i = 0; i < interruptCount; i++) {
+                interruptOutcomeTotal.labels("publish_failed").inc();
+              }
             }
             console.info("codex turn interrupted");
             continue;
@@ -445,23 +556,155 @@ export class Runner {
     };
   }
 
+  // acceptInterrupt is the control-plane entry point. Per the
+  // four-outcome contract (nelsong6/tank-operator#532), every accepted
+  // interrupt MUST resolve to exactly one terminal-outcome increment on
+  // interruptOutcomeTotal within bounded time. Pre-#532 the
+  // `await this.commandBus.markCompleted(record)` else-branch silently
+  // ack'd an interrupt that targeted a turn the runner hadn't seen yet
+  // (the race window between control-plane delivery and the data-plane
+  // consumer's trackCommandTurnTarget call); #532 closes that path by
+  // buffering with an orphan timer.
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
-    const targetTurnID = record.target_turn_id || record.client_nonce || "";
+    commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
+    const targetKey = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    if (!targetKey) {
+      interruptOutcomeTotal.labels("invalid_target").inc();
+      await this.commandBus.markFailed(
+        record,
+        new Error("interrupt_turn missing both target_turn_id and client_nonce"),
+      );
+      return;
+    }
     if (
       this.currentTurn &&
-      interruptTargetMatchesTurn(targetTurnID, this.currentTurn)
+      interruptTargetMatchesTurn(targetKey, this.currentTurn)
     ) {
       this.interruptRequested = true;
       this.currentTurn.interruptRecords ??= [];
       this.currentTurn.interruptRecords.push(record);
       this.currentAbort?.abort();
+      // outcome counter is incremented in the run-loop's interrupted
+      // catch branch — that's where publish + ack actually fire, and
+      // we want to count the terminal outcome (terminated_via_sdk or
+      // publish_failed) not the arrival.
       return;
     }
-    if (targetTurnID && this.pendingCommandTurnTargets.has(targetTurnID)) {
+    if (this.pendingCommandTurnTargets.has(targetKey)) {
+      // submit_turn already enqueued; takePendingInterruptForTurn picks
+      // it up at dequeue time. Existing path.
       this.addPendingInterrupt(record);
+      interruptOutcomeTotal.labels("buffered").inc();
       return;
     }
-    await this.commandBus.markCompleted(record);
+    // No matching turn known. Pre-#532 this silently ack'd the record;
+    // #532 buffers with an orphan timer so the buffer always drains to
+    // a durable terminal (either terminated_pre_sdk when the matching
+    // submit_turn lands, or orphaned when it never does).
+    this.bufferOrphanInterrupt(record, targetKey);
+  }
+
+  private bufferOrphanInterrupt(record: SessionCommandRecord, targetKey: string): void {
+    interruptOutcomeTotal.labels("buffered").inc();
+    const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    const orphanTimer = setTimeout(() => {
+      void this.expireOrphanInterrupt(record).catch((err) =>
+        console.error("expireOrphanInterrupt failed:", err),
+      );
+    }, INTERRUPT_BUFFER_MS);
+    if (typeof (orphanTimer as { unref?: () => void }).unref === "function") {
+      (orphanTimer as { unref: () => void }).unref();
+    }
+    this.orphanInterrupts.push({
+      record,
+      targetKey,
+      receivedAtMs: Date.now(),
+      stopCommandHeartbeat: stopHeartbeat,
+      orphanTimer,
+    });
+  }
+
+  // drainOrphanInterruptsFor moves orphan buffer entries matching this
+  // clientNonce into pendingInterrupts (the existing dequeue-side
+  // buffer). Called from trackCommandTurnTarget the moment a submit_turn
+  // is received, so a stop click that raced into the runner before its
+  // submit gets applied as soon as the submit catches up.
+  private drainOrphanInterruptsFor(clientNonce: string): void {
+    if (this.orphanInterrupts.length === 0) return;
+    const turnID = turnIDForClientNonce(clientNonce);
+    const remaining: OrphanInterrupt[] = [];
+    for (const buf of this.orphanInterrupts) {
+      if (buf.targetKey === clientNonce || buf.targetKey === turnID) {
+        clearTimeout(buf.orphanTimer);
+        buf.stopCommandHeartbeat();
+        this.addPendingInterrupt(buf.record);
+      } else {
+        remaining.push(buf);
+      }
+    }
+    this.orphanInterrupts.length = 0;
+    this.orphanInterrupts.push(...remaining);
+  }
+
+  private async expireOrphanInterrupt(record: SessionCommandRecord): Promise<void> {
+    const idx = this.orphanInterrupts.findIndex((buf) => buf.record === record);
+    if (idx < 0) return; // already drained
+    const buf = this.orphanInterrupts[idx]!;
+    this.orphanInterrupts.splice(idx, 1);
+    buf.stopCommandHeartbeat();
+    const syntheticTurnID = buf.targetKey.startsWith("turn_")
+      ? buf.targetKey
+      : turnIDForClientNonce(buf.targetKey);
+    // Before emitting interrupt_orphaned, check the durable ledger for
+    // a natural terminal on the target. The race is legitimate when a
+    // stop click lands after the turn has already completed/failed in
+    // a previous runner-process incarnation — the UI shows the natural
+    // terminal; emitting a duplicate turn.failed here would muddy the
+    // transcript. Ack the interrupt with turn_already_terminal instead.
+    try {
+      const terminal = await this.sink.findTurnTerminal(syntheticTurnID);
+      if (terminal) {
+        interruptOutcomeTotal.labels("turn_already_terminal").inc();
+        await this.commandBus.markCompleted(record);
+        return;
+      }
+    } catch (err) {
+      // Durable-terminal lookup is best-effort. If it fails we fall
+      // through to publishing the orphan terminal — that's safer than
+      // ack'ing without any durable response.
+      console.warn("findTurnTerminal failed for orphan check; falling through to interrupt_orphaned:", err);
+    }
+    const published = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: syntheticTurnID,
+        clientNonce: buf.targetKey,
+        source: "codex",
+        type: "turn.failed",
+        reason: "interrupt_orphaned",
+      }),
+    );
+    if (published) {
+      interruptOutcomeTotal.labels("orphaned").inc();
+      await this.commandBus.markCompleted(record);
+      return;
+    }
+    interruptOutcomeTotal.labels("publish_failed").inc();
+    await this.commandBus.markFailed(
+      record,
+      new Error("orphaned-interrupt terminal publish failed after retry"),
+    );
+  }
+
+  private async publishTerminalWithRetry(event: TankConversationEvent): Promise<boolean> {
+    for (let attempt = 0; attempt < TERMINAL_PUBLISH_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        const delay = TERMINAL_PUBLISH_BACKOFF_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      if (await dispatch(this.sink, event)) return true;
+    }
+    return false;
   }
 
   private trackCommandTurnTarget(clientNonce: string | undefined): void {
@@ -469,6 +712,13 @@ export class Runner {
     if (!normalized) return;
     this.pendingCommandTurnTargets.add(normalized);
     this.pendingCommandTurnTargets.add(turnIDForClientNonce(normalized));
+    // Drain any orphan-buffered interrupts whose target matches this
+    // turn. The runner saw the stop click before it saw the submit_turn
+    // (the control plane and data plane don't synchronize past
+    // JetStream delivery — by #511's design); now that the submit is
+    // tracked, the buffered interrupt moves into pendingInterrupts and
+    // the existing dequeue-side path applies it. See #532.
+    this.drainOrphanInterruptsFor(normalized);
   }
 
   private clearCommandTurnTarget(clientNonce: string | undefined): void {
