@@ -42,6 +42,17 @@ or cleanup work. Read
 [docs/product-inspirations.md](docs/product-inspirations.md) when making
 product or architecture decisions.
 
+Read [docs/diagnostic-discipline.md](docs/diagnostic-discipline.md) before
+investigating any bug or incident on this repo. The other three docs above
+describe the quality bar for *writing* code; this one describes how to
+*investigate* a system so the writing has the right target. Specifically:
+when a user reports a behavior claim, query the durable ledger
+(`session_events` in Postgres for run state) before looking at logs or
+metrics. Logs are loud; the durable ledger is quiet — but it's the
+contract. Skipping this step is how nelsong6/tank-operator#532 got its
+prior session's diagnosis pointed at a noisy-but-not-causal NATS error
+instead of the actual silent-stop bug.
+
 ## Observability
 
 Every service in this repo (orchestrator, agent-runner, codex-runner,

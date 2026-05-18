@@ -399,6 +399,57 @@ record. If step 1 succeeds and step 2 fails, the existing
 the `turn.interrupt_requested` chip stays on the transcript as honest
 evidence that the user did press Stop.
 
+**Four-outcome contract on the runner side (post-#532).** Once an
+`interrupt_turn` command lands on the runner's control-plane consumer,
+the runner MUST produce exactly one of these terminal-outcome
+increments on `tank_runner_interrupt_outcome_total` within bounded
+time, and a corresponding durable terminal event:
+
+- `terminated_via_sdk` — interrupt arrived during an in-flight turn.
+  `sdkQuery.interrupt()` is awaited FIRST (the load-bearing action that
+  stops the CLI from generating more tool calls), then `turn.interrupted`
+  is published with bounded retry. Ordering is intentionally inverted
+  from the pre-#532 shape, which gated the SDK call on the publish and
+  so let a transient publish failure silently let the model keep
+  running.
+- `terminated_pre_sdk` — interrupt arrived before the matching
+  `submit_turn` had been dispatched on this runner. The control plane
+  and data plane don't synchronize past JetStream-level delivery (by
+  #511's design), so an early-stop click can race the submit. The
+  runner holds such interrupts in an in-process `pendingInterrupts`
+  buffer, drains them when the matching `submit_turn` lands, and
+  synthesizes `turn.interrupted{reason:"client_interrupt_before_start"}`
+  without ever feeding the prompt to the SDK.
+- `orphaned` — a buffered interrupt's matching `submit_turn` never
+  arrived within `SESSION_INTERRUPT_BUFFER_MS` (default 30s). The
+  runner synthesizes `turn.failed{reason:"interrupt_orphaned"}` so the
+  UI's "stopping" projection resolves to a durable terminal rather
+  than hanging.
+- `publish_failed` — `sdkQuery.interrupt()` was attempted, every retry
+  to publish `turn.interrupted` failed, and the fallback
+  `turn.failed{reason:"publish_interrupt_failed"}` also failed. The
+  JetStream `interrupt_turn` command is NAK'd; redelivery on the next
+  `ack_wait` expiry retries the whole flow. Alert-worthy if it
+  persists.
+- `turn_already_terminal` — interrupt arrived after the targeted turn
+  had already emitted its own terminal (`turn.completed` /
+  `turn.failed`). The race is legitimate; the durable ledger shows the
+  natural terminal; the UI resolves via the existing race-resolution
+  arm in `conversationReducer.ts`.
+- `invalid_target` — `interrupt_turn` arrived with neither
+  `target_turn_id` nor `client_nonce`. Backend bug; should be zero in
+  production.
+- `buffered` is a transient arrival counter (not a terminal). Every
+  `buffered` increment must drain to one of the terminal-outcome
+  buckets above; the difference is the alert surface.
+
+There is no other valid outcome. Returning silently from
+`acceptInterrupt` or `interruptActiveTurn` without producing a durable
+terminal AND a counter increment is the bug class #532 closed — see
+the issue for the post-mortem evidence (Postgres `session_events` rows
+for session 19 showing 20 of 24 item completions landing AFTER a stop
+click, with no `turn.interrupted` ever emitted).
+
 The UI's `stopping` run status is **strictly a projection** of the durable
 `turn.interrupt_requested` event. No client-side flag, no UI-local mirror.
 A refresh after pressing Stop replays the chip from `/timeline` and the

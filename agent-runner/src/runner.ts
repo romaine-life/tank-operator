@@ -55,6 +55,7 @@ import {
   askUserQuestionPendingGauge,
   askUserQuestionWaitSeconds,
   commandsConsumedTotal,
+  interruptOutcomeTotal,
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
@@ -153,6 +154,45 @@ export interface PendingTurn {
   terminalEmitted: boolean;
   commandRecord?: SessionCommandRecord;
   stopCommandHeartbeat?: () => void;
+  // interruptOnStart carries any interrupt_turn record(s) that landed on
+  // the control consumer before the matching submit_turn had been
+  // dispatched on the runner. acceptCommandTurn drains pendingInterrupts
+  // against the freshly-built PendingTurn at submit time and parks the
+  // record(s) here; the SDK is never fed the prompt, and the dispatch
+  // path emits `turn.interrupted{reason:"client_interrupt_before_start"}`
+  // synthetically. See nelsong6/tank-operator#532 for the race the
+  // pre-#532 silent `return "not_found"` exposed.
+  interruptOnStart?: SessionCommandRecord[];
+}
+
+// BufferedInterrupt tracks an interrupt_turn command that arrived at the
+// control consumer with no matching active/pending turn yet on the
+// runner. The buffer's purpose is the post-#511 / pre-#532 race: the
+// control consumer can deliver interrupt_turn arbitrarily before the
+// data-plane consumer dispatches the matching submit_turn (the planes
+// don't synchronize past JetStream-level delivery). Pre-#532 the
+// runner returned "not_found" silently from `interruptActiveTurn`; the
+// SDK never got an interrupt and no durable terminal landed — the UI
+// hung in "stopping" forever.
+//
+// Buffered records hold their JetStream message un-acked via the
+// heartbeat below so a runner crash redelivers them. The orphanTimer
+// guarantees the buffer always drains within INTERRUPT_BUFFER_MS — if
+// no matching submit_turn arrives, we synthesize a durable terminal
+// (turn.failed{interrupt_orphaned}) so the UI resolves out of
+// "stopping" and the user sees an honest failure rather than a hang.
+interface BufferedInterrupt {
+  record: SessionCommandRecord;
+  // Lookup key: target_turn_id || client_nonce. acceptTurn matches
+  // against both PendingTurn.turnID and PendingTurn.clientNonce so the
+  // bare-uuid vs. "turn_"-prefixed shapes (which both flow over the
+  // wire for legacy reasons) resolve the same way.
+  targetKey: string;
+  receivedAtMs: number;
+  // Holds the JetStream delivery alive until applyInterruptToTurn or
+  // the orphan timer takes ownership of the ack.
+  stopCommandHeartbeat: () => void;
+  orphanTimer: ReturnType<typeof setTimeout>;
 }
 
 // PendingInputReply tracks a single in-flight AskUserQuestion call. Either
@@ -309,11 +349,50 @@ class AsyncQueue<T> {
   }
 }
 
+// INTERRUPT_BUFFER_MS bounds how long an interrupt_turn record can sit
+// in pendingInterrupts waiting for a matching submit_turn before the
+// runner gives up and emits turn.failed{interrupt_orphaned}. Sized well
+// above worst-case data-plane queueing (one full in-flight turn) so a
+// legitimate user-clicked-Stop-during-prior-turn race resolves
+// naturally, and short enough that a genuinely orphaned interrupt
+// surfaces as a durable failure inside a typical user attention window.
+// 30s mirrors the JetStream control consumer's ack_wait headroom.
+const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
+  process.env.SESSION_INTERRUPT_BUFFER_MS,
+  30_000,
+);
+
+// TERMINAL_PUBLISH_* bound how hard `applyInterruptToTurn` retries the
+// durable terminal publish before falling back to
+// turn.failed{publish_interrupt_failed}. The body of either event is
+// tiny so the retry is cheap; max_payload_exceeded is deterministic, so
+// retries don't help there and we want to surface the failure quickly.
+// Transient JetStream connectivity blips do recover within a few hundred
+// ms; the backoff is generous enough to span those.
+const TERMINAL_PUBLISH_ATTEMPTS = parsePositiveEnvInt(
+  process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS,
+  3,
+);
+const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
+  process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS,
+  500,
+);
+
+function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt((value ?? "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export class Runner {
   private readonly sink: SessionEventSink;
   private readonly commandBus: SessionCommandBus;
   private readonly userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
+  // pendingInterrupts holds interrupt_turn records that landed before
+  // the matching submit_turn was dispatched on this runner. See the
+  // BufferedInterrupt docstring for the race this buffer fixes.
+  // Linear-scan; expected depth is 0–1 in steady state.
+  private readonly pendingInterrupts: BufferedInterrupt[] = [];
   private readonly needsInputProviderItemIDs = new Set<string>();
   private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   // resolvedInputReplies carries the answers/annotations that resolved
@@ -635,6 +714,18 @@ export class Runner {
       await this.commandBus.markFailed(record, new Error("session command was not accepted"));
       return;
     }
+    // Drain any pre-arrived interrupts whose target matches this turn.
+    // The control consumer can deliver interrupt_turn before the
+    // data-plane consumer dispatches the matching submit_turn (the
+    // planes don't synchronize past JetStream-level delivery, by
+    // #511's design). Pre-#532 the runner returned "not_found"
+    // silently and the stop click was lost; post-#532 the buffered
+    // record drains here and is applied as a pre-SDK interrupt below.
+    // See nelsong6/tank-operator#532 and BufferedInterrupt's docstring.
+    const bufferedInterrupts = this.drainPendingInterruptsFor(pendingTurn);
+    if (bufferedInterrupts.length > 0) {
+      pendingTurn.interruptOnStart = bufferedInterrupts;
+    }
     // Pin model + effort from the first submit_turn and construct the SDK
     // query() lazily so the user's dropdown pick is what actually drives
     // the model running in this pod. Second-and-onward calls are a no-op
@@ -642,9 +733,31 @@ export class Runner {
     // happen before pushing onto userQueue: query() is what consumes the
     // queue, and a message landing while sdkQuery is still null would sit
     // unread until something else triggers ensureSdkQuery.
+    //
+    // We still pin model/effort even on the interrupt-on-start path:
+    // the user's dropdown pick remains the right choice for the pod's
+    // lifetime, even though we won't actually feed THIS turn into the
+    // SDK below.
     this.ensureSdkQuery(record);
     pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
+    if (pendingTurn.interruptOnStart && pendingTurn.interruptOnStart.length > 0) {
+      // The SDK is never fed this turn. Emit turn.interrupted
+      // synthetically for each buffered interrupt record (typically
+      // one; double-Stop is rare but possible) so each interrupt_turn
+      // command resolves to its own durable terminal-outcome bucket.
+      // applyInterruptToTurn handles the case where the same turn was
+      // already marked terminal by an earlier record in the loop via
+      // its turn.terminalEmitted guard.
+      for (const interruptRecord of pendingTurn.interruptOnStart) {
+        await this.applyInterruptToTurn(
+          interruptRecord,
+          pendingTurn,
+          "client_interrupt_before_start",
+        );
+      }
+      return;
+    }
     this.userQueue.push({
       type: "user",
       session_id: "",
@@ -653,33 +766,251 @@ export class Runner {
     } as unknown as SDKUserMessage);
   }
 
+  // acceptInterrupt is the single entry point from the control-plane
+  // consumer for interrupt_turn commands. Its contract — pinned by
+  // nelsong6/tank-operator#532 — is that EVERY accepted interrupt
+  // resolves to exactly one terminal-outcome increment on
+  // interruptOutcomeTotal within bounded time. No silent returns, no
+  // markCompleted-without-emitting-a-terminal paths. The pre-#532 shape
+  // had two silent strandings (race against submit_turn dispatch, and
+  // dispatch-failure on the durable terminal); the buffer-and-apply
+  // path here closes both.
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
-    const outcome = await this.interruptActiveTurn(
-      "client_interrupt",
-      record.target_turn_id || record.client_nonce,
-    );
-    if (outcome === "interrupted") {
-      // Await the SDK's interrupt() — it sends a {subtype: "interrupt"}
-      // control-plane request to the CLI subprocess and returns when the
-      // CLI has acked. Dropping the promise (the prior shape) meant we
-      // marked the command "completed" before the CLI had stopped, and
-      // any async rejection became an unhandled rejection instead of
-      // hitting the providerErrorTotal counter.
-      try {
-        await this.sdkQuery?.interrupt();
-      } catch (err) {
-        providerErrorTotal.labels("interrupt").inc();
-        throw err;
+    const targetKey = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    if (!targetKey) {
+      // Backend bug — the /interrupt handler MUST send target_turn_id
+      // (it copies the URL path value into both target_turn_id and
+      // client_nonce). Drop with a visible failure rather than the
+      // pre-#532 silent ack so the regression surfaces.
+      interruptOutcomeTotal.labels("invalid_target").inc();
+      await this.commandBus.markFailed(
+        record,
+        new Error("interrupt_turn missing both target_turn_id and client_nonce"),
+      );
+      return;
+    }
+    const turn = this.findTurnForKey(targetKey);
+    if (turn) {
+      await this.applyInterruptToTurn(record, turn, "client_interrupt");
+      return;
+    }
+    // No matching turn — buffer and wait. This is the resolution for
+    // the post-#511 race: the control consumer delivers interrupt_turn
+    // independent of data-plane queueing, so an early-stop click can
+    // land on the runner before the submit_turn it targets has been
+    // dispatched. Pre-#532 this returned "not_found" silently and the
+    // user's stop was simply lost.
+    this.bufferInterrupt(record, targetKey);
+  }
+
+  private findTurnForKey(key: string): PendingTurn | null {
+    if (this.activeTurn && this.turnMatchesTarget(this.activeTurn, key)) {
+      return this.activeTurn;
+    }
+    for (const turn of this.pendingTurns) {
+      if (this.turnMatchesTarget(turn, key)) return turn;
+    }
+    return null;
+  }
+
+  // bufferInterrupt parks the interrupt_turn record until either
+  // (a) the matching submit_turn arrives and acceptCommandTurn drains
+  // the buffer into PendingTurn.interruptOnStart, or (b) the orphan
+  // timer fires and we synthesize a turn.failed terminal so the UI
+  // doesn't hang in "stopping". The JetStream working() heartbeat
+  // keeps the message un-acked so a runner crash redelivers it; only
+  // applyInterruptToTurn or expireBufferedInterrupt take ownership of
+  // the ack.
+  private bufferInterrupt(record: SessionCommandRecord, targetKey: string): void {
+    interruptOutcomeTotal.labels("buffered").inc();
+    const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    const orphanTimer = setTimeout(() => {
+      void this.expireBufferedInterrupt(record).catch((err) =>
+        console.error("expireBufferedInterrupt failed:", err),
+      );
+    }, INTERRUPT_BUFFER_MS);
+    // Unref so a buffered interrupt doesn't hold the event loop open
+    // during runner shutdown. The signal-driven abort path drains the
+    // buffer explicitly during shutdown.
+    if (typeof (orphanTimer as { unref?: () => void }).unref === "function") {
+      (orphanTimer as { unref: () => void }).unref();
+    }
+    this.pendingInterrupts.push({
+      record,
+      targetKey,
+      receivedAtMs: Date.now(),
+      stopCommandHeartbeat: stopHeartbeat,
+      orphanTimer,
+    });
+  }
+
+  // drainPendingInterruptsFor takes ownership of every buffered
+  // interrupt whose targetKey matches `turn` (matching by both
+  // PendingTurn.turnID and .clientNonce, since the two shapes coexist
+  // on the wire). Returns the records so acceptCommandTurn can park
+  // them on PendingTurn.interruptOnStart; the heartbeats are stopped
+  // and the orphan timers cleared before return.
+  private drainPendingInterruptsFor(turn: PendingTurn): SessionCommandRecord[] {
+    if (this.pendingInterrupts.length === 0) return [];
+    const drained: SessionCommandRecord[] = [];
+    const remaining: BufferedInterrupt[] = [];
+    for (const buf of this.pendingInterrupts) {
+      if (this.turnMatchesTarget(turn, buf.targetKey)) {
+        clearTimeout(buf.orphanTimer);
+        buf.stopCommandHeartbeat();
+        drained.push(buf.record);
+      } else {
+        remaining.push(buf);
       }
+    }
+    this.pendingInterrupts.length = 0;
+    this.pendingInterrupts.push(...remaining);
+    return drained;
+  }
+
+  private async expireBufferedInterrupt(record: SessionCommandRecord): Promise<void> {
+    const idx = this.pendingInterrupts.findIndex((buf) => buf.record === record);
+    if (idx < 0) return; // already drained by a submit_turn
+    const buf = this.pendingInterrupts[idx]!;
+    this.pendingInterrupts.splice(idx, 1);
+    buf.stopCommandHeartbeat();
+    // Synthesize a durable terminal for the targeted turn so the UI's
+    // "stopping" projection resolves. The target turn never ran on this
+    // runner; the turnID we publish is the canonical SDK-side form
+    // derived from the targetKey so the event sits under the same
+    // turn_id the frontend's interruptRequests entry was keyed on.
+    const syntheticTurnID = buf.targetKey.startsWith("turn_")
+      ? buf.targetKey
+      : turnIDForClientNonce(buf.targetKey);
+    const published = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: syntheticTurnID,
+        clientNonce: buf.targetKey,
+        source: "claude",
+        type: "turn.failed",
+        reason: "interrupt_orphaned",
+      }),
+    );
+    if (published) {
+      interruptOutcomeTotal.labels("orphaned").inc();
       await this.commandBus.markCompleted(record);
       return;
     }
-    if (outcome === "publish_failed") {
-      await this.commandBus.markFailed(record, new Error("interrupt event publish failed"));
+    interruptOutcomeTotal.labels("publish_failed").inc();
+    await this.commandBus.markFailed(
+      record,
+      new Error("orphaned-interrupt terminal publish failed after retry"),
+    );
+  }
+
+  // applyInterruptToTurn is the single point where an accepted
+  // interrupt actually acts on the SDK and emits a durable terminal.
+  // Order is deliberate and inverted from the pre-#532 shape:
+  //
+  //   1. sdkQuery.interrupt() FIRST — this is the load-bearing action
+  //      that stops the CLI subprocess from producing more tool calls
+  //      and saves the user from continued token spend. We do not gate
+  //      it on the durable publish (the pre-#532 ordering did, which
+  //      meant any transient publish failure silently let the model
+  //      keep running).
+  //   2. dispatch turn.interrupted with bounded retry. On exhaustion,
+  //      fall back to turn.failed{publish_interrupt_failed} so the UI
+  //      always resolves to a durable terminal.
+  //
+  // reason="client_interrupt_before_start" branches into the
+  // synthetic-terminal path: no SDK call is needed (the SDK was never
+  // fed the prompt for this turn), we just publish the terminal.
+  private async applyInterruptToTurn(
+    record: SessionCommandRecord,
+    turn: PendingTurn,
+    reason: "client_interrupt" | "client_interrupt_before_start",
+  ): Promise<void> {
+    if (turn.terminalEmitted) {
+      // Race with the natural turn termination. The durable ledger
+      // shows the natural terminal; the UI's stopping projection
+      // resolves via the existing race-resolution arm. Mark the
+      // interrupt command complete; nothing more to do.
+      interruptOutcomeTotal.labels("turn_already_terminal").inc();
+      await this.commandBus.markCompleted(record);
       return;
     }
-    await this.commandBus.markCompleted(record);
+    turn.interrupted = true;
+    if (reason === "client_interrupt") {
+      try {
+        await this.sdkQuery?.interrupt();
+      } catch (err) {
+        // Count and continue. The durable terminal below is still the
+        // right thing to publish — better to mark the turn ended than
+        // to leak it because the SDK control-plane call threw.
+        providerErrorTotal.labels("interrupt").inc();
+        console.error("sdkQuery.interrupt() failed; continuing to emit durable terminal:", err);
+      }
+    }
+    const published = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.interrupted",
+        reason,
+      }),
+    );
+    if (published) {
+      turn.terminalEmitted = true;
+      if (turn.commandRecord) {
+        await this.markCommandTerminal(turn, "turn.interrupted");
+      }
+      interruptOutcomeTotal
+        .labels(reason === "client_interrupt_before_start" ? "terminated_pre_sdk" : "terminated_via_sdk")
+        .inc();
+      await this.commandBus.markCompleted(record);
+      return;
+    }
+    // Durable turn.interrupted publish failed after retry. Fall back to
+    // turn.failed so the UI's "stopping" projection still resolves
+    // (conversationReducer.ts handles turn.failed → "error" status).
+    // If THIS publish also fails, JetStream redelivery on the
+    // interrupt_turn command will retry the whole flow on the next
+    // ack_wait expiry — we don't try to make this case work in-process.
+    const fallback = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "publish_interrupt_failed",
+      }),
+    );
+    if (fallback) {
+      turn.terminalEmitted = true;
+      if (turn.commandRecord) {
+        await this.markCommandTerminal(turn, "turn.failed");
+      }
+    }
+    interruptOutcomeTotal.labels("publish_failed").inc();
+    await this.commandBus.markFailed(
+      record,
+      new Error("turn.interrupted publish failed after retry"),
+    );
+  }
+
+  private async publishTerminalWithRetry(event: TankConversationEvent): Promise<boolean> {
+    for (let attempt = 0; attempt < TERMINAL_PUBLISH_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff. JetStream client-side publish failures
+        // (max_payload, etc.) are deterministic so retries don't help
+        // there; transient connection blips do recover within a few
+        // hundred ms.
+        const delay = TERMINAL_PUBLISH_BACKOFF_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      if (await dispatch(this.sink, event)) return true;
+    }
+    return false;
   }
 
   // canUseTool is the SDK-blessed answer-injection point. The SDK calls
@@ -878,6 +1209,17 @@ export class Runner {
     return this.activeTurn;
   }
 
+  // interruptActiveTurn is now only used by the runner-shutdown path
+  // (run()'s finally block on signal abort). Client-driven interrupts
+  // flow through acceptInterrupt → applyInterruptToTurn directly so
+  // the four-outcome contract on interruptOutcomeTotal applies.
+  //
+  // Returns the InterruptOutcome the shutdown caller doesn't actually
+  // read — kept on the signature to make the existing call site
+  // self-documenting. The body emits the durable terminal best-effort;
+  // shutdown is synchronous past the await, so publish-failed at this
+  // stage is unrecoverable in-process and falls to JetStream
+  // redelivery on the next runner-process boot.
   private async interruptActiveTurn(
     reason: "client_interrupt" | "runner_shutdown",
     targetTurnID = "",

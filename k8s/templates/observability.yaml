@@ -393,6 +393,74 @@ spec:
               agent-runner / codex-runner logs for the "session bus publish
               failed" line and for "providerErrorTotal{operation=interrupt}".
 
+        # Stage 3 (post-#532) — runner accepted an interrupt but didn't
+        # drain it to any terminal-outcome bucket on
+        # tank_runner_interrupt_outcome_total. The four-outcome contract
+        # (see docs/tank-conversation-protocol.md → "Four-outcome contract
+        # on the runner side") guarantees that every accepted interrupt
+        # produces exactly one increment in a terminal-outcome bucket
+        # (terminated_via_sdk, terminated_pre_sdk, orphaned, publish_failed,
+        # turn_already_terminal, or invalid_target). "buffered" is a
+        # transient arrival counter that must drain; if buffered arrivals
+        # outrun terminal-outcome resolutions, an interrupt is stuck.
+        #
+        # This is stricter than TankStopNotTerminated above — that alert
+        # counts only the happy-path turn.interrupted terminal via the
+        # duration histogram. This alert catches every silent stranding
+        # the pre-#532 shape produced, including the buffer-and-apply
+        # race resolution and publish-failed fallback paths.
+        - alert: TankStopOutcomeStranded
+          expr: |
+            sum(rate(tank_runner_interrupt_outcome_total{outcome="buffered"}[5m]))
+              - sum(rate(tank_runner_interrupt_outcome_total{outcome=~"terminated_via_sdk|terminated_pre_sdk|orphaned|publish_failed|turn_already_terminal|invalid_target"}[5m]))
+              > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Runner-buffered interrupts are not draining to a terminal outcome"
+            runbook: |
+              An interrupt_turn was accepted on the runner's control plane
+              and held in the pendingInterrupts buffer waiting for a
+              matching submit_turn, but did not drain within the buffer
+              window AND did not produce an orphan terminal. This is a
+              regression of the #532 buffer-and-apply contract — the
+              runner's `acceptInterrupt` / `applyInterruptToTurn` /
+              `expireBufferedInterrupt` paths are no longer covering every
+              accepted interrupt. Check the affected runner pod's logs
+              for `expireBufferedInterrupt failed`; check that
+              `tank_runner_interrupt_outcome_total` exposes all the
+              outcome labels listed in the alert expression.
+
+        # Stage 4 (post-#532) — every retry to publish a turn.interrupted
+        # event failed and the fallback turn.failed{publish_interrupt_failed}
+        # also exhausted its retries. The user pressed Stop, the runner did
+        # call sdkQuery.interrupt() (load-bearing side of #532), but every
+        # attempt to land a durable terminal hit a publish error. JetStream
+        # redelivery on the original interrupt_turn command will retry; if
+        # this alert persists, redelivery isn't helping either.
+        #
+        # Most likely causes: oversized event payload (max_payload exceeded,
+        # deterministic — see #532 Stage 3 follow-up for the truncation
+        # plan), JetStream connectivity blackout, persister deadlock.
+        - alert: TankStopPublishFailed
+          expr: increase(tank_runner_interrupt_outcome_total{outcome="publish_failed"}[10m]) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Runner exhausted retries publishing a turn.interrupted terminal"
+            runbook: |
+              The runner's publishTerminalWithRetry exhausted attempts for
+              both turn.interrupted and the turn.failed{publish_interrupt_failed}
+              fallback. The SDK was (best-effort) interrupted; the durable
+              ledger has no terminal for this stop yet, so the UI is in
+              "stopping". Check the affected runner pod's logs for
+              `'payload' max_payload size exceeded` (oversized event,
+              #532 Stage 3) or sustained NATS disconnect. JetStream
+              redelivery will retry on ack_wait expiry; this alert clears
+              once one delivery succeeds.
+
     # Session spawn observability. The user-visible latency budget for
     # `POST /sessions` -> ContainersReady is "fast unless the chosen node
     # has to pull a ~700MB session image." Recording rules below collapse
