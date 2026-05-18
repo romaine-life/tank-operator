@@ -269,6 +269,21 @@ const blocked = [
   { name: "removed INTERNAL_API_ALLOWED_SUBJECTS env var", pattern: /\bINTERNAL_API_ALLOWED_SUBJECTS\b/ },
   { name: "removed parseInternalSubjects helper", pattern: /\bparseInternalSubjects\b/ },
   { name: "removed internalAllowedSubjects field", pattern: /\binternalAllowedSubjects\b/ },
+  // Turn-complete sound was per-pane (declared inside ChatPane in
+  // App.tsx) before the cutover that moved it onto the always-on
+  // /api/sessions/events SSE consumer. The per-pane shape was the
+  // reason the sound only fired on session-return: ChatPane's
+  // /api/sessions/{id}/events stream closes when the pane is hidden,
+  // so background turn-complete events never reached the per-pane
+  // listener until the user came back. The App-level canonical site
+  // is a single `useCallback` per helper; ChatPane gets the play /
+  // prime functions as props. Block the per-pane `function`-keyword
+  // form so a future refactor can't quietly re-declare them inside
+  // ChatPane (or any other per-session component) and rebuild the
+  // dual-listener path.
+  { name: "per-pane playTurnCompleteSound declaration", pattern: /\bfunction\s+playTurnCompleteSound\s*\(/ },
+  { name: "per-pane primeTurnCompleteSound declaration", pattern: /\bfunction\s+primeTurnCompleteSound\s*\(/ },
+  { name: "per-pane getTurnCompleteAudio declaration", pattern: /\bfunction\s+getTurnCompleteAudio\s*\(/ },
   // /api/internal/sessions/spawn was an alias of POST /api/internal/sessions
   // during the #486 Stage 4 cutover. Both endpoints had identical semantics
   // post-cutover; the alias was retired in the API-cleanup follow-up. POST

@@ -72,6 +72,76 @@ export function sessionActivityStatusLabel(
   return "Waiting";
 }
 
+// orderKeyAfter compares two BIGSERIAL-shaped order_key strings
+// numerically. Lexicographic string compare looks correct most of the
+// time but breaks at digit-count boundaries: `"100" <= "99"` is true
+// as strings even though 100 > 99 numerically. We hit that in the
+// turn-complete-sound dedup gate — every transition that crossed a
+// power-of-ten boundary was silenced. Parse with BigInt to handle
+// values past Number.MAX_SAFE_INTEGER for long-running ledgers; fall
+// back to string compare if parsing fails (defensive only — backend
+// formats with strconv.FormatInt).
+export function orderKeyAfter(later: string, earlier: string): boolean {
+  try {
+    return BigInt(later) > BigInt(earlier);
+  } catch {
+    return later > earlier;
+  }
+}
+
+// shouldRingForActivityTransition is the centralized "play the turn-complete
+// sound?" predicate. The session-list SSE consumer in App.tsx calls it on
+// every session.activity_changed delivery; one place owns the
+// transition-to-user-turn rule.
+//
+// Modeled on Mattermost's shouldSkipNotification and Zulip's
+// should_send_audible_notification (docs/product-inspirations.md). Centralizing
+// the predicate keeps the transition matrix testable and prevents per-pane
+// drift — the bug class that produced the "sound only plays when I return to
+// the session" regression (per-pane SSE was the only place this logic lived,
+// and it stopped firing while the pane was hidden).
+//
+// Returns true when the new state is "user's turn" AND the prior state wasn't
+// already a user-turn state. Three cases ring:
+//   1. working → ready/needs_input (the canonical "your turn now" transition)
+//   2. error → ready/needs_input (agent recovered from a previous failure)
+//   3. no prior → ready/needs_input (first activity_changed the page sees for
+//      this session — including fast turns where the backend's
+//      lifecycle_emitter coalesces submitted → streaming → ready into a
+//      single activity_changed event because all three chat events landed
+//      in the persister's fold window. We observed this directly with
+//      haiku-fast turns: only one activity_changed event arrives, with
+//      status=ready and no prior in the page's session state)
+//
+// Does NOT ring on user-initiated stops (stopping/stopped → ready) or terminal
+// errors (error stays as error), because the user is presumably already aware
+// of the action they just took or the failure they're already looking at.
+//
+// The bootstrap-replay safety net is provided by two outer gates in App.tsx,
+// NOT this predicate: (a) activitySnapshotAppliedRef silences events until
+// /api/sessions has returned; (b) lastSoundedOrderKeyRef seeded from the
+// snapshot's per-session last_order_key dedups SSE catchup replays of events
+// already represented in the snapshot. A session absent from the snapshot
+// activity map has no historical activity_changed events in the ledger
+// (sessions.Reader.fillActivity calls LatestActivity, which is what the
+// catchup loop replays from); so no SSE catchup event can land here with
+// prior=undefined except a genuinely-fresh post-bootstrap event.
+export function shouldRingForActivityTransition(
+  prior: SessionActivitySummary | undefined,
+  next: SessionActivitySummary,
+): boolean {
+  const isUserTurn = (status: ConversationActivityStatus | undefined): boolean =>
+    status === "ready" || status === "needs_input";
+  if (!isUserTurn(next.status)) return false;
+  if (prior && isUserTurn(prior.status)) return false;
+  // Don't ring on stop-then-ready: the user just pressed Stop and the agent
+  // winding back to ready is the expected consequence, not a new signal.
+  if (prior && (prior.status === "stopping" || prior.status === "stopped")) {
+    return false;
+  }
+  return true;
+}
+
 export function sessionActivityChips(
   activity?: SessionActivitySummary,
 ): SessionActivityChip[] {

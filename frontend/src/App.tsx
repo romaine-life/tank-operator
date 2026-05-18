@@ -96,9 +96,11 @@ import { McpIcon } from "./McpIcon";
 import { ProviderIcon } from "./providerIcons";
 import {
   normalizeSessionActivity,
+  orderKeyAfter,
   sessionActivityChips,
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
+  shouldRingForActivityTransition,
   type SessionActivitySummary,
 } from "./sessionActivity";
 import {
@@ -2333,6 +2335,13 @@ interface RunPrefs {
   showDuration: boolean;
   turnCompleteSound: boolean;
   turnCompleteSoundVolume: number;
+  // Mattermost/Element suppress the chat ping when the user is already
+  // viewing the channel — seeing the new message *is* the notification.
+  // Zulip doesn't. For Tank, the sound is a "your turn now" state-transition
+  // signal (closer to a build-complete chime than a chat ping), so the
+  // default is on. The toggle exists for users who'd rather mirror the
+  // chat-app convention. See docs/product-inspirations.md analysis.
+  turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
   // claudeModelId + claudeEffort persist the user's last picks across
   // sessions so a fresh session opens with them pre-selected. They drive
@@ -2353,6 +2362,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   showDuration: true,
   turnCompleteSound: true,
   turnCompleteSoundVolume: 0.8,
+  turnCompleteSoundOnVisible: true,
   chatFontScale: 1,
   claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
@@ -3823,6 +3833,8 @@ function ChatPane({
   user,
   autoRename,
   onAutoRenameConsumed,
+  primeTurnCompleteSound,
+  playTurnCompleteSound,
 }: {
   session: Session;
   visible: boolean;
@@ -3839,6 +3851,15 @@ function ChatPane({
   user: SessionUser;
   autoRename: boolean;
   onAutoRenameConsumed: () => void;
+  // App-owned audio: the SSE consumer in App.tsx rings on the
+  // always-on /api/sessions/events stream's activity_changed events.
+  // ChatPane gets these props for two narrower uses: primeTurnCompleteSound
+  // on the Send-button gesture (audio-unlock backup beyond the sidebar
+  // click primer in activate()), and playTurnCompleteSound for the
+  // Test button in the settings panel. ChatPane no longer fires the
+  // sound off chat events — see App.tsx commentary at the audio refs.
+  primeTurnCompleteSound: () => void;
+  playTurnCompleteSound: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -4039,8 +4060,6 @@ function ChatPane({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
-  const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
-  const runPrefsRef = useRef(runPrefs);
   const [sdkConnectionState, setSdkConnectionState] =
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
@@ -4347,36 +4366,6 @@ function ChatPane({
   function nextQueuedMessageId(): string {
     queuedMessageSeqRef.current += 1;
     return `queued-${session.id}-${queuedMessageSeqRef.current}`;
-  }
-
-  useEffect(() => {
-    runPrefsRef.current = runPrefs;
-  }, [runPrefs]);
-
-  function getTurnCompleteAudio(): HTMLAudioElement | null {
-    if (typeof Audio === "undefined") return null;
-    if (!turnCompleteAudioRef.current) {
-      const audio = new Audio(TURN_COMPLETE_SOUND_SRC);
-      audio.preload = "auto";
-      turnCompleteAudioRef.current = audio;
-    }
-    return turnCompleteAudioRef.current;
-  }
-
-  function primeTurnCompleteSound() {
-    const audio = getTurnCompleteAudio();
-    if (!audio) return;
-    audio.load();
-  }
-
-  function playTurnCompleteSound() {
-    const prefs = runPrefsRef.current;
-    if (!prefs.turnCompleteSound) return;
-    const audio = getTurnCompleteAudio();
-    if (!audio) return;
-    audio.volume = clampTurnCompleteSoundVolume(prefs.turnCompleteSoundVolume);
-    audio.currentTime = 0;
-    void audio.play().catch(() => undefined);
   }
 
   const slashFiltered = slashOpen ? filterSlashCommands(slashCommands, slashQuery) : [];
@@ -5670,7 +5659,14 @@ function ChatPane({
             : "Done",
       );
       setRunStatus("done");
-      playTurnCompleteSound();
+      // Turn-complete sound is fired by the App-level SSE consumer
+      // on the always-on /api/sessions/events stream, NOT here. Per
+      // docs/migration-policy.md, no parallel path: leaving a ring
+      // call here would split the "your turn" signal across two
+      // listeners — the bug that produced the "only rings when I
+      // return to the session" regression. The activity-stream
+      // listener covers this same transition for both visible and
+      // background sessions.
     } else if (terminal.status === "stopped") {
       setLastStatusText("Stopped");
       setRunStatus("done");
@@ -6241,6 +6237,29 @@ function ChatPane({
                   </button>
                 </div>
               </div>
+              {/* Chat-app convention: Mattermost/Element suppress the
+                  ping while you're actively viewing the channel; Zulip
+                  doesn't. Our default is on (ring regardless) because
+                  the sound here is a state-transition chime, not a
+                  message-arrival ping — but users who prefer the
+                  chat-app convention can flip it off. */}
+              <button
+                type="button"
+                className="run-settings-toggle"
+                onClick={() =>
+                  setRunPref(
+                    "turnCompleteSoundOnVisible",
+                    !runPrefs.turnCompleteSoundOnVisible,
+                  )
+                }
+                aria-pressed={runPrefs.turnCompleteSoundOnVisible}
+                disabled={!runPrefs.turnCompleteSound}
+              >
+                <span>Ping on open chats</span>
+                {runPrefs.turnCompleteSoundOnVisible && (
+                  <CheckIcon className="run-settings-check" aria-hidden="true" />
+                )}
+              </button>
             </section>
             <section className="run-settings-section">
               <h2 className="run-settings-title">Transcript</h2>
@@ -7187,6 +7206,53 @@ export function App() {
     }
   }
 
+  // Turn-complete sound lives at App scope so the always-on
+  // /api/sessions/events SSE handler can ring for any session — including
+  // ones whose ChatPane isn't visible. The prior per-pane setup was the
+  // reason the sound only fired on returning to a session: ChatPane's
+  // /api/sessions/{id}/events SSE closes when the pane is hidden, so
+  // background turn-complete events never reached the per-pane listener
+  // until you came back and it replayed from cursor. See
+  // docs/product-inspirations.md → "Durable conversation history must be
+  // replayable from the server without an open browser connection." The
+  // global activity stream is the canonical "your turn" transport; chat
+  // panes do not own this signal.
+  const turnCompleteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const runPrefsRef = useRef<RunPrefs>(runPrefs);
+  useEffect(() => {
+    runPrefsRef.current = runPrefs;
+  }, [runPrefs]);
+  const getTurnCompleteAudio = useCallback((): HTMLAudioElement | null => {
+    if (typeof Audio === "undefined") return null;
+    if (!turnCompleteAudioRef.current) {
+      const audio = new Audio(TURN_COMPLETE_SOUND_SRC);
+      audio.preload = "auto";
+      turnCompleteAudioRef.current = audio;
+    }
+    return turnCompleteAudioRef.current;
+  }, []);
+  // primeTurnCompleteSound MUST be called from inside a user-gesture event
+  // handler (click, keypress, etc.). Browsers' autoplay policies refuse
+  // audio.play() until the page has received at least one gesture; calling
+  // audio.load() during a gesture marks the element as "unlocked" for the
+  // rest of the page lifetime. We prime on activate() (sidebar session
+  // click) and on startRun (Send button) so realistic interaction paths
+  // unlock audio before any background turn completes.
+  const primeTurnCompleteSound = useCallback(() => {
+    const audio = getTurnCompleteAudio();
+    if (!audio) return;
+    audio.load();
+  }, [getTurnCompleteAudio]);
+  const playTurnCompleteSound = useCallback(() => {
+    const prefs = runPrefsRef.current;
+    if (!prefs.turnCompleteSound) return;
+    const audio = getTurnCompleteAudio();
+    if (!audio) return;
+    audio.volume = clampTurnCompleteSoundVolume(prefs.turnCompleteSoundVolume);
+    audio.currentTime = 0;
+    void audio.play().catch(() => undefined);
+  }, [getTurnCompleteAudio]);
+
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
   // than wrapping setActive so all call sites benefit.
@@ -7246,6 +7312,15 @@ export function App() {
   // any events that landed during the snapshot query itself. Updated by
   // refresh() after each successful snapshot fetch.
   const lifecycleTipRef = useRef<string | null>(null);
+  // Bootstrap-suppression for the turn-complete sound. With lifecycleTipRef
+  // seeding the SSE cursor, the server no longer replays the full ledger
+  // on cold open — only events past the tip. Still, refresh() races with
+  // the SSE useEffect, so events delivered before activitySnapshotAppliedRef
+  // flips true are silenced as a defense-in-depth. lastSoundedOrderKeyRef
+  // dedups per-session last_order_key replays after a reconnect or resync.
+  const activitySnapshotAppliedRef = useRef(false);
+  const lastSoundedOrderKeyRef = useRef<Map<string, string>>(new Map());
+  const activeRef = useRef<string | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -7344,13 +7419,34 @@ export function App() {
         );
         return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
-      setSessionActivities(() => {
-        const next: Record<string, SessionActivitySummary> = {};
-        for (const session of listed) {
-          if (session.activity) next[session.id] = session.activity;
-        }
-        return next;
-      });
+      const nextActivities: Record<string, SessionActivitySummary> = {};
+      for (const session of listed) {
+        if (session.activity) nextActivities[session.id] = session.activity;
+      }
+      setSessionActivities(nextActivities);
+      // Synchronously mirror into the ref so the SSE handler reading
+      // sessionActivitiesRef.current immediately after refresh sees the
+      // fresh snapshot, not whatever was in there before. The useEffect
+      // ref-sync below also catches this on the next render but lags by
+      // a render cycle, which the back-to-back-activity-events race
+      // (submitted → streaming → ready in microseconds) cannot tolerate.
+      sessionActivitiesRef.current = nextActivities;
+      // Seed the turn-complete-sound dedup map from the snapshot's
+      // per-session last_order_key. Any SSE-replayed activity_changed
+      // event with last_order_key <= the seeded value will be silenced
+      // (it represents a chat-ledger order we've already accounted for
+      // in the snapshot). Sessions absent from the snapshot are not
+      // seeded — the predicate's "no prior, no ring" rule plus the
+      // snapshot-applied flag below cover them.
+      lastSoundedOrderKeyRef.current = new Map(
+        listed
+          .map((session): [string, string | null] => [
+            session.id,
+            session.activity?.last_order_key ?? null,
+          ])
+          .filter((entry): entry is [string, string] => entry[1] !== null),
+      );
+      activitySnapshotAppliedRef.current = true;
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -7381,6 +7477,9 @@ export function App() {
   useEffect(() => {
     sessionActivitiesRef.current = sessionActivities;
   }, [sessionActivities]);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   useEffect(() => {
     if (!user) return;
@@ -7481,18 +7580,85 @@ export function App() {
           sessions: sessionsRef.current,
           activities: sessionActivitiesRef.current,
         };
+        const priorActivity = state.activities[normalized.session_id];
         const next = applySessionListEvent(state, normalized, {
           onPlaceholderSynthesized: notePlaceholderSynthesized,
         });
         if (next.sessions !== state.sessions) {
-          setSessions(
-            user
-              ? orderSessions(next.sessions, readSessionOrder(sessionOrderStorageKey(user)))
-              : next.sessions,
-          );
+          const ordered = user
+            ? orderSessions(next.sessions, readSessionOrder(sessionOrderStorageKey(user)))
+            : next.sessions;
+          setSessions(ordered);
+          // Synchronously mirror to the ref. The ref-sync useEffect
+          // below only fires after React's next render, which can lag
+          // an entire SSE burst — see the activities comment for the
+          // race that broke the turn-complete sound.
+          sessionsRef.current = ordered;
         }
         if (next.activities !== state.activities) {
           setSessionActivities(next.activities);
+          // CRITICAL: sync ref synchronously. Without this, back-to-back
+          // session.activity_changed events arriving in microseconds
+          // (turn lifecycle is submitted → streaming → ready, three
+          // events in rapid succession) all read the same stale prior
+          // from this ref because the ref-sync useEffect only runs
+          // after React's next render. That made every transition look
+          // like "ready → ready" / "ready → submitted" / "ready →
+          // streaming" and the predicate ("prior must be working") never
+          // fired. The Test button still worked because it bypasses the
+          // predicate. Fixing the race here is what makes the sound ring.
+          sessionActivitiesRef.current = next.activities;
+        }
+        // Turn-complete sound. The activity_changed event is the
+        // canonical "your turn now" signal on the always-on
+        // /api/sessions/events stream; routing the sound through here
+        // (rather than ChatPane's per-session SSE) is what fixes the
+        // "only rings when I return to the session" regression. Gates:
+        //   1. snapshot-applied: silence the cursor-empty replay that
+        //      arrives on every fresh page load.
+        //   2. per-session last_order_key dedup: silence events whose
+        //      chat-ledger order is already represented in the snapshot
+        //      or a prior ring. Replays after reconnect can't re-ring.
+        //   3. shouldRingForActivityTransition: predicate restricts to
+        //      working -> user-action transitions (see test matrix).
+        //   4. turnCompleteSoundOnVisible: respect the "ping on open
+        //      chats" pref (default on). Mattermost/Element suppress
+        //      the chat ping when actively viewing the channel; we let
+        //      the user pick because the sound here is a "your turn"
+        //      state signal, not a message-arrival ping.
+        if (
+          normalized.type === "session.activity_changed" &&
+          activitySnapshotAppliedRef.current
+        ) {
+          const nextActivity = next.activities[normalized.session_id];
+          const nextLastOrderKey = nextActivity?.last_order_key ?? null;
+          if (nextActivity && nextLastOrderKey) {
+            const priorRing = lastSoundedOrderKeyRef.current.get(
+              normalized.session_id,
+            );
+            // Numeric compare via orderKeyAfter — lexicographic string
+            // compare ("100" <= "99" is true) silenced every transition
+            // that crossed a power-of-ten ledger order_key boundary.
+            const alreadyRepresented =
+              priorRing != null && !orderKeyAfter(nextLastOrderKey, priorRing);
+            if (!alreadyRepresented) {
+              // Always advance the dedup watermark so a stuck-at state
+              // (e.g. repeated needs_input) can't ring twice for the
+              // same chat order even if predicate logic widens later.
+              lastSoundedOrderKeyRef.current.set(
+                normalized.session_id,
+                nextLastOrderKey,
+              );
+              if (shouldRingForActivityTransition(priorActivity, nextActivity)) {
+                const isVisible = activeRef.current === normalized.session_id;
+                const suppressForVisible =
+                  isVisible && !runPrefsRef.current.turnCompleteSoundOnVisible;
+                if (!suppressForVisible) {
+                  playTurnCompleteSound();
+                }
+              }
+            }
+          }
         }
       });
       source.addEventListener("ready", (event) => {
@@ -7515,6 +7681,11 @@ export function App() {
         }
         logSessionListStreamSignal({ signal: "resync_required", detail: parsed });
         cursorRef.current = null;
+        // Drop the snapshot-applied flag so the SSE replay that
+        // follows refresh() can't ring for transitions that happened
+        // during the disconnect window. refresh() re-seeds the dedup
+        // map + flips the flag back on once the fresh snapshot lands.
+        activitySnapshotAppliedRef.current = false;
         source?.close();
         source = null;
         void refresh();
@@ -7638,6 +7809,13 @@ export function App() {
   }, [sessions, active, closingIds]);
 
   function activate(id: string) {
+    // Treat the sidebar click as the user gesture that unlocks audio
+    // for the page. Browsers refuse audio.play() until the page has
+    // received at least one gesture; calling audio.load() here marks
+    // the element as "unlocked" for the rest of the page lifetime,
+    // so a background turn that completes a minute later can ring
+    // without further interaction.
+    primeTurnCompleteSound();
     setActive(id);
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
@@ -8360,6 +8538,8 @@ export function App() {
                       user={user!}
                       autoRename={autoRenameSessionId === s.id}
                       onAutoRenameConsumed={() => setAutoRenameSessionId(null)}
+                      primeTurnCompleteSound={primeTurnCompleteSound}
+                      playTurnCompleteSound={playTurnCompleteSound}
                     />
                   </div>
                 ) : (
