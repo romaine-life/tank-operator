@@ -80,6 +80,20 @@ type SessionRecord struct {
 	RequestedAt string
 	CreatedAt   string
 	UpdatedAt   string
+
+	// Sidebar-visible columns added in
+	// docs/session-list-redesign.md Phase 1 dual-write and consumed
+	// directly by Reader.List as of Phase 2's snapshot cutover. Status
+	// is non-empty in steady state ('Pending' / 'Active' / 'Failed');
+	// the other fields are pointers because they're optional (no
+	// ready_at until the pod first reached Ready, etc.).
+	Status         string
+	ReadyAt        string
+	TerminatingAt  string
+	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
+	TestState      map[string]any // jsonb column, materialized for the handler layer
+	RolloutState   map[string]any // jsonb column
+	RowVersion     int64
 }
 
 // sessionConfigMounts is the canonical list of files mounted into every

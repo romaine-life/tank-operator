@@ -48,21 +48,10 @@ type Info struct {
 	Activity *lifecycleevents.ActivitySummary `json:"activity,omitempty"`
 }
 
-// LifecycleStatusSource lets the Reader pull each session's durable
-// pod-status snapshot from the lifecycle ledger so the `status` field on
-// Info reflects the latest pod-state event instead of being recomputed
-// from the live pod object on every List() call. Satisfied by
-// lifecycleevents.Store.
-type LifecycleStatusSource interface {
-	LatestPodStatus(ctx context.Context, scope, sessionID string) (*lifecycleevents.PodStatusSummary, error)
-	LatestActivity(ctx context.Context, scope, sessionID string) (*lifecycleevents.ActivitySummary, error)
-}
-
 type Reader struct {
 	client    kubernetes.Interface
 	namespace string
 	registry  Registry
-	lifecycle LifecycleStatusSource
 	scope     string
 }
 
@@ -75,113 +64,56 @@ func NewReader(client kubernetes.Interface, namespace string) *Reader {
 }
 
 func NewReaderWithRegistry(client kubernetes.Interface, namespace string, registry Registry) *Reader {
-	return NewReaderFull(client, namespace, registry, nil, "")
+	return NewReaderFull(client, namespace, registry, "")
 }
 
-// NewReaderFull is the full-fledged constructor that wires the lifecycle
-// store so List/Get can hydrate Activity and the durable Status field
-// from the ledger. The legacy two-arg / three-arg constructors are kept
-// for the manager's reaperLoop call sites that don't need the lifecycle
-// data.
-func NewReaderFull(client kubernetes.Interface, namespace string, registry Registry, lifecycle LifecycleStatusSource, scope string) *Reader {
+// NewReaderFull is the full-fledged constructor. The pre-Phase-2
+// lifecycle hydration parameter is gone — the snapshot reads Status
+// / ReadyAt / Activity directly from the sessions row columns now,
+// no ledger pull on the read path.
+func NewReaderFull(client kubernetes.Interface, namespace string, registry Registry, scope string) *Reader {
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
 	if scope == "" {
 		scope = "default"
 	}
-	return &Reader{client: client, namespace: namespace, registry: registry, lifecycle: lifecycle, scope: scope}
+	return &Reader{client: client, namespace: namespace, registry: registry, scope: scope}
 }
 
+// List returns the sidebar snapshot for one owner. Phase 2 of
+// docs/session-list-redesign.md cut this from a three-source merge
+// (K8s pods + registry + lifecycle store hydration) down to a single
+// registry read — the row carries every column the SPA renders.
+//
+// The K8s pod list is no longer read here: every field the snapshot
+// needs (status, ready_at, terminating_at, activity_summary,
+// test_state, rollout_state) lives on the sessions row, populated by
+// sessioncontroller.RowWriter and the registry write methods.
+// Dropping the pod read also eliminates the pod-fallback loop, which
+// was the bug that let Terminating pods for just-deleted sessions
+// reappear in the sidebar for the full ~75s graceful-shutdown window
+// (tank-operator#525 Bug A — the surface symptom that drove the
+// redesign).
+//
+// Registry-only mode (no registry wired): returns empty. Local-dev
+// shape; production always has a registry.
 func (r *Reader) List(ctx context.Context, owner string) ([]Info, error) {
-	ownerLabel := sessionmodel.OwnerLabel(owner)
-	pods, err := r.client.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "tank-operator/owner=" + ownerLabel,
-	})
+	if r.registry == nil {
+		return nil, nil
+	}
+	records, err := r.registry.List(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
-
-	podsByID := make(map[string]*corev1.Pod, len(pods.Items))
-	podOrder := make([]*corev1.Pod, 0, len(pods.Items))
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		podsByID[sessionIDFromPod(pod)] = pod
-		podOrder = append(podOrder, pod)
-	}
-
-	if r.registry != nil {
-		// registry.List returns visible AND invisible rows (see
-		// sessionregistry.Store.List). `seen` is built from every
-		// registered session id so the pod-fallback loop below can tell
-		// "no registry row" (legitimate Manager.Create race window —
-		// Reader returns the pod-derived Info) apart from "registry
-		// row marked deleted" (the post-delete pod is Terminating
-		// during its grace window — Reader must NOT re-append it).
-		// Pre-tank-operator#525 the seen set only contained visible
-		// ids, so Terminating pods for just-deleted sessions reappeared
-		// in the sidebar for the full ~75s graceful-shutdown window.
-		records, err := r.registry.List(ctx, owner)
-		if err != nil {
-			return nil, err
-		}
-		seen := make(map[string]struct{}, len(records))
-		out := make([]Info, 0, len(records)+len(pods.Items))
-		for _, record := range records {
-			seen[record.ID] = struct{}{}
-			if !record.Visible {
-				continue
-			}
-			info := infoFromRecord(owner, record, podsByID[record.ID])
-			r.hydrateLifecycle(ctx, &info)
-			out = append(out, info)
-		}
-		for _, pod := range podOrder {
-			id := sessionIDFromPod(pod)
-			if _, ok := seen[id]; ok || !podHasSandboxAgent(pod) {
-				continue
-			}
-			info := infoFromPod(owner, pod)
-			r.hydrateLifecycle(ctx, &info)
-			out = append(out, info)
-		}
-		return out, nil
-	}
-
-	out := make([]Info, 0, len(pods.Items))
-	for _, pod := range podOrder {
-		if !podHasSandboxAgent(pod) {
+	out := make([]Info, 0, len(records))
+	for _, record := range records {
+		if !record.Visible {
 			continue
 		}
-		info := infoFromPod(owner, pod)
-		r.hydrateLifecycle(ctx, &info)
-		out = append(out, info)
+		out = append(out, infoFromRecord(owner, record))
 	}
 	return out, nil
-}
-
-// hydrateLifecycle replaces the live-pod status computation with the
-// durable equivalent: the latest session.pod_* event drives Status (and
-// ReadyAt where applicable), and the latest session.activity_changed
-// fills the Activity block. Falls back to whatever Status the
-// infoFromRecord/infoFromPod path already set if the lifecycle store is
-// unwired (local dev with stub store) or hasn't seen the session yet.
-func (r *Reader) hydrateLifecycle(ctx context.Context, info *Info) {
-	if r.lifecycle == nil || info == nil || info.ID == "" {
-		return
-	}
-	if status, err := r.lifecycle.LatestPodStatus(ctx, r.scope, info.ID); err == nil && status != nil {
-		if status.Status != "" {
-			info.Status = status.Status
-		}
-		if status.ReadyAt != nil {
-			info.ReadyAt = status.ReadyAt
-		}
-	}
-	if activity, err := r.lifecycle.LatestActivity(ctx, r.scope, info.ID); err == nil && activity != nil {
-		copy := *activity
-		info.Activity = &copy
-	}
 }
 
 func (r *Reader) Get(ctx context.Context, owner, sessionID string) (Info, error) {
@@ -249,36 +181,61 @@ func (r *Reader) GetByID(ctx context.Context, sessionID string) (Info, error) {
 	return infoFromPod(owner, pod), nil
 }
 
-func infoFromRecord(owner string, record sessionmodel.SessionRecord, pod *corev1.Pod) Info {
-	if pod != nil {
-		info := infoFromPod(owner, pod)
-		info.ID = record.ID
-		info.Mode = sessionmodel.NormalizeSessionMode(record.Mode)
-		info.RequestedAt = firstString(record.RequestedAt, record.CreatedAt, valueString(info.RequestedAt))
-		info.CreatedAt = firstString(record.CreatedAt, valueString(info.CreatedAt))
-		info.Name = record.Name
-		return info
+// infoFromRecord builds the snapshot Info entirely from a sessions
+// row. All sidebar-visible fields live on the row as of Phase 2; the
+// K8s pod is no longer consulted on the snapshot path. Activity is
+// parsed from the activity_summary jsonb column written by the
+// chat-activity emitter on each indicator-affecting chat event.
+func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
+	status := record.Status
+	if status == "" {
+		// Brand-new rows whose status hasn't been written yet: render
+		// as Pending. The Phase 1 schema default also stamps 'Pending'
+		// at INSERT time, so this branch only fires for synthetic
+		// records (tests with empty fixtures).
+		status = "Pending"
 	}
-	return Info{
-		ID:          record.ID,
-		PodName:     optionalString(record.PodName),
-		Owner:       owner,
-		Status:      "Failed",
-		Mode:        sessionmodel.NormalizeSessionMode(record.Mode),
-		RequestedAt: firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:   optionalString(record.CreatedAt),
-		ReadyAt:     nil,
-		Name:        record.Name,
+	info := Info{
+		ID:           record.ID,
+		PodName:      optionalString(record.PodName),
+		Owner:        owner,
+		Status:       status,
+		Mode:         sessionmodel.NormalizeSessionMode(record.Mode),
+		RequestedAt:  firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:    optionalString(record.CreatedAt),
+		ReadyAt:      optionalString(record.ReadyAt),
+		Name:         record.Name,
+		TestState:    record.TestState,
+		RolloutState: record.RolloutState,
 	}
+	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
+		info.Activity = activity
+	}
+	return info
 }
 
-// infoFromPod builds an Info from a live pod for callers that haven't
-// wired the lifecycle store yet (legacy NewReader / NewReaderWithRegistry).
-// The Status field defaults to "Pending" — the real Status comes from
-// hydrateLifecycle's pull against the latest session.pod_* lifecycle
-// event. Live pod-state computation is intentionally NOT done here per
-// tank-operator#83: status is derived from the durable ledger, not the
-// pod object.
+// parseActivitySummary decodes the row's activity_summary jsonb into
+// the lifecycleevents.ActivitySummary the Info field expects. Empty
+// columns return nil so the sidebar renders "no activity yet" for
+// fresh sessions.
+func parseActivitySummary(raw []byte) *lifecycleevents.ActivitySummary {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out lifecycleevents.ActivitySummary
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+// infoFromPod builds an Info from a live pod. After Phase 2 of
+// docs/session-list-redesign.md this is only called by Reader.Get
+// (per-session detail page); Reader.List goes straight to the row.
+// Status defaults to "Pending" here because the row's value already
+// reflects the latest lifecycle transition by the time the per-
+// session GET handler runs and the SPA snapshot view always wins on
+// the sidebar.
 func infoFromPod(owner string, pod *corev1.Pod) Info {
 	podName := pod.Name
 	createdAt := timeString(pod.CreationTimestamp.Time)
@@ -344,10 +301,11 @@ func podHasSandboxAgent(pod *corev1.Pod) bool {
 	return false
 }
 
-// podStatus was deleted in tank-operator#83. Status is derived from the
-// session_lifecycle_events ledger via LatestPodStatus, not computed live
-// from the pod object. See Reader.hydrateLifecycle and the
-// scripts/check-removed-chat-runtime.mjs guard.
+// podStatus was deleted in tank-operator#83. Status is sourced from
+// the sessions.status row column (docs/session-list-redesign.md
+// Phase 2), populated by sessioncontroller.RowWriter. The
+// scripts/check-removed-chat-runtime.mjs guard blocks
+// reintroduction of any live pod-status computation here.
 
 func podReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning || len(pod.Status.ContainerStatuses) == 0 {
