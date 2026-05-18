@@ -131,10 +131,19 @@ declares one rule group per subsystem:
   `tank:session_pod_spawn_seconds:p50_24h`,
   `tank:session_pod_spawn_seconds:p95_24h`, and
   `tank:session_pod_spawn_seconds:max_1h`, derived from
-  `kube_pod_status_container_ready_time - kube_pod_created` on session-namespace pods.
-  Recording rules collapse the per-pod series to single scalars so the
-  forbidden-labels rule above is respected for stored series; the
-  per-pod dashboard panel renders the same primitive on-demand.
+  `kube_pod_status_container_ready_time - kube_pod_created` on every
+  session-pod namespace — the production namespace
+  (`tank-operator-sessions`) plus every test-slot sessions namespace
+  (`tank-operator-slot-<N>-sessions`). Recording rules collapse the
+  per-pod series to single scalars so the forbidden-labels rule above
+  is respected for stored series; the per-pod dashboard panel renders
+  the same primitive on-demand, labeled by `namespace/pod` so slot vs
+  production pods are distinguishable. The two failure modes worth
+  separating: image distribution (cold pulls cluster around 27-33s)
+  and cluster CPU/memory request packing (FailedScheduling, pods sit
+  Pending for minutes). The latter typically only shows up in the
+  outlier alert (`max_1h > 60s`) since one stuck pod doesn't move the
+  median.
 
 Severity is `info` for "diagnostic-only, page nobody", `warning` for
 "a user feature is degraded", `critical` for "user-trust is on the line"

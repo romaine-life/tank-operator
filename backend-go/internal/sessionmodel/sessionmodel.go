@@ -755,9 +755,9 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 // it; limits cap a runaway runner at the agreed budget so one
 // misbehaving session can't blast its noisy neighbors.
 //
-// Budgets are calibrated against observed steady-state usage from the
-// 7-day sample around the eviction (agent-runner at ~150-300 MiB
-// steady, ~795 MiB at the failure point; claude/sandbox-agent at
+// Memory budgets are calibrated against observed steady-state usage
+// from the 7-day sample around the eviction (agent-runner at ~150-300
+// MiB steady, ~795 MiB at the failure point; claude/sandbox-agent at
 // ~14 MiB; mcp-auth-proxy at ~27 MiB). Limits leave 4-5x headroom on
 // every container so normal-but-bursty sessions don't OOMKill.
 //
@@ -765,10 +765,24 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 // throttling that creates the appearance of latency bugs in agent
 // streaming, and the node-level CPU budget is enforced by the
 // scheduler's request packing.
+//
+// CPU requests were retuned 2026-05 after FailedScheduling pressure on
+// the 3-node Standard_B2s_v2 cluster (prod sessions + 10 test slots
+// sharing one node pool). Per-pod sample across the live namespaces:
+// idle session pods drew ~10m total (agent-runner ~9m, sandbox-agent
+// ~0m, mcp-auth-proxy ~1m); active turns peaked ~120m on agent-runner.
+// The prior 100m/50m/25m=175m budget packed every pod as if it were
+// active, blocking new sessions from scheduling even though actual node
+// CPU sat under 35%. Lowered to 50m/25m/10m=85m: ~5x headroom over
+// idle, peaks still allowed via burstability (no CPU limit). The
+// `tank:session_pod_spawn_seconds:*` recording rules in
+// k8s/templates/observability.yaml are the regression detector — if
+// scheduling pressure returns, p50/p95 spawn time rises and the
+// existing TankSessionSpawnSlow* alerts fire.
 func agentRunnerResources() map[string]any {
 	return map[string]any{
 		"requests": map[string]any{
-			"cpu":    "100m",
+			"cpu":    "50m",
 			"memory": "512Mi",
 		},
 		"limits": map[string]any{
@@ -780,7 +794,7 @@ func agentRunnerResources() map[string]any {
 func sandboxAgentResources() map[string]any {
 	return map[string]any{
 		"requests": map[string]any{
-			"cpu":    "50m",
+			"cpu":    "25m",
 			"memory": "64Mi",
 		},
 		"limits": map[string]any{
@@ -792,7 +806,7 @@ func sandboxAgentResources() map[string]any {
 func mcpAuthProxyResources() map[string]any {
 	return map[string]any{
 		"requests": map[string]any{
-			"cpu":    "25m",
+			"cpu":    "10m",
 			"memory": "64Mi",
 		},
 		"limits": map[string]any{

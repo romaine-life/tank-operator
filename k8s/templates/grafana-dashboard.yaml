@@ -234,7 +234,7 @@ data:
         {
           "id": 14,
           "title": "Session pod spawn p50 / p95 (24h trailing)",
-          "description": "Time from pod creation to ContainersReady across session pods created in the trailing 24h. Backed by recording rules tank:session_pod_spawn_seconds:p50_24h and :p95_24h. The alert TankSessionSpawnSlowMedian fires when p50 > 5s for 1h — that signature means every spawn is paying cold-pull cost (image distribution is broken).",
+          "description": "Time from pod creation to ContainersReady across session pods (production + every test slot) created in the trailing 24h. Backed by recording rules tank:session_pod_spawn_seconds:p50_24h and :p95_24h. The alert TankSessionSpawnSlowMedian fires when p50 > 5s for 1h — typical causes are cold-pull image distribution OR cluster CPU/memory request packing forcing FailedScheduling.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -253,15 +253,15 @@ data:
         {
           "id": 15,
           "title": "Per-pod spawn duration (recent)",
-          "description": "Per-session-pod time from creation to ContainersReady. One series per session pod observed by kube-state-metrics; series age out when the pod is deleted. Bimodal distribution is expected — fast spawns (~3s) hit the node's image cache, slow spawns (~30s) are cold pulls of the ~712MB claude-container image. Anything materially above the cold-pull baseline is the diagnostic signal to chase.",
+          "description": "Per-session-pod time from creation to ContainersReady, across the production sessions namespace and every test-slot sessions namespace. One series per session pod observed by kube-state-metrics; series age out when the pod is deleted. Bimodal distribution is expected — fast spawns (~3s) hit the node's image cache, slow spawns (~30s) are cold pulls of the ~712MB claude-container image. Anything materially above the cold-pull baseline is the diagnostic signal to chase. Spawn times in the minutes-range typically indicate FailedScheduling (cluster CPU/memory request packing) rather than image pull cost.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "fieldConfig": { "defaults": { "unit": "s" } },
           "targets": [
             {
-              "expr": "kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}",
-              "legendFormat": "{{`{{ pod }}`}}"
+              "expr": "kube_pod_status_container_ready_time{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"} - on(pod, namespace) kube_pod_created{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"}",
+              "legendFormat": "{{`{{ namespace }}/{{ pod }}`}}"
             }
           ]
         },
@@ -282,7 +282,7 @@ data:
         {
           "id": 17,
           "title": "Inferred warm-spawn ratio (24h)",
-          "description": "Fraction of session pods spawned in the last 24h that completed in under 10s. Bimodal-distribution proxy for cache hits: warm pulls cluster at 2-3s, cold pulls at 27-33s, the 10s threshold sits in the empty middle. Drift downward suggests nodes are losing the image cache more often. Drift upward suggests cache distribution is improving (e.g. after a pre-pull DaemonSet ships).",
+          "description": "Fraction of session pods spawned in the last 24h (across the production sessions namespace and every test-slot sessions namespace) that completed in under 10s. Bimodal-distribution proxy for cache hits: warm pulls cluster at 2-3s, cold pulls at 27-33s, the 10s threshold sits in the empty middle. Drift downward suggests nodes are losing the image cache more often OR FailedScheduling is delaying spawns beyond 10s. Drift upward suggests cache distribution is improving (e.g. after a pre-pull DaemonSet ships).",
           "type": "stat",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 64 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -303,7 +303,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(((kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}) < bool 10) and on(pod, namespace) (time() - kube_pod_created{namespace=\"tank-operator-sessions\"} < 86400)) / count((kube_pod_status_container_ready_time{namespace=\"tank-operator-sessions\"} - on(pod, namespace) kube_pod_created{namespace=\"tank-operator-sessions\"}) and on(pod, namespace) (time() - kube_pod_created{namespace=\"tank-operator-sessions\"} < 86400))",
+              "expr": "sum(((kube_pod_status_container_ready_time{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"} - on(pod, namespace) kube_pod_created{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"}) < bool 10) and on(pod, namespace) (time() - kube_pod_created{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"} < 86400)) / count((kube_pod_status_container_ready_time{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"} - on(pod, namespace) kube_pod_created{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"}) and on(pod, namespace) (time() - kube_pod_created{namespace=~\"tank-operator(-slot-[0-9]+)?-sessions\"} < 86400))",
               "legendFormat": "warm-spawn ratio"
             }
           ]
