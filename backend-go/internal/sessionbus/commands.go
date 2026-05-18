@@ -21,6 +21,16 @@ type Command struct {
 	ClientNonce          string `json:"client_nonce,omitempty"`
 	Prompt               string `json:"prompt,omitempty"`
 	Model                string `json:"model,omitempty"`
+	// Effort is the extended-thinking effort level requested by the user
+	// at session creation: "low" | "medium" | "high" | "xhigh" | "max".
+	// Pinned at pod boot by the agent-runner from the first submit_turn
+	// that carries a value; subsequent overrides are ignored because the
+	// SDK Options object is sealed for the runner's lifetime. Empty
+	// string means "use the runner's baked-in default". Allowlist
+	// enforcement lives in middleware.go's validateEffort — that's the
+	// single point of truth; this field is treated as already-validated
+	// when it lands on the wire.
+	Effort               string `json:"effort,omitempty"`
 	PermissionMode       string `json:"permission_mode,omitempty"`
 	SkillName            string `json:"skill_name,omitempty"`
 	FollowUp             bool   `json:"follow_up,omitempty"`
@@ -50,6 +60,7 @@ func (c Command) Normalize() Command {
 	c.ClientNonce = strings.TrimSpace(c.ClientNonce)
 	c.Prompt = strings.TrimSpace(c.Prompt)
 	c.Model = strings.TrimSpace(c.Model)
+	c.Effort = strings.TrimSpace(c.Effort)
 	c.PermissionMode = strings.TrimSpace(c.PermissionMode)
 	c.SkillName = strings.TrimSpace(c.SkillName)
 	c.TargetTurnID = strings.TrimSpace(c.TargetTurnID)

@@ -57,6 +57,34 @@ func validateSkillName(v string) string {
 	return ""
 }
 
+// allowedClaudeEfforts is the canonical extended-thinking effort
+// allowlist. Mirrors the EffortLevel union in
+// @anthropic-ai/claude-agent-sdk so a typo or stale UI value can't poison
+// the runner's options at pod boot. Empty input is allowed and means
+// "use the runner's baked-in default" — keep that mapping intact.
+//
+// Keep this list in lockstep with frontend/src/App.tsx CLAUDE_EFFORTS
+// and agent-runner/src/runner.ts DEFAULT_EFFORT. The runner does NOT
+// re-validate (it trusts whatever lands on the wire) so this is the
+// single point of allowlist enforcement.
+var allowedClaudeEfforts = map[string]struct{}{
+	"low":    {},
+	"medium": {},
+	"high":   {},
+	"xhigh":  {},
+	"max":    {},
+}
+
+func validateEffort(v string) string {
+	if v == "" {
+		return ""
+	}
+	if _, ok := allowedClaudeEfforts[v]; ok {
+		return v
+	}
+	return ""
+}
+
 // requireAuth extracts the user from the request, writes an error and returns
 // false if auth fails. On success the user's email is stashed on the
 // per-request metadata struct the HTTP middleware threads through so a

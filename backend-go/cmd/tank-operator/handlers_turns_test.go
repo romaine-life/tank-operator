@@ -76,7 +76,7 @@ func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string) 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
+	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","effort":"xhigh","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
 
@@ -116,6 +116,60 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	}
 	if got.Prompt != "/test\n\nhello sdk" || got.Model != "claude-sonnet-4-6" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" || !got.FollowUp {
 		t.Fatalf("record payload fields = %#v", got)
+	}
+	// Effort is a load-bearing field on submit_turn: the agent-runner pins
+	// it into SDK Options at pod boot from the first turn, and we want the
+	// allowlist value to survive the round-trip from request body to bus
+	// command. Mirror of the model/permission_mode assertion above.
+	if got.Effort != "xhigh" {
+		t.Fatalf("effort = %q, want xhigh", got.Effort)
+	}
+}
+
+// TestEnqueueSessionTurnRejectsInvalidEffort pins the allowlist enforcement
+// at the choke point. The agent-runner trusts whatever lands on the wire
+// (it casts the string to EffortLevel without re-validating), so a typo
+// or stale UI value MUST be rejected here loudly with a 400 — silently
+// dropping it would either (a) hide a frontend regression or (b) get
+// quietly stripped by Normalize and let the runner fall back to the
+// baked-in default, which looks identical to "the dropdown didn't take
+// effect" from a user's perspective.
+func TestEnqueueSessionTurnRejectsInvalidEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-bad-effort","prompt":"hello","effort":"bogus"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+// TestEnqueueSessionTurnAllowsEmptyEffort pins the "empty means use the
+// runner's baked-in default" mapping. The frontend omits the effort field
+// for Codex (and may omit it for legacy clients); enforce-but-don't-
+// require keeps the wire shape additive across providers.
+func TestEnqueueSessionTurnAllowsEmptyEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-no-effort","prompt":"hello"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Effort; got != "" {
+		t.Fatalf("effort = %q, want empty (runner-default fallback)", got)
 	}
 }
 

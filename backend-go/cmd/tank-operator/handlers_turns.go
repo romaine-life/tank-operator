@@ -73,6 +73,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		ClientNonce    string `json:"client_nonce"`
 		Prompt         string `json:"prompt"`
 		Model          string `json:"model"`
+		Effort         string `json:"effort"`
 		PermissionMode string `json:"permission_mode"`
 		SkillName      string `json:"skill_name"`
 		FollowUp       bool   `json:"follow_up"`
@@ -87,6 +88,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		RequireNonce:   true,
 		Prompt:         body.Prompt,
 		Model:          body.Model,
+		Effort:         body.Effort,
 		PermissionMode: body.PermissionMode,
 		SkillName:      body.SkillName,
 		FollowUp:       body.FollowUp,
@@ -286,6 +288,7 @@ type sdkTurnRequest struct {
 	RequireNonce   bool
 	Prompt         string
 	Model          string
+	Effort         string
 	PermissionMode string
 	SkillName      string
 	FollowUp       bool
@@ -326,6 +329,15 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	}
 	if skillName != "" && !promptMatchesSkillTrigger(provider, skillName, prompt) {
 		return nil, http.StatusBadRequest, "skill_name does not match prompt trigger"
+	}
+	// Effort allowlist enforcement is loud on purpose: silent drop would
+	// hide a frontend regression that ships a stale effort string. The
+	// runner trusts whatever lands on the wire and has no rejection path
+	// of its own, so the choke point is here. Empty is allowed and means
+	// "use the runner's baked-in default" — that mapping is preserved.
+	effort := validateEffort(strings.TrimSpace(req.Effort))
+	if strings.TrimSpace(req.Effort) != "" && effort == "" {
+		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
 	}
 	if info.PodName == nil {
 		return nil, http.StatusServiceUnavailable, "session pod not ready"
@@ -368,6 +380,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
 		Model:             validateTurnArg(req.Model),
+		Effort:            effort,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
 		FollowUp:          req.FollowUp,

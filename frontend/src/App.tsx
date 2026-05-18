@@ -168,6 +168,11 @@ type ForkSessionRequest = {
   sourceSession: Session;
   forkedEntry: TranscriptEntry;
   model: string;
+  // effort is Claude-only; codex forks send "" and the runner falls back.
+  // The empty string also matches the agent-runner's "use baked-in
+  // default" branch, so legacy forks created before this field existed
+  // keep working without a migration.
+  effort: string;
   permissionMode: string;
 };
 
@@ -2237,14 +2242,42 @@ interface ModelOption {
 
 const CODEX_ACCOUNT_DEFAULT_MODEL_ID = "codex-account-default";
 
+// CLAUDE_MODELS is ordered with the agent-runner's DEFAULT_MODEL first
+// (claude-opus-4-7) so a fresh session lands on the strongest model by
+// default. The id strings are forwarded straight to the SDK's
+// options.model via the bus; tightening to an allowlist lives in the
+// agent-runner's pinning code, not here, because adding a model should
+// be a one-line UI change.
 const CLAUDE_MODELS: ModelOption[] = [
-  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
+  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
 ];
 const CODEX_MODELS: ModelOption[] = [
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
+
+// Extended-thinking effort levels exposed by the Claude Agent SDK
+// (EffortLevel union). The ids are the wire values; the labels carry
+// the cost guidance so users picking xhigh/max know what they're
+// opting into. Keep in lockstep with:
+//   - backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts
+//     (server-side allowlist)
+//   - agent-runner/src/runner.ts DEFAULT_EFFORT (the "high" fallback)
+interface EffortOption {
+  id: string;
+  label: string;
+  hint?: string;
+}
+const CLAUDE_EFFORTS: EffortOption[] = [
+  { id: "low", label: "Low", hint: "Fastest, minimal thinking" },
+  { id: "medium", label: "Medium", hint: "Moderate thinking" },
+  { id: "high", label: "High", hint: "Deep reasoning (default)" },
+  { id: "xhigh", label: "Extra High", hint: "Opus 4.7 only; ~2× tokens" },
+  { id: "max", label: "Max", hint: "Opus 4.6/4.7, Sonnet 4.6 only" },
+];
+const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";
+const DEFAULT_CLAUDE_EFFORT_ID = "high";
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
@@ -2260,6 +2293,15 @@ interface RunPrefs {
   turnCompleteSound: boolean;
   turnCompleteSoundVolume: number;
   chatFontScale: number;
+  // claudeModelId + claudeEffort persist the user's last picks across
+  // sessions so a fresh session opens with them pre-selected. They drive
+  // initial selectedModelId / selectedEffort state in RunPane and are
+  // also written back on every change. Once a turn is submitted the
+  // model + effort are sealed for that session pod's lifetime (see
+  // agent-runner/src/runner.ts), so these prefs only affect the *next*
+  // session created in this browser.
+  claudeModelId: string;
+  claudeEffort: string;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2271,6 +2313,8 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   turnCompleteSound: true,
   turnCompleteSoundVolume: 0.8,
   chatFontScale: 1,
+  claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
+  claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -2293,6 +2337,21 @@ function clampTurnCompleteSoundVolume(value: number): number {
   );
 }
 
+// allowlistFromOptions narrows a localStorage string to the canonical
+// id set for a typed run-pref. The allowlist is what makes a stale or
+// hand-edited pref safe: an unknown value falls back to the default
+// instead of being forwarded to the backend (where it would either be
+// rejected or, worse, accepted as opaque). Returning the trimmed
+// candidate only when the option set contains it keeps the SPA in
+// lockstep with backend-go's allowedClaudeEfforts without re-listing
+// the values here. Empty / unknown → caller's fallback.
+function pickAllowedPrefId(raw: string | null, options: { id: string }[], fallback: string): string {
+  if (raw == null) return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
+}
+
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
@@ -2302,6 +2361,10 @@ function loadRunPrefs(): RunPrefs {
         if (raw != null) out[key] = clampChatFontScale(Number(raw));
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
+      } else if (key === "claudeModelId") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
+      } else if (key === "claudeEffort") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -2327,6 +2390,14 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
       if (typeof raw === "number") out[key] = clampChatFontScale(raw);
     } else if (key === "turnCompleteSoundVolume") {
       if (typeof raw === "number") out[key] = clampTurnCompleteSoundVolume(raw);
+    } else if (key === "claudeModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, prev.claudeModelId);
+      }
+    } else if (key === "claudeEffort") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, prev.claudeEffort);
+      }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
     }
@@ -3622,7 +3693,45 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  const [selectedModelId, setSelectedModelId] = useState<string>(modelOptions[0].id);
+  // Seed model + effort from RunPrefs (browser-persisted) for Claude;
+  // Codex has only one option so it skips RunPrefs. State is local
+  // because the agent-runner seals model + effort at pod boot from the
+  // first submit_turn — switching the dropdown after a turn has been
+  // submitted would silently no-op at the pod, and the UI hides the
+  // launchpad once entries.length > 0 so the user can't try.
+  const initialClaudeModelId = isClaude
+    ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
+        ? runPrefs.claudeModelId
+        : modelOptions[0].id)
+    : modelOptions[0].id;
+  const initialClaudeEffortId = CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
+    ? runPrefs.claudeEffort
+    : DEFAULT_CLAUDE_EFFORT_ID;
+  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialClaudeModelId);
+  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialClaudeEffortId);
+  // Persist-then-set wrappers so the dropdown's onValueChange both
+  // updates local state for the active session and writes the new pick
+  // into RunPrefs for the *next* session this browser opens. Codex
+  // sessions skip the persist because the only Codex model is the
+  // account default — there's no user pick to remember.
+  const setSelectedModelId = useCallback(
+    (id: string) => {
+      setSelectedModelIdState(id);
+      if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
+        setRunPref("claudeModelId", id);
+      }
+    },
+    [isClaude, setRunPref],
+  );
+  const setSelectedEffortId = useCallback(
+    (id: string) => {
+      setSelectedEffortIdState(id);
+      if (CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
+        setRunPref("claudeEffort", id);
+      }
+    },
+    [setRunPref],
+  );
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
   // interval while running so the bar updates without a per-element timer.
@@ -3757,6 +3866,13 @@ function ChatPane({
     skillName?: string;
     followUp: boolean;
     model: string;
+    // effort is the extended-thinking level the user picked in the
+    // launchpad dropdown; empty string for Codex / pre-feature paths.
+    // The agent-runner pins effort at pod boot from the first turn that
+    // carries a non-empty value, so this is only load-bearing on the
+    // session's very first run object — but every run object carries it
+    // for telemetry parity with model.
+    effort: string;
     permissionMode: string;
     turnStart: number;
     submitAccepted: boolean;
@@ -5191,6 +5307,13 @@ function ChatPane({
         client_nonce: run.id,
         prompt: run.prompt,
         model: run.model,
+        // effort is forwarded only when set — the backend's
+        // validateEffort treats empty string as "use the runner's
+        // baked-in default" rather than rejecting. Sending "" on
+        // every turn would still work but obscures the intent in
+        // request logs; the omit-when-empty keeps the wire shape
+        // clean for non-Claude sessions.
+        ...(run.effort ? { effort: run.effort } : {}),
         permission_mode: run.permissionMode,
         skill_name: run.skillName,
         follow_up: run.followUp,
@@ -5280,6 +5403,11 @@ function ChatPane({
       skillName,
       followUp,
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
+      // effort is Claude-only; Codex sessions send empty and the agent-
+      // runner's pinning code falls back to its default. Sending the
+      // empty string from Codex paths keeps the run object shape stable
+      // across providers.
+      effort: isClaude ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
@@ -5450,6 +5578,15 @@ function ChatPane({
   const rolloutActionActive = currentSkillState === "rollout";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+  // Derived label for the launchpad's "Ready to use" status line; falls
+  // back to "High" rather than empty when the persisted value drifted
+  // out of the allowlist so the status line never reads as "...
+  // effort.". The DEFAULT_CLAUDE_EFFORT_ID resolution mirrors the
+  // agent-runner's DEFAULT_EFFORT fallback so the SPA and pod show the
+  // same thing.
+  const selectedEffortLabel =
+    (CLAUDE_EFFORTS.find((e) => e.id === selectedEffortId)?.label) ??
+    (CLAUDE_EFFORTS.find((e) => e.id === DEFAULT_CLAUDE_EFFORT_ID)?.label ?? "High");
   const contextWindow = getContextWindow(selectedModel.id);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
@@ -6032,14 +6169,38 @@ function ChatPane({
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
+                {isClaude && (
+                  <>
+                    <DropdownMenuLabel>Effort</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={selectedEffortId}
+                      onValueChange={setSelectedEffortId}
+                    >
+                      {CLAUDE_EFFORTS.map((opt) => (
+                        <DropdownMenuRadioItem key={opt.id} value={opt.id}>
+                          {opt.label}
+                          {opt.hint ? (
+                            <span className="run-model-menu-hint"> — {opt.hint}</span>
+                          ) : null}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             <p className="run-empty-status">
-              Ready to use {selectedModel.label}. Start typing your message below.
+              Ready to use {selectedModel.label}
+              {isClaude ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
             </p>
             <p className="run-empty-kbd">
               Press <kbd>⌘K</kbd> to switch model
             </p>
+            {isClaude && (
+              <p className="run-empty-lock-hint">
+                Model and effort are fixed for this session once you send the first message.
+              </p>
+            )}
           </div>
         ) : (
           <>
@@ -6100,6 +6261,10 @@ function ChatPane({
                     selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
                       ? ""
                       : selectedModelId,
+                  // Fork inherits the source pane's effort pick so the
+                  // forked pod boots with the same reasoning depth the
+                  // user had been working at. Codex forks send "".
+                  effort: isClaude ? selectedEffortId : "",
                   permissionMode: composerMode,
                 })
               }
@@ -7328,6 +7493,9 @@ export function App() {
           client_nonce: newForkTurnId(),
           prompt,
           model: request.model,
+          // Same omit-when-empty rule as enqueueSdkTurn: don't carry an
+          // empty effort on the wire for Codex forks.
+          ...(request.effort ? { effort: request.effort } : {}),
           permission_mode: request.permissionMode,
           follow_up: false,
         }),
