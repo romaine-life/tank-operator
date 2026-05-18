@@ -14,7 +14,7 @@ import {
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
-import { Virtuoso } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   PromptInput,
   PromptInputFooter,
@@ -59,6 +59,7 @@ import {
   GlobeIcon,
   ImageIcon,
   InfoIcon,
+  LinkIcon,
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
@@ -851,6 +852,31 @@ function sessionUrl(id: string): string {
   url.hash = "";
   url.searchParams.set("session", id);
   return url.toString();
+}
+
+// Deep link to a specific message inside a session. Read by
+// readInitialMessageId() on cold start so we can scroll the active
+// session's transcript to the referenced entry. Shape mirrors the
+// existing ?session= contract so URLs compose cleanly when an agent
+// or human pastes one as a shareable pointer.
+function messageUrl(sessionId: string, entryId: string): string {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("session", sessionId);
+  url.searchParams.set("message", entryId);
+  return url.toString();
+}
+
+function readInitialMessageId(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("message");
+}
+
+function clearInitialMessageId(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("message");
+  window.history.replaceState({}, "", url.toString());
 }
 
 function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
@@ -2720,6 +2746,45 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// LinkButton copies a deep-link URL to this specific transcript entry.
+// The URL is the same shape the SPA reads on cold start
+// (?session=<id>&message=<entry.id>) so a human pasting it lands on the
+// session and scrolls/highlights the entry, while an agent can parse
+// the query params to fetch the underlying event from the API.
+function LinkButton({
+  sessionId,
+  entryId,
+}: {
+  sessionId: string;
+  entryId: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-link"
+      title="Copy link to message"
+      aria-label={copied ? "Link copied" : "Copy link to message"}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(messageUrl(sessionId, entryId));
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon size={12} aria-hidden="true" />
+      ) : (
+        <LinkIcon size={12} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 function ForkButton({
   entry,
   onFork,
@@ -2896,6 +2961,8 @@ const RunContext = createContext<{
 function RunMessageBubble({
   entry,
   avatar,
+  sessionId,
+  highlighted,
   showTimestamps,
   showDuration,
   onQuote,
@@ -2903,6 +2970,8 @@ function RunMessageBubble({
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
+  sessionId: string;
+  highlighted: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
@@ -2936,6 +3005,8 @@ function RunMessageBubble({
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
+      data-message-id={entry.id}
+      data-highlight={highlighted ? "true" : undefined}
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
@@ -2986,6 +3057,7 @@ function RunMessageBubble({
           <QuoteButton text={text} style="fence" onQuote={onQuote} />
           <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
           <CopyButton text={text} />
+          <LinkButton sessionId={sessionId} entryId={entry.id} />
         </div>
       </div>
       {variant === "user" && user && (
@@ -3478,6 +3550,9 @@ function RunToolGroup({
 function RunMessages({
   entries,
   avatar,
+  sessionId,
+  pendingScrollMessageId,
+  onScrollConsumed,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -3490,6 +3565,16 @@ function RunMessages({
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
+  sessionId: string;
+  // Set when the SPA cold-started with ?message=<entry.id>. RunMessages
+  // searches the loaded groups for that id and, when found, scrolls
+  // Virtuoso to it and lights up a highlight pulse on the bubble. If
+  // the entry hasn't loaded yet (it sits before the current backfill
+  // window) we leave the id armed; a later `entries` change retries.
+  pendingScrollMessageId?: string | null;
+  // Fired after a successful scroll so the parent can clear the URL
+  // param and stop re-applying the highlight on subsequent renders.
+  onScrollConsumed?: () => void;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -3501,6 +3586,38 @@ function RunMessages({
   onAtBottomChange?: (atBottom: boolean) => void;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  // Highlighted entry is the bubble that should pulse after a deep-link
+  // scroll. We clear it on a timer so re-renders during streaming don't
+  // re-trigger the animation on entries the user is just reading.
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  // Track which message id we've already handled so we don't re-scroll
+  // every time entries change during streaming.
+  const consumedScrollIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = pendingScrollMessageId;
+    if (!target) return;
+    if (consumedScrollIdRef.current === target) return;
+    const groupIndex = groups.findIndex((g) => {
+      if (g.kind === "tools") return g.entries.some((e) => e.id === target);
+      return g.entry.id === target;
+    });
+    if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
+    consumedScrollIdRef.current = target;
+    setHighlightedEntryId(target);
+    const handle = virtuosoRef.current;
+    if (handle) {
+      // align: "center" puts the bubble in the middle of the viewport
+      // so the user can see surrounding context, not just the bubble
+      // wedged against the top edge.
+      handle.scrollToIndex({ index: groupIndex, align: "center", behavior: "smooth" });
+    }
+    onScrollConsumed?.();
+    const timer = window.setTimeout(() => {
+      setHighlightedEntryId((current) => (current === target ? null : current));
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [pendingScrollMessageId, groups, onScrollConsumed]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
   // Tool groups have no single id, so we composite the first/last child
   // ids — same group instance stays the same key as it grows during a
@@ -3531,6 +3648,8 @@ function RunMessages({
         <RunMessageBubble
           entry={g.entry}
           avatar={avatar}
+          sessionId={sessionId}
+          highlighted={highlightedEntryId === g.entry.id}
           showTimestamps={showTimestamps}
           showDuration={showDuration}
           onQuote={onQuote}
@@ -3541,8 +3660,10 @@ function RunMessages({
     [
       autoExpandTools,
       avatar,
+      highlightedEntryId,
       onFork,
       onQuote,
+      sessionId,
       showDuration,
       showThinking,
       showTimestamps,
@@ -3557,6 +3678,7 @@ function RunMessages({
   // top — Virtuoso debounces this so rapid scroll doesn't spam fetches.
   return (
     <Virtuoso
+      ref={virtuosoRef}
       className="run-transcript run-transcript-claude"
       data-slot="root"
       data={groups}
@@ -3585,6 +3707,8 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
+  pendingScrollMessageId,
+  onScrollConsumed,
   runPrefs,
   setRunPref,
   user,
@@ -3594,6 +3718,11 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
+  // Deep-link target the parent extracted from ?message=<id>. Only set
+  // for the ChatPane whose session matches ?session=<id>; other panes
+  // receive null and skip the scroll logic.
+  pendingScrollMessageId?: string | null;
+  onScrollConsumed?: () => void;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
@@ -6087,6 +6216,9 @@ function ChatPane({
             <RunMessages
               entries={entries}
               avatar={sessionAvatar}
+              sessionId={session.id}
+              pendingScrollMessageId={pendingScrollMessageId}
+              onScrollConsumed={onScrollConsumed}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               showTimestamps={runPrefs.showTimestamps}
@@ -6902,6 +7034,18 @@ export function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const initialSessionId = useRef<string | null>(readInitialSessionId());
+  // ?message=<entry.id> deep link, captured once at boot. We keep it in
+  // state (not a ref) so React re-renders the matching ChatPane with
+  // the prop populated; that pane consumes it via onScrollConsumed,
+  // which clears state + URL param so back/forward navigation doesn't
+  // re-scroll.
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
+    readInitialMessageId,
+  );
+  const consumePendingScroll = useCallback(() => {
+    setPendingScrollMessageId(null);
+    clearInitialMessageId();
+  }, []);
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
   );
@@ -7940,6 +8084,12 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
+                      pendingScrollMessageId={
+                        pendingScrollMessageId && active === s.id
+                          ? pendingScrollMessageId
+                          : null
+                      }
+                      onScrollConsumed={consumePendingScroll}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
