@@ -158,6 +158,76 @@ func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID str
 	return err
 }
 
+// Get returns one session row, or (zero, nil) when the row is absent.
+// Used by the row-update publisher to read the post-write state and
+// fan it out on NATS. Reads every sidebar-visible column so the wire
+// payload is a complete row snapshot.
+func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.SessionRecord, bool, error) {
+	normalized := strings.ToLower(strings.TrimSpace(owner))
+	if normalized == "" || strings.TrimSpace(sessionID) == "" {
+		return sessionmodel.SessionRecord{}, false, nil
+	}
+	const q = `
+		SELECT mode, pod_name, name, visible,
+			COALESCE(to_char(requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
+			COALESCE(to_char(created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
+			COALESCE(to_char(updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
+			status,
+			COALESCE(to_char(ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
+			COALESCE(to_char(terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
+			activity_summary,
+			test_state,
+			rollout_state,
+			row_version
+		FROM sessions
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	var (
+		mode, podName, requestedAt, createdAt, updatedAt    string
+		status, readyAt, terminatingAt                      string
+		name                                                *string
+		visible                                             bool
+		activitySummary, testState, rolloutState            []byte
+		rowVersion                                          int64
+	)
+	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
+		&mode, &podName, &name, &visible,
+		&requestedAt, &createdAt, &updatedAt,
+		&status, &readyAt, &terminatingAt,
+		&activitySummary, &testState, &rolloutState,
+		&rowVersion,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sessionmodel.SessionRecord{}, false, nil
+	}
+	if err != nil {
+		return sessionmodel.SessionRecord{}, false, err
+	}
+	if mode == "" {
+		mode = sessionmodel.DefaultSessionMode
+	}
+	record := sessionmodel.SessionRecord{
+		ID:              sessionID,
+		Email:           normalized,
+		Mode:            mode,
+		Scope:           s.scope,
+		PodName:         podName,
+		Name:            name,
+		Visible:         visible,
+		RequestedAt:     requestedAt,
+		CreatedAt:       createdAt,
+		UpdatedAt:       updatedAt,
+		Status:          status,
+		ReadyAt:         readyAt,
+		TerminatingAt:   terminatingAt,
+		ActivitySummary: activitySummary,
+		TestState:       unmarshalJSONB(testState),
+		RolloutState:    unmarshalJSONB(rolloutState),
+		RowVersion:      rowVersion,
+	}
+	return record, true, nil
+}
+
 // OwnerForSession returns the owner email associated with the given
 // session id in this scope, or empty when no such session is registered.
 // Used by sessioncontroller.ChatActivityEmitter to resolve which per-owner SSE subject a

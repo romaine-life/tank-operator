@@ -39,15 +39,14 @@ type SessionRegistry interface {
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
-// SessionListEventPublisher is implemented by the session bus; it
-// publishes one typed lifecycle-event payload on the per-(owner, scope)
-// NATS session-list events subject. Replaces the prior SessionListWaker
-// (opaque wake-and-refetch) per tank-operator#83 — the SSE handler now
-// forwards the payload verbatim to clients instead of just telling them
-// to re-fetch. Scope mirrors the row's session_scope so prod and slot
-// orchestrators sharing a NATS broker never see each other's payloads.
-type SessionListEventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
+// RowEmitter publishes the current state of one sessions row on the
+// per-(owner, scope) NATS row-update subject. After
+// docs/session-list-redesign.md Phase 3 every Manager mutation calls
+// PublishCurrentRow once the durable write has committed; the SPA's
+// SessionStore is a row cache that replaces-by-id from the row-update
+// stream. Satisfied by *sessioncontroller.RowPublisher.
+type RowEmitter interface {
+	PublishCurrentRow(ctx context.Context, owner, sessionID string)
 }
 
 // LifecycleAppender is the durable side of the producer pipeline.
@@ -65,7 +64,7 @@ type Manager struct {
 	namespace string
 	registry  SessionRegistry
 	lifecycle LifecycleAppender
-	publisher SessionListEventPublisher
+	emitter   RowEmitter
 	scope     string
 
 	manifestOpts sessionmodel.ManifestOptions
@@ -97,7 +96,7 @@ type ManagerOptions struct {
 	CodexAPIProxyHost string
 }
 
-func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, lifecycle LifecycleAppender, publisher SessionListEventPublisher, opts ManagerOptions) *Manager {
+func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, lifecycle LifecycleAppender, emitter RowEmitter, opts ManagerOptions) *Manager {
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = defaultIdleTimeout
 		if v := os.Getenv("IDLE_TIMEOUT_SECONDS"); v != "" {
@@ -123,7 +122,7 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		namespace:      namespace,
 		registry:       registry,
 		lifecycle:      lifecycle,
-		publisher:      publisher,
+		emitter:        emitter,
 		scope:          opts.ManifestOpts.SessionScope,
 		manifestOpts:   opts.ManifestOpts,
 		wsCount:        map[string]int{},
@@ -708,38 +707,27 @@ func (m *Manager) emitLifecycle(ctx context.Context, event lifecycleevents.Event
 	if event.Type == "" || event.SessionID == "" || event.Email == "" {
 		return
 	}
-	if m.lifecycle == nil {
-		return
+	// Append to the durable lifecycle ledger (kept until Phase 4 drops
+	// the table). Phase 3 retired the ledger from the read/wire paths,
+	// but Append is still where each user-action transition gets a
+	// stable event_id for replica-race dedup against the K8s watch's
+	// matching event_id (e.g., session.deleted emitted by both
+	// Manager.Delete and the pod-informer's handleDelete).
+	if m.lifecycle != nil {
+		if _, _, err := m.lifecycle.Append(ctx, event); err != nil {
+			slog.Warn("manager lifecycle append failed",
+				"session_id", event.SessionID,
+				"type", event.Type,
+				"error", err,
+			)
+		}
 	}
-	assigned, alreadyExists, err := m.lifecycle.Append(ctx, event)
-	if err != nil {
-		slog.Warn("manager lifecycle append failed",
-			"session_id", event.SessionID,
-			"type", event.Type,
-			"error", err,
-		)
-		return
-	}
-	if alreadyExists || m.publisher == nil {
-		return
-	}
-	payload, err := json.Marshal(assigned)
-	if err != nil {
-		slog.Warn("manager lifecycle marshal failed",
-			"session_id", event.SessionID,
-			"type", event.Type,
-			"error", err,
-		)
-		return
-	}
-	if err := m.publisher.PublishSessionListEvent(ctx, assigned.Email, assigned.SessionScope, payload); err != nil {
-		slog.Warn("manager lifecycle publish failed",
-			"session_id", event.SessionID,
-			"type", event.Type,
-			"owner", assigned.Email,
-			"scope", assigned.SessionScope,
-			"error", err,
-		)
+	// Publish the row's current state on the row-update wire. The
+	// post-write row reflects every column registry.* methods just
+	// committed (visible / name / status / etc.). RowEmitter handles
+	// the fetch-and-publish; failures are logged inside.
+	if m.emitter != nil {
+		m.emitter.PublishCurrentRow(ctx, event.Email, event.SessionID)
 	}
 }
 

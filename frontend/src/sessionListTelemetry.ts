@@ -1,28 +1,23 @@
-// Sidebar session-list client-side telemetry. Two surfaces:
+// Sidebar session-list client-side telemetry. After
+// docs/session-list-redesign.md Phase 3 the surface is just the
+// debug-gated console transcript: enable per browser by setting
+// `localStorage.tankDebug = "session-list"` (comma-separated tokens
+// accepted; this checks for "session-list" specifically). Once
+// enabled, every snapshot fetch, every applied row update, every
+// cursor advance, and every stream signal prints to the console
+// under `[tank/session-list]`. Off by default — zero perf cost when
+// not enabled.
 //
-//  1. Debug-gated console transcript. Enable per browser by setting
-//     `localStorage.tankDebug = "session-list"` (comma-separated tokens
-//     are accepted; this checks for "session-list" specifically). Once
-//     enabled, every snapshot fetch, every applied SSE event, and every
-//     cursor advance prints to the console under `[tank/session-list]`.
-//     Off by default — zero perf cost when not enabled.
+// The Phase 2 client-metric beacon was retired in Phase 3 alongside
+// the entire placeholder-synthesis branch in the sidebar reducer —
+// the row-update wire makes synthesis unreachable by construction
+// (the wire always carries the full row; there is nothing to
+// synthesize). The related backend counter and its alert are
+// removed in the same PR.
 //
-//  2. Always-on placeholder-synthesis beacon. The reducer's
-//     applyPodStatusEvent branch that synthesizes a Session row for an
-//     unknown id is supposed to fire only in a narrow live-event race
-//     window. Post-tank-operator#525 the cold-open replay-from-zero is
-//     gone and the Reader.List pod-fallback excludes invisible rows, so
-//     the synthesis branch should be effectively cold in production.
-//     Any fire posts to /api/debug/client-metric which increments
-//     `tank_session_list_client_placeholder_synthesized_total` — a
-//     non-zero rate in steady state is the smoking-gun signal that a
-//     resurrection path snuck back in.
-//
-// Both helpers are best-effort: they swallow localStorage/fetch errors
-// so a misconfigured browser or transient network glitch can never
-// affect the reducer's correctness path.
-
-import type { SessionListEvent } from "./sessionListEvents";
+// Helpers are best-effort: they swallow localStorage errors so a
+// misconfigured browser can never affect the reducer's correctness
+// path.
 
 const DEBUG_STORAGE_KEY = "tankDebug";
 const DEBUG_TOKEN = "session-list";
@@ -36,7 +31,6 @@ function isDebugEnabled(): boolean {
       .map((s) => s.trim())
       .includes(DEBUG_TOKEN);
   } catch {
-    // Private mode or storage-disabled browsers — treat as off.
     return false;
   }
 }
@@ -55,14 +49,18 @@ export function logSessionListSseOpen(cursor: string | null): void {
   console.log(`${CONSOLE_PREFIX} sse open`, { cursor });
 }
 
-export function logSessionListEvent(event: SessionListEvent): void {
+// logSessionListEvent prints a short summary of one applied wire
+// frame. Signature is intentionally loose so the row-update wire's
+// SessionRowUpdatePayload and any future shape can both pass through
+// without the telemetry types bleeding into the consumer.
+export function logSessionListEvent(event: {
+  type?: string;
+  session_id?: string;
+  session_scope?: string;
+  order_key?: string;
+}): void {
   if (!isDebugEnabled()) return;
-  console.log(`${CONSOLE_PREFIX} event`, {
-    type: event.type,
-    session_id: event.session_id,
-    scope: event.session_scope,
-    order_key: event.order_key,
-  });
+  console.log(`${CONSOLE_PREFIX} event`, event);
 }
 
 export function logSessionListStreamSignal(args: {
@@ -71,34 +69,4 @@ export function logSessionListStreamSignal(args: {
 }): void {
   if (!isDebugEnabled()) return;
   console.log(`${CONSOLE_PREFIX} stream`, args);
-}
-
-// notePlaceholderSynthesized fires unconditionally — this is the
-// regression-detection signal for the post-#525 invariant that
-// placeholder synthesis should be cold in production. Both the console
-// warning AND the server-side counter beacon fire regardless of the
-// debug flag. The fetch is fire-and-forget; failures (auth, network,
-// abort) are swallowed so the reducer is never blocked by telemetry.
-export function notePlaceholderSynthesized(event: SessionListEvent): void {
-  console.warn(`${CONSOLE_PREFIX} placeholder synthesized`, {
-    type: event.type,
-    session_id: event.session_id,
-    scope: event.session_scope,
-    order_key: event.order_key,
-  });
-  try {
-    void fetch("/api/debug/client-metric", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      // Allowlisted name; the server rejects any other value with 400
-      // so we don't leak arbitrary client strings into Prometheus.
-      body: JSON.stringify({ name: "session_list.placeholder_synthesized" }),
-      keepalive: true,
-    }).catch(() => {
-      // swallow — telemetry must not affect rendering
-    });
-  } catch {
-    // swallow
-  }
 }

@@ -394,6 +394,50 @@ const blocked = [
     // catch-up entry point.
     pattern: /writeSessionListStreamPage\([\s\S]{0,200}?AfterOrderKey:\s*""/,
   },
+  // docs/session-list-redesign.md Phase 3 — the typed-event wire was
+  // replaced by the row-update wire. Block the entire pre-Phase-3
+  // surface so a refactor can't quietly resurrect the event-type
+  // discriminator on the wire (the failure pattern that produced
+  // the placeholder-synthesis resurrection bug).
+  {
+    name: "removed PublishSessionListEvent typed-event publisher",
+    pattern: /\bPublishSessionListEvent\b/,
+  },
+  {
+    name: "removed SubscribeSessionListEvents typed-event subscriber",
+    pattern: /\bSubscribeSessionListEvents\b/,
+  },
+  {
+    name: "removed SessionListEventSubject helper",
+    pattern: /\bSessionListEventSubject\b/,
+  },
+  {
+    name: "removed sessionListEvents.ts frontend reducer module",
+    // Block the file path so a future refactor can't quietly
+    // recreate the typed-event reducer. The new wire shape lives
+    // in sessionStore.ts.
+    pattern: /sessionListEvents\.ts\b/,
+  },
+  {
+    name: "removed applySessionListEvent reducer entry point",
+    pattern: /\bapplySessionListEvent\b/,
+  },
+  {
+    name: "removed applyPodStatusEvent placeholder-synthesis branch",
+    pattern: /\bapplyPodStatusEvent\b/,
+  },
+  {
+    name: "removed Tank-Lifecycle-Tip-Order-Key header",
+    pattern: /\bTank-Lifecycle-Tip-Order-Key\b/,
+  },
+  {
+    name: "removed notePlaceholderSynthesized telemetry beacon",
+    pattern: /\bnotePlaceholderSynthesized\b/,
+  },
+  {
+    name: "removed tank_session_list_client_placeholder_synthesized_total counter",
+    pattern: /\btank_session_list_client_placeholder_synthesized_total\b/,
+  },
   // docs/session-list-redesign.md Phase 1 — internal/podinformer and
   // cmd/tank-operator/lifecycle_emitter.go were consolidated into
   // internal/sessioncontroller so all three lifecycle producers

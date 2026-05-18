@@ -117,7 +117,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, lifecycleStore, sessionBus, sessions.ManagerOptions{
+	// Build the RowPublisher every lifecycle producer fans row updates
+	// through (Manager user-actions, sessioncontroller K8s watch,
+	// chat-activity emitter). The Fetcher reads post-write row state
+	// from the registry; the Publisher hands the marshaled payload to
+	// NATS. Per docs/session-list-redesign.md Phase 3 this is the
+	// single wire path the SPA's SessionStore consumes — no typed-
+	// event reducer, no event-type switch.
+	rowPublisher := &sessioncontroller.RowPublisher{
+		Fetcher:   rowFetcherFor(sessionReg),
+		Publisher: sessionBus,
+		Scope:     sessionScope,
+	}
+
+	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, lifecycleStore, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionsNamespace:       namespace,
 			SessionServiceAccount:   sessionServiceAccount,
@@ -181,7 +194,7 @@ func main() {
 	if sessionBus != nil {
 		rw, err := sessioncontroller.NewRowWriter(
 			lifecycleStore,
-			sessionBus,
+			rowPublisher,
 			pgPool,
 			promRowWriterMetrics{},
 		)
@@ -373,6 +386,23 @@ func buildLifecycleEventStore(pool *pgxpool.Pool) lifecycleevents.Store {
 		return lifecycleevents.StubStore{}
 	}
 	return lifecycleevents.NewPostgresStore(pool)
+}
+
+// rowFetcherFor adapts the SessionRegistry interface to the narrower
+// sessioncontroller.RowFetcher shape. The Postgres-backed Store has a
+// Get method; the in-memory stub falls back to a not-found result so
+// row-update publishes silently no-op in local-dev mode.
+func rowFetcherFor(reg sessions.SessionRegistry) sessioncontroller.RowFetcher {
+	if fetcher, ok := reg.(sessioncontroller.RowFetcher); ok {
+		return fetcher
+	}
+	return stubRowFetcher{}
+}
+
+type stubRowFetcher struct{}
+
+func (stubRowFetcher) Get(_ context.Context, _, _ string) (sessionmodel.SessionRecord, bool, error) {
+	return sessionmodel.SessionRecord{}, false, nil
 }
 
 // buildSessionRegistryOwnerResolver wraps the SessionRegistry interface

@@ -60,8 +60,8 @@ type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
 	PublishSessionEventWake(context.Context, string) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
-	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
-	SubscribeSessionListEvents(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
+	PublishSessionRowUpdate(ctx context.Context, email, scope string, payload []byte) error
+	SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -93,7 +93,14 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// load + resync. Together they replace the deleted activity polling
 	// endpoint and the prior wake-and-refetch SSE shape.
 	mux.HandleFunc("GET /api/sessions/events", s.handleSessionsEvents)
-	mux.HandleFunc("GET /api/sessions/timeline", s.handleSessionListTimeline)
+	// Admin-only debug surface for sidebar diagnosis. Returns the
+	// server's view of (owner, scope) — every registry row including
+	// visible=false, plus the current row-update cursor. Per
+	// memory/feedback_no_devtools_build_surfaces_instead.md the SPA
+	// user can't open browser devtools; this endpoint is the curl-
+	// able server-side observability that replaces "share a Network
+	// tab screenshot."
+	mux.HandleFunc("GET /api/debug/session-list-state", s.handleDebugSessionListState)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)
@@ -128,10 +135,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
 
-	// Client-side telemetry beacon (allowlisted Prometheus counters
-	// the SPA pushes when its reducer hits a code path that should be
-	// cold post-tank-operator#525 — see handlers_debug_client_metric.go).
-	mux.HandleFunc("POST /api/debug/client-metric", s.handleClientMetric)
 
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)

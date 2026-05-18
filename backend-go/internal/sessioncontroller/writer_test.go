@@ -2,7 +2,6 @@ package sessioncontroller
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
@@ -127,13 +126,12 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 // TestRowWriterRecordTransitionDedupes verifies the (scope, session_id,
 // event_id) idempotency contract: a repeated emit of the same event
 // (informer resync, replica race) returns TransitionDeduped and skips
-// both the row update AND the NATS publish. This is the same
-// invariant the pre-consolidation K8s watch test pinned, now
-// asserted through the RowWriter surface.
+// the row-update publish. This is the invariant the pre-consolidation
+// K8s watch test pinned, now asserted through the RowWriter surface.
 func TestRowWriterRecordTransitionDedupes(t *testing.T) {
 	store := newFakeStore()
-	pub := &fakePublisher{}
-	writer, err := NewRowWriter(store, pub, nil, nil)
+	emitter := &fakeEmitter{}
+	writer, err := NewRowWriter(store, emitter, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +153,11 @@ func TestRowWriterRecordTransitionDedupes(t *testing.T) {
 	if outcome != TransitionEmitted {
 		t.Fatalf("first outcome = %q, want emitted", outcome)
 	}
-	if len(pub.payloads) != 1 {
-		t.Fatalf("first publish count = %d, want 1", len(pub.payloads))
+	if len(emitter.calls) != 1 {
+		t.Fatalf("first publish count = %d, want 1", len(emitter.calls))
+	}
+	if emitter.calls[0].sessionID != "42" {
+		t.Fatalf("PublishCurrentRow session = %q, want 42", emitter.calls[0].sessionID)
 	}
 
 	outcome2, err := writer.RecordTransition(context.Background(), event)
@@ -166,20 +167,20 @@ func TestRowWriterRecordTransitionDedupes(t *testing.T) {
 	if outcome2 != TransitionDeduped {
 		t.Fatalf("repeat outcome = %q, want deduped", outcome2)
 	}
-	if len(pub.payloads) != 1 {
-		t.Fatalf("repeat publish count = %d, want 1 (deduped must skip publish)", len(pub.payloads))
+	if len(emitter.calls) != 1 {
+		t.Fatalf("repeat publish count = %d, want 1 (deduped must skip the row-update publish)", len(emitter.calls))
 	}
 }
 
-// TestRowWriterPublishesAssignedPayload confirms the wire payload is
-// the lifecycle-store-stamped Event (with OrderKey assigned), not the
-// caller's input. The SPA's reducer keys on order_key for cursor
-// advance; without this contract a publish-before-append regression
-// would silently lose ordering.
-func TestRowWriterPublishesAssignedPayload(t *testing.T) {
+// TestRowWriterPublishesByID confirms the writer hands the session id
+// to the row publisher (not the event payload). The publisher reads
+// the row's current state from the registry — passing the wrong id
+// would publish the wrong row, which is the failure mode this test
+// is the gate against.
+func TestRowWriterPublishesByID(t *testing.T) {
 	store := newFakeStore()
-	pub := &fakePublisher{}
-	writer, _ := NewRowWriter(store, pub, nil, nil)
+	emitter := &fakeEmitter{}
+	writer, _ := NewRowWriter(store, emitter, nil, nil)
 
 	event := lifecycleevents.Event{
 		Email:        "u@example.com",
@@ -192,16 +193,10 @@ func TestRowWriterPublishesAssignedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pub.payloads) != 1 {
-		t.Fatalf("publish count = %d, want 1", len(pub.payloads))
+	if len(emitter.calls) != 1 {
+		t.Fatalf("publish count = %d, want 1", len(emitter.calls))
 	}
-	var probe struct {
-		OrderKey string `json:"order_key"`
-	}
-	if err := json.Unmarshal(pub.payloads[0].raw, &probe); err != nil {
-		t.Fatal(err)
-	}
-	if probe.OrderKey == "" {
-		t.Fatalf("published payload missing order_key — the wire shape must carry the lifecycle store's assigned value, not the caller's empty one")
+	if emitter.calls[0].owner != "u@example.com" || emitter.calls[0].sessionID != "42" {
+		t.Fatalf("PublishCurrentRow args = %+v, want (u@example.com, 42)", emitter.calls[0])
 	}
 }
