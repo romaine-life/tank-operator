@@ -1,5 +1,8 @@
 export const SESSION_COMMAND_ACK_MS: number;
 export const SESSION_COMMAND_MAX_DELIVER: number;
+export const SESSION_CONTROL_ACK_MS: number;
+export const SESSION_CONTROL_MAX_DELIVER: number;
+export const SESSION_CONTROL_MAX_ACK_PENDING: number;
 
 export interface SessionBusConfig {
   sessionId: string;
@@ -38,6 +41,16 @@ export interface SessionCommand {
   input_reply?: string;
   prompt?: string;
   model?: string;
+  /**
+   * Extended-thinking effort level, one of "low" | "medium" | "high" |
+   * "xhigh" | "max". Pinned at pod boot from the first submit_turn that
+   * carries a value (subsequent overrides are ignored — the SDK Options
+   * are sealed for the runner's lifetime, see agent-runner/runner.ts).
+   * Allowlist enforcement is upstream in backend-go's middleware; the
+   * runner trusts whatever string lands here and falls back to its
+   * baked-in default when the field is empty.
+   */
+  effort?: string;
   permission_mode?: string;
   skill_name?: string;
   follow_up?: boolean;
@@ -66,6 +79,7 @@ export class SessionCommandRecord implements SessionCommand {
   input_reply?: string;
   prompt?: string;
   model?: string;
+  effort?: string;
   permission_mode?: string;
   skill_name?: string;
   follow_up?: boolean;
@@ -85,6 +99,16 @@ export class SharedSessionBus {
     deps: SessionBusDependencies,
   );
   startCommandConsumer(
+    handler: (record: SessionCommandRecord) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<() => Promise<void>>;
+  /**
+   * Subscribe to the control-plane subject (interrupts today; any future
+   * low-latency control signal). The consumer is separate from
+   * startCommandConsumer's data-plane consumer so a long-running
+   * submit_turn cannot block delivery.
+   */
+  startControlConsumer(
     handler: (record: SessionCommandRecord) => Promise<void>,
     signal?: AbortSignal,
   ): Promise<() => Promise<void>>;
@@ -111,6 +135,7 @@ export function buildWakeupSubmitTurnCommand(args: {
 }): SessionCommand;
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
+export function controlSubject(sessionStorageKey: string, provider: string): string;
 export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;

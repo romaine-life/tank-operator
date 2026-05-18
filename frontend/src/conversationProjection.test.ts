@@ -35,6 +35,35 @@ function ev(
   };
 }
 
+test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order_key", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "long task" },
+      }),
+      ev("2", "turn.submitted", { client_nonce: "run-1" }),
+      ev("3", "turn.started", { source: "claude" }),
+      ev("4", "turn.interrupt_requested", {
+        actor: "system",
+        source: "tank",
+      }),
+    ]),
+  );
+
+  assert.equal(projection.runStatus, "stopping");
+  assert.equal(projection.stopping, true);
+  const meta = projection.entries.find((entry) => entry.kind === "meta");
+  assert.ok(meta, "Stop requested chip should appear in projection entries");
+  if (meta?.kind === "meta") {
+    assert.equal(meta.meta.title, "Stop requested");
+    assert.equal(meta.meta.severity, "info");
+    assert.equal(meta.turnId, "turn-1");
+    assert.equal(meta.orderKey, "0004");
+  }
+});
+
 test("projects canonical user and assistant events into chat messages", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

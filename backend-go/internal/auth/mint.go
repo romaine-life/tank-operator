@@ -14,13 +14,10 @@ import (
 )
 
 const (
-	SessionTTL                   = 7 * 24 * time.Hour
-	GitHubMCPAttestationTTL      = 5 * time.Minute
-	GitHubMCPAttestationAudience = "mcp-github-tank"
-	gitHubMCPAttestationIssuer   = "tank-operator"
-	installStateTTL              = 10 * time.Minute
-	installAudience              = "tank-operator/github-install"
-	mintTimeout                  = 10 * time.Second
+	SessionTTL       = 7 * 24 * time.Hour
+	installStateTTL  = 10 * time.Minute
+	installAudience  = "tank-operator/github-install"
+	mintTimeout      = 10 * time.Second
 )
 
 // Minter signs session and install-state JWTs via a remote Signer (Key Vault
@@ -56,58 +53,6 @@ func (m *Minter) MintSession(sub, email, name, role string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), mintTimeout)
 	defer cancel()
 	return m.signer.MintJWT(ctx, claims)
-}
-
-type GitHubMCPAttestationSubject struct {
-	Email          string
-	InstallationID *int64
-	IsHost         bool
-	IsSuperAdmin   bool
-	SessionScope   string
-	SessionID      string
-	PodName        string
-}
-
-func (m *Minter) MintGitHubMCPAttestation(subject GitHubMCPAttestationSubject) (string, time.Time, error) {
-	if m.signer == nil {
-		return "", time.Time{}, fmt.Errorf("JWT signer not configured")
-	}
-	email := strings.ToLower(strings.TrimSpace(subject.Email))
-	sessionScope := strings.TrimSpace(subject.SessionScope)
-	sessionID := strings.TrimSpace(subject.SessionID)
-	podName := strings.TrimSpace(subject.PodName)
-	if email == "" || sessionScope == "" || sessionID == "" || podName == "" {
-		return "", time.Time{}, fmt.Errorf("missing GitHub MCP attestation subject field")
-	}
-
-	now := time.Now()
-	expiresAt := now.Add(GitHubMCPAttestationTTL)
-	claims := jwt.MapClaims{
-		"iss":            gitHubMCPAttestationIssuer,
-		"aud":            GitHubMCPAttestationAudience,
-		"sub":            "tank-session:" + sessionScope + ":" + sessionID,
-		"email":          email,
-		"owner_email":    email,
-		"is_host":        subject.IsHost,
-		"is_super_admin": subject.IsSuperAdmin,
-		"session_scope":  sessionScope,
-		"session_id":     sessionID,
-		"pod_name":       podName,
-		"iat":            now.Unix(),
-		"nbf":            now.Add(-5 * time.Second).Unix(),
-		"exp":            expiresAt.Unix(),
-	}
-	if subject.InstallationID != nil {
-		claims["github_installation_id"] = *subject.InstallationID
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), mintTimeout)
-	defer cancel()
-	token, err := m.signer.MintJWT(ctx, claims)
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	return token, expiresAt, nil
 }
 
 func (m *Minter) PublicJWKS(ctx context.Context) (JWKS, error) {

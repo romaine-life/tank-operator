@@ -142,11 +142,19 @@ Microsoft sign-in is delegated to **auth.romaine.life** (Better Auth + Microsoft
 
 **GitHub App install flow (#57 stage 2).** When `/api/auth/me` returns `installation_id=null`, the SPA renders an onboarding wall (`frontend/src/App.tsx → OnboardingWall`) instead of the main shell. Clicking the install CTA hits `/api/github/install/url`, which mints a 10-min state JWT (custom audience `tank-operator/github-install`) bound to the caller's email and 302s to `https://github.com/apps/<github.appSlug>/installations/new?state=...`. After GitHub install consent, GitHub redirects to `/api/github/install/callback`; the callback validates *both* the state JWT and the caller's `auth_token` cookie agree on email (defense-in-depth against a phishing flow where an attacker tricks a victim into installing under the attacker's profile), then upserts `installation_id` on the Postgres profile row and 302s back to `/`. Validation failures redirect to `/?install_error=<reason>` for an SPA banner. The user-facing App lives at `https://github.com/apps/tank-operator-romaine-life` (`tank-operator` slug was taken globally on github.com) — `github.appSlug` in `k8s/values.yaml` carries the actual slug.
 
+**Break-glass CLI auth (admin only).** When tank's UI is broken and an admin needs to reach the API from a curl: load `https://auth.romaine.life/admin` → click **Mint bot token** → copy the 24h JWT → `curl -H "Authorization: Bearer <jwt>" https://tank.romaine.life/api/sessions/8/events`. The bot token carries `role=admin` + `purpose=bot` and goes through the same JWKS verifier the cookie path uses; admin cross-user reads (below) accept it for any session. Revoke before natural expiry with `az keyvault key rotate auth-jwt-signing`, which rolls the auth-side signing key and invalidates every outstanding JWT — fine for a rare-event surface. See `nelsong6/auth/README.md → "Admin bot tokens"`.
+
+**Admin cross-user reads (the why for role=admin in this codebase).** Read-only session endpoints — events list/SSE, single-session metadata, read-state cursor, file/MCP/skill listings, session list (via `?owner=<email>`) — bypass the per-owner gate when the caller has `role=admin`. Read-side handlers go through `authorizeSessionRead` (`auth_session.go`) which returns 404 (not 403) on cross-user denial so the API doesn't leak the existence of sessions a non-admin can't read. **Writes intentionally stay per-owner**: turns, file uploads/edits, terminal attach, name/test/rollout/credential patches, and delete all continue to call `mgr.GetByOwner` or `s.resolveSessionPod` (the write helper), so an admin token cannot mutate someone else's session. Admin lift is a read-only contract by construction — if a new write handler ever needs admin reach, it must explicitly opt in by writing a separate code path, not by switching to the read helper. Observed via the `tank_admin_cross_user_session_{reads,lists}_total` counters; structured slog lines on the session-list SSE handler carry both `caller` and `owner` when they differ.
+
 ## In-cluster MCP servers
 
-The HTTP MCP servers live in standalone repos; this repo keeps only the
-runtime identities under `infra/mcp.tf`. Each MCP repo owns its Python source,
-image build workflow, and Helm chart with the `kube-rbac-proxy` sidecar.
+The HTTP MCP servers live in standalone repos. Each MCP repo owns its Python
+source, image build workflow, and Helm chart with the `kube-rbac-proxy`
+sidecar. Runtime identities (UAMI + federated credential + role assignments +
+KV-published client ID) are migrating into their respective MCP repos —
+`nelsong6/mcp-azure-personal/infra/` is the first; `mcp-tank-operator` and
+`mcp-auth` still live in `infra/mcp.tf` here pending the same migration. The
+cross-MCP `mcp-tenant-id` KV secret stays here as a shared convenience.
 Inbound auth: claude-session SA token validated via TokenReview +
 SubjectAccessReview against the synthetic
 `mcp.tank-operator.io/servers/<name>` resource. Currently:

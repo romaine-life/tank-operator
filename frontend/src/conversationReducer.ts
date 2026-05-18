@@ -5,6 +5,7 @@ export type ConversationRunStatus =
   | "submitted"
   | "streaming"
   | "needs_input"
+  | "stopping"
   | "stopped"
   | "error";
 
@@ -38,11 +39,20 @@ export interface ConversationItem {
   createdAt?: string;
 }
 
+export interface ConversationInterruptRequest {
+  id: string;
+  turnId: string;
+  clientNonce?: string;
+  orderKey?: string;
+  time: string;
+}
+
 export interface ConversationReducerState {
   seenEventIds: string[];
   seenClientNonces: string[];
   messages: ConversationMessage[];
   items: ConversationItem[];
+  interruptRequests: ConversationInterruptRequest[];
   runStatus: ConversationRunStatus;
   activeTurnId: string | null;
   activeItemId: string | null;
@@ -58,6 +68,7 @@ export const initialConversationState: ConversationReducerState = {
   seenClientNonces: [],
   messages: [],
   items: [],
+  interruptRequests: [],
   runStatus: "ready",
   activeTurnId: null,
   activeItemId: null,
@@ -131,6 +142,8 @@ export function conversationReducer(
         failed: true,
         lastError: errorText(event),
       };
+    case "turn.interrupt_requested":
+      return applyInterruptRequested(next, event);
     case "turn.interrupted":
       return {
         ...next,
@@ -191,6 +204,32 @@ export function reduceConversationEvents(
   seed: ConversationReducerState = initialConversationState,
 ): ConversationReducerState {
   return events.reduce(conversationReducer, seed);
+}
+
+function applyInterruptRequested(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  if (!event.turn_id) return state;
+  const request: ConversationInterruptRequest = {
+    id: event.event_id,
+    turnId: event.turn_id,
+    clientNonce: event.client_nonce,
+    orderKey: event.order_key,
+    time: event.created_at,
+  };
+  // Only transition runStatus when the turn is genuinely mid-flight. Late
+  // arrivals (request lands after turn.completed / failed / interrupted)
+  // append the chip for transparency but do not downgrade a terminal state.
+  const transitioning =
+    state.runStatus === "submitted" ||
+    state.runStatus === "streaming" ||
+    state.runStatus === "needs_input";
+  return {
+    ...state,
+    interruptRequests: [...state.interruptRequests, request],
+    runStatus: transitioning ? "stopping" : state.runStatus,
+  };
 }
 
 function applyUserMessage(

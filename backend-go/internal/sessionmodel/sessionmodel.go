@@ -382,11 +382,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
 	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
-		"name":      "tank-operator-sa-token",
-		"mountPath": "/var/run/secrets/tank-operator",
-		"readOnly":  true,
-	})
-	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
 		"name":      "auth-romaine-sa-token",
 		"mountPath": "/var/run/secrets/auth.romaine.life",
 		"readOnly":  true,
@@ -399,8 +394,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"imagePullPolicy": "Always",
 			"command":         []any{"mcp-auth-proxy"},
 			"env": []any{
-				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
-				map[string]any{"name": "TANK_SESSION_ATTESTATION_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 				map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
 			},
 			// The metrics port is exposed as a named container port so the
@@ -642,8 +635,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		spec["hostAliases"] = hostAliases
 	}
 
+	// auth.romaine.life's /api/auth/exchange/k8s reads per-session lineage
+	// from pod annotations (see nelsong6/auth → src/k8s-pod.ts). The
+	// `tank-operator/owner-email` annotation was already here, but
+	// `tank-operator/session-id` was only emitted as a label, which made
+	// the auth handler reject every service-token exchange with
+	// `denied_annotation_missing`. Both annotations are required for the
+	// per-session exchange path; stamp them at pod creation time so the
+	// MCP auth proxy sidecar can mint service JWTs immediately.
 	annotations := map[string]any{
 		"tank-operator/owner-email":      owner,
+		"tank-operator/session-id":       sessionID,
 		"argocd.argoproj.io/tracking-id": argoTrackingID,
 	}
 	if opts.GlimmungContextJSON != "" {

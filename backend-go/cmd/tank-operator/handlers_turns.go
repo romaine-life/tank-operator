@@ -73,6 +73,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		ClientNonce    string `json:"client_nonce"`
 		Prompt         string `json:"prompt"`
 		Model          string `json:"model"`
+		Effort         string `json:"effort"`
 		PermissionMode string `json:"permission_mode"`
 		SkillName      string `json:"skill_name"`
 		FollowUp       bool   `json:"follow_up"`
@@ -87,6 +88,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		RequireNonce:   true,
 		Prompt:         body.Prompt,
 		Model:          body.Model,
+		Effort:         body.Effort,
 		PermissionMode: body.PermissionMode,
 		SkillName:      body.SkillName,
 		FollowUp:       body.FollowUp,
@@ -127,6 +129,27 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	interruptTurnID := "interrupt_" + auth.RandomHex(12)
+
+	// Durable-first: persist turn.interrupt_requested before publishing the
+	// JetStream command, so a refresh-after-stop replays the stopping
+	// projection state from the ledger instead of relying on a UI-local
+	// flag. Event_id is deterministic in target turn id, so a double-click
+	// POST collapses to one durable row at the Postgres UNIQUE constraint.
+	requestedEvent := conversation.TurnInterruptRequestedEventMap(conversation.TurnInterruptRequestedArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             user.Email,
+		TurnID:            targetTurnID,
+		ClientNonce:       targetTurnID,
+		Runtime:           provider,
+		Now:               time.Now().UTC(),
+	})
+	if err := s.persistBackendEvent(r.Context(), storageKey, requestedEvent); err != nil {
+		turnInterruptRequestTotal.WithLabelValues("persist_failed").Inc()
+		writeError(w, http.StatusInternalServerError, "persist interrupt request: "+err.Error())
+		return
+	}
+
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
 		CommandID:         "interrupt:" + targetTurnID + ":" + auth.RandomHex(12),
 		Type:              sessionbus.CommandInterrupt,
@@ -140,6 +163,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		TargetTurnID:      targetTurnID,
 		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
+		turnInterruptRequestTotal.WithLabelValues("publish_failed").Inc()
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
 			SessionID:         sessionID,
 			SessionStorageKey: storageKey,
@@ -157,6 +181,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, "publish interrupt: "+err.Error())
 		return
 	}
+	turnInterruptRequestTotal.WithLabelValues("persisted").Inc()
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":         "accepted",
 		"target_turn_id": targetTurnID,
@@ -263,6 +288,7 @@ type sdkTurnRequest struct {
 	RequireNonce   bool
 	Prompt         string
 	Model          string
+	Effort         string
 	PermissionMode string
 	SkillName      string
 	FollowUp       bool
@@ -303,6 +329,15 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	}
 	if skillName != "" && !promptMatchesSkillTrigger(provider, skillName, prompt) {
 		return nil, http.StatusBadRequest, "skill_name does not match prompt trigger"
+	}
+	// Effort allowlist enforcement is loud on purpose: silent drop would
+	// hide a frontend regression that ships a stale effort string. The
+	// runner trusts whatever lands on the wire and has no rejection path
+	// of its own, so the choke point is here. Empty is allowed and means
+	// "use the runner's baked-in default" — that mapping is preserved.
+	effort := validateEffort(strings.TrimSpace(req.Effort))
+	if strings.TrimSpace(req.Effort) != "" && effort == "" {
+		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
 	}
 	if info.PodName == nil {
 		return nil, http.StatusServiceUnavailable, "session pod not ready"
@@ -345,6 +380,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
 		Model:             validateTurnArg(req.Model),
+		Effort:            effort,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
 		FollowUp:          req.FollowUp,

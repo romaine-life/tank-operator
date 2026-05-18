@@ -272,6 +272,47 @@ func (r *Reader) Get(ctx context.Context, owner, sessionID string) (Info, error)
 	return infoFromPod(owner, pod), nil
 }
 
+// GetByID resolves a session by ID without verifying ownership. The
+// returned Info carries the resolved owner email so the HTTP layer can
+// authorize the caller against it (admin → allowed for any owner;
+// non-admin → must match their own email). Only the read-side handlers
+// reach for this — write paths continue to call Get(owner, sessionID)
+// so an admin token can't submit turns / write files / attach
+// terminals into someone else's session.
+//
+// Returns ErrNotFound if no pod for sessionID exists. The
+// `tank-operator/owner-email` annotation is the source of truth for
+// the email (the `tank-operator/owner` label is a one-way hash sized
+// for k8s label constraints and can't be reversed). Pods missing the
+// annotation are treated as not-found rather than returning an empty
+// owner — a half-tagged pod can't be authorized either way and would
+// otherwise silently grant access to any caller whose email is also
+// empty.
+func (r *Reader) GetByID(ctx context.Context, sessionID string) (Info, error) {
+	pod, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, "session-"+sessionID, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		pods, listErr := r.client.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "tank-operator/session-id=" + sessionID,
+		})
+		if listErr != nil {
+			return Info{}, listErr
+		}
+		if len(pods.Items) == 0 {
+			return Info{}, ErrNotFound
+		}
+		pod = &pods.Items[0]
+		err = nil
+	}
+	if err != nil {
+		return Info{}, err
+	}
+	owner := strings.TrimSpace(pod.Annotations["tank-operator/owner-email"])
+	if owner == "" {
+		return Info{}, ErrNotFound
+	}
+	return infoFromPod(owner, pod), nil
+}
+
 func infoFromRecord(owner string, record sessionmodel.SessionRecord, pod *corev1.Pod) Info {
 	if pod != nil {
 		info := infoFromPod(owner, pod)

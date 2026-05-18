@@ -180,6 +180,68 @@ func TestPersistMessageTerminatesInvalidJSON(t *testing.T) {
 	}
 }
 
+// TestSubjectForCommandRoutesInterruptToControlPlane pins the load-bearing
+// fix for the "Stop doesn't interrupt deep tool-use loops" failure mode:
+// interrupt_turn MUST publish to the control-plane subject, not the
+// command subject, so that a runner-side max_ack_pending=1 on the command
+// subject cannot hold the interrupt behind an in-flight submit_turn.
+// If this test ever flips to expect CommandSubject, the migration guard
+// in scripts/check-removed-chat-runtime.mjs is the second line of defense.
+func TestSubjectForCommandRoutesInterruptToControlPlane(t *testing.T) {
+	storage := "session-storage-key"
+	provider := "claude"
+	interrupt := Command{
+		Type:              CommandInterrupt,
+		SessionStorageKey: storage,
+		Provider:          provider,
+	}
+	got := SubjectForCommand(interrupt)
+	want := ControlSubject(storage, provider)
+	if got != want {
+		t.Fatalf("interrupt subject = %q, want %q (control-plane)", got, want)
+	}
+	if got == CommandSubject(storage, provider) {
+		t.Fatalf("interrupt MUST NOT publish to the command subject %q", got)
+	}
+}
+
+// TestSubjectForCommandRoutesDataPlane keeps the existing data-plane
+// commands (submit_turn, input_reply, anything not explicitly control)
+// on the command subject, where the runner's per-session serial consumer
+// processes them one at a time.
+func TestSubjectForCommandRoutesDataPlane(t *testing.T) {
+	storage := "session-storage-key"
+	provider := "claude"
+	for _, ty := range []string{CommandSubmitTurn, CommandInputReply, "unknown_future"} {
+		cmd := Command{
+			Type:              ty,
+			SessionStorageKey: storage,
+			Provider:          provider,
+		}
+		got := SubjectForCommand(cmd)
+		want := CommandSubject(storage, provider)
+		if got != want {
+			t.Fatalf("%s subject = %q, want %q (data plane)", ty, got, want)
+		}
+	}
+}
+
+// TestControlSubjectShape pins the wire format so the runner-shared JS
+// helper (which builds the same shape independently) is mechanically
+// comparable. The shape token order is: subjectRoot, storageToken,
+// "control", sanitizedProvider.
+func TestControlSubjectShape(t *testing.T) {
+	got := ControlSubject("abc", "claude")
+	wantPrefix := "tank.session."
+	wantSuffix := ".control.claude"
+	if !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, wantSuffix) {
+		t.Fatalf("control subject shape = %q, want prefix %q + %q", got, wantPrefix, wantSuffix)
+	}
+	if got == CommandSubject("abc", "claude") {
+		t.Fatalf("control and command subjects collided: %q", got)
+	}
+}
+
 func TestEventTypeForLogExtractsType(t *testing.T) {
 	got := eventTypeForLog([]byte(`{"type":"turn.started","event_id":"x"}`))
 	if got != "turn.started" {

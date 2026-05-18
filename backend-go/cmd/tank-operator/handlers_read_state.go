@@ -28,12 +28,14 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
-		return
-	}
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
+	// The read-state cursor is per-caller, per-session: admin's marker on
+	// someone else's session is admin's own scroll position and doesn't
+	// affect the owner's. So this is treated as a read-side authorization
+	// — admin can advance their cursor in any session, non-admin only in
+	// their own. The Set() call below stores under (user.Email, sessionID)
+	// so the per-caller scoping is preserved either way.
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
 		return
 	}
 

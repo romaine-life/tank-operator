@@ -2,9 +2,10 @@
 
 Sidecar to the claude-container in each session pod. Listens on per-MCP
 localhost ports; .mcp.json points claude at these instead of at the
-in-cluster MCP Services directly. Most MCPs still receive the projected
-ServiceAccount token. GitHub MCP receives a short-lived Tank session
-attestation minted from a separate audience-scoped pod token.
+in-cluster MCP Services directly. Most MCPs receive the projected
+ServiceAccount token; mcp-github and mcp-tank-operator receive an
+auth.romaine.life-issued role=service JWT via the AuthRomaineService
+exchange.
 
 The bug this exists to fix: kubelet rotates the SA token file in-place
 (eager renewal at ~50 min, well inside the default 1h TTL), but env
@@ -47,7 +48,6 @@ from aiohttp import ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
-    record_github_attestation,
     record_proxy_request,
     record_sa_token_read,
     start_metrics_server,
@@ -57,14 +57,8 @@ from .metrics import (
 log = logging.getLogger(__name__)
 
 SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-TANK_ATTESTATION_TOKEN_PATH = Path(
-    os.environ.get(
-        "TANK_SESSION_ATTESTATION_TOKEN_PATH",
-        "/var/run/secrets/tank-operator/token",
-    )
-)
-TANK_OPERATOR_INTERNAL_URL = os.environ.get("TANK_OPERATOR_INTERNAL_URL", "").rstrip("/")
 GITHUB_MCP_PORT = 9992
+GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
 
 # auth.romaine.life service-principal exchange (see
@@ -97,7 +91,7 @@ AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 #   9995 â€” mcp-glimmung
 #   9996 â€” mcp-tank-operator
 LISTENERS: list[tuple[int, str]] = [
-    (9991, "http://mcp-azure-personal.mcp-azure.svc:80"),
+    (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
     (9993, "http://mcp-k8s.mcp-k8s.svc:80"),
     (9994, "http://mcp-argocd.mcp-argocd.svc:80"),
@@ -134,66 +128,6 @@ class ServiceAccountTokenProvider:
             raise
         record_sa_token_read("success")
         return value
-
-
-class TankGitHubAttestationProvider:
-    def __init__(
-        self,
-        http: ClientSession,
-        *,
-        operator_url: str = TANK_OPERATOR_INTERNAL_URL,
-        token_path: Path = TANK_ATTESTATION_TOKEN_PATH,
-        refresh_skew_seconds: float = 30.0,
-    ) -> None:
-        self._http = http
-        self._operator_url = operator_url.rstrip("/")
-        self._token_path = token_path
-        self._refresh_skew_seconds = refresh_skew_seconds
-        self._cached_token = ""
-        self._expires_at = 0.0
-        self._lock = asyncio.Lock()
-
-    async def token(self) -> str:
-        now = time.time()
-        if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
-            record_github_attestation("cache_hit")
-            return self._cached_token
-        async with self._lock:
-            now = time.time()
-            if self._cached_token and self._expires_at > now + self._refresh_skew_seconds:
-                record_github_attestation("cache_hit")
-                return self._cached_token
-            if not self._operator_url:
-                record_github_attestation("exception")
-                raise RuntimeError("TANK_OPERATOR_INTERNAL_URL is required for GitHub MCP auth")
-            try:
-                pod_token = _read_token(self._token_path)
-                async with self._http.post(
-                    f"{self._operator_url}/api/internal/github/attestation",
-                    headers={"Authorization": f"Bearer {pod_token}"},
-                    json={},
-                ) as response:
-                    if response.status != 200:
-                        detail = (await response.text())[:300]
-                        record_github_attestation("http_error")
-                        raise RuntimeError(
-                            f"Tank GitHub MCP attestation request returned {response.status}: {detail}"
-                        )
-                    body = await response.json()
-            except RuntimeError:
-                raise
-            except Exception:
-                record_github_attestation("exception")
-                raise
-            token = str(body.get("token") or "")
-            expires_at = _parse_expires_at(body.get("expires_at"))
-            if not token or expires_at <= time.time():
-                record_github_attestation("invalid_response")
-                raise RuntimeError("Tank GitHub MCP attestation response was invalid")
-            self._cached_token = token
-            self._expires_at = expires_at
-            record_github_attestation("success")
-            return token
 
 
 class AuthRomaineServiceProvider:
@@ -308,7 +242,7 @@ async def _oauth_discovery_not_configured(request: web.Request) -> web.Response:
 
 def _mcp_server_label(upstream: str) -> str:
     """Extract a bounded label from the upstream URL. Example:
-    'http://mcp-azure-personal.mcp-azure.svc:80' → 'mcp-azure-personal'.
+    'http://mcp-azure-personal.mcp-azure-personal.svc:80' → 'mcp-azure-personal'.
     The fallback is the full host string, which is still bounded by the
     LISTENERS map but less Grafana-friendly. Cardinality is the count
     of distinct upstreams (~6), never per-request.
@@ -424,8 +358,9 @@ async def run() -> None:
     metrics_port = int(os.environ.get("MCP_AUTH_PROXY_METRICS_PORT", "9990"))
     metrics_runner = await start_metrics_server(metrics_port)
     runners.append(metrics_runner)
-    # Shared across mcp-tank-operator's outbound calls so the cached
-    # JWT (15-min TTL) is reused across many tool calls in a session.
+    # Shared across mcp-tank-operator and mcp-github outbound calls so
+    # the cached JWT (15-min TTL) is reused across many tool calls in a
+    # session.
     auth_romaine_provider = AuthRomaineServiceProvider(http)
 
     try:
@@ -437,15 +372,23 @@ async def run() -> None:
             # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
             if port == GITHUB_MCP_PORT:
-                token_provider = TankGitHubAttestationProvider(http)
+                # mcp-github verifies the auth.romaine.life service JWT
+                # against the IdP's JWKS and resolves the caller's GitHub
+                # App installation by calling tank-operator's
+                # /api/internal/github/installation with this same bearer
+                # forwarded.
+                token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()
 
-            # mcp-tank-operator gets the auth.romaine.life service JWT
-            # forwarded so its session-management tools can authenticate
-            # to /api/internal/sessions/* . Other MCPs are unaffected.
+            # mcp-tank-operator and mcp-glimmung both gate their tool
+            # surface on the caller's auth.romaine.life service JWT (read
+            # from X-Auth-Romaine-Token because Authorization is consumed
+            # by kube-rbac-proxy in front of each, which strips it before
+            # forwarding upstream). Inject the header so the upstreams
+            # can attribute every call to the originating user.
             extra_header_provider = None
-            if port == TANK_OPERATOR_MCP_PORT:
+            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT):
                 async def _provide_auth_romaine_header(
                     provider=auth_romaine_provider,
                 ) -> tuple[str, str]:

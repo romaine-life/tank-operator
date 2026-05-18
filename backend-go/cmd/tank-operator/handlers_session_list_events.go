@@ -37,6 +37,7 @@ func (s *appServer) handleSessionListTimeline(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
+	owner := listSessionsOwner(user, r)
 	if s.lifecycleEvents == nil {
 		// Stub path (no Postgres): empty page is the correct contract.
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -49,7 +50,7 @@ func (s *appServer) handleSessionListTimeline(w http.ResponseWriter, r *http.Req
 	}
 	cursor := sessionListCursorFromRequest(r)
 	if cursor.AfterOrderKey != "" {
-		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), user.Email, cursor.AfterOrderKey); err != nil {
+		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, cursor.AfterOrderKey); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		} else if !ok {
@@ -63,7 +64,7 @@ func (s *appServer) handleSessionListTimeline(w http.ResponseWriter, r *http.Req
 			limit = n
 		}
 	}
-	page, err := s.lifecycleEvents.ListByOwner(r.Context(), user.Email, cursor, limit)
+	page, err := s.lifecycleEvents.ListByOwner(r.Context(), owner, cursor, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

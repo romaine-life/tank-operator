@@ -509,6 +509,16 @@ func (m *Manager) GetByOwner(ctx context.Context, owner, sessionID string) (Info
 	return info, err
 }
 
+// GetByID retrieves a session by ID without verifying ownership. The
+// returned Info carries the resolved owner so the caller can authorize.
+// Read-only paths use this for admin cross-user reads; writes continue
+// to use GetByOwner so an admin token can't accidentally mutate
+// someone else's session. See backend-go/internal/sessions/sessions.go.
+func (m *Manager) GetByID(ctx context.Context, sessionID string) (Info, error) {
+	info, err := m.reader().GetByID(ctx, sessionID)
+	return info, err
+}
+
 // GetPodName waits up to 90s for the session pod to be ready and returns its name.
 func (m *Manager) GetPodName(ctx context.Context, owner, sessionID string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, podReadyTimeout)

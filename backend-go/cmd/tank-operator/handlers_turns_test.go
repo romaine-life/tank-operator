@@ -76,7 +76,7 @@ func (*recordingSessionBus) SubscribeSessionListEvents(context.Context, string) 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
+	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","effort":"xhigh","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
 
@@ -116,6 +116,60 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	}
 	if got.Prompt != "/test\n\nhello sdk" || got.Model != "claude-sonnet-4-6" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" || !got.FollowUp {
 		t.Fatalf("record payload fields = %#v", got)
+	}
+	// Effort is a load-bearing field on submit_turn: the agent-runner pins
+	// it into SDK Options at pod boot from the first turn, and we want the
+	// allowlist value to survive the round-trip from request body to bus
+	// command. Mirror of the model/permission_mode assertion above.
+	if got.Effort != "xhigh" {
+		t.Fatalf("effort = %q, want xhigh", got.Effort)
+	}
+}
+
+// TestEnqueueSessionTurnRejectsInvalidEffort pins the allowlist enforcement
+// at the choke point. The agent-runner trusts whatever lands on the wire
+// (it casts the string to EffortLevel without re-validating), so a typo
+// or stale UI value MUST be rejected here loudly with a 400 — silently
+// dropping it would either (a) hide a frontend regression or (b) get
+// quietly stripped by Normalize and let the runner fall back to the
+// baked-in default, which looks identical to "the dropdown didn't take
+// effect" from a user's perspective.
+func TestEnqueueSessionTurnRejectsInvalidEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-bad-effort","prompt":"hello","effort":"bogus"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+// TestEnqueueSessionTurnAllowsEmptyEffort pins the "empty means use the
+// runner's baked-in default" mapping. The frontend omits the effort field
+// for Codex (and may omit it for legacy clients); enforce-but-don't-
+// require keeps the wire shape additive across providers.
+func TestEnqueueSessionTurnAllowsEmptyEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-no-effort","prompt":"hello"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Effort; got != "" {
+		t.Fatalf("effort = %q, want empty (runner-default fallback)", got)
 	}
 }
 
@@ -187,6 +241,22 @@ func TestInterruptSessionTurnPublishesControlCommand(t *testing.T) {
 	}
 	if got.Prompt != "" {
 		t.Fatalf("interrupt prompt = %q, want empty", got.Prompt)
+	}
+	// Pin the load-bearing routing: interrupts MUST select the control
+	// subject. If a future refactor sends them back through CommandSubject,
+	// the runner-side max_ack_pending=1 on the command consumer will hold
+	// the interrupt behind the in-flight submit_turn for the full duration
+	// of the turn (the original "Stop doesn't stop deep tool-use loops"
+	// regression). The unit test in internal/sessionbus pins the function;
+	// this test pins that the handler's command Type + StorageKey + Provider
+	// resolve to the same routing decision end-to-end.
+	subject := sessionbus.SubjectForCommand(got)
+	if subject != sessionbus.ControlSubject(got.SessionStorageKey, got.Provider) {
+		t.Fatalf("interrupt subject = %q, want control subject for storage=%q provider=%q",
+			subject, got.SessionStorageKey, got.Provider)
+	}
+	if subject == sessionbus.CommandSubject(got.SessionStorageKey, got.Provider) {
+		t.Fatalf("interrupt MUST NOT publish on the data-plane command subject (%q)", subject)
 	}
 }
 
@@ -300,6 +370,125 @@ func TestEnqueueSessionTurnSurfacesSessionBusFailure(t *testing.T) {
 
 	if resp.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestInterruptPersistsRequestedEventBeforeCommand pins the durable-first
+// ordering: turn.interrupt_requested lands in session_events before the
+// JetStream interrupt_turn command is published. This is the migration's
+// load-bearing invariant — a future refactor that swapped the order would
+// break the refresh-after-stop projection contract.
+func TestInterruptPersistsRequestedEventBeforeCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-70", "70", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedInterruptRequest(t, "70", "turn-active_123")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 1 {
+		t.Fatalf("session-event upserts = %d, want 1 (turn.interrupt_requested)", len(es.upserts))
+	}
+	if got, _ := es.upserts[0]["type"].(string); got != "turn.interrupt_requested" {
+		t.Fatalf("upsert[0].type = %q, want turn.interrupt_requested", got)
+	}
+	if got, _ := es.upserts[0]["turn_id"].(string); got != "turn-active_123" {
+		t.Fatalf("upsert[0].turn_id = %q, want turn-active_123", got)
+	}
+	if got, _ := es.upserts[0]["actor"].(string); got != "system" {
+		t.Fatalf("upsert[0].actor = %q, want system", got)
+	}
+	if got, _ := es.upserts[0]["source"].(string); got != "tank" {
+		t.Fatalf("upsert[0].source = %q, want tank", got)
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if bus.commands[0].Type != sessionbus.CommandInterrupt {
+		t.Fatalf("command type = %q, want %q", bus.commands[0].Type, sessionbus.CommandInterrupt)
+	}
+}
+
+// TestInterruptPersistFailureBlocksCommand asserts the durable-first
+// invariant under failure: if the persist of turn.interrupt_requested
+// fails, NO interrupt_turn command is published. Otherwise the bus would
+// carry a side-effect that the durable ledger doesn't record.
+func TestInterruptPersistFailureBlocksCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-71", "71", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.sessionEvents = &recordingSessionEventStore{err: errors.New("postgres unavailable")}
+	req := authedInterruptRequest(t, "71", "turn-active_123")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0 (persist failed should block publish)", len(bus.commands))
+	}
+}
+
+// TestInterruptPublishFailureLeavesRequestedEventAndCommandFailed: the
+// durable record honestly reflects both the requested boundary and the
+// publish failure. The reducer resolves this chain to error via
+// turn.command_failed, and the chip from turn.interrupt_requested stays
+// as transcript evidence that the user did press Stop.
+func TestInterruptPublishFailureLeavesRequestedEventAndCommandFailed(t *testing.T) {
+	bus := &recordingSessionBus{err: errors.New("nats down")}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-72", "72", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedInterruptRequest(t, "72", "turn-active_123")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2 (interrupt_requested + command_failed)", len(es.upserts))
+	}
+	wantTypes := []string{"turn.interrupt_requested", "turn.command_failed"}
+	for i, want := range wantTypes {
+		if got, _ := es.upserts[i]["type"].(string); got != want {
+			t.Fatalf("upsert[%d].type = %q, want %q", i, got, want)
+		}
+	}
+}
+
+// TestInterruptIsIdempotentByEventID: deterministic event_id collapses a
+// double-click POST to one durable row. The handler returns 202 on each
+// call, but the reducer only sees one chip on replay.
+func TestInterruptIsIdempotentByEventID(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-73", "73", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+
+	for i := 0; i < 2; i++ {
+		req := authedInterruptRequest(t, "73", "turn-active_123")
+		resp := httptest.NewRecorder()
+		app.handleInterruptSessionTurn(resp, req)
+		if resp.Code != http.StatusAccepted {
+			t.Fatalf("call %d: status = %d body = %s", i, resp.Code, resp.Body.String())
+		}
+	}
+
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("handler upsert calls = %d, want 2 (the dedupe happens at the Postgres UNIQUE constraint, not the handler)", len(es.upserts))
+	}
+	if a, _ := es.upserts[0]["event_id"].(string); a == "" {
+		t.Fatal("upsert[0].event_id missing")
+	}
+	a, _ := es.upserts[0]["event_id"].(string)
+	b, _ := es.upserts[1]["event_id"].(string)
+	if a != b {
+		t.Fatalf("event_ids differ: %q vs %q; idempotency requires deterministic event_id keyed in turn_id", a, b)
 	}
 }
 

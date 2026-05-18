@@ -3,6 +3,7 @@ export type ConversationActivityStatus =
   | "submitted"
   | "streaming"
   | "needs_input"
+  | "stopping"
   | "stopped"
   | "error";
 
@@ -21,7 +22,7 @@ export interface SessionActivityChip {
   key: "state" | "unread";
   label: string;
   title: string;
-  tone: "failed" | "input" | "running" | "stopped" | "unread";
+  tone: "failed" | "input" | "running" | "stopping" | "stopped" | "unread";
 }
 
 export function normalizeSessionActivity(value: unknown): SessionActivitySummary | null {
@@ -49,6 +50,7 @@ export function sessionActivityDotStatus(
   if (!isChatMode || sessionStatus !== "Active") return sessionStatus.toLowerCase();
   if (activity?.failed || activity?.status === "error") return "agent-error";
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
+  if (activity?.status === "stopping") return "agent-stopping";
   if (activity?.status === "submitted" || activity?.status === "streaming") {
     return "agent-working";
   }
@@ -65,6 +67,7 @@ export function sessionActivityStatusLabel(
   if (activity?.needs_input || activity?.status === "needs_input") return "Needs input";
   if (activity?.status === "submitted") return "Submitted";
   if (activity?.status === "streaming") return "Running";
+  if (activity?.status === "stopping") return "Stopping";
   if (activity?.status === "stopped") return "Stopped";
   return "Waiting";
 }
@@ -78,6 +81,8 @@ export function sessionActivityChips(
     chips.push({ key: "state", label: "failed", title: "Failed", tone: "failed" });
   } else if (activity.needs_input || activity.status === "needs_input") {
     chips.push({ key: "state", label: "input", title: "Needs input", tone: "input" });
+  } else if (activity.status === "stopping") {
+    chips.push({ key: "state", label: "stopping", title: "Stopping", tone: "stopping" });
   } else if (activity.status === "submitted" || activity.status === "streaming") {
     chips.push({ key: "state", label: "running", title: "Running", tone: "running" });
   } else if (activity.status === "stopped") {
@@ -102,6 +107,7 @@ function activityStatus(value: string | null): ConversationActivityStatus | null
     case "submitted":
     case "streaming":
     case "needs_input":
+    case "stopping":
     case "stopped":
     case "error":
       return value;

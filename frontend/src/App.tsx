@@ -14,6 +14,7 @@ import {
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   PromptInput,
   PromptInputFooter,
@@ -35,6 +36,7 @@ import {
   AlertCircleIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
+  ArrowUpIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -57,6 +59,7 @@ import {
   GlobeIcon,
   ImageIcon,
   InfoIcon,
+  LinkIcon,
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
@@ -166,6 +169,11 @@ type ForkSessionRequest = {
   sourceSession: Session;
   forkedEntry: TranscriptEntry;
   model: string;
+  // effort is Claude-only; codex forks send "" and the runner falls back.
+  // The empty string also matches the agent-runner's "use baked-in
+  // default" branch, so legacy forks created before this field existed
+  // keep working without a migration.
+  effort: string;
   permissionMode: string;
 };
 
@@ -632,6 +640,43 @@ function writeSessionInteraction(id: string, interaction: SessionInteraction): v
   } catch {}
 }
 
+// Per-session transcript-anchor persistence (Stage 2 chat windowing). When
+// the user returns to a long session we want them to land on the last
+// event they were viewing instead of either the head of the ledger (the
+// old 50-page-walk behavior) or always-newest. The order_key is a small
+// string — one entry per session — so localStorage is the right fit.
+//
+// Read/write paths defensive against quota errors and private-mode storage
+// blocks; the fallback chain (saved → first_unread → newest) means losing
+// a key never breaks the load, it just degrades the UX one notch.
+const SDK_TRANSCRIPT_POSITION_KEY_PREFIX = "tank.transcript.position.";
+
+function readSdkTranscriptPosition(sessionId: string): string | null {
+  try {
+    const stored = localStorage.getItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+    );
+    if (typeof stored === "string" && stored) return stored;
+  } catch {}
+  return null;
+}
+
+function writeSdkTranscriptPosition(sessionId: string, orderKey: string): void {
+  if (!orderKey) return;
+  try {
+    localStorage.setItem(
+      SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId,
+      orderKey,
+    );
+  } catch {}
+}
+
+function clearSdkTranscriptPosition(sessionId: string): void {
+  try {
+    localStorage.removeItem(SDK_TRANSCRIPT_POSITION_KEY_PREFIX + sessionId);
+  } catch {}
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -812,6 +857,31 @@ function sessionUrl(id: string): string {
   url.hash = "";
   url.searchParams.set("session", id);
   return url.toString();
+}
+
+// Deep link to a specific message inside a session. Read by
+// readInitialMessageId() on cold start so we can scroll the active
+// session's transcript to the referenced entry. Shape mirrors the
+// existing ?session= contract so URLs compose cleanly when an agent
+// or human pastes one as a shareable pointer.
+function messageUrl(sessionId: string, entryId: string): string {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("session", sessionId);
+  url.searchParams.set("message", entryId);
+  return url.toString();
+}
+
+function readInitialMessageId(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("message");
+}
+
+function clearInitialMessageId(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("message");
+  window.history.replaceState({}, "", url.toString());
 }
 
 function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
@@ -1671,6 +1741,29 @@ function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
 }
 
+// eventCountsAsTailOutput mirrors store/session_events.go's
+// UnreadOutputItemTypes / UnreadOutputTurnTypes — content events that
+// render as new bubbles in the transcript. Lifecycle markers
+// (turn.submitted / turn.started / turn.completed, the user's own
+// user_message.created) are excluded so the pending-tail pill counter
+// only ticks on something the user would actually want to scroll down
+// to see.
+function eventCountsAsTailOutput(event: unknown): boolean {
+  if (!isTankConversationEvent(event)) return false;
+  if (event.actor === "user") return false;
+  const type = event.type;
+  return (
+    type === "item.started" ||
+    type === "item.completed" ||
+    type === "item.failed" ||
+    type === "tool.approval_requested" ||
+    type === "tool.approval_resolved" ||
+    type === "turn.failed" ||
+    type === "turn.command_failed" ||
+    type === "turn.interrupted"
+  );
+}
+
 function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
   if (!isTankConversationEvent(event)) return null;
   const type = event.type;
@@ -2175,14 +2268,42 @@ interface ModelOption {
 
 const CODEX_ACCOUNT_DEFAULT_MODEL_ID = "codex-account-default";
 
+// CLAUDE_MODELS is ordered with the agent-runner's DEFAULT_MODEL first
+// (claude-opus-4-7) so a fresh session lands on the strongest model by
+// default. The id strings are forwarded straight to the SDK's
+// options.model via the bus; tightening to an allowlist lives in the
+// agent-runner's pinning code, not here, because adding a model should
+// be a one-line UI change.
 const CLAUDE_MODELS: ModelOption[] = [
-  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
+  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
 ];
 const CODEX_MODELS: ModelOption[] = [
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
+
+// Extended-thinking effort levels exposed by the Claude Agent SDK
+// (EffortLevel union). The ids are the wire values; the labels carry
+// the cost guidance so users picking xhigh/max know what they're
+// opting into. Keep in lockstep with:
+//   - backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts
+//     (server-side allowlist)
+//   - agent-runner/src/runner.ts DEFAULT_EFFORT (the "high" fallback)
+interface EffortOption {
+  id: string;
+  label: string;
+  hint?: string;
+}
+const CLAUDE_EFFORTS: EffortOption[] = [
+  { id: "low", label: "Low", hint: "Fastest, minimal thinking" },
+  { id: "medium", label: "Medium", hint: "Moderate thinking" },
+  { id: "high", label: "High", hint: "Deep reasoning (default)" },
+  { id: "xhigh", label: "Extra High", hint: "Opus 4.7 only; ~2× tokens" },
+  { id: "max", label: "Max", hint: "Opus 4.6/4.7, Sonnet 4.6 only" },
+];
+const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";
+const DEFAULT_CLAUDE_EFFORT_ID = "high";
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
@@ -2198,6 +2319,15 @@ interface RunPrefs {
   turnCompleteSound: boolean;
   turnCompleteSoundVolume: number;
   chatFontScale: number;
+  // claudeModelId + claudeEffort persist the user's last picks across
+  // sessions so a fresh session opens with them pre-selected. They drive
+  // initial selectedModelId / selectedEffort state in RunPane and are
+  // also written back on every change. Once a turn is submitted the
+  // model + effort are sealed for that session pod's lifetime (see
+  // agent-runner/src/runner.ts), so these prefs only affect the *next*
+  // session created in this browser.
+  claudeModelId: string;
+  claudeEffort: string;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2209,6 +2339,8 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   turnCompleteSound: true,
   turnCompleteSoundVolume: 0.8,
   chatFontScale: 1,
+  claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
+  claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -2231,6 +2363,21 @@ function clampTurnCompleteSoundVolume(value: number): number {
   );
 }
 
+// allowlistFromOptions narrows a localStorage string to the canonical
+// id set for a typed run-pref. The allowlist is what makes a stale or
+// hand-edited pref safe: an unknown value falls back to the default
+// instead of being forwarded to the backend (where it would either be
+// rejected or, worse, accepted as opaque). Returning the trimmed
+// candidate only when the option set contains it keeps the SPA in
+// lockstep with backend-go's allowedClaudeEfforts without re-listing
+// the values here. Empty / unknown → caller's fallback.
+function pickAllowedPrefId(raw: string | null, options: { id: string }[], fallback: string): string {
+  if (raw == null) return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
+}
+
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
@@ -2240,6 +2387,10 @@ function loadRunPrefs(): RunPrefs {
         if (raw != null) out[key] = clampChatFontScale(Number(raw));
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
+      } else if (key === "claudeModelId") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
+      } else if (key === "claudeEffort") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -2265,6 +2416,14 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
       if (typeof raw === "number") out[key] = clampChatFontScale(raw);
     } else if (key === "turnCompleteSoundVolume") {
       if (typeof raw === "number") out[key] = clampTurnCompleteSoundVolume(raw);
+    } else if (key === "claudeModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, prev.claudeModelId);
+      }
+    } else if (key === "claudeEffort") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, prev.claudeEffort);
+      }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
     }
@@ -2658,6 +2817,45 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// LinkButton copies a deep-link URL to this specific transcript entry.
+// The URL is the same shape the SPA reads on cold start
+// (?session=<id>&message=<entry.id>) so a human pasting it lands on the
+// session and scrolls/highlights the entry, while an agent can parse
+// the query params to fetch the underlying event from the API.
+function LinkButton({
+  sessionId,
+  entryId,
+}: {
+  sessionId: string;
+  entryId: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-link"
+      title="Copy link to message"
+      aria-label={copied ? "Link copied" : "Copy link to message"}
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(messageUrl(sessionId, entryId));
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+    >
+      {copied ? (
+        <CheckIcon size={12} aria-hidden="true" />
+      ) : (
+        <LinkIcon size={12} aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 function ForkButton({
   entry,
   onFork,
@@ -2834,6 +3032,8 @@ const RunContext = createContext<{
 function RunMessageBubble({
   entry,
   avatar,
+  sessionId,
+  highlighted,
   showTimestamps,
   showDuration,
   onQuote,
@@ -2841,6 +3041,8 @@ function RunMessageBubble({
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
+  sessionId: string;
+  highlighted: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
@@ -2874,6 +3076,8 @@ function RunMessageBubble({
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
+      data-message-id={entry.id}
+      data-highlight={highlighted ? "true" : undefined}
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
@@ -2924,6 +3128,7 @@ function RunMessageBubble({
           <QuoteButton text={text} style="fence" onQuote={onQuote} />
           <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
           <CopyButton text={text} />
+          <LinkButton sessionId={sessionId} entryId={entry.id} />
         </div>
       </div>
       {variant === "user" && user && (
@@ -3400,63 +3605,170 @@ function RunToolGroup({
   );
 }
 
+// RunMessages renders the durable transcript through react-virtuoso so the
+// DOM stays bounded regardless of session length — Mattermost / Element /
+// Slack / Discord all converge on this architecture (see
+// docs/product-inspirations.md). Without virtualization the DOM grows
+// 15-50 nodes per event; long sessions reach 100K+ nodes and layout cost
+// dominates. With Virtuoso only the visible window plus a small overscan
+// buffer mount at any moment.
+//
+// `customScrollParent` makes Virtuoso reuse the existing <main> as its
+// scroll container — no wrapping/sizing layout changes vs. the prior
+// inline render. The `followOutput` + `startReached` +
+// `atBottomStateChange` props replace the hand-rolled scroll-detect /
+// auto-scroll effects deleted from ChatPane in this stage.
 function RunMessages({
   entries,
   avatar,
+  sessionId,
+  pendingScrollMessageId,
+  onScrollConsumed,
   showThinking,
   autoExpandTools,
   showTimestamps,
   showDuration,
   onQuote,
   onFork,
+  scrollParent,
+  onStartReached,
+  onAtBottomChange,
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
+  sessionId: string;
+  // Set when the SPA cold-started with ?message=<entry.id>. RunMessages
+  // searches the loaded groups for that id and, when found, scrolls
+  // Virtuoso to it and lights up a highlight pulse on the bubble. If
+  // the entry hasn't loaded yet (it sits before the current backfill
+  // window) we leave the id armed; a later `entries` change retries.
+  pendingScrollMessageId?: string | null;
+  // Fired after a successful scroll so the parent can clear the URL
+  // param and stop re-applying the highlight on subsequent renders.
+  onScrollConsumed?: () => void;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  scrollParent: HTMLElement | null;
+  onStartReached?: () => void;
+  onAtBottomChange?: (atBottom: boolean) => void;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  // Highlighted entry is the bubble that should pulse after a deep-link
+  // scroll. We clear it on a timer so re-renders during streaming don't
+  // re-trigger the animation on entries the user is just reading.
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  // Track which message id we've already handled so we don't re-scroll
+  // every time entries change during streaming.
+  const consumedScrollIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = pendingScrollMessageId;
+    if (!target) return;
+    if (consumedScrollIdRef.current === target) return;
+    const groupIndex = groups.findIndex((g) => {
+      if (g.kind === "tools") return g.entries.some((e) => e.id === target);
+      return g.entry.id === target;
+    });
+    if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
+    consumedScrollIdRef.current = target;
+    setHighlightedEntryId(target);
+    const handle = virtuosoRef.current;
+    if (handle) {
+      // align: "center" puts the bubble in the middle of the viewport
+      // so the user can see surrounding context, not just the bubble
+      // wedged against the top edge.
+      handle.scrollToIndex({ index: groupIndex, align: "center", behavior: "smooth" });
+    }
+    onScrollConsumed?.();
+    const timer = window.setTimeout(() => {
+      setHighlightedEntryId((current) => (current === target ? null : current));
+    }, 2400);
+    return () => window.clearTimeout(timer);
+  }, [pendingScrollMessageId, groups, onScrollConsumed]);
+  // computeItemKey stabilizes Virtuoso's per-item identity across renders.
+  // Tool groups have no single id, so we composite the first/last child
+  // ids — same group instance stays the same key as it grows during a
+  // streaming turn.
+  const computeKey = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        const head = g.entries[0]?.id ?? "tools";
+        const tail = g.entries[g.entries.length - 1]?.id ?? head;
+        return `tools-${head}-${tail}`;
+      }
+      return g.entry.id;
+    },
+    [],
+  );
+  const renderItem = useCallback(
+    (_index: number, g: EntryGroup) => {
+      if (g.kind === "tools") {
+        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+      }
+      if (g.kind === "reasoning") {
+        return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
+      }
+      if (g.kind === "meta") {
+        return <RunMetaBlock entry={g.entry} />;
+      }
+      return (
+        <RunMessageBubble
+          entry={g.entry}
+          avatar={avatar}
+          sessionId={sessionId}
+          highlighted={highlightedEntryId === g.entry.id}
+          showTimestamps={showTimestamps}
+          showDuration={showDuration}
+          onQuote={onQuote}
+          onFork={onFork}
+        />
+      );
+    },
+    [
+      autoExpandTools,
+      avatar,
+      highlightedEntryId,
+      onFork,
+      onQuote,
+      sessionId,
+      showDuration,
+      showThinking,
+      showTimestamps,
+    ],
+  );
+  // followOutput="smooth" keeps the user stuck to the live tail when they
+  // ARE at the bottom; releases when they scroll up. Returning false from
+  // followOutput's callback would let us suppress auto-scroll mid-render,
+  // but the default behavior matches what ChatPane wants today (sticky
+  // when at bottom; the buffered pill in ChatPane handles back-read).
+  // startReached fires when the user scrolls within ~`overscan` of the
+  // top — Virtuoso debounces this so rapid scroll doesn't spam fetches.
   return (
-    <div className="run-transcript run-transcript-claude" data-slot="root">
-      {groups.map((g: EntryGroup, idx: number) => {
-        if (g.kind === "tools") {
-          return (
-            <RunToolGroup
-              key={`tools-${g.entries[0].id}-${idx}`}
-              entries={g.entries}
-              autoExpand={autoExpandTools}
-            />
-          );
-        }
-        if (g.kind === "reasoning") {
-          return (
-            <RunReasoningBlock
-              key={g.entry.id}
-              entry={g.entry}
-              showThinking={showThinking}
-            />
-          );
-        }
-        if (g.kind === "meta") {
-          return <RunMetaBlock key={g.entry.id} entry={g.entry} />;
-        }
-        return (
-          <RunMessageBubble
-            key={g.entry.id}
-            entry={g.entry}
-            avatar={avatar}
-            showTimestamps={showTimestamps}
-            showDuration={showDuration}
-            onQuote={onQuote}
-            onFork={onFork}
-          />
-        );
-      })}
-    </div>
+    <Virtuoso
+      ref={virtuosoRef}
+      className="run-transcript run-transcript-claude"
+      data-slot="root"
+      data={groups}
+      customScrollParent={scrollParent ?? undefined}
+      computeItemKey={computeKey}
+      itemContent={renderItem}
+      followOutput="smooth"
+      startReached={onStartReached}
+      atBottomStateChange={onAtBottomChange}
+      // Render two extra screens worth above and below the viewport so
+      // tool-group expansion and markdown reflow don't expose unrendered
+      // gaps mid-scroll.
+      overscan={{ main: 800, reverse: 800 }}
+      // Default initialTopMostItemIndex is the first item; we want the
+      // bottom so caught-up sessions land at the live tail. The minus-1
+      // safeguards against empty arrays (Virtuoso accepts negative indices
+      // as "no anchor").
+      initialTopMostItemIndex={Math.max(groups.length - 1, 0)}
+    />
   );
 }
 
@@ -3466,6 +3778,8 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
+  pendingScrollMessageId,
+  onScrollConsumed,
   runPrefs,
   setRunPref,
   user,
@@ -3475,6 +3789,11 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
+  // Deep-link target the parent extracted from ?message=<id>. Only set
+  // for the ChatPane whose session matches ?session=<id>; other panes
+  // receive null and skip the scroll logic.
+  pendingScrollMessageId?: string | null;
+  onScrollConsumed?: () => void;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
@@ -3503,7 +3822,45 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  const [selectedModelId, setSelectedModelId] = useState<string>(modelOptions[0].id);
+  // Seed model + effort from RunPrefs (browser-persisted) for Claude;
+  // Codex has only one option so it skips RunPrefs. State is local
+  // because the agent-runner seals model + effort at pod boot from the
+  // first submit_turn — switching the dropdown after a turn has been
+  // submitted would silently no-op at the pod, and the UI hides the
+  // launchpad once entries.length > 0 so the user can't try.
+  const initialClaudeModelId = isClaude
+    ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
+        ? runPrefs.claudeModelId
+        : modelOptions[0].id)
+    : modelOptions[0].id;
+  const initialClaudeEffortId = CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
+    ? runPrefs.claudeEffort
+    : DEFAULT_CLAUDE_EFFORT_ID;
+  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialClaudeModelId);
+  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialClaudeEffortId);
+  // Persist-then-set wrappers so the dropdown's onValueChange both
+  // updates local state for the active session and writes the new pick
+  // into RunPrefs for the *next* session this browser opens. Codex
+  // sessions skip the persist because the only Codex model is the
+  // account default — there's no user pick to remember.
+  const setSelectedModelId = useCallback(
+    (id: string) => {
+      setSelectedModelIdState(id);
+      if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
+        setRunPref("claudeModelId", id);
+      }
+    },
+    [isClaude, setRunPref],
+  );
+  const setSelectedEffortId = useCallback(
+    (id: string) => {
+      setSelectedEffortIdState(id);
+      if (CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
+        setRunPref("claudeEffort", id);
+      }
+    },
+    [setRunPref],
+  );
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
   // interval while running so the bar updates without a per-element timer.
@@ -3584,12 +3941,45 @@ function ChatPane({
     "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
   } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  // transcriptScrollEl is a state-backed reference to the <main> element.
+  // Virtuoso's customScrollParent expects the actual DOM node, and React
+  // refs populate AFTER render — passing `ref.current` would give Virtuoso
+  // `null` on first render and the prop wouldn't reactively update when
+  // the ref hydrated. State + callback ref forces a re-render once <main>
+  // mounts so Virtuoso receives the element on the next pass.
+  const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
   const transcriptScrollRef = useRef<HTMLElement | null>(null);
+  const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
+    transcriptScrollRef.current = node;
+    setTranscriptScrollEl(node);
+  }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<boolean> | null>(null);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
+  // Windowed-transcript bookkeeping introduced when /timeline switched from
+  // a 50-page forward walk to anchored reads. `sdkOldestLoadedOrderKeyRef`
+  // tracks the prev-cursor of the loaded window so "Load earlier" can
+  // back-paginate. `sdkFoundOldestRef` / `sdkFoundNewestRef` mirror the
+  // server's found_oldest / found_newest so the UI can hide back- and
+  // forward-paginate affordances at the edges of the ledger. Empty cursor
+  // / unknown booleans default to "we don't know yet" — UI treats that
+  // conservatively (paginate buttons remain visible until proven needed).
+  const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
+  const sdkFoundOldestRef = useRef(false);
+  const sdkFoundNewestRef = useRef(false);
+  const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
+  const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
+  // Streaming-while-back-reading bookkeeping. While the user is reading
+  // older context (atBottom=false), incoming SSE events get appended to
+  // the window — Virtuoso correctly renders them at the bottom of the
+  // virtualized list without moving the user's scroll position. The pill
+  // counter surfaces those events as a clickable "N new messages below ↓"
+  // affordance so the user knows the conversation moved. Cleared when
+  // atBottomStateChange(true) fires. Slack/Discord ship the same pattern.
+  const sdkAtBottomRef = useRef(true);
+  const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
@@ -3605,13 +3995,22 @@ function ChatPane({
     skillName?: string;
     followUp: boolean;
     model: string;
+    // effort is the extended-thinking level the user picked in the
+    // launchpad dropdown; empty string for Codex / pre-feature paths.
+    // The agent-runner pins effort at pod boot from the first turn that
+    // carries a non-empty value, so this is only load-bearing on the
+    // session's very first run object — but every run object carries it
+    // for telemetry parity with model.
+    effort: string;
     permissionMode: string;
     turnStart: number;
     submitAccepted: boolean;
-    stopRequested: boolean;
   } | null>(null);
+  // Mirror of the durable projection's active turn — read, not written.
+  // Run status itself comes from the projection (see applySdkProjectionToUi
+  // and the turn.interrupt_requested handling in conversationReducer), not
+  // from a local flag.
   const activeInterruptTargetRef = useRef<string | null>(null);
-  const stoppingTargetRef = useRef<string | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
   // bursts (sub-ms) and React's key reconciler keeps a stable component
@@ -3684,7 +4083,8 @@ function ChatPane({
     const sdkActive =
       projection.runStatus === "submitted" ||
       projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input";
+      projection.runStatus === "needs_input" ||
+      projection.runStatus === "stopping";
     activeInterruptTargetRef.current = sdkActive
       ? projection.activeClientNonce ?? projection.activeTurnId
       : null;
@@ -3696,25 +4096,20 @@ function ChatPane({
 
     if (currentRunRef.current) {
       if (sdkActive) {
-        setRunStatus(
-          currentRunRef.current.stopRequested || stoppingTargetRef.current
-            ? "stopping"
-            : "running",
-        );
+        setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
         setRunning(true);
       }
       return;
     }
 
     if (sdkActive) {
-      setRunStatus(stoppingTargetRef.current ? "stopping" : "running");
+      setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
       setRunning(true);
       setRunStartedAt((startedAt) => startedAt ?? Date.now());
       setNow(Date.now());
       return;
     }
 
-    stoppingTargetRef.current = null;
     setRunning(false);
     if (projection.runStatus === "error") {
       setRunStatus("error");
@@ -3844,11 +4239,25 @@ function ChatPane({
   function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
-    if (!sdkServerEventsRef.current.some((candidate) => candidate.event_id === event.event_id)) {
+    const alreadySeen = sdkServerEventsRef.current.some(
+      (candidate) => candidate.event_id === event.event_id,
+    );
+    if (!alreadySeen) {
       sdkServerEventsRef.current = orderedConversationEvents([
         ...sdkServerEventsRef.current,
         event,
       ]);
+      // Streaming-back-read pill: count visible-output events that
+      // arrive while the user isn't viewing the live tail. Lifecycle
+      // markers (turn.*, tool.approval_*) shouldn't count — they don't
+      // produce new bubbles, just status transitions. Match the same
+      // policy the server-side UnreadOutputItemTypes uses for badging.
+      if (
+        !sdkAtBottomRef.current &&
+        eventCountsAsTailOutput(event as unknown as JsonObject)
+      ) {
+        setSdkPendingTailCount((count) => count + 1);
+      }
     }
     syncSdkRenderedEntries();
 
@@ -3857,6 +4266,18 @@ function ChatPane({
     if (run && terminal && event.client_nonce === run.id) {
       finalizeSdkRun(run, terminal, { refreshHistory: false });
     }
+  }
+  // handleSdkAtBottomChange is the durable boolean source from Virtuoso
+  // for "is the user viewing the live tail." Replaces the prior 24px
+  // scrollTop hysteresis listener. Two side effects:
+  //   - Mirror to userScrolledUp so the existing scroll-to-bottom button
+  //     visibility CSS still works.
+  //   - When transitioning to atBottom=true, clear the pending-tail
+  //     pill counter — the user has now seen those events.
+  function handleSdkAtBottomChange(atBottom: boolean): void {
+    sdkAtBottomRef.current = atBottom;
+    setUserScrolledUp(!atBottom);
+    if (atBottom) setSdkPendingTailCount(0);
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -3964,28 +4385,11 @@ function ChatPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, queuedMessages]);
 
-  // Auto-scroll the transcript to the bottom when entries grow, unless
-  // the user has scrolled away. Mirrors cloudcli's `autoScrollToBottom`
-  // + wheel-detection behaviour.
-  useEffect(() => {
-    if (userScrolledUp) return;
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    main.scrollTop = main.scrollHeight;
-  }, [entries.length, userScrolledUp, visible, activeTab]);
-
-  // Detect user scroll-away from the bottom. Threshold of 24px so small
-  // overshoots (image loads) don't disable auto-scroll.
-  useEffect(() => {
-    const main = transcriptScrollRef.current;
-    if (!main) return;
-    const onScroll = () => {
-      const distanceFromBottom = main.scrollHeight - main.scrollTop - main.clientHeight;
-      setUserScrolledUp(distanceFromBottom > 24);
-    };
-    main.addEventListener("scroll", onScroll, { passive: true });
-    return () => main.removeEventListener("scroll", onScroll);
-  }, []);
+  // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
+  // keeps the user pinned to the live tail when at-bottom, and
+  // `atBottomStateChange` is the durable boolean source for
+  // `setUserScrolledUp` (no more 24px hysteresis listener, no more manual
+  // scrollTop=scrollHeight effect). See RunMessages for the wiring.
 
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
@@ -4016,6 +4420,19 @@ function ChatPane({
     );
   }
 
+  // refreshSdkRunHistoryResult loads the durable transcript through a
+  // single anchored read instead of the prior 50-page forward walk from
+  // order_key=0. The old loop was the root cause of the mid-load scroll
+  // "dance": rendering as each 1000-event page arrived extended the DOM
+  // under the user's eyes, so any user scroll-down latched off the
+  // auto-scroll effect and the next page rendered with stale scroll
+  // position. Per docs/migration-policy.md the old path is deleted, not
+  // kept as a fallback.
+  //
+  // Anchor resolution: prefer the saved per-session position from
+  // localStorage (so reopening a session lands where the user left off),
+  // fall back to anchor=first_unread (server resolves to
+  // last_read_order_key), final fallback to anchor=newest.
   function refreshSdkRunHistoryResult(
     showHint: boolean,
     clearRealtime = false,
@@ -4023,55 +4440,84 @@ function ChatPane({
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
-    const events: unknown[] = [];
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      let afterOrderKey = "";
-      for (let page = 0; page < 50; page += 1) {
-        const params = new URLSearchParams({ limit: "1000" });
-        if (afterOrderKey) params.set("after_order_key", afterOrderKey);
-        const res = await authedFetch(
-          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
-        );
-        if (!res.ok) return { replayed: false };
-        const body = (await res.json()) as {
-          session_id?: string;
-          events?: unknown[];
-          next_order_key?: string;
-          has_more?: boolean;
-          read_state?: { last_read_order_key?: unknown } | null;
-        };
-        if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
-        const lastReadOrderKey = body.read_state?.last_read_order_key;
-        if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
-          sdkLastReadSentRef.current = advanceTimelineCursor(
-            sdkLastReadSentRef.current,
-            lastReadOrderKey,
-          );
-        }
-        if (!Array.isArray(body.events)) return { replayed: false };
-        events.push(...body.events);
-        const previousAfter = afterOrderKey;
-        const nextAfter = typeof body.next_order_key === "string" ? body.next_order_key : "";
-        if (nextAfter) {
-          afterOrderKey = nextAfter;
-          sdkTimelineCursorRef.current = advanceTimelineCursor(
-            sdkTimelineCursorRef.current,
-            nextAfter,
-          );
-        }
-        if (!body.has_more) break;
-        if (!nextAfter || nextAfter === previousAfter) break;
+      const savedAnchor = readSdkTranscriptPosition(refreshSessionId);
+      const params = new URLSearchParams();
+      if (savedAnchor) {
+        params.set("anchor", savedAnchor);
+        params.set("num_before", "100");
+        params.set("num_after", "100");
+      } else {
+        params.set("anchor", "first_unread");
+        params.set("num_before", "100");
+        params.set("num_after", "100");
       }
-
+      let res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      // If the saved anchor was pruned/never existed, server returns 409;
+      // fall through to first_unread which never 409s (the server degrades
+      // to tail when read state is empty or fully caught up).
+      if (res.status === 409 && savedAnchor) {
+        clearSdkTranscriptPosition(refreshSessionId);
+        const fallback = new URLSearchParams({
+          anchor: "first_unread",
+          num_before: "100",
+          num_after: "100",
+        });
+        res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${fallback.toString()}`,
+        );
+      }
+      if (!res.ok) return { replayed: false };
+      const body = (await res.json()) as {
+        session_id?: string;
+        events?: unknown[];
+        next_order_key?: string;
+        prev_order_key?: string;
+        has_more?: boolean;
+        found_oldest?: boolean;
+        found_newest?: boolean;
+        read_state?: { last_read_order_key?: unknown } | null;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+      const lastReadOrderKey = body.read_state?.last_read_order_key;
+      if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
+        sdkLastReadSentRef.current = advanceTimelineCursor(
+          sdkLastReadSentRef.current,
+          lastReadOrderKey,
+        );
+      }
+      if (!Array.isArray(body.events)) return { replayed: false };
       const canonicalEvents: TankConversationEvent[] = [];
-      for (const ev of events) {
+      for (const ev of body.events) {
         if (isTankConversationEvent(ev)) {
           advanceSdkTimelineCursor(ev);
           canonicalEvents.push(ev);
         }
       }
+      // Forward cursor advances to next_order_key — the SSE stream resumes
+      // from this point so we don't re-emit events already in the window.
+      const nextAfter =
+        typeof body.next_order_key === "string" ? body.next_order_key : "";
+      if (nextAfter) {
+        sdkTimelineCursorRef.current = advanceTimelineCursor(
+          sdkTimelineCursorRef.current,
+          nextAfter,
+        );
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      const foundNewest = body.found_newest === true;
+      sdkFoundOldestRef.current = foundOldest;
+      sdkFoundNewestRef.current = foundNewest;
+      setSdkFoundOldest(foundOldest);
       const terminal = clientNonce
-        ? sdkHistoryTerminalForRun(events, clientNonce)
+        ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
       replaceSdkServerEvents(
@@ -4085,6 +4531,163 @@ function ChatPane({
       return { replayed: true, terminal };
     };
     return load().catch(() => ({ replayed: false }));
+  }
+
+  // loadSdkOlderEvents fetches one bounded page of events strictly older
+  // than the current window's oldest event. Surfaced through the "Earlier
+  // messages" affordance at the top of the transcript. Each click brings
+  // 100 more events into the window; the UI hides the button once
+  // sdkFoundOldest flips true.
+  async function loadSdkOlderEvents(): Promise<void> {
+    const refreshSessionId = session.id;
+    const oldest = sdkOldestLoadedOrderKeyRef.current;
+    if (!oldest) return;
+    if (sdkFoundOldestRef.current) return;
+    if (sdkLoadingOlder) return;
+    setSdkLoadingOlder(true);
+    try {
+      const params = new URLSearchParams({
+        before_order_key: oldest,
+        limit: "100",
+      });
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      );
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        events?: unknown[];
+        prev_order_key?: string;
+        found_oldest?: boolean;
+      };
+      if (sessionIdRef.current !== refreshSessionId) return;
+      if (!Array.isArray(body.events)) return;
+      const olderEvents: TankConversationEvent[] = [];
+      for (const ev of body.events) {
+        if (isTankConversationEvent(ev)) olderEvents.push(ev);
+      }
+      if (olderEvents.length > 0) {
+        // Merge: existing server events stay at the tail of the array;
+        // older page goes to the head. orderedConversationEvents
+        // sorts ASC by order_key so insertion order doesn't matter, but
+        // doing a head-merge keeps the conceptual model honest.
+        sdkServerEventsRef.current = orderedConversationEvents([
+          ...olderEvents,
+          ...sdkServerEventsRef.current,
+        ]);
+        syncSdkRenderedEntries();
+      }
+      const prevAfter =
+        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+      if (prevAfter) {
+        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      }
+      const foundOldest = body.found_oldest === true;
+      if (foundOldest) {
+        sdkFoundOldestRef.current = true;
+        setSdkFoundOldest(true);
+      }
+    } finally {
+      setSdkLoadingOlder(false);
+    }
+  }
+
+  // jumpSdkToOldest resets the window to the head of the ledger. Symmetric
+  // counterpart of jumpSdkToLatest — drives the "scroll to start" floating
+  // button next to scroll-to-bottom. Always refetches (anchor=oldest)
+  // rather than walking the entire ledger client-side, so the round-trip
+  // cost is O(limit) regardless of session length. The handler is the
+  // dedicated anchor=oldest path added in handlers_session_events.go,
+  // which dispatches an indexed ASC scan from the head with
+  // FoundOldest=true.
+  async function jumpSdkToOldest(): Promise<void> {
+    const refreshSessionId = session.id;
+    const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      events?: unknown[];
+      next_order_key?: string;
+      prev_order_key?: string;
+      found_oldest?: boolean;
+      found_newest?: boolean;
+    };
+    if (sessionIdRef.current !== refreshSessionId) return;
+    if (!Array.isArray(body.events)) return;
+    const canonicalEvents: TankConversationEvent[] = [];
+    for (const ev of body.events) {
+      if (isTankConversationEvent(ev)) {
+        advanceSdkTimelineCursor(ev);
+        canonicalEvents.push(ev);
+      }
+    }
+    // Forward cursor: events newer than this page exist only if found_newest
+    // is false. The SSE stream resumes at next_order_key; we don't drop the
+    // SSE cursor here because the user can scroll forward into territory
+    // already covered by the live tail subscriber.
+    const nextAfter =
+      typeof body.next_order_key === "string" ? body.next_order_key : "";
+    if (nextAfter) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        nextAfter,
+      );
+    }
+    const prevAfter =
+      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+    // anchor=oldest always sets found_oldest=true server-side; mirror it.
+    sdkFoundOldestRef.current = body.found_oldest === true;
+    sdkFoundNewestRef.current = body.found_newest === true;
+    setSdkFoundOldest(body.found_oldest === true);
+    replaceSdkServerEvents(canonicalEvents, false);
+  }
+
+  // jumpSdkToLatest resets the window to the live tail. If the SPA never
+  // back-paginated (foundNewest=true), this is a no-op fast path: the
+  // existing DOM bottom is the live tail, so the caller can just scroll.
+  // If the user back-paginated past the live tail, we drop the window
+  // and refetch — that's the "stale tail" path mentioned in the plan.
+  async function jumpSdkToLatest(): Promise<void> {
+    if (sdkFoundNewestRef.current) return;
+    const refreshSessionId = session.id;
+    const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as {
+      events?: unknown[];
+      next_order_key?: string;
+      prev_order_key?: string;
+      found_oldest?: boolean;
+      found_newest?: boolean;
+    };
+    if (sessionIdRef.current !== refreshSessionId) return;
+    if (!Array.isArray(body.events)) return;
+    const canonicalEvents: TankConversationEvent[] = [];
+    for (const ev of body.events) {
+      if (isTankConversationEvent(ev)) {
+        advanceSdkTimelineCursor(ev);
+        canonicalEvents.push(ev);
+      }
+    }
+    const nextAfter =
+      typeof body.next_order_key === "string" ? body.next_order_key : "";
+    if (nextAfter) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        nextAfter,
+      );
+    }
+    const prevAfter =
+      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+    sdkFoundOldestRef.current = body.found_oldest === true;
+    sdkFoundNewestRef.current = body.found_newest === true;
+    setSdkFoundOldest(body.found_oldest === true);
+    replaceSdkServerEvents(canonicalEvents, false);
   }
 
   useEffect(() => {
@@ -4358,6 +4961,9 @@ function ChatPane({
 
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
+  // The cleanup also persists the user's last-viewing cursor for the
+  // departing session so reopening lands at the same spot (Stage 2 chat
+  // windowing).
   useEffect(() => {
     sessionIdRef.current = session.id;
     sdkServerEntriesRef.current = [];
@@ -4367,9 +4973,15 @@ function ChatPane({
     sdkConversationStateRef.current = initialConversationState;
     sdkAssistantDurationsRef.current = new Map();
     sdkTimelineCursorRef.current = null;
+    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkFoundOldestRef.current = false;
+    sdkFoundNewestRef.current = false;
+    setSdkFoundOldest(false);
+    setSdkLoadingOlder(false);
+    sdkAtBottomRef.current = true;
+    setSdkPendingTailCount(0);
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
-    stoppingTargetRef.current = null;
     setEntries([]);
     setQueuedMessages([]);
     historyRefreshRef.current = null;
@@ -4378,6 +4990,20 @@ function ChatPane({
     setSdkConnectionState("idle");
     setRunStatus("idle");
     setRunning(false);
+    const departingSessionId = session.id;
+    return () => {
+      // Persist transcript position only when the user has back-paginated
+      // past the live tail; otherwise the default first_unread / newest
+      // anchor on reopen is already the right place to land. Save the
+      // last_order_key of the loaded window — the next open uses it as
+      // the anchor and EventsAround re-centers around that point.
+      const newest = sdkTimelineCursorRef.current;
+      if (newest && sdkFoundNewestRef.current === false) {
+        writeSdkTranscriptPosition(departingSessionId, newest);
+      } else {
+        clearSdkTranscriptPosition(departingSessionId);
+      }
+    };
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -4693,9 +5319,14 @@ function ChatPane({
   }
 
   function cancelRun() {
-    const run = currentRunRef.current;
-    if (run?.stopRequested || stoppingTargetRef.current) return;
-    const interruptTarget = run?.id ?? activeInterruptTargetRef.current;
+    // Stop is a durable boundary: cancelRun POSTs and the projection
+    // transitions runStatus → "stopping" off the resulting durable
+    // turn.interrupt_requested event. cancelRun does not set runStatus
+    // imperatively — see frontend/src/migrationPolicy.test.ts for the
+    // gate that pins this invariant.
+    const currentStatus = sdkConversationStateRef.current.runStatus;
+    if (currentStatus === "stopping" || currentStatus === "stopped") return;
+    const interruptTarget = activeInterruptTargetRef.current;
     if (!interruptTarget) {
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
@@ -4706,32 +5337,13 @@ function ChatPane({
       );
       return;
     }
-    if (run) {
-      run.stopRequested = true;
-    }
-    stoppingTargetRef.current = interruptTarget;
-    setLastStatusText(null);
-    setRunStatus("stopping");
-    setRunning(true);
-    if (run && !run.submitAccepted) return;
-    void requestSdkInterrupt(interruptTarget, run);
+    void requestSdkInterrupt(interruptTarget);
   }
 
-  async function requestSdkInterrupt(
-    turnID: string,
-    run: NonNullable<typeof currentRunRef.current> | null,
-  ): Promise<void> {
+  async function requestSdkInterrupt(turnID: string): Promise<void> {
     try {
       await interruptSdkTurn(turnID);
     } catch (err) {
-      if (run && currentRunRef.current?.id === run.id) {
-        run.stopRequested = false;
-      }
-      if (stoppingTargetRef.current === turnID) {
-        stoppingTargetRef.current = null;
-      }
-      setRunStatus("running");
-      setRunning(true);
       setLastStatusText("Stop failed");
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
@@ -4824,6 +5436,13 @@ function ChatPane({
         client_nonce: run.id,
         prompt: run.prompt,
         model: run.model,
+        // effort is forwarded only when set — the backend's
+        // validateEffort treats empty string as "use the runner's
+        // baked-in default" rather than rejecting. Sending "" on
+        // every turn would still work but obscures the intent in
+        // request logs; the omit-when-empty keeps the wire shape
+        // clean for non-Claude sessions.
+        ...(run.effort ? { effort: run.effort } : {}),
         permission_mode: run.permissionMode,
         skill_name: run.skillName,
         follow_up: run.followUp,
@@ -4913,10 +5532,14 @@ function ChatPane({
       skillName,
       followUp,
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
+      // effort is Claude-only; Codex sessions send empty and the agent-
+      // runner's pinning code falls back to its default. Sending the
+      // empty string from Codex paths keeps the run object shape stable
+      // across providers.
+      effort: isClaude ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
-      stopRequested: false,
     };
     currentRunRef.current = run;
     const optimisticTime = nowIso();
@@ -4951,18 +5574,11 @@ function ChatPane({
       .then(() => {
         if (currentRunRef.current?.id !== run.id) return;
         run.submitAccepted = true;
-        if (run.stopRequested) {
-          void requestSdkInterrupt(run.id, run);
-          return;
-        }
         setSdkConnectionState("connected");
       })
       .catch((err) => {
         if (currentRunRef.current?.id !== run.id) return;
         currentRunRef.current = null;
-        if (stoppingTargetRef.current === run.id) {
-          stoppingTargetRef.current = null;
-        }
         setRunning(false);
         setRunStatus("error");
         setSdkConnectionState("idle");
@@ -4989,9 +5605,6 @@ function ChatPane({
   ): void {
     if (currentRunRef.current?.id !== run.id) return;
     currentRunRef.current = null;
-    if (stoppingTargetRef.current === run.id) {
-      stoppingTargetRef.current = null;
-    }
     const durationMs = Date.now() - run.turnStart;
     updateSdkLastAssistantDuration(durationMs);
     if (terminal.status === "done") {
@@ -5094,6 +5707,15 @@ function ChatPane({
   const rolloutActionActive = currentSkillState === "rollout";
   const selectedModel =
     modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
+  // Derived label for the launchpad's "Ready to use" status line; falls
+  // back to "High" rather than empty when the persisted value drifted
+  // out of the allowlist so the status line never reads as "...
+  // effort.". The DEFAULT_CLAUDE_EFFORT_ID resolution mirrors the
+  // agent-runner's DEFAULT_EFFORT fallback so the SPA and pod show the
+  // same thing.
+  const selectedEffortLabel =
+    (CLAUDE_EFFORTS.find((e) => e.id === selectedEffortId)?.label) ??
+    (CLAUDE_EFFORTS.find((e) => e.id === DEFAULT_CLAUDE_EFFORT_ID)?.label ?? "High");
   const contextWindow = getContextWindow(selectedModel.id);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
@@ -5266,7 +5888,7 @@ function ChatPane({
 
       <main
         className={`run-main run-main-${runStatus}`}
-        ref={transcriptScrollRef as React.RefObject<HTMLElement>}
+        ref={transcriptScrollCallbackRef}
         style={chatFontScaleStyle}
       >
         {activeTab === "files" ? (
@@ -5676,17 +6298,77 @@ function ChatPane({
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
+                {isClaude && (
+                  <>
+                    <DropdownMenuLabel>Effort</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={selectedEffortId}
+                      onValueChange={setSelectedEffortId}
+                    >
+                      {CLAUDE_EFFORTS.map((opt) => (
+                        <DropdownMenuRadioItem key={opt.id} value={opt.id}>
+                          {opt.label}
+                          {opt.hint ? (
+                            <span className="run-model-menu-hint"> — {opt.hint}</span>
+                          ) : null}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             <p className="run-empty-status">
-              Ready to use {selectedModel.label}. Start typing your message below.
+              Ready to use {selectedModel.label}
+              {isClaude ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
             </p>
             <p className="run-empty-kbd">
               Press <kbd>⌘K</kbd> to switch model
             </p>
+            {isClaude && (
+              <p className="run-empty-lock-hint">
+                Model and effort are fixed for this session once you send the first message.
+              </p>
+            )}
           </div>
         ) : (
           <>
+            {/* Passive top-of-transcript indicator. Replaces the prior
+                explicit "Load earlier messages" button: the auto-load on
+                Virtuoso's startReached (wired below) is the affordance now,
+                matching Slack and Discord. Three states:
+                  - sdkLoadingOlder: spinner-ish "Loading earlier messages…"
+                    surfaced while the back-paginate fetch is in flight so
+                    the user has feedback that the silent scroll-up triggered
+                    something.
+                  - sdkFoundOldest: a "Beginning of conversation" divider so
+                    the user can tell they've hit the head of the ledger
+                    instead of just a scroll-stop with no explanation.
+                  - otherwise: nothing — older content sits virtualized just
+                    above the viewport and reveals itself as the user scrolls.
+                Both states are status, not actions; the SDk loading marker
+                gets role="status" so screenreaders announce it. */}
+            {sdkLoadingOlder ? (
+              <div
+                className="run-transcript-load-older run-transcript-load-older-passive"
+                role="status"
+                aria-live="polite"
+              >
+                Loading earlier messages…
+              </div>
+            ) : sdkFoundOldest && entries.length > 0 ? (
+              <div
+                className="run-transcript-beginning"
+                role="status"
+                aria-label="Beginning of conversation"
+              >
+                <span className="run-transcript-beginning-rule" aria-hidden="true" />
+                <span className="run-transcript-beginning-label">
+                  Beginning of conversation
+                </span>
+                <span className="run-transcript-beginning-rule" aria-hidden="true" />
+              </div>
+            ) : null}
             {continueHintVisible && (
               <div className="run-continue-hint" role="status">
                 Continuing previous conversation
@@ -5695,6 +6377,9 @@ function ChatPane({
             <RunMessages
               entries={entries}
               avatar={sessionAvatar}
+              sessionId={session.id}
+              pendingScrollMessageId={pendingScrollMessageId}
+              onScrollConsumed={onScrollConsumed}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               showTimestamps={runPrefs.showTimestamps}
@@ -5708,9 +6393,18 @@ function ChatPane({
                     selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
                       ? ""
                       : selectedModelId,
+                  // Fork inherits the source pane's effort pick so the
+                  // forked pod boots with the same reasoning depth the
+                  // user had been working at. Codex forks send "".
+                  effort: isClaude ? selectedEffortId : "",
                   permissionMode: composerMode,
                 })
               }
+              scrollParent={transcriptScrollEl}
+              onStartReached={() => {
+                void loadSdkOlderEvents();
+              }}
+              onAtBottomChange={handleSdkAtBottomChange}
             />
           </>
         )}
@@ -5760,24 +6454,75 @@ function ChatPane({
         </div>
       )}
 
-      {/* Floating scroll-to-bottom button — fades in when the transcript
-          has been scrolled up. Snaps the user back to the latest message
-          and re-enables auto-scroll. Always rendered so the opacity
-          transition reads cleanly; pointer-events handled in CSS. */}
+      {/* Floating jump-to-start button — symmetric with jump-to-latest.
+          Slack/Discord ship the pair: ↑ takes you to the very first
+          message of the session (anchor=oldest), ↓ takes you back to the
+          live tail. Visible when the user isn't already at the head AND
+          the ledger isn't tiny enough that "start" is already on screen
+          (loaded window doesn't include the oldest event yet). Hidden
+          while scrolled-to-bottom on a fresh session so the at-tail UI
+          isn't cluttered. Sits above the scroll-to-bottom button. */}
+      {activeTab === "chat" && entries.length > 0 && !sdkFoundOldest && userScrolledUp && (
+        <button
+          type="button"
+          className="run-scroll-to-top"
+          onClick={() => {
+            const reachOldest = async () => {
+              await jumpSdkToOldest();
+              // Don't clear sdkPendingTailCount — those events are still
+              // unread, just no longer "below" the user; the pill on the
+              // scroll-to-bottom button stays informative.
+              requestAnimationFrame(() => {
+                const main = transcriptScrollRef.current;
+                if (main) main.scrollTop = 0;
+              });
+            };
+            void reachOldest();
+          }}
+          aria-label="Scroll to beginning of conversation"
+        >
+          <ArrowUpIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+        </button>
+      )}
+
+      {/* Floating scroll-to-bottom button — fades in when the user has
+          scrolled away from the live tail (atBottom=false). When new
+          events have streamed in during a back-read the button shows
+          "N new" so the user knows the conversation moved (Slack /
+          Discord pattern). Click reaches the live tail in one round-trip
+          — refetching the tail if the user back-paginated past it. */}
       {activeTab === "chat" && entries.length > 0 && (
         <button
           type="button"
           className={`run-scroll-to-bottom${
             userScrolledUp ? "" : " run-scroll-to-bottom-hidden"
-          }`}
+          }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
-            const main = transcriptScrollRef.current;
-            if (main) main.scrollTop = main.scrollHeight;
-            setUserScrolledUp(false);
+            const reachNewest = async () => {
+              await jumpSdkToLatest();
+              setUserScrolledUp(false);
+              setSdkPendingTailCount(0);
+              // Belt-and-suspenders: scroll on the next frame in case
+              // Virtuoso's followOutput hasn't repositioned yet.
+              requestAnimationFrame(() => {
+                const main = transcriptScrollRef.current;
+                if (main) main.scrollTop = main.scrollHeight;
+              });
+            };
+            void reachNewest();
           }}
-          aria-label="Scroll to latest"
+          aria-label={
+            sdkPendingTailCount > 0
+              ? `${sdkPendingTailCount} new messages below`
+              : "Scroll to latest"
+          }
         >
           <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+          {sdkPendingTailCount > 0 && (
+            <span className="run-scroll-to-bottom-count">
+              {sdkPendingTailCount > 99 ? "99+" : sdkPendingTailCount}
+            </span>
+          )}
         </button>
       )}
 
@@ -6239,6 +6984,7 @@ function ChatPane({
                 className="run-submit-btn"
                 status={submitStatus}
                 onStop={cancelRun}
+                isStopping={runStatus === "stopping"}
                 disabled={!ready}
               >
                 {/* When idle, force the cloudcli-style paper-plane icon.
@@ -6468,6 +7214,18 @@ export function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState("");
   const initialSessionId = useRef<string | null>(readInitialSessionId());
+  // ?message=<entry.id> deep link, captured once at boot. We keep it in
+  // state (not a ref) so React re-renders the matching ChatPane with
+  // the prop populated; that pane consumes it via onScrollConsumed,
+  // which clears state + URL param so back/forward navigation doesn't
+  // re-scroll.
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
+    readInitialMessageId,
+  );
+  const consumePendingScroll = useCallback(() => {
+    setPendingScrollMessageId(null);
+    clearInitialMessageId();
+  }, []);
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
   );
@@ -6915,6 +7673,9 @@ export function App() {
           client_nonce: newForkTurnId(),
           prompt,
           model: request.model,
+          // Same omit-when-empty rule as enqueueSdkTurn: don't carry an
+          // empty effort on the wire for Codex forks.
+          ...(request.effort ? { effort: request.effort } : {}),
           permission_mode: request.permissionMode,
           follow_up: false,
         }),
@@ -7523,6 +8284,12 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
+                      pendingScrollMessageId={
+                        pendingScrollMessageId && active === s.id
+                          ? pendingScrollMessageId
+                          : null
+                      }
+                      onScrollConsumed={consumePendingScroll}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}

@@ -99,6 +99,7 @@
         "turn.completed",
         "turn.failed",
         "turn.command_failed",
+        "turn.interrupt_requested",
         "turn.interrupted",
         "item.started",
         "item.completed",
@@ -282,6 +283,19 @@
               "reason": { "type": "string", "minLength": 1 }
             }
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "turn.interrupt_requested" } },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" }
         }
       }
     },

@@ -144,16 +144,28 @@ func main() {
 		ReaderMetrics:     promSessionReaderMetrics{},
 	})
 
-	// 10. Init auth signer + verifier (RS256, signing key in KV).
+	// 10. Init auth signer + verifier (RS256). Two key sources:
+	//   - KV-backed `tank-operator-jwt-signing` for legacy tank-operator-
+	//     minted JWTs (browser cookies issued by /api/auth/exchange).
+	//   - auth.romaine.life's published JWKS for JWTs the platform IdP
+	//     mints directly (admin bot tokens from /admin/bot-tokens,
+	//     future service-role tokens, anything else issued by
+	//     auth.romaine.life itself).
+	// The chained resolver tries both and short-circuits on the first
+	// success. Key namespaces are disjoint in production — auth.romaine
+	// .life signs with auth-jwt-signing, tank-operator signs with
+	// tank-operator-jwt-signing — so the chain produces a deterministic
+	// answer per kid.
 	jwtKey, err := buildJWTSigner(azCred)
 	if err != nil {
 		slog.Error("JWT signing key failed", "error", err)
 		os.Exit(1)
 	}
-	// Access gate is the role claim on the auth.romaine.life JWT (verified at
-	// exchange time and stamped onto the tank-operator session JWT). The
-	// Verifier just checks role ∈ {admin, user}; no per-tank email allowlist.
-	verifier := auth.NewVerifier(jwtKey)
+	keyResolver := auth.NewChainedKeyResolver(
+		auth.NewRomaineLifeKeyResolver(),
+		jwtKey,
+	)
+	verifier := auth.NewVerifier(keyResolver)
 	minter := auth.NewMinter(jwtKey, jwtKey)
 
 	// 11. Start reaper.

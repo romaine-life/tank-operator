@@ -32,6 +32,15 @@ const ignoredFiles = new Set([
 const ignoredRelativePaths = new Set([
   "scripts/check-removed-chat-runtime.mjs",
   "scripts/check-tank-conversation-contract.mjs",
+  // The stop-request migration's completion manifest catalogues the
+  // retired symbols as grep targets. Excluded so this guard doesn't
+  // fire on its sibling guard's expectations.
+  "scripts/check-stop-request-migration.mjs",
+  // The protocol doc explains the migration by naming the retired
+  // symbols in prose ("the retired stopRequested / stoppingTargetRef
+  // UI-mirror"). This is documentation, not live code — the guard is
+  // there to block reintroduction in implementation files.
+  "docs/tank-conversation-protocol.md",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
   // The observability test asserts /debug/vars returns 404 (the negative
@@ -313,6 +322,57 @@ const blocked = [
   {
     name: "removed pod-only Reader.List fallback enumeration",
     pattern: /for\s+_,\s+pod\s+:=\s+range\s+podOrder\s+\{[\s\S]{0,300}?info\s*:=\s*infoFromPod/,
+  },
+  // UI-local stop optimism retired in the turn.interrupt_requested
+  // migration. `stopping` is now a projection-driven run status sourced
+  // from the durable turn.interrupt_requested event; the local flag and
+  // its paired ref were the UI mirror that contradicted durable state
+  // (the smell named in docs/quality-timeframes.md's review heuristics).
+  // The literal setRunStatus("stopping") imperative call is allowed in
+  // applySdkProjectionToUi (projection-driven) but forbidden in cancelRun
+  // — that boundary is pinned by frontend/src/migrationPolicy.test.ts,
+  // which has finer-grained function-body awareness than this script.
+  { name: "retired local stop-request flag", pattern: /\bstopRequested\b/ },
+  { name: "retired stopping-target ref",     pattern: /\bstoppingTargetRef\b/ },
+  // Stage 2 chat-windowing cutover (PR #503): the SPA used to fetch the
+  // entire ledger forward from order_key=0 in a 50-page loop of 1000-event
+  // pages. The DOM extended under the user's eyes mid-load and produced
+  // the "scroll down, scroll bar learns there's more, repeat 3-4×"
+  // dance. Replaced with one anchored read (anchor=first_unread by
+  // default, fallback to anchor=newest) + bounded back-paginate via
+  // before_order_key. Block re-introduction of the old shapes so a
+  // future refactor can't quietly rebuild the forward walk.
+  { name: "removed 50-page forward-walk loop", pattern: /for\s*\(\s*let\s+page\s*=\s*0\s*;\s*page\s*<\s*50\b/ },
+  { name: "removed 1000-event-per-page timeline fetch", pattern: /limit:\s*["']1000["']/ },
+  // Stage 3 (PR #503): hand-rolled scroll-detect hysteresis. Replaced
+  // by react-virtuoso's atBottomStateChange callback, which is the
+  // durable boolean source for "is the user viewing the live tail." The
+  // 24px threshold was the smoking-gun signature of the prior listener —
+  // ban the literal so a future refactor can't reintroduce it.
+  { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
+  // Interrupt-on-data-plane (the retired single-consumer architecture).
+  // Until this PR, both runners dispatched isInterruptCommand →
+  // acceptInterrupt from inside the data-plane command consumer. That's
+  // the exact shape that produced the "Stop doesn't interrupt deep
+  // tool-use loops" regression: JetStream max_ack_pending=1 on the
+  // command consumer held interrupt_turn behind submit_turn for the
+  // duration of the turn. Interrupts now arrive via the control-plane
+  // consumer (startControlConsumer); reintroducing the data-plane
+  // dispatch breaks the split. The runner-shared sessionBus.js
+  // legitimately keeps `isInterruptCommand` as a defensive ack-and-drop
+  // (cutover hygiene for in-flight stragglers); the pattern below
+  // matches only the dispatch-to-acceptInterrupt shape, not the
+  // defensive drop.
+  {
+    name: "retired interrupt-on-data-plane dispatch",
+    // Anchored on `.startCommandConsumer(...)` so the control-plane
+    // dispatch inside `.startControlConsumer(...)` (which legitimately
+    // routes isInterruptCommand → acceptInterrupt) does not trip this
+    // guard. The regression we are blocking is specifically: the same
+    // handler that processes submit_turn also tries to handle interrupts,
+    // which is the shape JetStream max_ack_pending=1 turns into a stuck
+    // interrupt.
+    pattern: /\.startCommandConsumer\(async\s*\(record\)[\s\S]{0,800}?isInterruptCommand\(record\)\s*\)\s*\{\s*(?:commandsConsumedTotal[\s\S]{0,200}?)?await\s+this\.acceptInterrupt/,
   },
 ];
 

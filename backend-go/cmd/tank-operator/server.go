@@ -47,9 +47,10 @@ type appServer struct {
 	latestDesignSelection map[string]any
 
 	// spawnQuota enforces per-`sub` rate limits on the service-principal
-	// spawn surface. Per-`actor_email` concurrent caps are checked via
-	// the session manager directly (CheckConcurrentCap in quota.go).
-	// See nelsong6/tank-operator#486 stage 6.
+	// spawn surface — the runaway-loop guard inside a single session
+	// pod. The per-`actor_email` concurrent-active-session cap that
+	// previously sat alongside it was removed; see quota.go for the
+	// rationale and what to design back in next time.
 	spawnQuota *SpawnQuotaTracker
 }
 
@@ -127,7 +128,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
-	mux.HandleFunc("POST /api/internal/github/attestation", s.handleInternalGitHubAttestation)
+	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)

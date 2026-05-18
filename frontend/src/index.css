@@ -3109,6 +3109,112 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Pending-tail variant: the round button widens to a pill carrying the
+   "N new" count badge when events arrive while the user is back-reading.
+   Matches the affordance Slack and Discord use for new-messages-below. */
+.run-scroll-to-bottom-pending {
+  width: auto;
+  padding: 0 0.55rem 0 0.5rem;
+  gap: 0.35rem;
+  border-color: rgba(110, 168, 255, 0.5);
+  background: rgba(33, 53, 80, 0.94);
+}
+
+.run-scroll-to-bottom-pending:hover {
+  background: rgba(43, 64, 92, 0.96);
+  border-color: rgba(140, 190, 255, 0.7);
+}
+
+.run-scroll-to-bottom-count {
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  min-width: 1.2rem;
+  text-align: center;
+}
+
+/* Floating scroll-to-top button — sibling of .run-scroll-to-bottom,
+   stacked above it. Visual treatment matches so the pair reads as one
+   control. Slack-style: ↑ jumps to the very first message of the
+   session (anchor=oldest); ↓ jumps to the live tail. The two buttons
+   are siblings under <ChatPane>'s root so they share absolute
+   positioning context (the <main> transcript element). */
+.run-scroll-to-top {
+  position: absolute;
+  right: calc(var(--space-5) + 0.5rem);
+  /* Stack above .run-scroll-to-bottom (bottom: 6.5rem + 2.25rem + 0.5rem gap). */
+  bottom: 9.25rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 17, 21, 0.92);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.6);
+  z-index: 5;
+  transition:
+    background var(--motion-fast, 140ms) ease,
+    border-color var(--motion-fast, 140ms) ease;
+}
+
+.run-scroll-to-top:hover {
+  background: rgba(30, 33, 39, 0.96);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+/* Passive variant of .run-transcript-load-older — same pill shape so
+   layout doesn't jump when the auto-paginate fetch fires, but no hover
+   affordance and no cursor pointer because it isn't a clickable action.
+   Used when scroll-up triggers loadSdkOlderEvents and we want feedback
+   that something happened. */
+.run-transcript-load-older-passive {
+  cursor: default;
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.run-transcript-load-older-passive:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+/* Beginning-of-conversation divider — replaces the back-paginate button
+   once foundOldest flips true. Rule-flanked label so the user can tell
+   they hit the head of the ledger instead of just a silent scroll-stop.
+   Slack/Discord both ship this divider; the visual is intentionally
+   quieter than the load-older pill it replaces because it's an end-state,
+   not an action. */
+.run-transcript-beginning {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: var(--space-4) auto var(--space-3);
+  padding: 0 var(--space-5);
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.run-transcript-beginning-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.run-transcript-beginning-label {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+
 /* Composer textarea — taller, more breathing room. Auto-grows with
    content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {
@@ -3407,6 +3513,26 @@ button:disabled {
 /* Model picker dropdown — rendered from the provider card. */
 .run-model-menu {
   min-width: 16rem;
+}
+
+/* Inline hint trailing an effort radio item ("Low — Fastest…"). Muted
+ * so the option label stays primary in the dropdown's scan. */
+.run-model-menu-hint {
+  color: var(--text-muted);
+  font-size: 0.78em;
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+
+/* Launchpad footnote that surfaces the pod-lifetime lock on model +
+ * effort. Sits below the ⌘K hint, same tone, slightly tighter line. */
+.run-empty-lock-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  max-width: 28rem;
+  text-align: center;
+  line-height: 1.35;
 }
 
 /* Files tab — split view: entry list on the left, file preview on right. */
@@ -3766,6 +3892,35 @@ textarea.run-files-viewer-editor:focus {
   100% { opacity: 0; }
 }
 
+/* "Load earlier messages" pill — sits at the top of the transcript when
+   the loaded window doesn't yet include the head of the ledger. Visual
+   sibling of .run-continue-hint, with a stronger affordance because
+   it's an action, not a status. */
+.run-transcript-load-older {
+  align-self: center;
+  margin: var(--space-3) auto var(--space-2);
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-default);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.run-transcript-load-older:hover:not(:disabled) {
+  background: var(--bg-default);
+  border-color: var(--border-default);
+}
+
+.run-transcript-load-older:disabled {
+  cursor: progress;
+  color: var(--text-muted);
+}
+
 @keyframes run-status-pulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
   50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
@@ -3953,6 +4108,40 @@ textarea.run-files-viewer-editor:focus {
 
 .run-msg-fork {
   color: var(--cyan);
+}
+
+/* Match the cyan accent on fork so the two "navigation" affordances
+   read as a set. Hovering still ramps to text-primary via the base
+   .run-msg-action:hover rule. */
+.run-msg-link {
+  color: var(--cyan);
+}
+
+/* Deep-link landing pulse. Applied via data-highlight on the message
+   bubble for ~2.4s after Virtuoso scrolls to it, then cleared by the
+   timer in RunMessages. Box-shadow ring works on both user and
+   assistant variants without leaking into the timings column. */
+@keyframes run-msg-highlight-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.0);
+  }
+  20% {
+    box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.0);
+  }
+}
+
+.run-transcript-message[data-highlight="true"] .run-transcript-message-content {
+  animation: run-msg-highlight-pulse 2.2s ease-out 1;
+  border-radius: 0.5rem;
+}
+
+/* While the highlight is up keep the footer visible so the user sees
+   the link button that produced the jump, even before mouse hover. */
+.run-transcript-message[data-highlight="true"] .run-msg-footer {
+  opacity: 1;
 }
 
 /* Reasoning accordion — collapsible thinking block. */

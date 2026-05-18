@@ -129,6 +129,24 @@ type TurnCommandFailedArgs struct {
 	Now               time.Time
 }
 
+// TurnInterruptRequestedArgs describes the durable event emitted when a
+// user-initiated stop is accepted at the /interrupt boundary. The event
+// lands in the Postgres session_events ledger before the JetStream
+// interrupt_turn command is published, so a refresh-after-stop replays
+// the stopping projection state instead of silently losing it. Mirrors
+// turn.command_failed in actor/source (backend is the producer). The
+// event_id is deterministic in TurnID so a double-click POST dedupes at
+// the (tank_session_id, event_id) UNIQUE constraint.
+type TurnInterruptRequestedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	TurnID            string
+	ClientNonce       string
+	Runtime           string
+	Now               time.Time
+}
+
 // TurnCommandFailedEventMap builds a turn.command_failed event keyed
 // by the same turn_id the failed command targeted, so client renderers
 // associate it with the stranded turn submission.
@@ -156,6 +174,47 @@ func TurnCommandFailedEventMap(args TurnCommandFailedArgs) map[string]any {
 		"payload": map[string]any{
 			"reason": args.Reason,
 		},
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	return event
+}
+
+// TurnInterruptRequestedEventMap builds the durable event posted at the
+// /interrupt handler boundary. Symmetric with the submit boundary's
+// user_message.created + turn.submitted pair: the orchestrator owns the
+// write, no runner involvement, no payload requirements beyond turn_id.
+func TurnInterruptRequestedEventMap(args TurnInterruptRequestedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        args.TurnID + ":turn.interrupt_requested",
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"turn_id":         args.TurnID,
+		"client_nonce":    args.ClientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventTurnInterruptRequested),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
 	})
 	if args.SessionStorageKey != "" {
 		event["tank_session_id"] = args.SessionStorageKey

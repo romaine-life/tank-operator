@@ -28,6 +28,35 @@ func CommandSubject(sessionStorageKey, provider string) string {
 	return fmt.Sprintf("%s.%s.commands.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
 }
 
+// ControlSubject names the per-session/per-provider control-plane subject
+// that carries low-latency commands which must not be blocked by an
+// in-flight turn (today: interrupt_turn; future: any control signal whose
+// usefulness collapses if delivery is queued behind a long-running
+// submit_turn). The runner subscribes to this subject with a dedicated
+// JetStream consumer whose `max_ack_pending` is sized for control
+// throughput, not data-plane serialization. See
+// docs/tank-conversation-protocol.md → "Durable turn interruption" for
+// the contract and the reason data plane and control plane are split.
+func ControlSubject(sessionStorageKey, provider string) string {
+	return fmt.Sprintf("%s.%s.control.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
+}
+
+// SubjectForCommand selects the publish subject for a command based on its
+// Type. Control-plane commands (interrupts) MUST go to ControlSubject so
+// they are not delivered behind the in-flight ack of a long submit_turn;
+// data-plane commands (submit_turn, input_reply, anything else) go to
+// CommandSubject and are serialized by the runner's single-in-flight
+// command consumer. The split is the load-bearing fix for the "Stop
+// doesn't interrupt deep tool-use loops" failure mode where a JetStream
+// `max_ack_pending: 1` consumer held interrupt_turn behind submit_turn
+// for the full duration of the turn.
+func SubjectForCommand(command Command) string {
+	if command.Type == CommandInterrupt {
+		return ControlSubject(command.SessionStorageKey, command.Provider)
+	}
+	return CommandSubject(command.SessionStorageKey, command.Provider)
+}
+
 func WakeSubject(sessionStorageKey string) string {
 	return fmt.Sprintf("%s.%s.wake", liveRoot, StorageToken(sessionStorageKey))
 }

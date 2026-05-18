@@ -75,6 +75,18 @@ var (
 		Name: "tank_session_event_timeline_failure_total",
 		Help: "Failures of the GET /timeline snapshot used by the SPA to bootstrap a session.",
 	})
+	// sessionEventTimelineRequestTotal labels each /timeline read by the
+	// anchor shape the SPA chose. The `legacy_forward` label exists so a
+	// Prometheus alert can fire if the pre-anchor forward-walk path
+	// reappears after the Stage 2 cutover documented in
+	// docs/quality-timeframes.md ("migration guards prevent old paths
+	// from returning"). Expected steady-state values once Stage 2 lands:
+	// `newest`, `first_unread`, `around`, `before` non-zero;
+	// `legacy_forward` always zero.
+	sessionEventTimelineRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_event_timeline_request_total",
+		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",
+	}, []string{"anchor"})
 	sessionEventStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_emitted_total",
 		Help: "Events emitted to a connected SSE consumer (post-filter).",
@@ -145,6 +157,22 @@ var (
 		Name: "tank_session_list_orphan_pod_total",
 		Help: "Sessions-namespace pods observed by the Reader without a matching registry row (visible or tombstoned).",
 	})
+
+	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
+	// labeled by outcome at each exit point. Steady-state expectation:
+	// persisted dominates; persist_failed and publish_failed near zero.
+	// Cardinality bounded at 3, respects docs/observability.md budget.
+	// The "stopping" durable-state migration is observable through this
+	// counter — a regression that lets requests slip silently shows up as
+	// a divergence between persisted and the durable session_events ledger
+	// row count.
+	turnInterruptRequestTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_turn_interrupt_request_total",
+			Help: "Stop requests posted to /interrupt, labeled by outcome.",
+		},
+		[]string{"outcome"},
+	)
 )
 
 // --- Service-principal (role=service) request metrics ---
@@ -168,6 +196,36 @@ var serviceRoleRequestsTotal = promauto.NewCounterVec(
 
 func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
+}
+
+// --- Admin cross-user read metrics ---
+//
+// Counts every time a role=admin caller reads a session whose Owner !=
+// their email, or lists sessions for a different owner via
+// `?owner=<email>`. Single-counter shape (no labels) keeps cardinality
+// at 2 series total — the operational signal is "is this happening at
+// all" plus per-rate alerting if it ever spikes outside expected admin
+// activity windows. The reads themselves are intentionally not
+// per-target-email so audit-trail concerns belong in the request log,
+// not the metrics surface.
+
+var (
+	adminCrossUserReadsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_admin_cross_user_session_reads_total",
+		Help: "Times an admin-role caller read a session belonging to another user (per-session read endpoints).",
+	})
+	adminCrossUserListsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_admin_cross_user_session_lists_total",
+		Help: "Times an admin-role caller passed `?owner=<email>` to list sessions or session-list events for another user.",
+	})
+)
+
+func recordAdminCrossUserRead() {
+	adminCrossUserReadsTotal.Inc()
+}
+
+func recordAdminCrossUserList() {
+	adminCrossUserListsTotal.Inc()
 }
 
 // --- Session-list (sidebar) stream metrics --- the matching names for
@@ -341,6 +399,12 @@ func recordSessionEventStreamError() {
 
 func recordSessionEventTimelineFailure() {
 	sessionEventTimelineFailureTotal.Inc()
+}
+
+// recordSessionEventTimelineRequest tags one /timeline read with the anchor
+// shape the SPA chose. Centralized so the label set stays disciplined.
+func recordSessionEventTimelineRequest(anchor string) {
+	sessionEventTimelineRequestTotal.WithLabelValues(anchor).Inc()
 }
 
 func recordSessionEventPersistSchemaRejected() {
