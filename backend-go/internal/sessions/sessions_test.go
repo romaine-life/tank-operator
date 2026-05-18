@@ -242,7 +242,7 @@ func TestListExcludesInvisibleRegistryRowsEvenWhenPodAlive(t *testing.T) {
 // end-to-end through TestListReturnsOwnedSandboxAgentPods (which wires a
 // fakeLifecycleSource). Re-introducing this test would resurrect the
 // retired path the migration-guard forbids; the equivalent pod-state
-// derivation is now tested in internal/podinformer.
+// derivation is now tested in internal/sessioncontroller.
 
 type registryRecords []sessionmodel.SessionRecord
 
