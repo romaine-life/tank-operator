@@ -243,6 +243,18 @@ var (
 		Name: "tank_session_list_stream_heartbeat_total",
 		Help: "Heartbeat frames written on idle sidebar SSE streams.",
 	})
+	// sessionListCrossScopeEventsDroppedTotal fires when a payload arrives
+	// on the per-(owner, scope) NATS subject whose embedded session_scope
+	// does not match this orchestrator's configured scope. The subject
+	// shape itself prevents cross-scope delivery in steady state, so any
+	// non-zero rate here is a producer-side regression: someone published
+	// to the right subject with the wrong scope inside the payload, which
+	// would silently mutate sidebar state on the client before this guard
+	// was added. PrometheusRule alerts on rate > 0 over 10 minutes.
+	sessionListCrossScopeEventsDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_list_cross_scope_events_dropped_total",
+		Help: "Session-list NATS payloads dropped because the embedded session_scope did not match the local orchestrator scope.",
+	})
 )
 
 // --- Pod-informer producer metrics. ---

@@ -202,6 +202,32 @@ spec:
               unread-count indicators will lag actual chat state. Inspect
               orchestrator logs for `lifecycle emitter:` lines.
 
+        # Cross-scope event leak guard. The per-(owner, scope) NATS
+        # subject prevents cross-scope delivery in steady state; if a
+        # publisher ever lands a wrong-scope payload (regression of the
+        # tank-operator#83 follow-up that scoped the wire shape), this
+        # counter increments and the SSE handler drops the payload before
+        # mutating client state. Any non-zero rate means cross-environment
+        # leakage came back — page on first sighting, not over a long
+        # window.
+        - alert: TankSessionListCrossScopeLeak
+          expr: rate(tank_session_list_cross_scope_events_dropped_total[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session-list NATS payload arrived with the wrong session_scope"
+            runbook: |
+              A publisher emitted a session_lifecycle_events payload whose
+              embedded session_scope does not match the receiving
+              orchestrator's scope. The (email, scope) subject shape makes
+              this physically unreachable in steady state, so this is a
+              producer-side regression — usually one of
+              `sessions.Manager.emitLifecycle`,
+              `podinformer.emit`, or `lifecycleEmitter` passing a stale
+              scope to `PublishSessionListEvent`. Inspect orchestrator
+              logs for `session list payload dropped: scope mismatch`.
+
     - name: tank-operator.nats
       rules:
         - alert: TankNATSReconnectStorm

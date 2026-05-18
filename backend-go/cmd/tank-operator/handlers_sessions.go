@@ -86,7 +86,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 
 	cursor := sessionListCursorFromRequest(r)
 	if s.lifecycleEvents != nil {
-		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, cursor.AfterOrderKey); err != nil {
+		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, s.sessionScope, cursor.AfterOrderKey); err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 				"reason": "cursor_check_failed",
@@ -99,6 +99,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 			slog.Warn("session list stream resync required",
 				"caller", user.Email,
 				"owner", owner,
+				"scope", s.sessionScope,
 				"last_order_key", cursor.AfterOrderKey,
 			)
 			writeSSEJSONEvent(w, "resync_required", "", map[string]any{
@@ -119,10 +120,10 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 		sessionListStreamReconnectTotal.Inc()
 	}
 
-	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionListEvents(r.Context(), owner)
+	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionListEvents(r.Context(), owner, s.sessionScope)
 	if err != nil {
 		recordSessionListStreamError()
-		slog.Warn("session list events subscribe failed", "caller", user.Email, "owner", owner, "error", err)
+		slog.Warn("session list events subscribe failed", "caller", user.Email, "owner", owner, "scope", s.sessionScope, "error", err)
 		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 			"reason": "subscribe_failed",
 			"detail": err.Error(),

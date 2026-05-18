@@ -38,13 +38,14 @@ type SessionRegistry interface {
 }
 
 // SessionListEventPublisher is implemented by the session bus; it
-// publishes one typed lifecycle-event payload on the per-owner NATS
-// session-list events subject. Replaces the prior SessionListWaker
+// publishes one typed lifecycle-event payload on the per-(owner, scope)
+// NATS session-list events subject. Replaces the prior SessionListWaker
 // (opaque wake-and-refetch) per tank-operator#83 — the SSE handler now
 // forwards the payload verbatim to clients instead of just telling them
-// to re-fetch.
+// to re-fetch. Scope mirrors the row's session_scope so prod and slot
+// orchestrators sharing a NATS broker never see each other's payloads.
 type SessionListEventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email string, payload []byte) error
+	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
 }
 
 // LifecycleAppender is the durable side of the producer pipeline.
@@ -671,11 +672,12 @@ func (m *Manager) emitLifecycle(ctx context.Context, event lifecycleevents.Event
 		)
 		return
 	}
-	if err := m.publisher.PublishSessionListEvent(ctx, assigned.Email, payload); err != nil {
+	if err := m.publisher.PublishSessionListEvent(ctx, assigned.Email, assigned.SessionScope, payload); err != nil {
 		slog.Warn("manager lifecycle publish failed",
 			"session_id", event.SessionID,
 			"type", event.Type,
 			"owner", assigned.Email,
+			"scope", assigned.SessionScope,
 			"error", err,
 		)
 	}

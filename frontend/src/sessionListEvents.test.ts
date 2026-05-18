@@ -37,16 +37,45 @@ test("normalizeSessionListEvent rejects unknown event types", () => {
   assert.equal(got, null);
 });
 
-test("normalizeSessionListEvent requires order_key / session_id / event_id", () => {
+test("normalizeSessionListEvent requires order_key / session_id / event_id / session_scope", () => {
+  // session_scope is required after tank-operator#83's follow-up: the
+  // backend SSE handler only forwards events from its own (email, scope)
+  // partition, so any payload without a scope on the wire is malformed.
+  // The reducer used to default-fill "default" here, which silently
+  // accepted cross-scope events from the email-only NATS subject and
+  // mutated state for the wrong environment.
+  const fullPayload = {
+    type: "session.created",
+    order_key: "1",
+    session_id: "21",
+    event_id: "x",
+    session_scope: "default",
+  } as const;
+
   assert.equal(
-    normalizeSessionListEvent({ type: "session.created", session_id: "21", event_id: "x" }),
+    normalizeSessionListEvent({ ...fullPayload, order_key: undefined as unknown as string }),
     null,
     "missing order_key must be rejected",
   );
   assert.equal(
-    normalizeSessionListEvent({ type: "session.created", order_key: "1", event_id: "x" }),
+    normalizeSessionListEvent({ ...fullPayload, session_id: undefined as unknown as string }),
     null,
     "missing session_id must be rejected",
+  );
+  assert.equal(
+    normalizeSessionListEvent({ ...fullPayload, event_id: undefined as unknown as string }),
+    null,
+    "missing event_id must be rejected",
+  );
+  assert.equal(
+    normalizeSessionListEvent({ ...fullPayload, session_scope: undefined as unknown as string }),
+    null,
+    "missing session_scope must be rejected (no default-fill)",
+  );
+  assert.equal(
+    normalizeSessionListEvent({ ...fullPayload, session_scope: "" }),
+    null,
+    "empty session_scope must be rejected (no default-fill)",
   );
 });
 

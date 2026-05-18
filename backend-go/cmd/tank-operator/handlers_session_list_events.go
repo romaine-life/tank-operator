@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,7 +51,7 @@ func (s *appServer) handleSessionListTimeline(w http.ResponseWriter, r *http.Req
 	}
 	cursor := sessionListCursorFromRequest(r)
 	if cursor.AfterOrderKey != "" {
-		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, cursor.AfterOrderKey); err != nil {
+		if ok, err := s.lifecycleEvents.HasOrderKey(r.Context(), owner, s.sessionScope, cursor.AfterOrderKey); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		} else if !ok {
@@ -64,7 +65,7 @@ func (s *appServer) handleSessionListTimeline(w http.ResponseWriter, r *http.Req
 			limit = n
 		}
 	}
-	page, err := s.lifecycleEvents.ListByOwner(r.Context(), owner, cursor, limit)
+	page, err := s.lifecycleEvents.ListByOwner(r.Context(), owner, s.sessionScope, cursor, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -89,7 +90,7 @@ func (s *appServer) writeSessionListStreamPage(ctx context.Context, w http.Respo
 	if s.lifecycleEvents == nil {
 		return false, 0, nil
 	}
-	page, err := s.lifecycleEvents.ListByOwner(ctx, owner, *cursor, listEventStreamPageLimit)
+	page, err := s.lifecycleEvents.ListByOwner(ctx, owner, s.sessionScope, *cursor, listEventStreamPageLimit)
 	if err != nil {
 		return false, 0, err
 	}
@@ -111,17 +112,35 @@ func (s *appServer) writeSessionListStreamPage(ctx context.Context, w http.Respo
 
 // emitSessionListPayload forwards a NATS payload to the connected client.
 // Payloads are already JSON-marshaled lifecycleevents.Event documents;
-// we re-decode just enough to extract order_key for the SSE `id:` line
-// and to advance the cursor so a mid-stream reconnect resumes correctly.
+// we re-decode just enough to extract order_key + session_scope for the
+// SSE `id:` line, the cursor advance, and the defensive scope guard.
 //
 // A payload whose order_key is ≤ the cursor was either already streamed
 // during catch-up or is a duplicate of a row we just emitted — skip it
 // rather than re-rendering the same transition on the client.
+//
+// A payload whose session_scope does not match this orchestrator's
+// configured scope is dropped with a counter increment. The (email,
+// scope) NATS subject already makes this physically unreachable in
+// steady state; the check exists so a producer-side regression (wrong
+// scope passed to PublishSessionListEvent) cannot silently mutate
+// sidebar state on connected clients, and shows up as a non-zero rate
+// on tank_session_list_cross_scope_events_dropped_total instead.
 func (s *appServer) emitSessionListPayload(w http.ResponseWriter, cursor *lifecycleevents.Cursor, payload []byte) {
 	var probe struct {
-		OrderKey string `json:"order_key"`
+		OrderKey     string `json:"order_key"`
+		SessionScope string `json:"session_scope"`
 	}
 	if err := json.Unmarshal(payload, &probe); err != nil {
+		return
+	}
+	if scope := strings.TrimSpace(probe.SessionScope); scope != "" && scope != s.sessionScope {
+		sessionListCrossScopeEventsDroppedTotal.Inc()
+		slog.Warn("session list payload dropped: scope mismatch",
+			"expected_scope", s.sessionScope,
+			"payload_scope", scope,
+			"order_key", probe.OrderKey,
+		)
 		return
 	}
 	orderKey := strings.TrimSpace(probe.OrderKey)

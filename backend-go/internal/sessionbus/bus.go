@@ -264,44 +264,57 @@ func (b *Bus) PublishSessionEventWake(_ context.Context, sessionStorageKey strin
 }
 
 // PublishSessionListEvent publishes one typed lifecycle-event payload on
-// the per-owner session-list events subject. The SSE handler on
+// the per-(owner, scope) session-list events subject. The SSE handler on
 // /api/sessions/events forwards the payload verbatim to subscribed
 // clients — there is no separate wake-and-refetch step. Replaces the
 // prior opaque resync-trigger publish per tank-operator#83. Steady-state
 // expectation: zero publish failures; a failure here means NATS is down,
 // in which case SSE clients fall back to the durable Postgres replay on
 // reconnect.
-func (b *Bus) PublishSessionListEvent(_ context.Context, email string, payload []byte) error {
+//
+// Scope must match the lifecycleevents row's session_scope field. Passing
+// the wrong scope here is the failure mode the (email, scope) subject
+// shape is designed to make impossible — events publish to a subject no
+// other-scope subscriber is listening on, so cross-scope leakage is a
+// wire-shape impossibility instead of a delivery-time filter.
+func (b *Bus) PublishSessionListEvent(_ context.Context, email, scope string, payload []byte) error {
 	if b == nil {
 		return fmt.Errorf("session bus unavailable")
 	}
 	if strings.TrimSpace(email) == "" {
 		return nil
 	}
+	if strings.TrimSpace(scope) == "" {
+		return fmt.Errorf("session list event scope is required")
+	}
 	if len(payload) == 0 {
 		return fmt.Errorf("session list event payload is empty")
 	}
-	if err := b.nc.Publish(SessionListEventSubject(email), payload); err != nil {
+	if err := b.nc.Publish(SessionListEventSubject(email, scope), payload); err != nil {
 		b.wakeMetrics.RecordSessionListEventPublishFailed()
 		slog.Warn("session list event publish failed",
-			"email", email, "error", err)
+			"email", email, "scope", scope, "error", err)
 		return err
 	}
 	return nil
 }
 
 // SubscribeSessionListEvents returns a channel that receives each typed
-// lifecycle-event payload published for the owner. Channel cap is 64 to
-// absorb short bursts (pod-informer can emit several transitions in
-// quick succession during pod startup); if the consumer falls further
-// behind, payloads are dropped at the NATS-subscription callback and the
-// consumer's next reconnect cursor-resume catches up from Postgres.
-func (b *Bus) SubscribeSessionListEvents(ctx context.Context, email string) (<-chan []byte, func(), error) {
+// lifecycle-event payload published for the (owner, scope) pair. Channel
+// cap is 64 to absorb short bursts (pod-informer can emit several
+// transitions in quick succession during pod startup); if the consumer
+// falls further behind, payloads are dropped at the NATS-subscription
+// callback and the consumer's next reconnect cursor-resume catches up
+// from Postgres.
+func (b *Bus) SubscribeSessionListEvents(ctx context.Context, email, scope string) (<-chan []byte, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
+	if strings.TrimSpace(scope) == "" {
+		return nil, func() {}, fmt.Errorf("session list event scope is required")
+	}
 	ch := make(chan []byte, 64)
-	sub, err := b.nc.Subscribe(SessionListEventSubject(email), func(msg *nats.Msg) {
+	sub, err := b.nc.Subscribe(SessionListEventSubject(email, scope), func(msg *nats.Msg) {
 		// Copy the data slice — the NATS client reuses the underlying
 		// buffer across deliveries.
 		payload := make([]byte, len(msg.Data))

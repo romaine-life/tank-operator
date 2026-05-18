@@ -49,6 +49,16 @@ export interface SessionListEvent {
 
 // ----- Wire parsing --------------------------------------------------------
 
+// normalizeSessionListEvent parses one wire payload from /api/sessions/events
+// or /api/sessions/timeline. session_scope is required: the backend SSE
+// handler only subscribes to its own (email, scope) NATS subject and only
+// catches up from that scope's slice of session_lifecycle_events, so a
+// well-formed payload always carries the scope it was produced under.
+// Rejecting payloads without a scope makes the wire shape an explicit
+// contract rather than letting a malformed payload silently land in
+// reducer state with a defaulted scope — which was the bug class behind
+// the "deletes come back" + "test-slot sessions in prod sidebar" symptoms
+// that pre-#83 cross-scope reads produced.
 export function normalizeSessionListEvent(value: unknown): SessionListEvent | null {
   if (!isRecord(value)) return null;
   const type = value.type;
@@ -56,11 +66,12 @@ export function normalizeSessionListEvent(value: unknown): SessionListEvent | nu
   const sessionId = stringField(value, "session_id");
   const orderKey = stringField(value, "order_key");
   const eventId = stringField(value, "event_id");
-  if (!sessionId || !orderKey || !eventId) return null;
+  const sessionScope = stringField(value, "session_scope");
+  if (!sessionId || !orderKey || !eventId || !sessionScope) return null;
   return {
     order_key: orderKey,
     email: stringField(value, "email") ?? "",
-    session_scope: stringField(value, "session_scope") ?? "default",
+    session_scope: sessionScope,
     session_id: sessionId,
     type,
     event_id: eventId,

@@ -44,11 +44,11 @@ func (s *fakeStore) Append(_ context.Context, event lifecycleevents.Event) (life
 	return event, false, nil
 }
 
-func (s *fakeStore) ListByOwner(_ context.Context, _ string, _ lifecycleevents.Cursor, _ int) (lifecycleevents.Page, error) {
+func (s *fakeStore) ListByOwner(_ context.Context, _, _ string, _ lifecycleevents.Cursor, _ int) (lifecycleevents.Page, error) {
 	return lifecycleevents.Page{}, nil
 }
 
-func (s *fakeStore) HasOrderKey(_ context.Context, _, _ string) (bool, error) { return true, nil }
+func (s *fakeStore) HasOrderKey(_ context.Context, _, _, _ string) (bool, error) { return true, nil }
 
 func (s *fakeStore) LatestActivity(_ context.Context, _, _ string) (*lifecycleevents.ActivitySummary, error) {
 	return nil, nil
@@ -62,10 +62,12 @@ func nextOrderKey(i int) string {
 	return time.Now().Format("150405.000") + "-" + string(rune('a'+i%26))
 }
 
-// fakePublisher records each (owner, payload) it sees. Used to assert
-// that the informer only publishes on a fresh append (the "already
-// exists" path must not re-publish, or stale rows would render on
-// connected clients).
+// fakePublisher records each (owner, scope, payload) it sees. Used to
+// assert that the informer only publishes on a fresh append (the
+// "already exists" path must not re-publish, or stale rows would render
+// on connected clients) and that the scope passed to the publisher
+// matches the row's session_scope (the wire shape is keyed on (email,
+// scope), so a stale scope here breaks delivery).
 type fakePublisher struct {
 	mu       sync.Mutex
 	payloads []publishedEvent
@@ -73,15 +75,16 @@ type fakePublisher struct {
 
 type publishedEvent struct {
 	owner string
+	scope string
 	raw   []byte
 }
 
-func (p *fakePublisher) PublishSessionListEvent(_ context.Context, owner string, payload []byte) error {
+func (p *fakePublisher) PublishSessionListEvent(_ context.Context, owner, scope string, payload []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cp := make([]byte, len(payload))
 	copy(cp, payload)
-	p.payloads = append(p.payloads, publishedEvent{owner: owner, raw: cp})
+	p.payloads = append(p.payloads, publishedEvent{owner: owner, scope: scope, raw: cp})
 	return nil
 }
 

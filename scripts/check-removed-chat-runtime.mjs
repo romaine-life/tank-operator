@@ -304,6 +304,46 @@ const blocked = [
   // 24px threshold was the smoking-gun signature of the prior listener —
   // ban the literal so a future refactor can't reintroduce it.
   { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
+  // tank-operator#83 follow-up — the session-list typed-event surface
+  // shipped with session_scope in the row + index but the read path,
+  // NATS subject, and frontend reducer all keyed on email alone. Prod
+  // and slot orchestrators share one Postgres + NATS broker, so
+  // cross-scope events leaked into each other's sidebars (deletes that
+  // came back, slot sessions showing up in prod). The fix made scope a
+  // first-class read dimension: (email, scope, order_key) is the
+  // partition everywhere. Block the specific call shapes that would
+  // resurrect the email-only path so a future PR can't quietly rebuild
+  // the leak the type signatures otherwise enforce against.
+  //
+  // The Go signature change is its own compile-time guard for
+  // ListByOwner/HasOrderKey/PublishSessionListEvent/SubscribeSessionList
+  // Events. The patterns below cover the wire-shape and reducer-shape
+  // regressions the compiler doesn't catch.
+  {
+    name: "retired email-only SessionListEventSubject call",
+    // Pattern matches a single-argument call like
+    // SessionListEventSubject(email). The new shape is two args
+    // (email, scope); a one-arg call is the pre-#83-follow-up signature
+    // that conflated scopes on the wire.
+    pattern: /\bSessionListEventSubject\(\s*[A-Za-z_][\w.]*\s*\)/,
+  },
+  {
+    name: "retired email-only session-list NATS subject literal",
+    // Old subject: tank.live.sessions.<email_token>.events
+    // New subject: tank.live.sessions.<email_token>.<scope_token>.events
+    // A literal matching the old 4-segment shape (no scope token
+    // between email and `.events`) is the old wire shape coming back.
+    pattern: /tank\.live\.sessions\.[A-Za-z0-9_\-]+\.events\b/,
+  },
+  {
+    name: "retired frontend session_scope default fallback",
+    // The reducer used to default-fill "default" when session_scope was
+    // missing on the wire; that turned malformed payloads into silent
+    // state mutations. The wire shape now requires scope to be present;
+    // any code that re-adds a ?? "default" fallback near session_scope
+    // is the regression.
+    pattern: /session_scope[\s\S]{0,40}\?\?\s*["']default["']/,
+  },
   // Interrupt-on-data-plane (the retired single-consumer architecture).
   // Until this PR, both runners dispatched isInterruptCommand →
   // acceptInterrupt from inside the data-plane command consumer. That's
