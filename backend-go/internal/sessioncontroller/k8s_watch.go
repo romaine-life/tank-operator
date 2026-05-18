@@ -1,24 +1,24 @@
-// Package podinformer is the single-writer Kubernetes pod watcher that
-// feeds session_lifecycle_events with pod-state transitions and republishes
-// each row on the per-owner NATS session-list events subject. The
-// orchestrator deployment runs with replicas=2 (k8s/values.yaml), so the
-// informer holds a coordination.k8s.io/Lease via the standard
-// leaderelection library and only the leader writes; the follower keeps a
-// warm K8s client and SSE serving stays available everywhere.
+// K8s watch loop for the session controller. Single-writer Kubernetes
+// pod watcher that feeds session_lifecycle_events with pod-state
+// transitions, updates the sessions row's status / ready_at /
+// terminating_at columns through RowWriter, and republishes each row
+// on the per-owner NATS session-list events subject. The orchestrator
+// deployment runs with replicas=2 (k8s/values.yaml), so the watch
+// holds a coordination.k8s.io/Lease via the standard leaderelection
+// library and only the leader writes; the follower keeps a warm K8s
+// client and SSE serving stays available everywhere.
 //
-// Why this exists: the prior "session status is computed from the live
-// pod object on every List() call" architecture never published a
-// list-wake on pod phase transitions, so the sidebar only updated when
-// the user did something. tank-operator#83 retires that path; the
-// informer is the producer end of the durable lifecycle ledger that
-// replaces it.
-package podinformer
+// History: this code was a separate package until
+// docs/session-list-redesign.md Phase 1 consolidated it into
+// sessioncontroller alongside chat_activity.go so the three writers
+// (user-action, K8s, chat) converge through a single RowWriter.
+
+package sessioncontroller
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,77 +38,65 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
-// Metrics is the optional observability hook the informer reports
-// transition counts and lag through. Wired to prometheus in
+// K8sWatchMetrics is the optional observability hook the watch loop
+// reports transition counts and lag through. Wired to prometheus in
 // cmd/tank-operator/observability.go.
-type Metrics interface {
+type K8sWatchMetrics interface {
 	RecordTransition(eventType string)
 	RecordLag(seconds float64)
 	RecordLeaderStatus(isLeader bool)
 }
 
-type noopMetrics struct{}
+type noopK8sWatchMetrics struct{}
 
-func (noopMetrics) RecordTransition(_ string) {}
-func (noopMetrics) RecordLag(_ float64)       {}
-func (noopMetrics) RecordLeaderStatus(_ bool) {}
+func (noopK8sWatchMetrics) RecordTransition(_ string) {}
+func (noopK8sWatchMetrics) RecordLag(_ float64)       {}
+func (noopK8sWatchMetrics) RecordLeaderStatus(_ bool) {}
 
-// EventPublisher publishes one already-marshaled lifecycle-event payload
-// onto the per-(owner, scope) NATS session-list events subject.
-// Implemented by *sessionbus.Bus. Kept as a narrow interface so the
-// informer can be tested without spinning up NATS. Scope mirrors the
-// row's session_scope so the wire shape matches the durable partition;
-// publishing with a different scope than the row carries is the bug
-// class the (owner, scope) subject prevents at the wire layer.
-type EventPublisher interface {
-	PublishSessionListEvent(ctx context.Context, email, scope string, payload []byte) error
-}
-
-// Config wires the informer with everything it needs to produce durable
-// rows + NATS payloads. Namespace is the sessions namespace
-// (`tank-operator-sessions`); LeaseNamespace is where the lease lives
-// (orchestrator namespace); Identity is what shows up in the Lease's
-// holderIdentity (use the pod name).
-type Config struct {
-	K8s             kubernetes.Interface
-	Store           lifecycleevents.Store
-	Publisher       EventPublisher
-	Metrics         Metrics
-	Scope           string
-	Namespace       string // sessions namespace ("tank-operator-sessions")
-	LeaseNamespace  string // orchestrator namespace
-	LeaseName       string // defaults to "tank-operator-pod-informer"
-	Identity        string // pod name (HOSTNAME env)
-	ResyncPeriod    time.Duration
-	LeaseDuration   time.Duration
-	RenewDeadline   time.Duration
-	RetryPeriod     time.Duration
-	// SkipLeaderElection runs the informer without a lease — only for
+// K8sWatchConfig wires the watch loop with everything it needs to
+// produce durable rows + NATS payloads. Namespace is the sessions
+// namespace (`tank-operator-sessions`); LeaseNamespace is where the
+// lease lives (orchestrator namespace); Identity is what shows up in
+// the Lease's holderIdentity (use the pod name). All durable writes
+// go through Writer.RecordTransition so the ledger row, the sessions
+// row column update, and the NATS publish are a single call.
+type K8sWatchConfig struct {
+	K8s            kubernetes.Interface
+	Writer         *RowWriter
+	Metrics        K8sWatchMetrics
+	Scope          string
+	Namespace      string // sessions namespace ("tank-operator-sessions")
+	LeaseNamespace string // orchestrator namespace
+	LeaseName      string // defaults to "tank-operator-session-controller"
+	Identity       string // pod name (HOSTNAME env)
+	ResyncPeriod   time.Duration
+	LeaseDuration  time.Duration
+	RenewDeadline  time.Duration
+	RetryPeriod    time.Duration
+	// SkipLeaderElection runs the watch without a lease — only for
 	// single-replica local dev and unit tests. In production the
 	// orchestrator runs with replicas=2 and the lease is required.
 	SkipLeaderElection bool
 }
 
-// Run blocks until ctx is canceled. It manages the lease lifecycle
-// internally: while the leader, runs the informer and writes lifecycle
-// rows; while the follower, sleeps and re-attempts leadership.
-// Single-writer guarantee comes from the lease, not from the informer
-// itself — two replicas without a lease would each emit duplicate rows
-// on the same transition (the unique constraint would catch them, but
-// the publish side would still send two NATS messages).
-func Run(ctx context.Context, cfg Config) error {
-	cfg = applyDefaults(cfg)
+// RunK8sWatch blocks until ctx is canceled. It manages the lease
+// lifecycle internally: while the leader, runs the informer and writes
+// lifecycle rows; while the follower, sleeps and re-attempts
+// leadership. Single-writer guarantee comes from the lease, not from
+// the informer itself — two replicas without a lease would each emit
+// duplicate rows on the same transition (the unique constraint would
+// catch them, but the publish side would still send two NATS
+// messages).
+func RunK8sWatch(ctx context.Context, cfg K8sWatchConfig) error {
+	cfg = applyK8sWatchDefaults(cfg)
 	if cfg.K8s == nil {
-		return fmt.Errorf("podinformer: K8s client is required")
+		return fmt.Errorf("sessioncontroller k8s-watch: K8s client is required")
 	}
-	if cfg.Store == nil {
-		return fmt.Errorf("podinformer: lifecycle store is required")
-	}
-	if cfg.Publisher == nil {
-		return fmt.Errorf("podinformer: publisher is required")
+	if cfg.Writer == nil {
+		return fmt.Errorf("sessioncontroller k8s-watch: RowWriter is required")
 	}
 	if cfg.SkipLeaderElection {
-		return runLeader(ctx, cfg)
+		return runK8sWatchLeader(ctx, cfg)
 	}
 	lock, err := resourcelock.New(
 		resourcelock.LeasesResourceLock,
@@ -118,7 +106,7 @@ func Run(ctx context.Context, cfg Config) error {
 		resourcelock.ResourceLockConfig{Identity: cfg.Identity},
 	)
 	if err != nil {
-		return fmt.Errorf("podinformer: build lease lock: %w", err)
+		return fmt.Errorf("sessioncontroller k8s-watch: build lease lock: %w", err)
 	}
 	for ctx.Err() == nil {
 		// LeaderElector blocks until lease is lost or ctx is canceled.
@@ -132,12 +120,12 @@ func Run(ctx context.Context, cfg Config) error {
 			Callbacks: leaderelection.LeaderCallbacks{
 				OnStartedLeading: func(leaderCtx context.Context) {
 					cfg.Metrics.RecordLeaderStatus(true)
-					slog.Info("podinformer: started leading",
+					slog.Info("sessioncontroller k8s-watch: started leading",
 						"identity", cfg.Identity,
 						"lease", cfg.LeaseNamespace+"/"+cfg.LeaseName,
 					)
-					if err := runLeader(leaderCtx, cfg); err != nil {
-						slog.Warn("podinformer: leader run failed",
+					if err := runK8sWatchLeader(leaderCtx, cfg); err != nil {
+						slog.Warn("sessioncontroller k8s-watch: leader run failed",
 							"error", err,
 							"identity", cfg.Identity,
 						)
@@ -145,7 +133,7 @@ func Run(ctx context.Context, cfg Config) error {
 				},
 				OnStoppedLeading: func() {
 					cfg.Metrics.RecordLeaderStatus(false)
-					slog.Info("podinformer: stopped leading",
+					slog.Info("sessioncontroller k8s-watch: stopped leading",
 						"identity", cfg.Identity,
 					)
 				},
@@ -153,7 +141,7 @@ func Run(ctx context.Context, cfg Config) error {
 					if holder == cfg.Identity {
 						return
 					}
-					slog.Info("podinformer: new leader observed",
+					slog.Info("sessioncontroller k8s-watch: new leader observed",
 						"holder", holder,
 						"identity", cfg.Identity,
 					)
@@ -162,17 +150,18 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		elector, err := leaderelection.NewLeaderElector(leaderCfg)
 		if err != nil {
-			return fmt.Errorf("podinformer: build leader elector: %w", err)
+			return fmt.Errorf("sessioncontroller k8s-watch: build leader elector: %w", err)
 		}
 		elector.Run(ctx)
 	}
 	return ctx.Err()
 }
 
-// runLeader runs the actual informer + transition emitter. Called from
-// OnStartedLeading (or directly when SkipLeaderElection is true).
-func runLeader(ctx context.Context, cfg Config) error {
-	tracker := newTransitionTracker(cfg.Store, cfg.Publisher, cfg.Metrics, cfg.Scope)
+// runK8sWatchLeader runs the actual informer + transition emitter.
+// Called from OnStartedLeading (or directly when SkipLeaderElection is
+// true).
+func runK8sWatchLeader(ctx context.Context, cfg K8sWatchConfig) error {
+	tracker := newTransitionTracker(cfg.Writer, cfg.Metrics, cfg.Scope)
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.K8s,
 		cfg.ResyncPeriod,
@@ -212,7 +201,7 @@ func runLeader(ctx context.Context, cfg Config) error {
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("podinformer: register handler: %w", err)
+		return fmt.Errorf("sessioncontroller k8s-watch: register handler: %w", err)
 	}
 	factory.Start(ctx.Done())
 	factory.WaitForCacheSync(ctx.Done())
@@ -220,7 +209,7 @@ func runLeader(ctx context.Context, cfg Config) error {
 	return ctx.Err()
 }
 
-func applyDefaults(cfg Config) Config {
+func applyK8sWatchDefaults(cfg K8sWatchConfig) K8sWatchConfig {
 	if cfg.Scope == "" {
 		cfg.Scope = "default"
 	}
@@ -228,12 +217,12 @@ func applyDefaults(cfg Config) Config {
 		cfg.Namespace = sessionmodel.SessionsNamespace
 	}
 	if strings.TrimSpace(cfg.LeaseName) == "" {
-		cfg.LeaseName = "tank-operator-pod-informer"
+		cfg.LeaseName = "tank-operator-session-controller"
 	}
 	if strings.TrimSpace(cfg.Identity) == "" {
 		cfg.Identity = strings.TrimSpace(os.Getenv("HOSTNAME"))
 		if cfg.Identity == "" {
-			cfg.Identity = "tank-operator-podinformer"
+			cfg.Identity = "tank-operator-session-controller"
 		}
 	}
 	if cfg.ResyncPeriod == 0 {
@@ -249,21 +238,20 @@ func applyDefaults(cfg Config) Config {
 		cfg.RetryPeriod = 2 * time.Second
 	}
 	if cfg.Metrics == nil {
-		cfg.Metrics = noopMetrics{}
+		cfg.Metrics = noopK8sWatchMetrics{}
 	}
 	return cfg
 }
 
-// transitionTracker keeps per-pod last-emitted state so the informer
+// transitionTracker keeps per-pod last-emitted state so the watch
 // emits one durable row per real state change. Restart-safe: on first
 // sight of a pod we re-derive the current state and attempt to emit;
 // the unique (session_scope, session_id, event_id) constraint in the
 // ledger collapses re-emits to no-ops.
 type transitionTracker struct {
-	store     lifecycleevents.Store
-	publisher EventPublisher
-	metrics   Metrics
-	scope     string
+	writer  *RowWriter
+	metrics K8sWatchMetrics
+	scope   string
 
 	mu   sync.Mutex
 	last map[types.UID]podState
@@ -276,16 +264,15 @@ type podState struct {
 	failedReason string
 }
 
-func newTransitionTracker(store lifecycleevents.Store, publisher EventPublisher, metrics Metrics, scope string) *transitionTracker {
+func newTransitionTracker(writer *RowWriter, metrics K8sWatchMetrics, scope string) *transitionTracker {
 	if metrics == nil {
-		metrics = noopMetrics{}
+		metrics = noopK8sWatchMetrics{}
 	}
 	return &transitionTracker{
-		store:     store,
-		publisher: publisher,
-		metrics:   metrics,
-		scope:     scope,
-		last:      make(map[types.UID]podState),
+		writer:  writer,
+		metrics: metrics,
+		scope:   scope,
+		last:    make(map[types.UID]podState),
 	}
 }
 
@@ -371,41 +358,23 @@ func (t *transitionTracker) emit(ctx context.Context, event lifecycleevents.Even
 	if event.Type == "" || event.SessionID == "" {
 		return
 	}
-	assigned, alreadyExists, err := t.store.Append(ctx, event)
+	outcome, err := t.writer.RecordTransition(ctx, event)
 	if err != nil {
-		slog.Warn("podinformer: append failed",
+		slog.Warn("sessioncontroller k8s-watch: record transition failed",
 			"session_id", event.SessionID,
 			"type", event.Type,
 			"error", err,
 		)
 		return
 	}
-	if alreadyExists {
-		// Restart resync or duplicate observation — the row was already
-		// in the ledger, so the previous emit already published. Skip
-		// the NATS publish to avoid re-rendering an old transition on
-		// connected clients.
+	if outcome == TransitionDeduped {
+		// Restart resync or duplicate observation — RowWriter already
+		// skipped the publish so we don't re-render an old transition
+		// on connected clients.
 		return
 	}
 	t.metrics.RecordTransition(event.Type)
-	t.metricsForLag(assigned.OccurredAt)
-	payload, err := json.Marshal(assigned)
-	if err != nil {
-		slog.Warn("podinformer: marshal payload failed",
-			"session_id", event.SessionID,
-			"type", event.Type,
-			"error", err,
-		)
-		return
-	}
-	if err := t.publisher.PublishSessionListEvent(ctx, assigned.Email, assigned.SessionScope, payload); err != nil {
-		slog.Warn("podinformer: publish failed",
-			"session_id", event.SessionID,
-			"scope", assigned.SessionScope,
-			"type", event.Type,
-			"error", err,
-		)
-	}
+	t.metricsForLag(event.OccurredAt)
 }
 
 // metricsForLag records the time between the producer-stamped

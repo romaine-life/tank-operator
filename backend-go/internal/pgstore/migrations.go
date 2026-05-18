@@ -43,6 +43,38 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS sessions_email_scope_visible
 		ON sessions (email, session_scope, visible, created_at)`,
 
+	// Row-centric architecture (docs/session-list-redesign.md). The
+	// sidebar's status, ready_at, terminating_at, and activity_summary
+	// move onto the sessions row so the snapshot is a single SELECT and
+	// the wire (Phase 3) carries the row payload instead of typed
+	// lifecycle events. row_version is a per-row monotonic counter
+	// drawn from a globally-shared sequence so per-(email, scope)
+	// cursor reads are well-ordered. Cold-start defaults are chosen so
+	// existing rows render correctly the moment Phase 2 cuts the
+	// snapshot read over to these columns:
+	//   - status defaults to 'Pending' (matches Manager.Create's Info
+	//     init and the prior LatestPodStatus fall-back for sessions
+	//     with no ledger events yet).
+	//   - row_version defaults to nextval() so every pre-existing row
+	//     has a unique, monotonic value before any controller write.
+	//
+	// The accompanying sessions_email_scope_row_version index is the
+	// catch-up read predicate for the row-update wire (Phase 3); add
+	// it now so Phase 3 doesn't need a separate schema migration.
+	`CREATE SEQUENCE IF NOT EXISTS sessions_row_version_seq`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'Pending'`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS ready_at timestamptz`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS terminating_at timestamptz`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS activity_summary jsonb`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS row_version bigint NOT NULL DEFAULT nextval('sessions_row_version_seq')`,
+	`CREATE INDEX IF NOT EXISTS sessions_email_scope_row_version
+		ON sessions (email, session_scope, row_version)`,
+
 	// `session_events` — the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.
@@ -94,13 +126,17 @@ var schemaMigrations = []string{
 	// typed events with a monotonic order_key per owner, cursor-resumable
 	// SSE on /api/sessions/events, explicit resync on unknown cursor.
 	//
-	// One row per durable transition. Producers:
-	//   - sessions.Manager  → session.created / .deleted / .name_changed /
-	//                         .test_state_changed / .rollout_state_changed
-	//   - podinformer       → session.pod_scheduled / .pod_ready /
-	//                         .pod_not_ready / .pod_failed / .pod_terminating
-	//   - sessionbus persister → session.activity_changed (per-session
-	//                         activity-summary deltas folded from chat events)
+	// One row per durable transition. All three producers write through
+	// internal/sessioncontroller.RowWriter as of the Phase 1 consolidation
+	// (docs/session-list-redesign.md):
+	//   - sessions.Manager (user actions) → session.created / .deleted /
+	//                       .name_changed / .test_state_changed /
+	//                       .rollout_state_changed
+	//   - sessioncontroller k8s-watch    → session.pod_scheduled / .pod_ready /
+	//                       .pod_not_ready / .pod_failed / .pod_terminating
+	//   - sessioncontroller chat-activity → session.activity_changed
+	//                       (per-session activity-summary deltas folded
+	//                       from chat events via the persister hook)
 	//
 	// order_key is a BIGSERIAL because the read shape is per-owner (sidebar
 	// subscribes per owner); a per-owner global serial preserves write order

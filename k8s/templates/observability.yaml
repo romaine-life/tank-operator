@@ -178,10 +178,12 @@ spec:
               rows on Kubernetes pod transitions is not running on any
               orchestrator replica. Pod evictions, readiness flips, and pod
               deletions will not propagate to the sidebar until the lease is
-              re-acquired. Inspect orchestrator logs for `podinformer:
-              started leading` / `podinformer: leader run failed`; verify the
-              `tank-operator-pod-informer` Lease in the orchestrator namespace
-              and the `coordination.k8s.io/leases` RoleBinding.
+              re-acquired. Inspect orchestrator logs for
+              `sessioncontroller k8s-watch: started leading` /
+              `sessioncontroller k8s-watch: leader run failed`; verify
+              the `tank-operator-session-controller` Lease in the
+              orchestrator namespace and the
+              `coordination.k8s.io/leases` RoleBinding.
 
         # Activity-delta emitter is the chat→sidebar bridge. A non-zero
         # failure rate means something between the chat-event persister
@@ -200,7 +202,7 @@ spec:
               session.activity_changed lifecycle rows is hitting store or
               publish errors. The sidebar's run-status / needs-input /
               unread-count indicators will lag actual chat state. Inspect
-              orchestrator logs for `lifecycle emitter:` lines.
+              orchestrator logs for `chat-activity emitter:` lines.
 
         # Cross-scope event leak guard. The per-(owner, scope) NATS
         # subject prevents cross-scope delivery in steady state; if a
@@ -222,11 +224,11 @@ spec:
               embedded session_scope does not match the receiving
               orchestrator's scope. The (email, scope) subject shape makes
               this physically unreachable in steady state, so this is a
-              producer-side regression — usually one of
-              `sessions.Manager.emitLifecycle`,
-              `podinformer.emit`, or `lifecycleEmitter` passing a stale
-              scope to `PublishSessionListEvent`. Inspect orchestrator
-              logs for `session list payload dropped: scope mismatch`.
+              producer-side regression — most likely
+              `sessioncontroller.RowWriter.RecordTransition` or one of
+              its callers passing a stale scope to
+              `PublishSessionListEvent`. Inspect orchestrator logs for
+              `session list payload dropped: scope mismatch`.
 
     - name: tank-operator.nats
       rules:

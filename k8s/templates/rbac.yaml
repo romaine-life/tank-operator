@@ -35,9 +35,9 @@ roleRef:
 # Orchestrator-local scratch state. Keep this narrow: the server uses it for
 # the styleguide element-selection handoff between browser and agent.
 # Also holds the coordination.k8s.io Lease that single-writes the
-# pod-informer producer for session_lifecycle_events (replicas=2 →
-# need a lease to dedupe). See backend-go/internal/podinformer and
-# docs/observability.md.
+# session-controller K8s watch loop for session_lifecycle_events
+# (replicas=2 → need a lease to dedupe). See
+# backend-go/internal/sessioncontroller and docs/observability.md.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

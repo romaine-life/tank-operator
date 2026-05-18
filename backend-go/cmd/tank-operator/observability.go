@@ -7,8 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
-	"github.com/nelsong6/tank-operator/backend-go/internal/podinformer"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
 )
 
 // Observability is a real Prometheus surface scraped by the
@@ -288,7 +288,7 @@ var (
 
 var (
 	// sessionLifecycleEventWritesTotal counts every durable ledger write
-	// (whether by Manager, the persister-driven lifecycleEmitter, or the
+	// (whether by Manager, the persister-driven ChatActivityEmitter, or the
 	// pod-informer leader). The type label is bounded by the small fixed
 	// set of EventType constants — cardinality budget is fine.
 	sessionLifecycleEventWritesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -320,6 +320,16 @@ var (
 		Name: "tank_session_lifecycle_activity_failure_total",
 		Help: "Persister activity-summary delta derivation failures (store/publish errors).",
 	})
+	// sessionRowUpdatesTotal counts sessioncontroller.RowWriter's
+	// per-event dual-write outcomes on the sessions row. Outcome=ok
+	// dominates in steady state; outcome=failed > 0 means the row has
+	// drifted from the lifecycle ledger and Phase 2's snapshot would
+	// return stale state. Alerts in
+	// k8s/templates/observability.yaml.
+	sessionRowUpdatesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_row_updates_total",
+		Help: "sessions row column updates from RowWriter, labeled by lifecycle event type and outcome.",
+	}, []string{"type", "outcome"})
 )
 
 // recordSessionListStreamError centralizes the sidebar SSE error counter
@@ -328,23 +338,26 @@ func recordSessionListStreamError() {
 	sessionListStreamErrorTotal.Inc()
 }
 
-// promPodInformerMetrics satisfies podinformer.Metrics so the informer
-// can record transitions, leadership state, and producer lag without
-// importing prometheus.
-type promPodInformerMetrics struct{}
+// promK8sWatchMetrics satisfies sessioncontroller.K8sWatchMetrics so
+// the watch can record transitions, leadership state, and producer
+// lag without importing prometheus. Renamed from
+// promPodInformerMetrics in docs/session-list-redesign.md Phase 1
+// when the K8s watch loop was consolidated into the controller
+// package.
+type promK8sWatchMetrics struct{}
 
-func (promPodInformerMetrics) RecordTransition(eventType string) {
+func (promK8sWatchMetrics) RecordTransition(eventType string) {
 	sessionLifecycleEventWritesTotal.WithLabelValues(eventType).Inc()
 }
 
-func (promPodInformerMetrics) RecordLag(seconds float64) {
+func (promK8sWatchMetrics) RecordLag(seconds float64) {
 	if seconds < 0 {
 		seconds = 0
 	}
 	sessionPodInformerLagSeconds.Observe(seconds)
 }
 
-func (promPodInformerMetrics) RecordLeaderStatus(isLeader bool) {
+func (promK8sWatchMetrics) RecordLeaderStatus(isLeader bool) {
 	if isLeader {
 		sessionPodInformerLeaderHeld.Set(1)
 		return
@@ -352,7 +365,21 @@ func (promPodInformerMetrics) RecordLeaderStatus(isLeader bool) {
 	sessionPodInformerLeaderHeld.Set(0)
 }
 
-// promLifecycleEmitterMetrics satisfies lifecycleEmitterMetrics for the
+// promRowWriterMetrics satisfies sessioncontroller.RowWriterMetrics —
+// the dual-write contract's per-event observability surface. Phase 2's
+// snapshot cutover depends on row-update failure rate being zero;
+// non-zero here means the row drifted from the lifecycle ledger.
+type promRowWriterMetrics struct{}
+
+func (promRowWriterMetrics) RecordRowUpdate(eventType string) {
+	sessionRowUpdatesTotal.WithLabelValues(eventType, "ok").Inc()
+}
+
+func (promRowWriterMetrics) RecordRowUpdateFailure(eventType string) {
+	sessionRowUpdatesTotal.WithLabelValues(eventType, "failed").Inc()
+}
+
+// promLifecycleEmitterMetrics satisfies sessioncontroller.LifecycleEmitterMetrics for the
 // chat→activity_changed bridge. Emitted=true increments
 // {outcome="emitted"}, false → {outcome="skipped"}.
 type promLifecycleEmitterMetrics struct{}
@@ -475,16 +502,18 @@ func (promPGMetrics) RecordQuery(operation, outcome string, duration time.Durati
 	pgQueryDurationSeconds.WithLabelValues(operation).Observe(duration.Seconds())
 }
 
-// Compile-time interface conformance checks. If a future refactor renames
-// a method on the sessionbus / pgstore / podinformer interfaces, this
-// won't silently fall back to "no metrics emitted" — it will fail to build.
+// Compile-time interface conformance checks. If a future refactor
+// renames a method on the sessionbus / pgstore / sessioncontroller
+// interfaces, this won't silently fall back to "no metrics emitted" —
+// it will fail to build.
 var (
-	_ sessionbus.PersisterMetrics  = promPersisterMetrics{}
-	_ sessionbus.WakeMetrics       = promWakeMetrics{}
-	_ sessionbus.ConnectionMetrics = promNATSConnectionMetrics{}
-	_ pgstore.SQLMetrics           = promPGMetrics{}
-	_ podinformer.Metrics          = promPodInformerMetrics{}
-	_ lifecycleEmitterMetrics      = promLifecycleEmitterMetrics{}
+	_ sessionbus.PersisterMetrics              = promPersisterMetrics{}
+	_ sessionbus.WakeMetrics                   = promWakeMetrics{}
+	_ sessionbus.ConnectionMetrics             = promNATSConnectionMetrics{}
+	_ pgstore.SQLMetrics                       = promPGMetrics{}
+	_ sessioncontroller.K8sWatchMetrics        = promK8sWatchMetrics{}
+	_ sessioncontroller.RowWriterMetrics       = promRowWriterMetrics{}
+	_ sessioncontroller.LifecycleEmitterMetrics = promLifecycleEmitterMetrics{}
 )
 
 func recordSessionEventLag(event map[string]any) {

@@ -109,7 +109,7 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 
 // OwnerForSession returns the owner email associated with the given
 // session id in this scope, or empty when no such session is registered.
-// Used by the lifecycleEmitter to resolve which per-owner SSE subject a
+// Used by sessioncontroller.ChatActivityEmitter to resolve which per-owner SSE subject a
 // chat-derived activity delta should land on — the chat event payload
 // itself carries only `session_id`, not the email, since `tank_session_id`
 // is the durable routing key on the event bus.

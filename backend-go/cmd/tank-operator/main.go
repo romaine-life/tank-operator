@@ -22,9 +22,9 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/lifecycleevents"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
-	"github.com/nelsong6/tank-operator/backend-go/internal/podinformer"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
@@ -170,19 +170,40 @@ func main() {
 	// 11. Start reaper.
 	ctx := context.Background()
 	mgr.StartReaper(ctx)
-	// Wire the chat-event → activity-summary delta hook so the persister
-	// emits session.activity_changed lifecycle rows on each indicator-
-	// affecting chat event. Done after the session bus + lifecycle store
-	// are both built, before the persister goroutine starts.
+	// Build the shared RowWriter that all three lifecycle producers
+	// (chat-activity emitter, K8s watch, Manager.emitLifecycle) write
+	// through. Per docs/session-list-redesign.md Phase 1, this is the
+	// dual-write seam: every transition lands in the lifecycle ledger
+	// (old wire path, still consumed by today's SSE) AND updates the
+	// new sessions row columns (status / ready_at / terminating_at /
+	// activity_summary / row_version) for Phase 2's snapshot cutover.
+	var rowWriter *sessioncontroller.RowWriter
 	if sessionBus != nil {
-		emitter := &lifecycleEmitter{
-			store:      lifecycleStore,
-			chatEvents: sessionEventsStore,
-			readStates: readStateStore,
-			registry:   buildSessionRegistryOwnerResolver(sessionReg),
-			publisher:  sessionBus,
-			metrics:    promLifecycleEmitterMetrics{},
-			scope:      sessionScope,
+		rw, err := sessioncontroller.NewRowWriter(
+			lifecycleStore,
+			sessionBus,
+			pgPool,
+			promRowWriterMetrics{},
+		)
+		if err != nil {
+			slog.Error("session controller row writer init failed", "error", err)
+			os.Exit(1)
+		}
+		rowWriter = rw
+	}
+	// Wire the chat-event → activity-summary delta hook so the
+	// persister emits session.activity_changed rows + sessions
+	// activity_summary updates on each indicator-affecting chat event.
+	// Done after the session bus + lifecycle store + RowWriter are
+	// built, before the persister goroutine starts.
+	if sessionBus != nil && rowWriter != nil {
+		emitter := &sessioncontroller.ChatActivityEmitter{
+			Writer:     rowWriter,
+			ChatEvents: sessionEventsStore,
+			ReadStates: readStateStore,
+			Registry:   buildSessionRegistryOwnerResolver(sessionReg),
+			Metrics:    promLifecycleEmitterMetrics{},
+			Scope:      sessionScope,
 		}
 		sessionBus.SetLifecycleEmitter(emitter)
 		go func() {
@@ -191,28 +212,27 @@ func main() {
 			}
 		}()
 	}
-	// Start the pod-informer producer (leader-elected; the follower
-	// keeps a warm k8s client + the SSE handlers stay up). Skipped when
-	// the session bus or lifecycle store is the stub — the stub paths
-	// are local-dev only and have no consumers.
-	if sessionBus != nil && pgPool != nil {
+	// Start the K8s watch producer (leader-elected; the follower keeps
+	// a warm k8s client + the SSE handlers stay up). Skipped when the
+	// session bus or RowWriter is unwired — the stub paths are
+	// local-dev only and have no consumers.
+	if rowWriter != nil && pgPool != nil {
 		orchestratorNamespace := currentPodNamespace()
 		if orchestratorNamespace == "" {
 			orchestratorNamespace = "tank-operator"
 		}
 		go func() {
-			cfg := podinformer.Config{
+			cfg := sessioncontroller.K8sWatchConfig{
 				K8s:            k8sClient,
-				Store:          lifecycleStore,
-				Publisher:      sessionBus,
-				Metrics:        promPodInformerMetrics{},
+				Writer:         rowWriter,
+				Metrics:        promK8sWatchMetrics{},
 				Scope:          sessionScope,
 				Namespace:      namespace,
 				LeaseNamespace: orchestratorNamespace,
 				Identity:       strings.TrimSpace(os.Getenv("HOSTNAME")),
 			}
-			if err := podinformer.Run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
-				slog.Error("pod informer stopped", "error", err)
+			if err := sessioncontroller.RunK8sWatch(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("session controller k8s watch stopped", "error", err)
 			}
 		}()
 	}
@@ -355,12 +375,13 @@ func buildLifecycleEventStore(pool *pgxpool.Pool) lifecycleevents.Store {
 }
 
 // buildSessionRegistryOwnerResolver wraps the SessionRegistry interface
-// so the lifecycleEmitter can call OwnerForSession via the narrow
-// sessionToOwnerResolver interface. The Postgres-backed Store satisfies
-// this directly; the in-memory stub returns "" for every session, which
-// the emitter treats as "no owner, no emit" — fine for local dev.
-func buildSessionRegistryOwnerResolver(reg sessions.SessionRegistry) sessionToOwnerResolver {
-	if resolver, ok := reg.(sessionToOwnerResolver); ok {
+// so the chat-activity emitter can call OwnerForSession via the narrow
+// sessioncontroller.SessionToOwnerResolver interface. The Postgres-backed
+// Store satisfies this directly; the in-memory stub returns "" for every
+// session, which the emitter treats as "no owner, no emit" — fine for
+// local dev.
+func buildSessionRegistryOwnerResolver(reg sessions.SessionRegistry) sessioncontroller.SessionToOwnerResolver {
+	if resolver, ok := reg.(sessioncontroller.SessionToOwnerResolver); ok {
 		return resolver
 	}
 	return stubOwnerResolver{}
@@ -436,7 +457,7 @@ type profilesPrefsStore interface {
 // store; this adapter exists so swapping in a different backing impl (e.g. the
 // in-memory stub below) is just a constructor change. The embedded Store also
 // satisfies sessionToOwnerResolver via its OwnerForSession method, so the
-// lifecycleEmitter can resolve owner emails through the same adapter.
+// ChatActivityEmitter can resolve owner emails through the same adapter.
 type sessionRegistryAdapter struct {
 	*sessionregistry.Store
 }

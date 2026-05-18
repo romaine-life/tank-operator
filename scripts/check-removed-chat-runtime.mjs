@@ -47,6 +47,10 @@ const ignoredRelativePaths = new Set([
   // confirmation that the route is gone). Excluded so the migration
   // guard doesn't fire on its own enforcement.
   "backend-go/cmd/tank-operator/observability_test.go",
+  // The session-list redesign plan names the retired packages as
+  // migration targets — it is documentation of the deletion, not a
+  // resurrection. Same exemption shape as docs/tank-conversation-protocol.md.
+  "docs/session-list-redesign.md",
 ]);
 
 const blocked = [
@@ -389,6 +393,34 @@ const blocked = [
     // emission. Block reintroduction of an explicit empty-cursor
     // catch-up entry point.
     pattern: /writeSessionListStreamPage\([\s\S]{0,200}?AfterOrderKey:\s*""/,
+  },
+  // docs/session-list-redesign.md Phase 1 — internal/podinformer and
+  // cmd/tank-operator/lifecycle_emitter.go were consolidated into
+  // internal/sessioncontroller so all three lifecycle producers
+  // (K8s watch, chat activity, Manager user-actions) write through
+  // one RowWriter. Block reintroduction so a future refactor can't
+  // quietly fork the writers back apart and resurrect the three-
+  // pipes-glued-at-the-SPA architecture the redesign retires.
+  {
+    name: "removed internal/podinformer package import",
+    pattern: /\binternal\/podinformer\b/,
+  },
+  {
+    name: "removed internal/podinformer package keyword",
+    pattern: /^\s*package podinformer\b/m,
+  },
+  {
+    name: "removed cmd/tank-operator/lifecycle_emitter.go file path",
+    pattern: /cmd\/tank-operator\/lifecycle_emitter\.go\b/,
+  },
+  {
+    name: "removed lifecycleEmitter private struct name",
+    // The pre-#528 struct lived in cmd/tank-operator and held the
+    // chat-activity hook. Phase 1 moved it into
+    // internal/sessioncontroller as the exported ChatActivityEmitter.
+    // Block the old lowercase name so a refactor can't shadow the
+    // new exported type with a parallel implementation.
+    pattern: /\blifecycleEmitter\b/,
   },
   // Interrupt-on-data-plane (the retired single-consumer architecture).
   // Until this PR, both runners dispatched isInterruptCommand →

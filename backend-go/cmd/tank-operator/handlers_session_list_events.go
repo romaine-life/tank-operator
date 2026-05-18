@@ -1,7 +1,7 @@
 // Per-owner durable session-list event surface. Mirrors the shape of
 // handlers_session_events.go for the chat ledger: REST timeline replay +
 // SSE cursor-resume, both reading from the same session_lifecycle_events
-// store the producers (sessions.Manager, podinformer, persister via
+// store the producers (sessions.Manager, sessioncontroller k8s-watch + chat-activity via
 // lifecycle_emitter) write to. Lives in its own file so the chat-side
 // handlers and this stay independently grep-able.
 package main

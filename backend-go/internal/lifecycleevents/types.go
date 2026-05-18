@@ -7,14 +7,17 @@
 // this is the load-bearing implementation of, and tank-operator#83 for
 // the migration that introduced it.
 //
-// One row per durable transition. Producers:
+// One row per durable transition. All three producers write through
+// internal/sessioncontroller.RowWriter as of the Phase 1 consolidation
+// (docs/session-list-redesign.md):
 //
-//   - sessions.Manager       → session.created / .deleted / .name_changed /
-//                              .test_state_changed / .rollout_state_changed
-//   - podinformer            → session.pod_scheduled / .pod_ready /
-//                              .pod_not_ready / .pod_failed / .pod_terminating
-//   - sessionbus persister   → session.activity_changed (chat-derived
-//                              activity-summary deltas)
+//   - sessions.Manager (user actions)  → session.created / .deleted /
+//                          .name_changed / .test_state_changed /
+//                          .rollout_state_changed
+//   - sessioncontroller k8s-watch     → session.pod_scheduled / .pod_ready /
+//                          .pod_not_ready / .pod_failed / .pod_terminating
+//   - sessioncontroller chat-activity  → session.activity_changed
+//                          (chat-derived activity-summary deltas)
 package lifecycleevents
 
 // Event types. The strings are wire identifiers — the SSE typed payload
@@ -29,9 +32,10 @@ const (
 	EventTypeTestStateChanged    = "session.test_state_changed"
 	EventTypeRolloutStateChanged = "session.rollout_state_changed"
 
-	// Pod-state lifecycle (podinformer leader writes these on phase /
-	// Ready-condition / deletionTimestamp transitions). The frontend
-	// derives the durable "status" field from the latest of these.
+	// Pod-state lifecycle (sessioncontroller k8s-watch leader writes
+	// these on phase / Ready-condition / deletionTimestamp
+	// transitions). The frontend derives the durable "status" field
+	// from the latest of these.
 	EventTypePodScheduled   = "session.pod_scheduled"
 	EventTypePodReady       = "session.pod_ready"
 	EventTypePodNotReady    = "session.pod_not_ready"

@@ -1,4 +1,4 @@
-package podinformer
+package sessioncontroller
 
 import (
 	"context"
@@ -93,7 +93,7 @@ func (p *fakePublisher) PublishSessionListEvent(_ context.Context, owner, scope 
 func TestHandleUpsertEmitsScheduledOnFirstSight(t *testing.T) {
 	store := newFakeStore()
 	pub := &fakePublisher{}
-	tracker := newTransitionTracker(store, pub, nil, "default")
+	tracker := newTestTracker(store, pub)
 
 	pod := newSessionPod("21", "u@example.com", corev1.PodPending, false)
 	tracker.handleUpsert(context.Background(), nil, pod)
@@ -109,7 +109,7 @@ func TestHandleUpsertEmitsScheduledOnFirstSight(t *testing.T) {
 func TestHandleUpsertEmitsReadyOnTransition(t *testing.T) {
 	store := newFakeStore()
 	pub := &fakePublisher{}
-	tracker := newTransitionTracker(store, pub, nil, "default")
+	tracker := newTestTracker(store, pub)
 
 	pending := newSessionPod("21", "u@example.com", corev1.PodPending, false)
 	tracker.handleUpsert(context.Background(), nil, pending)
@@ -126,7 +126,7 @@ func TestHandleUpsertEmitsReadyOnTransition(t *testing.T) {
 func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 	store := newFakeStore()
 	pub := &fakePublisher{}
-	tracker := newTransitionTracker(store, pub, nil, "default")
+	tracker := newTestTracker(store, pub)
 
 	running := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	tracker.handleUpsert(context.Background(), nil, running)
@@ -164,7 +164,7 @@ func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 func TestHandleDeleteEmitsDeletedOnce(t *testing.T) {
 	store := newFakeStore()
 	pub := &fakePublisher{}
-	tracker := newTransitionTracker(store, pub, nil, "default")
+	tracker := newTestTracker(store, pub)
 
 	pod := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	tracker.handleUpsert(context.Background(), nil, pod)
@@ -208,11 +208,11 @@ func TestRestartResyncDoesNotRepublish(t *testing.T) {
 	pub := &fakePublisher{}
 	pod := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 
-	tracker1 := newTransitionTracker(store, pub, nil, "default")
+	tracker1 := newTestTracker(store, pub)
 	tracker1.handleUpsert(context.Background(), nil, pod)
 	publishesAfterFirst := len(pub.payloads)
 
-	tracker2 := newTransitionTracker(store, pub, nil, "default")
+	tracker2 := newTestTracker(store, pub)
 	tracker2.handleUpsert(context.Background(), nil, pod)
 
 	if got := len(pub.payloads); got != publishesAfterFirst {
@@ -224,7 +224,7 @@ func TestRestartResyncDoesNotRepublish(t *testing.T) {
 func TestIgnoresUnrelatedPods(t *testing.T) {
 	store := newFakeStore()
 	pub := &fakePublisher{}
-	tracker := newTransitionTracker(store, pub, nil, "default")
+	tracker := newTestTracker(store, pub)
 
 	unrelated := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
 	unrelated.Labels = map[string]string{} // strip session/managed labels
@@ -235,6 +235,19 @@ func TestIgnoresUnrelatedPods(t *testing.T) {
 }
 
 // --- helpers --------------------------------------------------------------
+
+// newTestTracker wires a RowWriter around the fake store + publisher
+// with no Postgres pool (so dual-write column updates are skipped at
+// the test layer — k8s_watch tests verify the ledger + publish side of
+// RowWriter's contract; column-update behavior is tested separately in
+// writer_test.go).
+func newTestTracker(store *fakeStore, pub *fakePublisher) *transitionTracker {
+	writer, err := NewRowWriter(store, pub, nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	return newTransitionTracker(writer, nil, "default")
+}
 
 func lastEventType(s *fakeStore) string {
 	if len(s.events) == 0 {
