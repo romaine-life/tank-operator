@@ -1776,10 +1776,25 @@ button:disabled {
   line-height: 1.4;
 }
 
-.home {
+/* The pre-session "home" content renders inside the same `.run-main`
+   scrolling area an active session's transcript uses, so the home no
+   longer owns its own scroll container. `.home-inner` just constrains
+   width and stacks the hero + configuration grid. The DemoLanding still
+   wraps its preview in `.home` for the marketing layout (so the rule
+   below is kept narrow to that callsite via `.demo-workspace .home`). */
+.demo-workspace .home {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: var(--space-6) var(--space-5);
+  font-family: var(--font-primary);
+}
+
+.run-main-home {
+  /* Home variant of the chat transcript area: no auto-scroll-to-bottom
+     constraints, just normal vertical scroll with comfortable padding so
+     the configuration grid breathes. The composer footer below remains
+     pinned by `.run-composer-wrap`. */
   padding: var(--space-6) var(--space-5);
   font-family: var(--font-primary);
 }
@@ -1792,6 +1807,17 @@ button:disabled {
   gap: var(--space-5);
   animation: welcome-fade var(--motion-slow) var(--ease-out);
 }
+
+/* Pre-session, the session-name editor slot just holds a static label.
+   Strip the rename-button hover affordances so the slot reads as text. */
+.run-header-name-btn-static {
+  cursor: default;
+  pointer-events: none;
+}
+
+/* The home composer-wrap reuses the run-composer-wrap styles. No
+   additional positioning needed — it inherits the same footer-pinned
+   layout the chat composer uses. */
 
 .home-hero {
   display: flex;
@@ -2120,18 +2146,10 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
-/* Home/demo variant of the shared chat composer. The composer itself
-   (`run-composer` + friends) is styled inline alongside the run pane; the
-   `-home` modifier only adds the sticky-bottom placement and a soft shadow
-   so the same composer floats above the home grid. Visual parity with the
-   in-session composer is the whole point — the user types here and the
-   same composer keeps going inside the chat. */
-.run-composer-home {
-  position: sticky;
-  bottom: var(--space-3);
-  margin-top: var(--space-2);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-}
+/* Pre-session, the composer wrap is the same `.run-composer-wrap` the
+   active session uses — no sticky positioning, no shadow, no separate
+   `-home` modifier. It sits at the bottom of the same `run-panel` flex
+   column the chat does; visual parity is structural now, not approximated. */
 
 /* Internal wrapper added by the shared <ChatComposer>; keeps `display` out
    of the way so the PromptInput's own layout owns positioning. */

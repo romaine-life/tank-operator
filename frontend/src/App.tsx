@@ -17,6 +17,7 @@ import {
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { WorkspaceShell } from "./WorkspaceShell";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -6286,9 +6287,42 @@ function ChatPane({
 
   return (
     <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
-    <section className="run-panel">
-      <header className="run-header">
-        <div className="run-header-title">
+    <WorkspaceShell
+      style={chatFontScaleStyle}
+      bodyClassName={`run-main-${runStatus}`}
+      bodyRef={transcriptScrollCallbackRef}
+      composerVisible={activeTab === "chat"}
+      composerWrapRef={composerWrapRef}
+      composerWrapStyle={chatFontScaleStyle}
+      composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
+      onComposerWrapDragOver={(e) => {
+        e.preventDefault();
+        if (!dragActive) setDragActive(true);
+      }}
+      onComposerWrapDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragActive(false);
+      }}
+      onComposerWrapDrop={(e) => {
+        e.preventDefault();
+        setDragActive(false);
+        handleAttachmentFiles(e.dataTransfer?.files ?? null);
+      }}
+      onComposerWrapPaste={(e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        const fs: File[] = [];
+        for (const it of Array.from(items)) {
+          if (it.kind === "file") {
+            const f = it.getAsFile();
+            if (f) fs.push(f);
+          }
+        }
+        if (fs.length > 0) {
+          e.preventDefault();
+          for (const f of fs) void uploadAttachment(f);
+        }
+      }}
+      title={(<>
           {editingTitle ? (
             <input
               className="run-header-name-input"
@@ -6326,8 +6360,8 @@ function ChatPane({
               {sessionDisplayName(session)}
             </button>
           )}
-        </div>
-        <nav className="run-tabs" aria-label="Session actions">
+      </>)}
+      tabs={(<>
           {activeTab !== "chat" && (
             <button
               type="button"
@@ -6378,14 +6412,8 @@ function ChatPane({
             <InfoIcon className="run-tab-icon" aria-hidden="true" />
             <span>Help</span>
           </button>
-        </nav>
-      </header>
-
-      <main
-        className={`run-main run-main-${runStatus}`}
-        ref={transcriptScrollCallbackRef}
-        style={chatFontScaleStyle}
-      >
+      </>)}
+      body={(<>
         {activeTab === "files" ? (
           <div className="run-files">
             <div className="run-files-breadcrumb">
@@ -6926,8 +6954,8 @@ function ChatPane({
             />
           </>
         )}
-      </main>
-
+      </>)}
+      floatingBetweenBodyAndComposer={(<>
       {/* Streaming status pill — pinned between transcript and composer
           while the run is in flight. Provider icon, rotating verb +
           animated dots, elapsed counter, Stop button with ESC hint. */}
@@ -7044,43 +7072,8 @@ function ChatPane({
         </button>
       )}
 
-      {activeTab === "chat" && (
-        <footer
-          className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
-          ref={composerWrapRef}
-          style={chatFontScaleStyle}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!dragActive) setDragActive(true);
-          }}
-          onDragLeave={(e) => {
-            // dragleave fires on child crossings; only deactivate if
-            // we've left the wrap entirely.
-            if (e.currentTarget === e.target) setDragActive(false);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            handleAttachmentFiles(e.dataTransfer?.files ?? null);
-          }}
-          onPaste={(e) => {
-            // Pull image/file data out of the clipboard. Plain text
-            // continues to paste into the textarea naturally.
-            const items = e.clipboardData?.items;
-            if (!items) return;
-            const fs: File[] = [];
-            for (const it of Array.from(items)) {
-              if (it.kind === "file") {
-                const f = it.getAsFile();
-                if (f) fs.push(f);
-              }
-            }
-            if (fs.length > 0) {
-              e.preventDefault();
-              for (const f of fs) void uploadAttachment(f);
-            }
-          }}
-        >
+      </>)}
+      composerAbove={(<>
           {dragActive && (
             <div className="run-composer-drop-overlay" aria-hidden="true">
               Drop to attach
@@ -7274,7 +7267,9 @@ function ChatPane({
               </div>
             </div>
           )}
-          <ChatComposer
+      </>)}
+      composer={(
+        <ChatComposer
             placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
             onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
             permissionMode={composerMode}
@@ -7408,9 +7403,8 @@ function ChatPane({
               </>
             }
           />
-        </footer>
       )}
-    </section>
+    />
     </RunContext.Provider>
   );
 }
@@ -8798,19 +8792,103 @@ export function App() {
 
       <main className="workspace">
         {active == null ? (
-          <div className="home">
-            <div className="home-inner">
-              <section className="home-hero" aria-labelledby="home-title">
-                <div>
-                  <h2 id="home-title" className="home-title">What do you want to build?</h2>
-                  <p className="home-sub">
-                    Type below to start a session — or pick a runtime and launcher first.
-                  </p>
-                </div>
-                <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
-              </section>
+          // Pre-session "home" state. Same workspace scaffold as an active
+          // session — same header, same tab row, same composer footer at
+          // the same y-coordinate — with the configuration grid rendered
+          // *in the transcript area* instead of an actual transcript. When
+          // the user submits, the session opens and the only thing that
+          // changes inside the same scaffold is the body: configuration
+          // gives way to the live transcript.
+          <WorkspaceShell
+            className="run-panel-home"
+            bodyClassName="run-main-home"
+            composerVisible={true}
+            composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
+            onComposerWrapDragOver={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              e.preventDefault();
+              if (!homeDragActive) setHomeDragActive(true);
+            }}
+            onComposerWrapDragLeave={(e) => {
+              if (e.currentTarget === e.target) setHomeDragActive(false);
+            }}
+            onComposerWrapDrop={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              e.preventDefault();
+              setHomeDragActive(false);
+              addHomeAttachments(e.dataTransfer?.files ?? null);
+            }}
+            onComposerWrapPaste={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              const fs: File[] = [];
+              for (const it of Array.from(items)) {
+                if (it.kind === "file") {
+                  const f = it.getAsFile();
+                  if (f) fs.push(f);
+                }
+              }
+              if (fs.length > 0) {
+                e.preventDefault();
+                addHomeAttachments(fs);
+              }
+            }}
+            title={(
+              <span className="run-header-name-btn run-header-name-btn-static" aria-label="New session">
+                New session
+              </span>
+            )}
+            tabs={(<>
+              {/* Same Files / Settings / Help tab buttons the run pane
+                  renders, disabled-with-tooltip because they each read
+                  session-bound state (workspace files, per-session
+                  settings, in-session help). The user sees the same row
+                  in the same spot pre- and post-session. */}
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                aria-disabled="true"
+                title="Browse files once a session is open"
+              >
+                <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
+                <span>Files</span>
+              </button>
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                aria-disabled="true"
+                title="Session settings appear once a session is open"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                aria-disabled="true"
+                title="Help appears once a session is open"
+              >
+                <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Help</span>
+              </button>
+            </>)}
+            body={(<>
+              <div className="home-inner">
+                <section className="home-hero" aria-labelledby="home-title">
+                  <div>
+                    <h2 id="home-title" className="home-title">What do you want to build?</h2>
+                    <p className="home-sub">
+                      Type below to start a session — or pick a runtime and launcher first.
+                    </p>
+                  </div>
+                  <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
+                </section>
 
-              <div className="home-grid">
+                <div className="home-grid">
                 <section className="home-panel home-panel-start" aria-labelledby="home-start-title">
                   <div className="home-panel-head">
                     <h3 id="home-start-title">Configuration</h3>
@@ -8992,119 +9070,80 @@ export function App() {
                 </section>
               </div>
 
-              {/* Chat-style composer. Renders the same `ChatComposer` the
-                  run pane uses inside an active session — including the
-                  same icon row in `toolButtons`. Image attach is wired
-                  end-to-end: files buffered here are uploaded to the new
-                  pod after Ready and appended to the seed turn the same
-                  way the in-chat `composePromptWithAttachments` does it.
-                  Rollout / test / slash / MCP render disabled with
-                  tooltips, because those surfaces are session-state
-                  driven and can't act before a pod exists. Drop and
-                  clipboard-paste of files are accepted on the surrounding
-                  wrap, matching the run-pane behavior. */}
-              <div
-                className={`run-composer-wrap run-composer-wrap-home${homeDragActive ? " run-composer-wrap-drag" : ""}`}
-                onDragOver={(e) => {
-                  if (!CHAT_MODES.has(defaultSessionMode)) return;
-                  e.preventDefault();
-                  if (!homeDragActive) setHomeDragActive(true);
-                }}
-                onDragLeave={(e) => {
-                  if (e.currentTarget === e.target) setHomeDragActive(false);
-                }}
-                onDrop={(e) => {
-                  if (!CHAT_MODES.has(defaultSessionMode)) return;
-                  e.preventDefault();
-                  setHomeDragActive(false);
-                  addHomeAttachments(e.dataTransfer?.files ?? null);
-                }}
-                onPaste={(e) => {
-                  if (!CHAT_MODES.has(defaultSessionMode)) return;
-                  const items = e.clipboardData?.items;
-                  if (!items) return;
-                  const fs: File[] = [];
-                  for (const it of Array.from(items)) {
-                    if (it.kind === "file") {
-                      const f = it.getAsFile();
-                      if (f) fs.push(f);
-                    }
-                  }
-                  if (fs.length > 0) {
-                    e.preventDefault();
-                    addHomeAttachments(fs);
-                  }
-                }}
-              >
-                {homeDragActive && (
-                  <div className="run-composer-drop-overlay" aria-hidden="true">
-                    Drop to attach
-                  </div>
-                )}
-                {homeAttachments.length > 0 && (
-                  <div className="run-composer-attachments">
-                    {homeAttachments.map((a) => (
-                      <div
-                        key={a.id}
-                        className="run-composer-chip run-composer-chip-ready"
-                        title={a.name}
+              </div>
+            </>)}
+            composerAbove={(<>
+              {homeDragActive && (
+                <div className="run-composer-drop-overlay" aria-hidden="true">
+                  Drop to attach
+                </div>
+              )}
+              {homeAttachments.length > 0 && (
+                <div className="run-composer-attachments">
+                  {homeAttachments.map((a) => (
+                    <div
+                      key={a.id}
+                      className="run-composer-chip run-composer-chip-ready"
+                      title={a.name}
+                    >
+                      {a.previewUrl ? (
+                        <img
+                          className="run-composer-chip-thumb"
+                          src={a.previewUrl}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <FileIcon size={14} aria-hidden="true" />
+                      )}
+                      <span className="run-composer-chip-name">{a.name}</span>
+                      <button
+                        type="button"
+                        className="run-composer-chip-remove"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          removeHomeAttachment(a.id);
+                        }}
+                        aria-label={`Remove ${a.name}`}
                       >
-                        {a.previewUrl ? (
-                          <img
-                            className="run-composer-chip-thumb"
-                            src={a.previewUrl}
-                            alt=""
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <FileIcon size={14} aria-hidden="true" />
-                        )}
-                        <span className="run-composer-chip-name">{a.name}</span>
-                        <button
-                          type="button"
-                          className="run-composer-chip-remove"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            removeHomeAttachment(a.id);
-                          }}
-                          aria-label={`Remove ${a.name}`}
-                        >
-                          <XIcon size={11} aria-hidden="true" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <input
-                  ref={homeFileInputRef}
-                  type="file"
-                  multiple
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    addHomeAttachments(e.target.files);
-                    e.target.value = "";
-                  }}
-                />
-                <ChatComposer
-                  className="run-composer-home"
-                  placeholder={
-                    CHAT_MODES.has(defaultSessionMode)
-                      ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
-                      : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
-                  }
-                  onSubmit={({ text, permissionMode }) => {
-                    const trimmed = text.trim();
-                    void createSession(
-                      defaultSessionMode,
-                      trimmed || undefined,
-                      permissionMode,
-                    );
-                  }}
-                  permissionMode={homeComposerMode}
-                  onPermissionModeChange={setHomeComposerMode}
-                  sendByCtrlEnter={false}
-                  disabled={busy}
-                  toolButtons={
+                        <XIcon size={11} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <input
+                ref={homeFileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  addHomeAttachments(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </>)}
+            composer={(
+              <ChatComposer
+                placeholder={
+                  CHAT_MODES.has(defaultSessionMode)
+                    ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
+                    : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
+                }
+                onSubmit={({ text, permissionMode }) => {
+                  const trimmed = text.trim();
+                  void createSession(
+                    defaultSessionMode,
+                    trimmed || undefined,
+                    permissionMode,
+                  );
+                }}
+                permissionMode={homeComposerMode}
+                onPermissionModeChange={setHomeComposerMode}
+                sendByCtrlEnter={false}
+                hintSuffix=" · / for slash commands"
+                disabled={busy}
+                toolButtons={
                     <>
                       <button
                         type="button"
@@ -9156,14 +9195,13 @@ export function App() {
                         aria-label="Show MCP servers"
                         title="MCP servers appear once your session is connected"
                       >
-                        <McpIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
-                    </>
-                  }
-                />
-              </div>
-            </div>
-          </div>
+                      <McpIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                  </>
+                }
+              />
+            )}
+          />
         ) : (
           <div className="terminals">
             {sessions
