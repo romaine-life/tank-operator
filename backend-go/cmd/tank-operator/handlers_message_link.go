@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 	"os"
@@ -27,7 +28,14 @@ func wantsTankMessageLinkJSON(r *http.Request) bool {
 	case "json", "api":
 		return true
 	}
-	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "application/json")
+	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
+	if accept == "" || accept == "*/*" {
+		return true
+	}
+	if strings.Contains(accept, "application/json") {
+		return true
+	}
+	return !strings.Contains(accept, "text/html")
 }
 
 func tankMessageLinkParts(r *http.Request) (string, string) {
@@ -79,6 +87,7 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 }
 
 func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request) {
+	setTankMessageLinkHeaders(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	body := tankMessageLinkContract(r)
 	body["authenticated"] = false
@@ -141,16 +150,52 @@ func serveTankStaticIndexWithMessageLink(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	script := fmt.Sprintf("\n<script id=%q type=\"application/json\">%s</script>\n", tankMessageLinkScriptID, contract)
+	headTags := tankMessageLinkHeadTags(r)
 	html := string(data)
+	if strings.Contains(html, "</head>") {
+		html = strings.Replace(html, "</head>", headTags+"</head>", 1)
+	}
 	if strings.Contains(html, "</body>") {
 		html = strings.Replace(html, "</body>", script+"</body>", 1)
 	} else {
 		html += script
 	}
+	setTankMessageLinkHeaders(w, r)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(html))
+}
+
+func setTankMessageLinkHeaders(w http.ResponseWriter, r *http.Request) {
+	contract := tankMessageLinkContract(r)
+	jsonURL, _ := contract["json_url"].(string)
+	if jsonURL != "" {
+		w.Header().Add("Link", fmt.Sprintf("<%s>; rel=\"alternate\"; type=\"application/json\"; title=\"Tank message link contract\"", jsonURL))
+	}
+	if api, ok := contract["api"].(map[string]any); ok {
+		if timelineURL, _ := api["timeline_url"].(string); timelineURL != "" {
+			w.Header().Add("Link", fmt.Sprintf("<%s>; rel=\"related\"; type=\"application/json\"; title=\"Tank timeline window\"", timelineURL))
+		}
+	}
+}
+
+func tankMessageLinkHeadTags(r *http.Request) string {
+	contract := tankMessageLinkContract(r)
+	jsonURL, _ := contract["json_url"].(string)
+	tags := ""
+	if jsonURL != "" {
+		tags += fmt.Sprintf("\n<link rel=\"alternate\" type=\"application/json\" title=\"Tank message link contract\" href=\"%s\" />", html.EscapeString(jsonURL))
+	}
+	if api, ok := contract["api"].(map[string]any); ok {
+		if timelineURL, _ := api["timeline_url"].(string); timelineURL != "" {
+			tags += fmt.Sprintf("\n<link rel=\"related\" type=\"application/json\" title=\"Tank timeline window\" href=\"%s\" />", html.EscapeString(timelineURL))
+		}
+	}
+	if tags != "" {
+		tags += "\n"
+	}
+	return tags
 }
 
 func requestOrigin(r *http.Request) string {
