@@ -21,10 +21,10 @@ import (
 // undefined → undefined == null in JS → the OnboardingWall renders even
 // for users with the GitHub App installed.
 //
-// `role` rides along so the SPA's OnboardingWall can skip itself for callers
-// that do not need a user-facing GitHub installation: admins (covered by the
-// host installation) and service principals (platform-internal test/session
-// automation).
+// `github_access` is the server-owned repo-discovery capability contract. The
+// SPA must not infer GitHub access from role + installation_id: only the host
+// email uses the host installation, while other callers need a user-facing App
+// installation for repo enumeration.
 //
 // Keep this the single source of truth so the shape can't drift
 // between the two paths again.
@@ -37,6 +37,7 @@ func userResponseBody(sub, email, name, role string, profile profiles.Profile) m
 		"avatar_url":      auth.GravatarURL(email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
+		"github_access":   githubAccessForUser(email, role, profile),
 		"run_prefs":       profile.RunPrefs,
 	}
 }

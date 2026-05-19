@@ -242,6 +242,7 @@ func TestMeRejectsUnauthenticated(t *testing.T) {
 // are installed. That was the bug in #391; this test prevents it
 // reappearing if the helper is refactored.
 func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.com")
 	login := "octocat"
 	installationID := int64(42)
 	prefs := map[string]any{"chatFontScale": 1.25}
@@ -264,6 +265,13 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	if got, _ := body["run_prefs"].(map[string]any); got == nil || got["chatFontScale"] != 1.25 {
 		t.Fatalf("run_prefs = %#v", body["run_prefs"])
 	}
+	access, ok := body["github_access"].(githubAccessResponse)
+	if !ok {
+		t.Fatalf("github_access = %#v, want githubAccessResponse", body["github_access"])
+	}
+	if access.RepoSource != githubRepoSourceUser || !access.CanListRepos || access.RequiresOnboarding {
+		t.Fatalf("github_access = %#v, want user installation access", access)
+	}
 	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" || body["role"] != "admin" {
 		t.Fatalf("body = %#v", body)
 	}
@@ -281,6 +289,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 // semantics make (*int64)(nil) != nil for `==` purposes, but both
 // marshal to JSON null. The SPA only sees the JSON.
 func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.com")
 	body := userResponseBody("sub-1", "user@example.com", "User Name", "user", profiles.Profile{})
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -296,6 +305,33 @@ func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
 		} else if v != nil {
 			t.Fatalf("expected JSON null for %q, got %#v", key, v)
 		}
+	}
+	access, ok := parsed["github_access"].(map[string]any)
+	if !ok {
+		t.Fatalf("github_access = %#v", parsed["github_access"])
+	}
+	if access["repo_source"] != githubRepoSourceNone || access["can_list_repos"] != false || access["requires_onboarding"] != true {
+		t.Fatalf("github_access = %#v, want onboarding required with no repo source", access)
+	}
+}
+
+func TestUserResponseBodyHostUsesHostGitHubAccess(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.com")
+	body := userResponseBody("sub-1", "host@example.com", "Host", auth.RoleAdmin, profiles.Profile{})
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	access, ok := parsed["github_access"].(map[string]any)
+	if !ok {
+		t.Fatalf("github_access = %#v", parsed["github_access"])
+	}
+	if access["repo_source"] != githubRepoSourceHost || access["can_list_repos"] != true || access["requires_onboarding"] != false {
+		t.Fatalf("github_access = %#v, want host installation access", access)
 	}
 }
 

@@ -242,17 +242,17 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 
 // GET /api/github/repos counters. The endpoint proxies through to
 // mcp-github via an on-behalf-of token mint; both legs can fail
-// independently, so we surface a simple ok|error outcome label plus
-// the end-to-end latency histogram. The picker's "All repos" section
-// uses both: rate(error) > 0 → red banner on the dashboard; p95
-// > 2s → the SPA's spinner is starting to feel laggy.
+// independently, so we surface outcome, resolved repo source, and a
+// bounded reason label plus the end-to-end latency histogram. This
+// keeps the user-trust failures visible: missing installation, missing
+// MCP config, auth exchange failure, and upstream repo discovery failure.
 var (
 	githubRepoListRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tank_github_repo_list_requests_total",
-			Help: "Calls to /api/github/repos, labeled by outcome.",
+			Help: "Calls to /api/github/repos, labeled by outcome, repo source, and bounded reason.",
 		},
-		[]string{"result"},
+		[]string{"result", "repo_source", "reason"},
 	)
 	githubRepoListDurationSeconds = promauto.NewHistogram(
 		prometheus.HistogramOpts{
@@ -590,12 +590,12 @@ func (promPGMetrics) RecordQuery(operation, outcome string, duration time.Durati
 // interfaces, this won't silently fall back to "no metrics emitted" —
 // it will fail to build.
 var (
-	_ sessionbus.PersisterMetrics              = promPersisterMetrics{}
-	_ sessionbus.WakeMetrics                   = promWakeMetrics{}
-	_ sessionbus.ConnectionMetrics             = promNATSConnectionMetrics{}
-	_ pgstore.SQLMetrics                       = promPGMetrics{}
-	_ sessioncontroller.K8sWatchMetrics        = promK8sWatchMetrics{}
-	_ sessioncontroller.RowWriterMetrics       = promRowWriterMetrics{}
+	_ sessionbus.PersisterMetrics               = promPersisterMetrics{}
+	_ sessionbus.WakeMetrics                    = promWakeMetrics{}
+	_ sessionbus.ConnectionMetrics              = promNATSConnectionMetrics{}
+	_ pgstore.SQLMetrics                        = promPGMetrics{}
+	_ sessioncontroller.K8sWatchMetrics         = promK8sWatchMetrics{}
+	_ sessioncontroller.RowWriterMetrics        = promRowWriterMetrics{}
 	_ sessioncontroller.LifecycleEmitterMetrics = promLifecycleEmitterMetrics{}
 )
 

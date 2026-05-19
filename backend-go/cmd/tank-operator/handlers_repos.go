@@ -10,11 +10,9 @@
 //     caller's recently-selected repo slugs to the splash-page picker.
 //
 // The splash picker shows two sections: "Recent" (this endpoint) and
-// "All repos" (stage 2's mcp-github passthrough, not in this PR).
-// Recent works the moment the schema migration lands — no mcp-github
-// dependency — so stage 1 ships a fully functional UI for users who
-// re-use the same repos session to session, even before stage 2 makes
-// the "All repos" enumeration available.
+// "All repos" (/api/github/repos via mcp-github). Recent reads only the
+// durable sessions table; All repos reads the caller's explicit GitHub repo
+// source (user installation, host installation, or none).
 package main
 
 import (
@@ -135,6 +133,24 @@ const recentRepoLimit = 8
 // "recent" anymore.
 const recentRepoLookbackDays = 30
 
+const recentRepoQuery = `
+	WITH recent AS (
+		SELECT unnest(repos) AS slug, created_at
+		FROM sessions
+		WHERE email = $1
+		  AND session_scope = $2
+		  AND created_at > now() - ($3::integer * interval '1 day')
+	)
+	SELECT slug
+	FROM (
+		SELECT slug, MAX(created_at) AS last_used
+		FROM recent
+		GROUP BY slug
+	) ranked
+	ORDER BY last_used DESC
+	LIMIT $4
+`
+
 // handleGitHubRecentRepos returns the caller's recently-selected repo
 // slugs, deduped, in most-recent-first order. The picker uses this to
 // surface the "Recent" section before the stage 2 enumeration call
@@ -176,24 +192,7 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 	if owner == "" {
 		return []string{}, nil
 	}
-	const q = `
-		WITH recent AS (
-			SELECT unnest(repos) AS slug, created_at
-			FROM sessions
-			WHERE email = $1
-			  AND session_scope = $2
-			  AND created_at > now() - ($3 || ' days')::interval
-		)
-		SELECT slug
-		FROM (
-			SELECT slug, MAX(created_at) AS last_used
-			FROM recent
-			GROUP BY slug
-		) ranked
-		ORDER BY last_used DESC
-		LIMIT $4
-	`
-	rows, err := pool.Query(ctx, q, owner, scope, lookbackDays, limit)
+	rows, err := pool.Query(ctx, recentRepoQuery, owner, scope, lookbackDays, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +209,7 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 }
 
 // handleGitHubRepos returns the full set of repos visible to the
-// caller's GitHub App installation, by way of mcp-github.
+// caller's resolved GitHub App source, by way of mcp-github.
 //
 // Stage 2 of the per-session repo-selection feature: pairs with the
 // nelsong6/auth on-behalf-of exchange (PR #43) so the orchestrator
@@ -221,16 +220,34 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 // changes — the same MCP tool session pods already call.
 //
 // This endpoint is hidden behind the same authedFetch wrapper the
-// recent-repos endpoint uses. Failures from mcp-github (unconnected
-// installation, IdP down, transport error) surface as 502 with a
-// stable detail string the SPA can render in the picker.
+// recent-repos endpoint uses. Capability and failure states are
+// structured so the picker can distinguish "install required" from
+// upstream GitHub/MCP/IdP failures without inferring from role.
 func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
+	if s.profiles == nil {
+		githubRepoListRequestsTotal.WithLabelValues("error", githubRepoSourceNone, "profile_store_missing").Inc()
+		writeGitHubRepoListError(w, http.StatusInternalServerError, "profile_store_missing", "profile store not configured")
+		return
+	}
+	profile, err := s.profiles.GetOrCreate(r.Context(), user.Email)
+	if err != nil {
+		githubRepoListRequestsTotal.WithLabelValues("error", githubRepoSourceNone, "profile_lookup_failed").Inc()
+		writeGitHubRepoListError(w, http.StatusInternalServerError, "profile_lookup_failed", "profile lookup failed: "+err.Error())
+		return
+	}
+	access := githubAccessForUser(user.Email, user.Role, profile)
+	if !access.CanListRepos {
+		githubRepoListRequestsTotal.WithLabelValues("error", access.RepoSource, "installation_required").Inc()
+		writeGitHubRepoListError(w, http.StatusConflict, "github_installation_required", "GitHub App installation is required to list repositories")
+		return
+	}
 	if s.mcpGitHub == nil {
-		writeError(w, http.StatusServiceUnavailable, "mcp-github client not configured")
+		githubRepoListRequestsTotal.WithLabelValues("error", access.RepoSource, "mcp_not_configured").Inc()
+		writeGitHubRepoListError(w, http.StatusServiceUnavailable, "mcp_not_configured", "mcp-github client not configured")
 		return
 	}
 	start := time.Now()
@@ -241,14 +258,38 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	repos, err := s.mcpGitHub.ListRepos(ctx, user.Email)
 	if err != nil {
-		githubRepoListRequestsTotal.WithLabelValues("error").Inc()
+		status, code, reason, detail := classifyGitHubRepoListError(err)
+		githubRepoListRequestsTotal.WithLabelValues("error", access.RepoSource, reason).Inc()
 		slog.Warn("mcp-github list_installation_repos failed", "email", user.Email, "error", err)
-		writeError(w, http.StatusBadGateway, "list repos: "+err.Error())
+		writeGitHubRepoListError(w, status, code, detail)
 		return
 	}
-	githubRepoListRequestsTotal.WithLabelValues("ok").Inc()
+	githubRepoListRequestsTotal.WithLabelValues("ok", access.RepoSource, "none").Inc()
 	githubRepoListDurationSeconds.Observe(time.Since(start).Seconds())
-	writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repos":       repos,
+		"repo_source": access.RepoSource,
+	})
+}
+
+func writeGitHubRepoListError(w http.ResponseWriter, status int, code, detail string) {
+	writeJSON(w, status, map[string]string{
+		"code":   code,
+		"detail": detail,
+	})
+}
+
+func classifyGitHubRepoListError(err error) (status int, code, reason, detail string) {
+	msg := err.Error()
+	if strings.Contains(msg, "no GitHub App installation") ||
+		strings.Contains(msg, "no GitHub installation_id") ||
+		strings.Contains(msg, "caller has no GitHub installation_id") {
+		return http.StatusConflict, "github_installation_required", "installation_required", "GitHub App installation is required to list repositories"
+	}
+	if strings.Contains(msg, "mint on-behalf-of token") || strings.Contains(msg, "exchange returned") {
+		return http.StatusBadGateway, "github_auth_exchange_failed", "auth_exchange_failed", "list repos: " + msg
+	}
+	return http.StatusBadGateway, "github_repo_discovery_failed", "upstream_failed", "list repos: " + msg
 }
 
 // AppServerMCPGitHub abstracts the mcpgithub client surface so tests

@@ -83,7 +83,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
-import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
+import { requiresGitHubOnboarding, type GitHubAccess, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
   reduceConversationEvents,
@@ -852,17 +852,19 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
-  // Platform role carried in the tank-operator session JWT. `admin` and
-  // `service` bypass the OnboardingWall; `user` is the standard signed-in
-  // caller. auth.romaine.life mints `pending` by default but tank-operator's
-  // exchange rejects that before a session JWT is ever issued.
+  // Platform role carried in the tank-operator session JWT. auth.romaine.life
+  // mints `pending` by default but tank-operator's exchange rejects that before
+  // a session JWT is ever issued. GitHub repo access is described separately by
+  // github_access.
   role: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
-  // GitHub App install. installation_id presence drives the onboarding
-  // wall — null means show the install CTA, non-null means full app.
+  // GitHub App install. Repo discovery capability is server-owned in
+  // github_access; role + installation_id are not enough to infer it because
+  // only the host account can use the host installation.
   github_login: string | null;
   installation_id: number | null;
+  github_access: GitHubAccess;
   // Phase E: cross-device run-pane prefs. Null when the user has never
   // saved prefs; SPA falls back to localStorage + defaults.
   run_prefs: Record<string, unknown> | null;
@@ -7833,15 +7835,15 @@ export function App() {
   //     close.
   //   - repoInput: the manual-entry text field's controlled value.
   //
-  // Stage 2 will widen the picker with an "All repos" section sourced
-  // from /api/github/repos; until then the manual text input is the
-  // escape hatch for first-use repos.
+  // The "All repos" section is sourced from /api/github/repos. The manual
+  // text input remains the escape hatch for first-use repos and transient
+  // discovery failures.
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
-  // Stage 2: All-repos lazy-load state. Sourced from /api/github/repos,
+  // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
   // result. Refreshed after a successful session create so just-used
@@ -7903,9 +7905,9 @@ export function App() {
     }
   }, []);
 
-  // Stage 2: fetch the full installation repo list. Lazy-loaded on
-  // first picker open and refreshed after a successful session create
-  // so just-installed repos appear in the list next time.
+  // Fetch the resolved GitHub repo list. Lazy-loaded on first picker open
+  // and refreshed after a successful session create so just-installed repos
+  // appear in the list next time.
   //
   // The endpoint mints an on-behalf-of service JWT (auth.romaine.life
   // PR #43) and proxies to mcp-github; failures here become a
@@ -7913,6 +7915,14 @@ export function App() {
   // than a silent empty list — the user can still type owner/name and
   // click Add to use an exact slug.
   const loadAllRepos = useCallback(async (): Promise<void> => {
+    if (!user?.github_access.can_list_repos) {
+      setAllRepos({
+        status: "error",
+        repos: [],
+        error: "GitHub App installation is required to load repositories.",
+      });
+      return;
+    }
     setAllRepos((prev) =>
       prev.status === "ready" ? prev : { status: "loading", repos: [] },
     );
@@ -7921,8 +7931,12 @@ export function App() {
       if (!res.ok) {
         let detail = `HTTP ${res.status}`;
         try {
-          const body = await res.json();
-          if (typeof body?.detail === "string") detail = body.detail;
+          const body = (await res.json()) as { code?: string; detail?: string };
+          if (typeof body?.detail === "string") {
+            detail = body.detail;
+          } else if (typeof body?.code === "string") {
+            detail = body.code;
+          }
         } catch {
           // Keep the status-only detail when response isn't JSON.
         }
@@ -7931,6 +7945,7 @@ export function App() {
       }
       const body = (await res.json()) as {
         repos?: Array<{ full_name?: string } & Record<string, unknown>>;
+        repo_source?: string;
       };
       const slugs = Array.isArray(body.repos)
         ? body.repos
@@ -7945,7 +7960,7 @@ export function App() {
         error: String(e instanceof Error ? e.message : e),
       });
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -8770,9 +8785,9 @@ export function App() {
     return <DemoLanding />;
   }
 
-  // Admins and service principals bypass the wall: admins use the host
-  // installation for MCP-github, and service principals are platform-internal
-  // callers used by test automation and session-pod handoffs.
+  // The backend owns GitHub repo-access policy. Standard users without an
+  // installation hit the onboarding wall; host admins and platform-internal
+  // service callers do not.
   if (requiresGitHubOnboarding(user)) {
     return <OnboardingWall user={user} onLogout={logout} />;
   }

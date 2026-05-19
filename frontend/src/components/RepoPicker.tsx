@@ -3,10 +3,10 @@
 //
 // Stage 1 of the auto-clone feature (per docs/quality-timeframes.md
 // "Acceptable chunking: a sequence of PRs where each PR leaves the
-// system in a coherent state"). This PR ships the durable selection,
-// the recent-repos surface, and the chip+picker UI. Stage 2 will add
-// an "All repos" enumeration sourced from mcp-github; stage 3 ships
-// the init container that actually clones.
+// system in a coherent state"). The picker ships the durable selection,
+// the recent-repos surface, and an "All repos" enumeration sourced from
+// mcp-github through /api/github/repos. A later stage ships the init
+// container that actually clones.
 //
 // UX shape:
 //   - The selected repos render as removable chips above the trigger.
@@ -28,8 +28,8 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { isValidRepoSlug } from "../repos";
 
-/** allRepos surfaces the user's full GitHub App installation, sourced
- *  from /api/github/repos (stage 2). The picker filters this list by
+/** allRepos surfaces the caller's resolved GitHub repo source, sourced
+ *  from /api/github/repos. The picker filters this list by
  *  the typed input and renders matches above the Recent section.
  *  Optional — the picker still works on Recent + manual-entry when
  *  this prop isn't provided. */
@@ -37,7 +37,7 @@ export interface AllReposState {
   /** "idle" before the first fetch; "loading" during the fetch;
    *  "ready" when the list is populated; "error" when it failed. */
   status: "idle" | "loading" | "ready" | "error";
-  /** The repo slugs the user's installation can see. Stable shape
+  /** The repo slugs the caller's resolved GitHub source can see. Stable shape
    *  regardless of `status`; check `status` before rendering. */
   repos: string[];
   /** User-facing error string when status === "error". */
@@ -49,7 +49,7 @@ export interface RepoPickerProps {
   selected: string[];
   /** Recently-used slugs surfaced as one-click suggestions. */
   recent: string[];
-  /** Optional full-installation enumeration (stage 2). */
+  /** Optional full-source enumeration. */
   allRepos?: AllReposState;
   /** Called once when the picker opens so the parent can lazy-load
    *  /api/github/repos. Parent owns dedupe — picker calls this
@@ -222,9 +222,8 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
 //
 //   1. Recent: the slugs the user has selected on prior sessions
 //      (durable; sourced from GET /api/github/recent-repos).
-//   2. All repos: the user's full GitHub App installation, sourced
-//      from GET /api/github/repos (stage 2). Lazy-loaded on first
-//      picker open.
+//   2. All repos: the caller's resolved GitHub repo source, sourced
+//      from GET /api/github/repos. Lazy-loaded on first picker open.
 //
 // Both lists are live-filtered by the typed input (substring,
 // case-insensitive). When the input is empty we hide All-repos

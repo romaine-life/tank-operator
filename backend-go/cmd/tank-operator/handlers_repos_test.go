@@ -1,9 +1,17 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
+	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -155,6 +163,120 @@ func TestRepoSelectionBucket(t *testing.T) {
 			t.Errorf("repoSelectionBucket(%d) = %q, want %q", n, got, want)
 		}
 	}
+}
+
+func TestRecentRepoQueryUsesTypedLookbackInterval(t *testing.T) {
+	if strings.Contains(recentRepoQuery, "|| ' days'") {
+		t.Fatalf("recentRepoQuery still string-concats interval: %s", recentRepoQuery)
+	}
+	if !strings.Contains(recentRepoQuery, "$3::integer * interval '1 day'") {
+		t.Fatalf("recentRepoQuery does not cast lookback days as integer interval: %s", recentRepoQuery)
+	}
+}
+
+func TestHandleGitHubReposRequiresInstallationWhenNoRepoSource(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.test")
+	server := &appServer{
+		verifier: auth.NewVerifier(testJWT(t)),
+		profiles: testProfilesStore{
+			"user@example.test": profiles.Profile{Email: "user@example.test"},
+		},
+		mcpGitHub: &fakeRepoLister{},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "user@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubRepos(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "github_installation_required" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+func TestHandleGitHubReposHostUsesHostSourceWithoutInstallation(t *testing.T) {
+	t.Setenv("HOST_EMAIL", "host@example.test")
+	repoLister := &fakeRepoLister{
+		repos: []mcpgithub.Repo{{FullName: "nelsong6/tank-operator", Private: false}},
+	}
+	server := &appServer{
+		verifier:  auth.NewVerifier(testJWT(t)),
+		profiles:  testProfilesStore{},
+		mcpGitHub: repoLister,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "host@example.test", auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubRepos(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if repoLister.email != "host@example.test" {
+		t.Fatalf("ListRepos email = %q, want host@example.test", repoLister.email)
+	}
+	var body struct {
+		RepoSource string           `json:"repo_source"`
+		Repos      []mcpgithub.Repo `json:"repos"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RepoSource != githubRepoSourceHost {
+		t.Fatalf("repo_source = %q, want %q", body.RepoSource, githubRepoSourceHost)
+	}
+	if len(body.Repos) != 1 || body.Repos[0].FullName != "nelsong6/tank-operator" {
+		t.Fatalf("repos = %+v", body.Repos)
+	}
+}
+
+func TestHandleGitHubReposClassifiesUpstreamMissingInstallation(t *testing.T) {
+	installationID := int64(42)
+	server := &appServer{
+		verifier: auth.NewVerifier(testJWT(t)),
+		profiles: testProfilesStore{
+			"user@example.test": profiles.Profile{Email: "user@example.test", InstallationID: &installationID},
+		},
+		mcpGitHub: &fakeRepoLister{err: errors.New("mcp-github error -32603: no GitHub App installation registered for user@example.test")},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/github/repos", nil)
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, "user@example.test", auth.RoleUser))
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubRepos(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "github_installation_required" {
+		t.Fatalf("body = %#v", body)
+	}
+}
+
+type fakeRepoLister struct {
+	repos []mcpgithub.Repo
+	err   error
+	email string
+}
+
+func (f *fakeRepoLister) ListRepos(_ context.Context, userEmail string) ([]mcpgithub.Repo, error) {
+	f.email = userEmail
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.repos, nil
 }
 
 func stringSliceEqual(a, b []string) bool {

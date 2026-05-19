@@ -56,6 +56,9 @@ workspace are gone; Tank does not try to resurrect that pod or preserve
 in-flight agent work after it. Do not treat that as a product gap unless the
 session lifecycle goal changes.
 
+Repo picker discovery and onboarding policy are described in
+[docs/repo-selection.md](docs/repo-selection.md).
+
 ## Repo layout
 
 ```

@@ -1,4 +1,4 @@
-import type { SessionRole } from "./authPolicy";
+import type { GitHubAccess, SessionRole } from "./authPolicy";
 
 // Microsoft sign-in happens upstream at auth.romaine.life. This SPA:
 //   1. On boot, checks for a stored tank-operator session JWT and validates
@@ -23,12 +23,13 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
-  /** Platform role from the auth.romaine.life JWT. `admin` and `service`
-   *  bypass the GitHub install wall; `user` is the standard signed-in caller. */
+  /** Platform role from the auth.romaine.life JWT. GitHub repo access is
+   *  described by github_access; do not infer it from role alone. */
   role: SessionRole;
   avatar_url: string;
   github_login: string | null;
   installation_id: number | null;
+  github_access: GitHubAccess;
   run_prefs: Record<string, unknown> | null;
 }
 

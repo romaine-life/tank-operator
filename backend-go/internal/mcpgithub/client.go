@@ -64,7 +64,7 @@ const DefaultSATokenPath = "/var/run/secrets/auth.romaine.life/token"
 
 // Repo is the projection mcp-github's `list_installation_repos`
 // returns, narrowed to the fields the picker renders. Mirrors the
-// JSON-RPC tool's `repos[]` row schema; extra fields the tool emits
+// JSON-RPC tool's `repositories[]` row schema; extra fields the tool emits
 // (description, language, etc.) are dropped at parse time.
 type Repo struct {
 	Owner    string `json:"owner"`
@@ -94,15 +94,15 @@ type Options struct {
 // burst of SPA opens against the picker doesn't fan out to N exchange
 // requests for the same user.
 type Client struct {
-	http       *http.Client
-	exchange   string
-	mcpURL     string
-	saPath     string
-	readToken  func(path string) (string, error)
-	now        func() time.Time
-	cacheLock  sync.RWMutex
-	cache      map[string]cachedToken
-	mintGroup  singleflight.Group
+	http      *http.Client
+	exchange  string
+	mcpURL    string
+	saPath    string
+	readToken func(path string) (string, error)
+	now       func() time.Time
+	cacheLock sync.RWMutex
+	cache     map[string]cachedToken
+	mintGroup singleflight.Group
 }
 
 type cachedToken struct {
@@ -355,7 +355,7 @@ func parseListReposResponse(reader interface {
 
 	// Pick whichever projection the server emitted.
 	var toolResult struct {
-		Repos []Repo `json:"repos"`
+		Repositories []Repo `json:"repositories"`
 	}
 	if len(envelope.Result.StructuredContent) > 0 {
 		if err := json.Unmarshal(envelope.Result.StructuredContent, &toolResult); err != nil {
@@ -372,8 +372,8 @@ func parseListReposResponse(reader interface {
 			break
 		}
 	}
-	if toolResult.Repos == nil {
-		toolResult.Repos = []Repo{}
+	if toolResult.Repositories == nil {
+		return nil, errors.New("mcp-github result missing repositories")
 	}
-	return toolResult.Repos, nil
+	return toolResult.Repositories, nil
 }

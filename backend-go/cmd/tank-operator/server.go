@@ -103,10 +103,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// it works the moment the schema migration lands. See
 	// handlers_repos.go for the SQL.
 	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
-	// /api/github/repos enumerates the caller's GitHub App installation
-	// repos via mcp-github. Stage 2 of the auto-clone feature; pairs
-	// with the auth.romaine.life on-behalf-of exchange so the
-	// orchestrator can mint a service JWT acting for the SPA user.
+	// /api/github/repos enumerates the caller's resolved GitHub repo source
+	// via mcp-github. Stage 2 of the auto-clone feature; pairs with the
+	// auth.romaine.life on-behalf-of exchange so the orchestrator can mint a
+	// service JWT acting for the SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
@@ -160,7 +160,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// CLI / sandbox agent.
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
-
 
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)

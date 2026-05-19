@@ -67,9 +67,9 @@ func (f *fakeMCPServer) start(t *testing.T) (exchangeURL, mcpURL string, stop fu
 
 func defaultMCPResponse() string {
 	// MCP SDK default codec wraps tool results in
-	// {result: {structuredContent: {repos: [...]}}}. Mirror that
+	// {result: {structuredContent: {repositories: [...]}}}. Mirror that
 	// shape so the client's parser exercises the production path.
-	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[{"owner":"nelsong6","name":"tank-operator","full_name":"nelsong6/tank-operator","private":false},{"owner":"nelsong6","name":"mcp-github","full_name":"nelsong6/mcp-github","private":true}]}}}`
+	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"owner":"nelsong6","name":"tank-operator","full_name":"nelsong6/tank-operator","private":false},{"owner":"nelsong6","name":"mcp-github","full_name":"nelsong6/mcp-github","private":true}]}}}`
 }
 
 func TestListRepos_HappyPath(t *testing.T) {
@@ -240,7 +240,7 @@ func TestListRepos_ReadTokenError(t *testing.T) {
 // JSON-RPC envelope inside a `data:` line.
 func TestParseListReposResponse_SSE(t *testing.T) {
 	sse := "event: message\n" +
-		`data: {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[{"owner":"foo","name":"bar","full_name":"foo/bar","private":false}]}}}` + "\n\n"
+		`data: {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"owner":"foo","name":"bar","full_name":"foo/bar","private":false}]}}}` + "\n\n"
 	repos, err := parseListReposResponse(strings.NewReader(sse))
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestParseListReposResponse_SSE(t *testing.T) {
 // `structuredContent`. Tolerated so a future SDK rev that switches
 // shapes doesn't break the picker silently.
 func TestParseListReposResponse_ContentTextFallback(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"repos\":[{\"owner\":\"foo\",\"name\":\"bar\",\"full_name\":\"foo/bar\",\"private\":false}]}"}]}}`
+	body := `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"repositories\":[{\"owner\":\"foo\",\"name\":\"bar\",\"full_name\":\"foo/bar\",\"private\":false}]}"}]}}`
 	repos, err := parseListReposResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -277,12 +277,12 @@ func TestParseListReposResponse_RPCError(t *testing.T) {
 	}
 }
 
-// TestParseListReposResponse_EmptyResult tolerates an empty repos
+// TestParseListReposResponse_EmptyResult tolerates an empty repositories
 // list (user with installation but no accessible repos) and renders
 // it as an empty array rather than nil — keeps the SPA's downstream
 // `.map` simple.
 func TestParseListReposResponse_EmptyResult(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[]}}}`
+	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[]}}}`
 	repos, err := parseListReposResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -292,5 +292,13 @@ func TestParseListReposResponse_EmptyResult(t *testing.T) {
 	}
 	if len(repos) != 0 {
 		t.Fatalf("repos = %+v", repos)
+	}
+}
+
+func TestParseListReposResponse_MissingRepositoriesIsError(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[]}}}`
+	_, err := parseListReposResponse(strings.NewReader(body))
+	if err == nil || !strings.Contains(err.Error(), "missing repositories") {
+		t.Fatalf("expected missing repositories error, got %v", err)
 	}
 }
