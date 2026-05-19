@@ -336,6 +336,24 @@ test("completed item with result_failed outcome warns without failing the sessio
   assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "warned");
 });
 
+test("completed command item with legacy nonzero raw exit code warns", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "codex" }),
+    ev("2", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "legacy-exit",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc 'exit 1'",
+        raw_item: { exit_code: 1 },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "warned");
+});
+
 test("tool.approval_resolved preserves warned status from result_failed outcome", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "claude" }),

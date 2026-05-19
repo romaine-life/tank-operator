@@ -331,8 +331,23 @@ function stringPayload(event: TankConversationEvent, key: string): string | unde
 
 function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {
   const outcome = event.payload?.outcome;
-  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return "completed";
-  return (outcome as { kind?: unknown }).kind === "result_failed" ? "warned" : "completed";
+  if (outcome && typeof outcome === "object" && !Array.isArray(outcome)) {
+    return (outcome as { kind?: unknown }).kind === "result_failed" ? "warned" : "completed";
+  }
+  return nonzeroExitCode(event.payload?.exit_code) || nonzeroExitCode(rawPayload(event)?.exit_code)
+    ? "warned"
+    : "completed";
+}
+
+function rawPayload(event: TankConversationEvent): Record<string, unknown> | undefined {
+  const raw = event.payload?.raw_item;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+}
+
+function nonzeroExitCode(value: unknown): boolean {
+  if (typeof value === "number" && Number.isInteger(value)) return value !== 0;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value) !== 0;
+  return false;
 }
 
 // stringTopLevel reads a top-level (envelope) string field from a Tank event.
