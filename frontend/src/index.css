@@ -2261,6 +2261,18 @@ button:disabled {
   margin-bottom: 0.25rem;
 }
 
+.home-repos-recent-count {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.home-repos-empty {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  padding: var(--space-1) 0;
+}
+
 .home-repos-recent-list {
   display: flex;
   flex-wrap: wrap;

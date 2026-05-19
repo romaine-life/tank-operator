@@ -24,7 +24,9 @@
 // keeps the picker a pure render of the parent's state, which is
 // what the vitest in RepoPicker.test.tsx asserts.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+
+import { isValidRepoSlug } from "../repos";
 
 export interface RepoPickerProps {
   /** Currently-staged repo slugs (chips). */
@@ -159,37 +161,108 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
             </button>
           </form>
           {error && <div className="home-repos-error" role="alert">{error}</div>}
-          {recent.length > 0 && (
-            <div className="home-repos-recent">
-              <div className="home-repos-recent-label">Recent</div>
-              <ul className="home-repos-recent-list" role="list">
-                {recent.map((slug) => {
-                  const alreadyPicked = selectedLower.current.has(slug.toLowerCase());
-                  return (
-                    <li key={slug} className="home-repos-recent-item">
-                      <button
-                        type="button"
-                        className={
-                          "home-repos-recent-chip" +
-                          (alreadyPicked ? " is-disabled" : "")
-                        }
-                        onClick={() => !alreadyPicked && onAdd(slug)}
-                        disabled={busy || alreadyPicked}
-                        title={alreadyPicked ? `${slug} (already added)` : slug}
-                      >
-                        {slug}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
+          <RepoPickerSuggestions
+            input={input}
+            recent={recent}
+            selectedLower={selectedLower.current}
+            busy={busy}
+            onAdd={onAdd}
+          />
           <div className="home-repos-help">
             Selected repos clone into <code>/workspace</code> at session start.
+            Live search across your GitHub installation lands in stage 2.
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+// RepoPickerSuggestions renders the section below the manual-entry
+// input. Stage 1 has no GitHub-side search, so this block is
+// deliberately honest about that:
+//
+//   - When the user has typed a valid `owner/name`, we point them at
+//     the Add button.
+//   - When the user has typed anything else, we show a "no live
+//     search yet" hint with the regex shape.
+//   - The Recent list is filtered by the input text (substring,
+//     case-insensitive) so the user gets the closest thing to
+//     autocomplete we can offer from data we have.
+//   - When Recent is empty AND no input, we show an explicit empty
+//     state so the picker doesn't look like a broken search box.
+//
+// Stage 2 will replace this block with the mcp-github "All repos"
+// lookahead.
+interface RepoPickerSuggestionsProps {
+  input: string;
+  recent: string[];
+  selectedLower: ReadonlySet<string>;
+  busy: boolean;
+  onAdd: (slug: string) => void;
+}
+
+function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
+  const { input, recent, selectedLower, busy, onAdd } = props;
+  const trimmed = input.trim();
+  const looksLikeSlug = trimmed !== "" && isValidRepoSlug(trimmed);
+
+  // Live-filter Recent by the trimmed input text. The match is
+  // intentionally permissive (substring, case-insensitive) so a user
+  // who has typed "nelsong6/" still sees their nelsong6 repos.
+  const filteredRecent = useMemo(() => {
+    if (recent.length === 0) return [];
+    if (trimmed === "") return recent;
+    const needle = trimmed.toLowerCase();
+    return recent.filter((slug) => slug.toLowerCase().includes(needle));
+  }, [recent, trimmed]);
+
+  // Empty-state messaging: surface why no suggestions appear, so the
+  // picker doesn't read like a broken search box. Three states:
+  //   1. Recent is empty (first-time user) — "No recent repos yet"
+  //   2. Recent has items but the typed input filters them all out — "No matching recent repos"
+  //   3. Recent has items and at least one matches — render the list
+  if (filteredRecent.length === 0) {
+    return (
+      <div className="home-repos-empty">
+        {recent.length === 0
+          ? "No recent repos yet — type owner/name above and click Add."
+          : `No matching recent repos.${looksLikeSlug ? " Click Add to use this exact slug." : ""}`}
+      </div>
+    );
+  }
+
+  return (
+    <div className="home-repos-recent">
+      <div className="home-repos-recent-label">
+        Recent
+        {trimmed !== "" && (
+          <span className="home-repos-recent-count">
+            {" "}({filteredRecent.length} match{filteredRecent.length === 1 ? "" : "es"})
+          </span>
+        )}
+      </div>
+      <ul className="home-repos-recent-list" role="list">
+        {filteredRecent.map((slug) => {
+          const alreadyPicked = selectedLower.has(slug.toLowerCase());
+          return (
+            <li key={slug} className="home-repos-recent-item">
+              <button
+                type="button"
+                className={
+                  "home-repos-recent-chip" +
+                  (alreadyPicked ? " is-disabled" : "")
+                }
+                onClick={() => !alreadyPicked && onAdd(slug)}
+                disabled={busy || alreadyPicked}
+                title={alreadyPicked ? `${slug} (already added)` : slug}
+              >
+                {slug}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
