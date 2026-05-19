@@ -129,6 +129,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
+import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
 
 type SessionMode =
   | "api_key"
@@ -3332,13 +3333,14 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
 const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
 function RunMarkdown({ children }: { children: string }) {
+  const linkedChildren = useMemo(() => linkWorkspacePathsInMarkdown(children), [children]);
   return (
     <Streamdown
       components={RUN_MARKDOWN_COMPONENTS}
       linkSafety={{ enabled: false }}
       shikiTheme={STREAMDOWN_DARK_THEME}
     >
-      {children}
+      {linkedChildren}
     </Streamdown>
   );
 }
