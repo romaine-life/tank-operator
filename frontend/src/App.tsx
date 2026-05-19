@@ -129,6 +129,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
+import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
 
 type SessionMode =
   | "api_key"
@@ -137,6 +138,7 @@ type SessionMode =
   | "config"
   | "codex_cli"
   | "codex_gui"
+  | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
   | "pi_cli"
@@ -147,7 +149,7 @@ type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
-  | "codex_app_server"
+  | "codex_exec_gui"
   | "pi_cli"
 >;
 type Provider = "anthropic" | "codex" | "pi";
@@ -169,6 +171,8 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  startedAt?: string;
+  completedAt?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble swaps in that session's deterministic avatar in
@@ -278,6 +282,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   config: "Claude config",
   codex_cli: "Codex CLI",
   codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   pi_cli: "Pi CLI",
@@ -293,6 +298,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_cli: "codex-cli",
   codex_gui: "codex-gui",
+  codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   pi_cli: "pi-cli",
@@ -304,6 +310,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_gui: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   pi_cli: "pi",
 };
@@ -315,6 +322,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   config: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
   pi_cli: "pi",
@@ -349,7 +357,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
-  codex_gui: "GUI chat pane for codex exec output",
+  codex_gui: "GUI chat pane for Codex app-server transport",
+  codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
@@ -361,7 +370,7 @@ const MODE_ORDER: SessionMode[] = [
   "api_key",
   "config",
   "codex_gui",
-  "codex_app_server",
+  "codex_exec_gui",
   "codex_config",
   "pi_cli",
   "pi_config",
@@ -474,14 +483,14 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server"
+  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server") {
+    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else if (session.mode === "pi_cli") {
       lines[lines.length - 1] = `> ${promptText}`;
@@ -592,7 +601,7 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_app_server"
+  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
     ? "Codex"
     : mode === "pi_cli"
       ? "Pi"
@@ -637,7 +646,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
-    value === "codex_app_server" ||
+    value === "codex_exec_gui" ||
     value === "pi_cli"
   );
 }
@@ -645,6 +654,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(localStorage.getItem(DEFAULT_SESSION_MODE_KEY));
+    if (stored === "codex_app_server") return "codex_gui";
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
@@ -808,10 +818,10 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -2762,6 +2772,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           toolInput: entry.toolInput,
           toolOutput: entry.toolOutput,
           toolStatus: entry.toolStatus,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
         };
       }
       if (entry.kind === "reasoning") {
@@ -2998,6 +3010,79 @@ function formatMessageTime(iso: string): string {
   } catch {
     return "";
   }
+}
+
+function formatToolClockTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatToolFullTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function toolTimingTitle(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+  running: boolean,
+): string | undefined {
+  const start = formatToolFullTime(startedAt);
+  const end = formatToolFullTime(completedAt);
+  if (!start && !end && !running) return undefined;
+  if (running) return start ? `Started ${start}; still running` : "Still running";
+  if (start && end) return `Started ${start}; ended ${end}`;
+  if (start) return `Started ${start}`;
+  return end ? `Ended ${end}` : undefined;
+}
+
+function ToolTiming({
+  startedAt,
+  completedAt,
+  running,
+}: {
+  startedAt?: string;
+  completedAt?: string;
+  running: boolean;
+}) {
+  const start = formatToolClockTime(startedAt);
+  const end = formatToolClockTime(completedAt);
+  if (!start && !end && !running) return null;
+  const title = toolTimingTitle(startedAt, completedAt, running);
+  return (
+    <span className="run-tool-timing" title={title} aria-label={title}>
+      {start && <span className="run-tool-timing-start">{start}</span>}
+      {start && (end || running) && (
+        <span className="run-tool-timing-arrow" aria-hidden="true">
+          →
+        </span>
+      )}
+      {running ? (
+        <span className="run-tool-timing-running">
+          <Loader2Icon
+            size={11}
+            className="run-spin run-tool-timing-spinner"
+            aria-hidden="true"
+          />
+          <span className="sr-only">running</span>
+        </span>
+      ) : (
+        end && <span className="run-tool-timing-end">{end}</span>
+      )}
+    </span>
+  );
 }
 
 function formatTurnDuration(ms: number): string {
@@ -3332,13 +3417,14 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
 const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
 function RunMarkdown({ children }: { children: string }) {
+  const linkedChildren = useMemo(() => linkWorkspacePathsInMarkdown(children), [children]);
   return (
     <Streamdown
       components={RUN_MARKDOWN_COMPONENTS}
       linkSafety={{ enabled: false }}
       shikiTheme={STREAMDOWN_DARK_THEME}
     >
-      {children}
+      {linkedChildren}
     </Streamdown>
   );
 }
@@ -3626,38 +3712,36 @@ function ToolAskUserBody({
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the in-flight click-to-submit UX.
   const durableAnswers = entry.askUserAnswers;
-  const answered =
-    (durableAnswers && Object.keys(durableAnswers).length > 0) ||
-    entry.toolStatus === "completed";
+  const hasDurableAnswers =
+    !!durableAnswers && Object.keys(durableAnswers).length > 0;
+  const answered = hasDurableAnswers || entry.toolStatus === "completed";
 
-  if (answered) {
-    return (
-      <div className="run-tool-body run-tool-ask">
-        {durableAnswers && Object.entries(durableAnswers).length > 0 ? (
-          <ul className="run-tool-ask-answered-list">
-            {Object.entries(durableAnswers).map(([question, answer]) => (
-              <li key={question} className="run-tool-ask-answered-item">
-                <span className="run-tool-ask-answered-question">{question}</span>
-                <span className="run-tool-ask-answered-arrow"> → </span>
-                <span className="run-tool-ask-answered-labels">{answer.labels.join(", ")}</span>
-                {answer.notes && (
-                  <span className="run-tool-ask-answered-notes"> ({answer.notes})</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className="run-tool-ask-answered">answered</span>
-        )}
-      </div>
-    );
+  // After answering, the per-question UI stays rendered so the user
+  // can scroll back in chat history and see exactly what was offered
+  // and what they picked. The durable answer payload drives the
+  // selected/muted state; local `selections` only matters before
+  // submit.
+  function selectedLabelsFor(q: AskUserQuestion): string[] {
+    if (answered && durableAnswers && durableAnswers[q.question]) {
+      return durableAnswers[q.question].labels;
+    }
+    return selections[q.question] ?? [];
+  }
+
+  function answeredNoteFor(question: string): string | undefined {
+    if (answered && durableAnswers && durableAnswers[question]) {
+      return durableAnswers[question].notes;
+    }
+    return undefined;
   }
 
   const isReady =
+    !answered &&
     questions.length > 0 &&
     questions.every((q) => (selections[q.question]?.length ?? 0) > 0);
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
+    if (answered) return;
     setSelections((prev) => {
       const current = prev[q.question] ?? [];
       if (q.multiSelect) {
@@ -3702,51 +3786,102 @@ function ToolAskUserBody({
     }
   }
 
+  // Edge case: tool completed without a durable answer payload (legacy
+  // events, or a non-input_reply completion path). The question UI is
+  // still useful for context, but we tag the body so the styles can
+  // make the unanswered options look inert.
+  const completedWithoutAnswers = answered && !hasDurableAnswers;
+
   return (
-    <div className="run-tool-body run-tool-ask">
+    <div
+      className={`run-tool-body run-tool-ask${answered ? " run-tool-ask-locked" : ""}`}
+      data-answered={answered ? "true" : "false"}
+    >
+      {answered && (
+        <div className="run-tool-ask-status" role="status">
+          <span className="run-tool-ask-status-icon" aria-hidden="true">✓</span>
+          <span className="run-tool-ask-status-label">
+            {completedWithoutAnswers ? "Answered" : "Your answer"}
+          </span>
+        </div>
+      )}
       {questions.map((q, qi) => {
-        const selectedLabels = selections[q.question] ?? [];
+        const selectedLabels = selectedLabelsFor(q);
+        const answeredNote = answeredNoteFor(q.question);
+        const liveNote = notes[q.question] ?? "";
+        const showPreNotesField =
+          !answered &&
+          selectedLabels.length > 0 &&
+          q.options.some((opt) => opt.preview);
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
             {q.question && <p className="run-tool-ask-text">{q.question}</p>}
-            <div className="run-tool-ask-options">
+            <div
+              className="run-tool-ask-options"
+              role={q.multiSelect ? "group" : "radiogroup"}
+              aria-label={q.question}
+            >
               {q.options.map((opt, oi) => {
                 const selected = selectedLabels.includes(opt.label);
+                const muted = answered && !selected;
+                const optionClass =
+                  "run-tool-ask-option" +
+                  (selected ? " run-tool-ask-option-selected" : "") +
+                  (muted ? " run-tool-ask-option-muted" : "") +
+                  (answered ? " run-tool-ask-option-locked" : "");
                 return (
                   <button
                     key={oi}
                     type="button"
-                    className={`run-tool-ask-option${selected ? " run-tool-ask-option-selected" : ""}`}
+                    className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting}
+                    disabled={submitting || answered}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
-                    <span className="run-tool-ask-option-label">
-                      {q.multiSelect ? (selected ? "☑ " : "☐ ") : ""}
-                      {opt.label}
+                    <span
+                      className="run-tool-ask-option-marker"
+                      aria-hidden="true"
+                      data-selected={selected ? "true" : "false"}
+                    >
+                      {q.multiSelect
+                        ? selected
+                          ? "☑"
+                          : "☐"
+                        : selected
+                          ? "●"
+                          : "○"}
                     </span>
-                    {opt.description && (
-                      <span className="run-tool-ask-option-desc">{opt.description}</span>
-                    )}
-                    {opt.preview && selected && (
-                      <span
-                        className="run-tool-ask-option-preview"
-                        // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
-                        dangerouslySetInnerHTML={{ __html: opt.preview }}
-                      />
-                    )}
+                    <span className="run-tool-ask-option-body">
+                      <span className="run-tool-ask-option-label">{opt.label}</span>
+                      {opt.description && (
+                        <span className="run-tool-ask-option-desc">{opt.description}</span>
+                      )}
+                      {opt.preview && selected && (
+                        <span
+                          className="run-tool-ask-option-preview"
+                          // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
+                          dangerouslySetInnerHTML={{ __html: opt.preview }}
+                        />
+                      )}
+                    </span>
                   </button>
                 );
               })}
             </div>
-            {selectedLabels.length > 0 && q.options.some((opt) => opt.preview) && (
+            {answered && answeredNote && (
+              <div className="run-tool-ask-notes-readonly">
+                <span className="run-tool-ask-notes-readonly-label">Notes</span>
+                <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
+              </div>
+            )}
+            {showPreNotesField && (
               <label className="run-tool-ask-notes-label">
                 <span>Notes (optional)</span>
                 <textarea
                   className="run-tool-ask-notes"
                   rows={2}
-                  value={notes[q.question] ?? ""}
+                  value={liveNote}
                   disabled={submitting}
                   onChange={(e) => setNoteFor(q.question, e.target.value)}
                   placeholder="Add any context Claude should consider…"
@@ -3756,16 +3891,18 @@ function ToolAskUserBody({
           </div>
         );
       })}
-      <div className="run-tool-ask-submit-row">
-        <button
-          type="button"
-          className="run-tool-ask-submit"
-          disabled={!isReady || submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Sending…" : "Submit answer"}
-        </button>
-      </div>
+      {!answered && (
+        <div className="run-tool-ask-submit-row">
+          <button
+            type="button"
+            className="run-tool-ask-submit"
+            disabled={!isReady || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Sending…" : "Submit answer"}
+          </button>
+        </div>
+      )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
   );
@@ -3917,13 +4054,16 @@ function ToolDefaultBody({
 function RunToolItem({
   entry,
   autoExpand,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
+  const running = state === "running";
   return (
     <div
       className="run-transcript-tool"
@@ -3964,7 +4104,14 @@ function RunToolItem({
           >
             {entry.toolName ?? "tool"}
           </span>
-          {state === "running" && (
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={entry.startedAt ?? entry.time}
+              completedAt={entry.completedAt}
+              running={running}
+            />
+          )}
+          {running && !showTimestamps && (
             <Loader2Icon
               size={12}
               className="run-spin run-tool-spinner"
@@ -3999,14 +4146,20 @@ function RunToolItem({
 function RunToolGroup({
   entries,
   autoExpand,
+  showTimestamps,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   if (entries.length === 1) {
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
-        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+        <RunToolItem
+          entry={entries[0]}
+          autoExpand={autoExpand}
+          showTimestamps={showTimestamps}
+        />
       </div>
     );
   }
@@ -4025,6 +4178,8 @@ function RunToolGroup({
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
   }
   const summary = summaryParts.join(" · ");
+  const groupStartedAt = entries.find((entry) => entry.startedAt || entry.time);
+  const groupCompletedAt = [...entries].reverse().find((entry) => entry.completedAt);
   return (
     <div
       className="run-transcript-tools"
@@ -4049,7 +4204,14 @@ function RunToolGroup({
           />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
-        {runningCount > 0 && (
+        {showTimestamps && (
+          <ToolTiming
+            startedAt={groupStartedAt?.startedAt ?? groupStartedAt?.time}
+            completedAt={groupCompletedAt?.completedAt}
+            running={runningCount > 0}
+          />
+        )}
+        {runningCount > 0 && !showTimestamps && (
           <Loader2Icon
             size={12}
             className="run-spin run-tool-spinner"
@@ -4067,7 +4229,12 @@ function RunToolGroup({
       {open && (
         <div className="run-transcript-tools-body">
           {entries.map((e) => (
-            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+            <RunToolItem
+              key={e.id}
+              entry={e}
+              autoExpand={autoExpand}
+              showTimestamps={showTimestamps}
+            />
           ))}
         </div>
       )}
@@ -4177,7 +4344,13 @@ function RunMessages({
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
-        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+        return (
+          <RunToolGroup
+            entries={g.entries}
+            autoExpand={autoExpandTools}
+            showTimestamps={showTimestamps}
+          />
+        );
       }
       if (g.kind === "reasoning") {
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
