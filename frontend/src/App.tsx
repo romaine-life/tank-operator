@@ -1593,8 +1593,10 @@ function DemoLanding() {
             <div className="home-inner">
               <section className="home-hero" aria-labelledby="demo-home-title">
                 <div>
-                  <h2 id="demo-home-title" className="home-title">New session</h2>
-                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
+                  <h2 id="demo-home-title" className="home-title">What do you want to build?</h2>
+                  <p className="home-sub">
+                    Type below to start a session — or pick a runtime and launcher first.
+                  </p>
                 </div>
                 <span className="home-count">{demoSessions.length} preview session{demoSessions.length === 1 ? "" : "s"}</span>
               </section>
@@ -1761,6 +1763,52 @@ function DemoLanding() {
                   </div>
                 </section>
               </div>
+
+              {/* Demo preview of the home chat composer. Submitting on the
+                  marketing page redirects to sign-in rather than creating a
+                  session — the real composer lives in the authenticated
+                  home below. */}
+              <form
+                className="home-composer"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  startLogin();
+                }}
+              >
+                <textarea
+                  className="home-composer-textarea"
+                  placeholder="Sign in to start a session…"
+                  rows={2}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      startLogin();
+                    }
+                  }}
+                />
+                <div className="home-composer-footer">
+                  <span className="home-composer-meta">
+                    <ProviderIcon
+                      provider={selectedProvider}
+                      className="home-composer-meta-icon"
+                    />
+                    <span>{MODE_LABELS[selectedMode]}</span>
+                  </span>
+                  <span className="home-composer-hint">
+                    Enter to start · Shift+Enter for new line
+                  </span>
+                  <button
+                    type="submit"
+                    className="home-composer-submit"
+                    aria-label="Sign in"
+                  >
+                    <SendHorizontalIcon
+                      className="home-composer-submit-icon"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         ) : (
