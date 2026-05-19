@@ -1633,6 +1633,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--bg-app);
 }
 
@@ -1777,10 +1779,24 @@ button:disabled {
   line-height: 1.4;
 }
 
-.home {
+/* The pre-session "home" content renders inside the same `.run-main`
+   scrolling area an active session's transcript uses, so the home no
+   longer owns its own scroll container. `.home-inner` just constrains
+   width and stacks the hero + configuration grid. The DemoLanding still
+   wraps its preview in `.home` for the marketing layout (so the rule
+   below is kept narrow to that callsite via `.demo-workspace .home`). */
+.demo-workspace .home {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: var(--space-6) var(--space-5);
+  font-family: var(--font-primary);
+}
+
+.run-main-home {
+  /* Home variant of the chat transcript area: no auto-scroll-to-bottom
+     constraints, just normal vertical scroll beneath the same header
+     strip the active session pane uses. */
   padding: var(--space-6) var(--space-5);
   font-family: var(--font-primary);
 }
@@ -1793,6 +1809,10 @@ button:disabled {
   gap: var(--space-5);
   animation: welcome-fade var(--motion-slow) var(--ease-out);
 }
+
+/* The home composer-wrap reuses the run-composer-wrap styles. No
+   additional positioning needed — it inherits the same footer-pinned
+   layout the chat composer uses. */
 
 .home-hero {
   display: flex;
@@ -2119,6 +2139,17 @@ button:disabled {
   padding: var(--space-2) var(--space-3);
   color: var(--text-faint);
   font-size: var(--text-sm);
+}
+
+/* Pre-session, the composer wrap is the same `.run-composer-wrap` the
+   active session uses — no sticky positioning, no shadow, no separate
+   `-home` modifier. It sits at the bottom of the same `run-panel` flex
+   column the chat does; visual parity is structural now, not approximated. */
+
+/* Internal wrapper added by the shared <ChatComposer>; keeps `display` out
+   of the way so the PromptInput's own layout owns positioning. */
+.chat-composer-shell {
+  display: contents;
 }
 
 /* Repo picker — splash page chip-and-picker for selecting repos to
@@ -2477,7 +2508,7 @@ button:disabled {
 .run-body {
   position: absolute;
   inset: 0;
-  padding: var(--space-3);
+  padding: 0;
   overflow: hidden;
 }
 
@@ -2520,7 +2551,7 @@ button:disabled {
   font-size: var(--text-lg);
   color: var(--text-primary);
   margin: 0;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .run-header-name-btn {
@@ -2532,7 +2563,7 @@ button:disabled {
   font-size: var(--text-lg);
   color: var(--text-primary);
   margin: 0;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   cursor: text;
   border-radius: var(--radius-sm);
 }
@@ -2547,7 +2578,7 @@ button:disabled {
   font-weight: 600;
   font-size: var(--text-lg);
   color: var(--text-primary);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   min-width: 0;
   width: 16rem;
   outline: none;
@@ -2944,117 +2975,6 @@ button:disabled {
   justify-content: center;
   padding: var(--space-6) var(--space-4);
   gap: var(--space-3);
-}
-
-.run-empty-launchpad {
-  gap: var(--space-3);
-}
-
-.run-empty-title {
-  font-family: var(--font-primary);
-  font-weight: 600;
-  font-size: var(--text-2xl);
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-
-.run-empty-sub {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  margin: 0;
-}
-
-.run-provider-card {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  margin-top: var(--space-3);
-  width: min(28rem, 90%);
-  border-radius: var(--radius-lg, 0.75rem);
-  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01));
-  color: var(--text-primary);
-  font-family: var(--font-primary);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--motion-fast, 120ms) ease, background var(--motion-fast, 120ms) ease;
-}
-
-.run-provider-card:hover:not(:disabled) {
-  border-color: var(--accent, rgba(120, 160, 255, 0.4));
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
-}
-
-.run-provider-card:disabled {
-  cursor: default;
-}
-
-.run-provider-icon {
-  width: 2rem;
-  height: 2rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.run-provider-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-.run-provider-name {
-  font-weight: 600;
-  font-size: var(--text-base);
-  color: var(--text-primary);
-}
-
-.run-provider-sub {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-
-.run-provider-chevron {
-  width: 1rem;
-  height: 1rem;
-  color: var(--text-muted);
-}
-
-.run-empty-status {
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  text-align: center;
-  max-width: 32rem;
-}
-
-.run-empty-kbd {
-  margin: 0.25rem 0 0;
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.run-empty-kbd kbd {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.05rem 0.4rem;
-  border-radius: 0.25rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.25);
-  color: var(--text-body);
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
 }
 
 /* Composer footer at the bottom of the chat pane. */
@@ -3903,31 +3823,6 @@ button:disabled {
   height: 1rem;
   color: var(--accent, #2563eb);
   align-self: center;
-}
-
-/* Model picker dropdown — rendered from the provider card. */
-.run-model-menu {
-  min-width: 16rem;
-}
-
-/* Inline hint trailing an effort radio item ("Low — Fastest…"). Muted
- * so the option label stays primary in the dropdown's scan. */
-.run-model-menu-hint {
-  color: var(--text-muted);
-  font-size: 0.78em;
-  font-weight: 400;
-  margin-left: 0.25rem;
-}
-
-/* Launchpad footnote that surfaces the pod-lifetime lock on model +
- * effort. Sits below the ⌘K hint, same tone, slightly tighter line. */
-.run-empty-lock-hint {
-  margin: 0.5rem 0 0;
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  max-width: 28rem;
-  text-align: center;
-  line-height: 1.35;
 }
 
 /* Files tab — split view: entry list on the left, file preview on right. */
