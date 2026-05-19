@@ -3222,6 +3222,13 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
+          {variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
+          <QuoteButton text={text} style="fence" onQuote={onQuote} />
+          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+          <CopyButton text={text} />
+          <LinkButton sessionId={sessionId} entryId={entry.id} />
           <div className="run-msg-timings">
             {showDuration && durationMs != null && (
               <span className="run-msg-timing-row">
@@ -3235,13 +3242,6 @@ function RunMessageBubble({
               </span>
             )}
           </div>
-          {variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          <QuoteButton text={text} style="fence" onQuote={onQuote} />
-          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
-          <CopyButton text={text} />
-          <LinkButton sessionId={sessionId} entryId={entry.id} />
         </div>
       </div>
       {variant === "user" && (() => {

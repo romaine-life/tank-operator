@@ -4105,9 +4105,8 @@ textarea.run-files-viewer-editor:focus {
 
 .run-msg-timings {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.15rem;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .run-msg-timing-row {
