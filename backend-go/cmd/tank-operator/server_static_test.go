@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +40,65 @@ func TestTankStaticFileRejectsTraversal(t *testing.T) {
 	}
 	if _, ok := tankStaticFile(tankStaticRootSet{base: root}, "..", filepath.Base(outside)); ok {
 		t.Fatal("expected traversal to be rejected")
+	}
+}
+
+func TestTankStaticIndexInjectsMessageLinkContract(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html><body><div id=\"root\"></div></body></html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?session=93&message=turn_1%3Aitem%3Amsg_1", nil)
+	req.Host = "tank.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res := httptest.NewRecorder()
+
+	serveTankStaticFile(res, req, tankStaticRootSet{base: root}, "index.html")
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	for _, want := range []string{
+		`id="tank-message-link"`,
+		`tank.message_link`,
+		`https://tank.example.test/api/sessions/93/timeline`,
+		`turn_1:item:msg_1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("injected HTML missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/?session=93&message=turn_1%3Aitem%3Amsg_1&format=json", nil)
+	req.Host = "tank.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res := httptest.NewRecorder()
+
+	(&appServer{}).handleTankMessageLink(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["kind"] != "tank.message_link" || body["session_id"] != "93" || body["timeline_id"] != "turn_1:item:msg_1" {
+		t.Fatalf("unexpected contract: %#v", body)
+	}
+	if body["auth_required"] != true || body["resolved"] != false {
+		t.Fatalf("auth flags = %#v", body)
+	}
+	api, ok := body["api"].(map[string]any)
+	if !ok {
+		t.Fatalf("api missing: %#v", body["api"])
+	}
+	timelineURL, _ := api["timeline_url"].(string)
+	if !strings.Contains(timelineURL, "/api/sessions/93/timeline") || !strings.Contains(timelineURL, "message=turn_1%3Aitem%3Amsg_1") {
+		t.Fatalf("timeline_url = %q", timelineURL)
 	}
 }
 

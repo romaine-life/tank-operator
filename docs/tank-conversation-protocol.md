@@ -363,6 +363,17 @@ indicator state. The backend event persister wakes SSE streams through
 NATS only after the Postgres `session_events` write commits. There is no
 ledger sweep or browser polling fallback for live transcript delivery.
 
+Copied transcript links are also machine-readable. A browser link such as
+`/?session=<id>&message=<timeline_id>` still serves the SPA for humans, but
+the HTML shell includes a `<script id="tank-message-link"
+type="application/json">` contract that names the session, `timeline_id`, and
+canonical `timeline_url`. Agents can also request the same URL with
+`Accept: application/json` or `?format=json`; unauthenticated callers get the
+contract plus auth instructions, while authenticated callers get the resolved
+timeline payload inline. The payload is the same durable `/timeline` response:
+`target_timeline_id`, `target_order_key`, and a bounded `events` window around
+the persisted cursor.
+
 Durable turn interruption:
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/interrupt`

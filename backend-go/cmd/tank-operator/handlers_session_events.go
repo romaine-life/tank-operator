@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -24,24 +25,24 @@ const (
 //
 //   - anchor=newest                — last N events (tail).
 //   - anchor=oldest                — first N events (head of ledger). Powers
-//                                    the SPA's "jump to start" affordance —
-//                                    Discord/Slack-style symmetric pair with
-//                                    anchor=newest.
+//     the SPA's "jump to start" affordance —
+//     Discord/Slack-style symmetric pair with
+//     anchor=newest.
 //   - anchor=first_unread          — page centered on the caller's
-//                                    last_read_order_key+1 (Zulip semantics).
-//                                    Falls back to newest when the session is
-//                                    fully read or never read.
+//     last_read_order_key+1 (Zulip semantics).
+//     Falls back to newest when the session is
+//     fully read or never read.
 //   - anchor=<order_key>           — page centered on that order_key.
 //   - before_order_key=<order_key> — strictly older than the cursor (DESC).
 //   - after_order_key=<order_key>  — strictly newer than the cursor (ASC).
-//                                    Used for "catch up forward" inside a
-//                                    bounded forward-paginate from the SPA.
+//     Used for "catch up forward" inside a
+//     bounded forward-paginate from the SPA.
 //   - none of the above            — `legacy_forward`: ASC from the head of
-//                                    the ledger. Retained for the Stage 1
-//                                    rollout window before the SPA cutover
-//                                    deletes its only caller. A Prometheus
-//                                    alert on the labeled counter catches
-//                                    re-introduction post-cutover.
+//     the ledger. Retained for the Stage 1
+//     rollout window before the SPA cutover
+//     deletes its only caller. A Prometheus
+//     alert on the labeled counter catches
+//     re-introduction post-cutover.
 //
 // num_before / num_after govern the symmetric anchor reads; limit governs
 // before/after cursor reads and the tail. Unknown cursors are explicit 409
@@ -52,9 +53,20 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+	body, status, err := s.sessionTimelineBody(r.Context(), r, user, sessionID)
+	if err != nil {
+		if status >= 500 {
+			recordSessionEventTimelineFailure()
+		}
 		writeError(w, status, err.Error())
 		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, user auth.User, sessionID string) (map[string]any, int, error) {
+	if _, status, err := s.authorizeSessionRead(ctx, user, sessionID); err != nil {
+		return nil, status, err
 	}
 
 	eventStore := s.sessionEvents
@@ -63,39 +75,29 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 	}
 	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID)
 	if err != nil {
-		recordSessionEventTimelineFailure()
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, http.StatusInternalServerError, err
 	}
 
 	intent := sessionEventReadIntentFromRequest(r, readState)
 	recordSessionEventTimelineRequest(intent.metricLabel)
-	if status, err := resolveSessionEventTimelineAnchor(r.Context(), eventStore, sessionID, &intent); err != nil {
-		recordSessionEventTimelineFailure()
-		writeError(w, status, err.Error())
-		return
+	if status, err := resolveSessionEventTimelineAnchor(ctx, eventStore, sessionID, &intent); err != nil {
+		return nil, status, err
 	}
 
 	// Cursor-existence validation: only meaningful for caller-supplied
 	// order_keys (after/before/anchor=<key>). Tail/around-first-unread/
 	// legacy-forward have no cursor to validate.
 	if intent.validateCursor != "" {
-		if ok, err := eventStore.HasOrderKey(r.Context(), sessionID, intent.validateCursor); err != nil {
-			recordSessionEventTimelineFailure()
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+		if ok, err := eventStore.HasOrderKey(ctx, sessionID, intent.validateCursor); err != nil {
+			return nil, http.StatusInternalServerError, err
 		} else if !ok {
-			recordSessionEventTimelineFailure()
-			writeError(w, http.StatusConflict, "event cursor not found; reload timeline")
-			return
+			return nil, http.StatusConflict, fmt.Errorf("event cursor not found; reload timeline")
 		}
 	}
 
-	page, err := s.runSessionEventRead(r.Context(), eventStore, sessionID, intent)
+	page, err := s.runSessionEventRead(ctx, eventStore, sessionID, intent)
 	if err != nil {
-		recordSessionEventTimelineFailure()
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+		return nil, http.StatusInternalServerError, err
 	}
 	if page.Events == nil {
 		page.Events = []map[string]any{}
@@ -116,7 +118,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		body["target_timeline_id"] = intent.timelineID
 		body["target_order_key"] = intent.anchorOrderKey
 	}
-	writeJSON(w, http.StatusOK, body)
+	return body, http.StatusOK, nil
 }
 
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
@@ -335,17 +337,17 @@ const (
 // 409-resync existence check, plus the metric label and the anchor string
 // echoed back in the response so the SPA can confirm what it got.
 type sessionEventReadIntent struct {
-	kind            sessionEventReadKind
-	limit           int
-	numBefore       int
-	numAfter        int
-	anchorOrderKey  string
-	afterOrderKey   string
-	beforeOrderKey  string
-	validateCursor  string
-	timelineID      string
-	metricLabel     string
-	responseAnchor  string
+	kind           sessionEventReadKind
+	limit          int
+	numBefore      int
+	numAfter       int
+	anchorOrderKey string
+	afterOrderKey  string
+	beforeOrderKey string
+	validateCursor string
+	timelineID     string
+	metricLabel    string
+	responseAnchor string
 }
 
 func sessionEventReadIntentFromRequest(r *http.Request, readState *store.ConversationReadStateRecord) sessionEventReadIntent {
