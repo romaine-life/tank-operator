@@ -31,6 +31,10 @@ state is separate from work state.
   arrives.
 - Provider-specific event streams are adapter inputs. The frontend renders the
   Tank conversation protocol, not raw provider wire formats.
+- Transcript deep links resolve through the durable conversation ledger. A
+  copied message URL may name the rendered transcript `timeline_id`, but the
+  server translates it to an `order_key` and returns a bounded page around
+  that persisted cursor; the browser DOM is never the source of truth.
 - Work delivery should use a real command/event fabric. Browser polling,
   process memory fanout, and database polling are not the normal live path for
   app-managed GUI chat.

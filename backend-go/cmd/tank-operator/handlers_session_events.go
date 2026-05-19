@@ -61,7 +61,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
 	}
-	readState, err := s.getSessionReadState(r, user.Email, sessionID)
+	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID)
 	if err != nil {
 		recordSessionEventTimelineFailure()
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -70,6 +70,11 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 
 	intent := sessionEventReadIntentFromRequest(r, readState)
 	recordSessionEventTimelineRequest(intent.metricLabel)
+	if status, err := resolveSessionEventTimelineAnchor(r.Context(), eventStore, sessionID, &intent); err != nil {
+		recordSessionEventTimelineFailure()
+		writeError(w, status, err.Error())
+		return
+	}
 
 	// Cursor-existence validation: only meaningful for caller-supplied
 	// order_keys (after/before/anchor=<key>). Tail/around-first-unread/
@@ -95,7 +100,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 	if page.Events == nil {
 		page.Events = []map[string]any{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"session_id":      sessionID,
 		"events":          page.Events,
 		"next_order_key":  page.NextOrderKey,
@@ -106,7 +111,12 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		"anchor":          intent.responseAnchor,
 		"cursor_semantic": "order_key",
 		"read_state":      sessionReadStateBody(readState),
-	})
+	}
+	if intent.timelineID != "" {
+		body["target_timeline_id"] = intent.timelineID
+		body["target_order_key"] = intent.anchorOrderKey
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
@@ -333,6 +343,7 @@ type sessionEventReadIntent struct {
 	afterOrderKey   string
 	beforeOrderKey  string
 	validateCursor  string
+	timelineID      string
 	metricLabel     string
 	responseAnchor  string
 }
@@ -340,6 +351,13 @@ type sessionEventReadIntent struct {
 func sessionEventReadIntentFromRequest(r *http.Request, readState *store.ConversationReadStateRecord) sessionEventReadIntent {
 	q := r.URL.Query()
 	anchor := strings.TrimSpace(q.Get("anchor"))
+	timelineID := strings.TrimSpace(q.Get("timeline_id"))
+	if timelineID == "" {
+		timelineID = strings.TrimSpace(q.Get("message_id"))
+	}
+	if timelineID == "" {
+		timelineID = strings.TrimSpace(q.Get("message"))
+	}
 	beforeOrderKey := strings.TrimSpace(q.Get("before_order_key"))
 	afterOrderKey := strings.TrimSpace(q.Get("after_order_key"))
 	if afterOrderKey == "" {
@@ -354,7 +372,8 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 	numAfter := parseSessionEventIntParam(q.Get("num_after"), 100, 0, 250)
 
 	// Resolution precedence: explicit before_order_key wins (back-paginate),
-	// then anchor=first_unread / newest / <order_key>, then after_order_key
+	// then explicit transcript timeline_id/message anchors, then
+	// anchor=first_unread / newest / <order_key>, then after_order_key
 	// (forward catch-up), then legacy_forward fallback.
 	if beforeOrderKey != "" {
 		return sessionEventReadIntent{
@@ -364,6 +383,16 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 			validateCursor: beforeOrderKey,
 			metricLabel:    "before",
 			responseAnchor: "before:" + beforeOrderKey,
+		}
+	}
+	if timelineID != "" {
+		return sessionEventReadIntent{
+			kind:           sessionEventReadAround,
+			numBefore:      numBefore,
+			numAfter:       numAfter,
+			timelineID:     timelineID,
+			metricLabel:    "timeline_id",
+			responseAnchor: "timeline_id:" + timelineID,
 		}
 	}
 
@@ -441,6 +470,28 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 		metricLabel:    "legacy_forward",
 		responseAnchor: "legacy_forward",
 	}
+}
+
+func resolveSessionEventTimelineAnchor(
+	ctx context.Context,
+	eventStore store.SessionEventStore,
+	sessionID string,
+	intent *sessionEventReadIntent,
+) (int, error) {
+	if intent == nil || strings.TrimSpace(intent.timelineID) == "" {
+		return http.StatusOK, nil
+	}
+	orderKey, err := eventStore.OrderKeyForTimelineID(ctx, sessionID, intent.timelineID)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	if orderKey == "" {
+		return http.StatusNotFound, fmt.Errorf("timeline target not found")
+	}
+	intent.anchorOrderKey = orderKey
+	intent.validateCursor = ""
+	intent.responseAnchor = "timeline_id:" + intent.timelineID
+	return http.StatusOK, nil
 }
 
 // sessionEventFirstUnreadAnchor returns the order_key the SPA should anchor

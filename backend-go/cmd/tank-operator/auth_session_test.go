@@ -53,6 +53,23 @@ func signedTokenWithRole(t *testing.T, email, role string) string {
 	return tok
 }
 
+func signedServiceToken(t *testing.T, email, actorEmail string) string {
+	t.Helper()
+	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "sub-" + email,
+		"email":       email,
+		"name":        email,
+		"role":        auth.RoleService,
+		"actor_email": actorEmail,
+		"iat":         time.Now().Unix(),
+		"exp":         time.Now().Add(time.Hour).Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
 func adminTestServer(t *testing.T) *appServer {
 	t.Helper()
 	// Two pods: one owned by `otherUser`, one owned by adminEmail. The
@@ -122,6 +139,42 @@ func TestAuthorizeSessionRead_NonAdminOwnSessionAllowed(t *testing.T) {
 	}
 }
 
+func TestAuthorizeSessionRead_ServiceActorOwnSessionAllowed(t *testing.T) {
+	app := adminTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(
+		t,
+		"pod-94@service.tank.romaine.life",
+		otherUser,
+	))
+	user, _ := app.verifier.CurrentUser(req)
+	info, status, err := app.authorizeSessionRead(req.Context(), user, "63")
+	if err != nil {
+		t.Fatalf("service actor read: err=%v status=%d", err, status)
+	}
+	if info.Owner != otherUser {
+		t.Fatalf("service actor read returned owner=%q, want %q", info.Owner, otherUser)
+	}
+}
+
+func TestAuthorizeSessionRead_ServiceActorCrossUserReturns404(t *testing.T) {
+	app := adminTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(
+		t,
+		"pod-94@service.tank.romaine.life",
+		"intruder@example.com",
+	))
+	user, _ := app.verifier.CurrentUser(req)
+	_, status, err := app.authorizeSessionRead(req.Context(), user, "63")
+	if status != http.StatusNotFound {
+		t.Fatalf("service actor cross-user: status=%d, want 404", status)
+	}
+	if err == nil || err.Error() == otherUser {
+		t.Fatalf("error should not leak owner email; got %q", err)
+	}
+}
+
 func TestAuthorizeSessionRead_MissingSessionIs404ForEveryone(t *testing.T) {
 	app := adminTestServer(t)
 	for _, tc := range []struct {
@@ -183,6 +236,21 @@ func TestListSessionsOwner_AdminQueryOverridesEmail(t *testing.T) {
 	)
 	if got != "target@example.com" {
 		t.Fatalf("admin with ?owner=: got %q, want target@example.com", got)
+	}
+}
+
+func TestListSessionsOwner_ServiceUsesActorEmail(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions?owner=target@example.com", nil)
+	got := listSessionsOwner(
+		auth.User{
+			Email:      "pod-94@service.tank.romaine.life",
+			Role:       auth.RoleService,
+			ActorEmail: otherUser,
+		},
+		req,
+	)
+	if got != otherUser {
+		t.Fatalf("service with ?owner=: got %q, want actor %q", got, otherUser)
 	}
 }
 

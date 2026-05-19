@@ -21,6 +21,7 @@ import (
 //
 // Authorization rule:
 //   - role=admin     → allowed for any owner
+//   - role=service   → allowed only when info.Owner == user.ActorEmail
 //   - role=user/etc  → allowed only when info.Owner == user.Email
 //
 // On a cross-user denial for a non-admin, returns 404 (not 403) so the
@@ -53,7 +54,8 @@ func (s *appServer) authorizeSessionRead(
 		}
 		return info, http.StatusOK, nil
 	}
-	if !strings.EqualFold(info.Owner, user.Email) {
+	owner := user.OwnerEmail()
+	if !strings.EqualFold(info.Owner, owner) {
 		// Mask existence — same 404 the caller would have seen if the
 		// session truly didn't exist. Don't surface owner email; that
 		// would leak who owns the session id.
@@ -73,5 +75,5 @@ func listSessionsOwner(user auth.User, r *http.Request) string {
 		recordAdminCrossUserList()
 		return queryOwner
 	}
-	return user.Email
+	return user.OwnerEmail()
 }

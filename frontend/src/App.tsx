@@ -4903,10 +4903,11 @@ function ChatPane({
   // position. Per docs/migration-policy.md the old path is deleted, not
   // kept as a fallback.
   //
-  // Anchor resolution: prefer the saved per-session position from
-  // localStorage (so reopening a session lands where the user left off),
-  // fall back to anchor=first_unread (server resolves to
-  // last_read_order_key), final fallback to anchor=newest.
+  // Anchor resolution: an explicit ?message=<entry.id> deep link wins,
+  // then the saved per-session position from localStorage (so reopening
+  // a session lands where the user left off), then anchor=first_unread
+  // (server resolves to last_read_order_key), final fallback to
+  // anchor=newest.
   function refreshSdkRunHistoryResult(
     showHint: boolean,
     clearRealtime = false,
@@ -4915,9 +4916,14 @@ function ChatPane({
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
     const load = async (): Promise<SdkHistoryRefreshResult> => {
+      const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
       const savedAnchor = readSdkTranscriptPosition(refreshSessionId);
       const params = new URLSearchParams();
-      if (savedAnchor) {
+      if (targetTimelineId) {
+        params.set("timeline_id", targetTimelineId);
+        params.set("num_before", "100");
+        params.set("num_after", "100");
+      } else if (savedAnchor) {
         params.set("anchor", savedAnchor);
         params.set("num_before", "100");
         params.set("num_after", "100");
