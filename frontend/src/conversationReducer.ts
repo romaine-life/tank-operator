@@ -318,7 +318,8 @@ function upsertItem(
   return {
     ...state,
     items,
-    activeItemId: resolvedStatus === "started" ? id : state.activeItemId,
+    activeItemId:
+      resolvedStatus === "started" ? id : state.activeItemId === id ? null : state.activeItemId,
   };
 }
 
