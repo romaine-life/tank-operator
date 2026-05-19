@@ -309,9 +309,15 @@ Codex SDK adapter:
 
 ## Backend API Sketch
 
-History read:
+History reads:
 
-`GET /api/sessions/{session_id}/timeline?after_order_key=<cursor>&limit=200`
+- Normal navigation opens the live tail:
+  `GET /api/sessions/{session_id}/timeline?anchor=newest&limit=200`
+- Explicit message links open a bounded page around a durable transcript
+  identity:
+  `GET /api/sessions/{session_id}/timeline?timeline_id=<timeline_id>&num_before=100&num_after=100`
+- Manual upward pagination reads older events:
+  `GET /api/sessions/{session_id}/timeline?before_order_key=<cursor>&limit=100`
 
 Returns:
 
@@ -334,6 +340,11 @@ Returns:
   }
 }
 ```
+
+The frontend must attach the live SSE stream only after the initial `/timeline`
+read has established a cursor. Browser-local scroll position is not a supported
+timeline anchor; reopening or switching sessions uses `anchor=newest` unless the
+URL carries an explicit `message`/`timeline_id` target.
 
 Read state write:
 

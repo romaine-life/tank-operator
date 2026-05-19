@@ -75,3 +75,20 @@ test("AskUserQuestion placeholder 'Answer questions?' never leaks into App sourc
   // hard-coded the SDK fallback into a fixture).
   assert.equal(appSource.includes("Answer questions?"), false);
 });
+
+test("chat history bootstrap is tail-first and not browser-position based", () => {
+  assert.equal(appSource.includes('params.set("anchor", "newest")'), true);
+  assert.equal(appSource.includes('params.set("timeline_id", targetTimelineId)'), true);
+  assert.equal(appSource.includes("first_unread"), false);
+  assert.equal(appSource.includes("tank.transcript.position"), false);
+  assert.equal(appSource.includes("readSdkTranscriptPosition"), false);
+  assert.equal(appSource.includes("writeSdkTranscriptPosition"), false);
+});
+
+test("chat live stream waits for timeline bootstrap", () => {
+  assert.equal(appSource.includes("historyBootstrapped"), true);
+  assert.match(
+    appSource,
+    /if \(!visible \|\| session\.status !== "Active" \|\| !historyBootstrapped\) return;/,
+  );
+});
