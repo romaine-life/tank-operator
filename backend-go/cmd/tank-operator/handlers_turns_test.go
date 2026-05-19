@@ -336,9 +336,33 @@ func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 	}
 }
 
-func TestInputReplySessionTurnRejectsCodex(t *testing.T) {
+func TestInputReplySessionTurnPublishesCodexControlCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
+	req := authedInputReplyRequest(t, "64", "turn-active_123", body)
+	resp := httptest.NewRecorder()
+
+	app.handleInputReplySessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandInputReply || got.Provider != "codex" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
+		t.Fatalf("input reply routing fields = %#v", got)
+	}
+	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" {
+		t.Fatalf("input reply target fields = %#v", got)
+	}
+}
+
+func TestInputReplySessionTurnRejectsCodexExecFallback(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexExecGUIMode, "codex-runner"))
 	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
 	req := authedInputReplyRequest(t, "64", "turn-active_123", body)
 	resp := httptest.NewRecorder()

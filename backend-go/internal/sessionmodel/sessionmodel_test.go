@@ -9,9 +9,10 @@ import (
 
 func TestNormalizeSessionMode(t *testing.T) {
 	tests := map[string]string{
-		"":             ClaudeGUIMode,
-		"codex_config": CodexConfigMode,
-		"unknown":      "unknown",
+		"":               ClaudeGUIMode,
+		"codex_config":   CodexConfigMode,
+		"codex_exec_gui": CodexExecGUIMode,
+		"unknown":        "unknown",
 	}
 	for input, want := range tests {
 		if got := NormalizeSessionMode(input); got != want {
@@ -196,6 +197,19 @@ func TestPodManifestCodexRunnerAlwaysUsesAppServerTransport(t *testing.T) {
 				t.Fatalf("CODEX_RUNNER_TRANSPORT = %v, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestPodManifestCodexExecGUIUsesLegacyTransport(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexExecGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+	})
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	env := containerEnv(findContainer(t, containers, "codex-runner"))
+	if got, present := env["CODEX_RUNNER_TRANSPORT"]; present {
+		t.Fatalf("CODEX_RUNNER_TRANSPORT = %v, want unset for legacy transport fallback", got)
 	}
 }
 

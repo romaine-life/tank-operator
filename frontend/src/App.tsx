@@ -130,6 +130,7 @@ type SessionMode =
   | "config"
   | "codex_cli"
   | "codex_gui"
+  | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
   | "pi_cli"
@@ -140,7 +141,7 @@ type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
-  | "codex_app_server"
+  | "codex_exec_gui"
   | "pi_cli"
 >;
 type Provider = "anthropic" | "codex" | "pi";
@@ -263,6 +264,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   config: "Claude config",
   codex_cli: "Codex CLI",
   codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   pi_cli: "Pi CLI",
@@ -278,6 +280,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_cli: "codex-cli",
   codex_gui: "codex-gui",
+  codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   pi_cli: "pi-cli",
@@ -289,6 +292,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_gui: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   pi_cli: "pi",
 };
@@ -300,6 +304,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   config: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
   pi_cli: "pi",
@@ -334,7 +339,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
-  codex_gui: "GUI chat pane for codex exec output",
+  codex_gui: "GUI chat pane for Codex app-server transport",
+  codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
@@ -346,7 +352,7 @@ const MODE_ORDER: SessionMode[] = [
   "api_key",
   "config",
   "codex_gui",
-  "codex_app_server",
+  "codex_exec_gui",
   "codex_config",
   "pi_cli",
   "pi_config",
@@ -456,14 +462,14 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server"
+  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server") {
+    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else if (session.mode === "pi_cli") {
       lines[lines.length - 1] = `> ${promptText}`;
@@ -574,7 +580,7 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_app_server"
+  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
     ? "Codex"
     : mode === "pi_cli"
       ? "Pi"
@@ -618,7 +624,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
-    value === "codex_app_server" ||
+    value === "codex_exec_gui" ||
     value === "pi_cli"
   );
 }
@@ -626,6 +632,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(localStorage.getItem(DEFAULT_SESSION_MODE_KEY));
+    if (stored === "codex_app_server") return "codex_gui";
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
@@ -778,10 +785,10 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,

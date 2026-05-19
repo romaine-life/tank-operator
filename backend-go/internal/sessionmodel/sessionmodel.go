@@ -25,6 +25,7 @@ const (
 	CodexConfigMode    = "codex_config"
 	CodexCLIMode       = "codex_cli"
 	CodexGUIMode       = "codex_gui"
+	CodexExecGUIMode   = "codex_exec_gui"
 	CodexAppServerMode = "codex_app_server"
 	PiConfigMode       = "pi_config"
 	PiCLIMode          = "pi_cli"
@@ -74,6 +75,7 @@ var (
 		CodexConfigMode:    {},
 		CodexCLIMode:       {},
 		CodexGUIMode:       {},
+		CodexExecGUIMode:   {},
 		CodexAppServerMode: {},
 		PiConfigMode:       {},
 		PiCLIMode:          {},
@@ -145,6 +147,7 @@ var noClaudeHijackModes = map[string]bool{
 	CodexConfigMode:    true,
 	CodexCLIMode:       true,
 	CodexGUIMode:       true,
+	CodexExecGUIMode:   true,
 	CodexAppServerMode: true,
 	PiConfigMode:       true,
 }
@@ -267,7 +270,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
-	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexAppServerMode {
+	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode {
 		sessionImage = opts.CodexSessionImage
 	}
 	if mode == PiConfigMode || mode == PiCLIMode {
@@ -333,10 +336,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// SDK runner sidecar. Without this, the agent's writes wouldn't be
 	// visible in the in-browser terminal and vice versa. emptyDir lives
 	// for the pod's lifetime, matching today's "pod restart loses
-	// workspace state" semantics. claude_gui uses agent-runner,
-	// codex_gui / codex_app_server use codex-runner; both need the shared mount.
+	// workspace state" semantics. claude_gui uses agent-runner;
+	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
-	wantCodexRunner := mode == CodexGUIMode || mode == CodexAppServerMode
+	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
@@ -381,7 +384,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex API proxy host alias and CA cert. Codex is a Rust binary, so
 	// NODE_EXTRA_CA_CERTS is not enough; CODEX_CA_CERTIFICATE is the env var
 	// the upstream client uses for reqwest and websocket TLS.
-	if (mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexAppServerMode) && opts.CodexAPIProxyIP != "" {
+	if (mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode) && opts.CodexAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.CodexAPIProxyIP,
 			"hostnames": []any{"chatgpt.com"},
@@ -599,7 +602,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		containers = append(containers, runnerContainer)
 	}
 
-	// Codex-runner sidecar — codex_gui only. Sibling of agent-runner:
+	// Codex-runner sidecar. Sibling of agent-runner:
 	// same workspace mount and same session-bus command/event contract
 	// (only one runner per pod, never both). Different SDK underneath. Auth is
 	// a pod-local placeholder auth.json plus codex-api-proxy injection;
@@ -669,12 +672,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(CodexRunnerMetricsPort),
 		})
-		// The legacy SDK/codex exec transport rejects request_user_input
-		// at the binary layer, so both Codex GUI modes need app-server
-		// transport for ask-user prompts to reach the user.
-		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
-			"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
-		})
+		// App-server is the primary Codex GUI transport. The legacy
+		// SDK/codex exec transport rejects request_user_input at the
+		// binary layer, so keep it behind CodexExecGUIMode as a fallback.
+		if mode == CodexGUIMode || mode == CodexAppServerMode {
+			codexRunnerEnv = append(codexRunnerEnv, map[string]any{
+				"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
+			})
+		}
 		if opts.HotSwapAgentRunner {
 			volumes = append(volumes, map[string]any{
 				"name":     "codex-runner-hot",
