@@ -50,6 +50,12 @@ sandbox_mode = "danger-full-access"
 approval_policy = "never"
 cli_auth_credentials_store = "file"
 
+# Tank GUI sessions run Codex through codex exec, which uses Codex's
+# default mode. Keep the ask-user tool available there so Codex GUI can
+# surface request_user_input instead of falling back to a text-only prompt.
+[features]
+default_mode_request_user_input = true
+
 ${mcp_block}
 EOF
 
