@@ -18,23 +18,61 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
-// handleCreateSession creates a new session pod.
+// repoSelectionBucket coarsely bins a repo-count for the
+// tank_session_repos_selected_total counter. Three labels keep
+// cardinality bounded ("none" / "one" / "many") while still surfacing
+// the operational shape: are users selecting any repos at all, and
+// is the "many" path getting exercised? The exact count is
+// recoverable from the durable column when needed.
+func repoSelectionBucket(count int) string {
+	switch {
+	case count <= 0:
+		return "none"
+	case count == 1:
+		return "one"
+	default:
+		return "many"
+	}
+}
+
+// handleCreateSession creates a new session pod. Accepts the optional
+// `repos[]` selection from the splash picker; the slugs are validated
+// at this boundary (validateRepoSlugs / sessionModeSupportsRepos),
+// persisted on the registry row by manager.Create, and — starting in
+// stage 3 — auto-cloned into /workspace by the repo-cloner init
+// container at pod boot.
 func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	var body struct {
-		Mode string `json:"mode"`
+		Mode  string   `json:"mode"`
+		Repos []string `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
+		body.Repos = nil
 	}
-	info, err := s.mgr.Create(r.Context(), user.Email, body.Mode, nil, "")
+	repos, err := validateRepoSlugs(body.Repos)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
+		Owner: user.Email,
+		Mode:  body.Mode,
+		Repos: repos,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
 }
 
@@ -510,12 +548,13 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		return
 	}
 	var body struct {
-		GlimmungRunRef        string `json:"glimmung_run_ref"`
-		GlimmungIssueRef      string `json:"glimmung_issue_ref"`
-		GlimmungTouchpointRef string `json:"glimmung_touchpoint_ref"`
-		ValidationURL         string `json:"validation_url"`
-		CallerEmail           string `json:"caller_email"`
-		Mode                  string `json:"mode"`
+		GlimmungRunRef        string   `json:"glimmung_run_ref"`
+		GlimmungIssueRef      string   `json:"glimmung_issue_ref"`
+		GlimmungTouchpointRef string   `json:"glimmung_touchpoint_ref"`
+		ValidationURL         string   `json:"validation_url"`
+		CallerEmail           string   `json:"caller_email"`
+		Mode                  string   `json:"mode"`
+		Repos                 []string `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -541,10 +580,26 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		glimmungContext["validation_url"] = body.ValidationURL
 	}
 
-	info, err := s.mgr.Create(r.Context(), email, body.Mode, glimmungContext, "")
+	repos, err := validateRepoSlugs(body.Repos)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+
+	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
+		Owner:           email,
+		Mode:            body.Mode,
+		GlimmungContext: glimmungContext,
+		Repos:           repos,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
 }

@@ -94,6 +94,13 @@ import {
   type ConversationViewEntry,
 } from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
+import { RepoPicker } from "./components/RepoPicker";
+import {
+  REPO_SUPPORTED_MODES,
+  addRepoSlug,
+  isValidRepoSlug,
+  removeRepoSlug,
+} from "./repos";
 import { ProviderIcon } from "./providerIcons";
 import {
   normalizeSessionActivity,
@@ -244,6 +251,15 @@ interface Session {
   // here for the initial-state extraction in normalizeSession; runtime
   // reads go through sessionActivities[id], not session.activity.
   activity?: SessionActivitySummary | null;
+  // repos is the durable owner/name slug list the user picked at
+  // session creation. Always an array on the wire (empty when none
+  // picked). The splash chips for existing sessions read from here
+  // — never from localStorage — so the chip list never contradicts
+  // the server's view. Stage 1 of the auto-clone feature.
+  repos: string[];
+  // clone_state is the per-repo init-container outcome (stage 3).
+  // Optional until stage 3 ships and the cloner writes back.
+  clone_state?: Record<string, unknown> | null;
 }
 
 interface TestState {
@@ -363,6 +379,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
+    repos: [],
   },
   {
     id: "codex-cli",
@@ -374,6 +391,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
+    repos: [],
   },
   {
     id: "pi-agent",
@@ -385,6 +403,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
+    repos: [],
   },
 ];
 
@@ -589,6 +608,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     created_at: new Date().toISOString(),
     ready_at: null,
     name: `${label} ${index}`,
+    repos: [],
   };
 }
 
@@ -711,6 +731,12 @@ function clearSdkTranscriptPosition(sessionId: string): void {
   } catch {}
 }
 
+// Recent-repos response shape, mirrored from
+// backend cmd/tank-operator/handlers_repos.go → handleGitHubRecentRepos.
+interface RecentReposResponse {
+  repos: string[];
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -722,6 +748,11 @@ function normalizeSession(session: Session): Session {
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.activity = activity;
+  // Defend against degraded snapshots (older server, infoFromPod
+  // fallback, hand-rolled JSON in tests): repos must always be an
+  // array so downstream renderers can `.map` without a guard.
+  next.repos = Array.isArray(session.repos) ? session.repos : [];
+  next.clone_state = session.clone_state ?? null;
   return next;
 }
 
@@ -7738,6 +7769,29 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  // Splash-page repo picker state. Stage 1 of the auto-clone feature:
+  //
+  //   - selectedRepos: the chips the user has staged for the
+  //     about-to-be-created session. Posted to /api/sessions on
+  //     create; cleared after a successful create so the next
+  //     session starts empty.
+  //   - recentRepos: GET /api/github/recent-repos result for this
+  //     user. The picker's "Recent" section reads from here. Stays
+  //     empty (and the section hidden) when the user has never
+  //     selected a repo before — no error state, just absence.
+  //   - repoPickerOpen: tri-state — closed by default; opens on
+  //     "+ Add repo" click; closes on outside-click / Esc / explicit
+  //     close.
+  //   - repoInput: the manual-entry text field's controlled value.
+  //
+  // Stage 2 will widen the picker with an "All repos" section sourced
+  // from /api/github/repos; until then the manual text input is the
+  // escape hatch for first-use repos.
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [recentRepos, setRecentRepos] = useState<string[]>([]);
+  const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+  const [repoInput, setRepoInput] = useState("");
+  const [repoError, setRepoError] = useState<string | null>(null);
   // When non-null, the chat pane for this session id auto-opens its title
   // rename input on its next render. Used to make freshly-created sessions
   // land directly in the chat pane with the title editor focused, and to
@@ -7772,6 +7826,40 @@ export function App() {
         setBooted(true);
       });
   }, []);
+
+  // refreshRecentRepos pulls /api/github/recent-repos and seeds the
+  // splash picker's "Recent" section. Best-effort: a network blip or
+  // an older backend (pre-stage-1) without the endpoint just leaves
+  // the section empty, which is a fine product state.
+  const refreshRecentRepos = useCallback(async () => {
+    try {
+      const res = await authedFetch("/api/github/recent-repos");
+      if (!res.ok) return;
+      const body = (await res.json()) as Partial<RecentReposResponse>;
+      if (Array.isArray(body.repos)) {
+        setRecentRepos(body.repos.map(String).filter(isValidRepoSlug));
+      }
+    } catch {
+      // Picker still works without the Recent section.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void refreshRecentRepos();
+  }, [user, refreshRecentRepos]);
+
+  // Close the picker when the user switches default mode to one
+  // that doesn't support repos, AND clear any staged selection so a
+  // mode flip on the splash can't leave behind chips that would 400
+  // the create call.
+  useEffect(() => {
+    if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
+      if (selectedRepos.length > 0) setSelectedRepos([]);
+      if (repoPickerOpen) setRepoPickerOpen(false);
+      if (repoError) setRepoError(null);
+    }
+  }, [defaultSessionMode, selectedRepos.length, repoPickerOpen, repoError]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
@@ -7813,6 +7901,12 @@ export function App() {
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       activity: undefined, // activities live in the parallel sessionActivities map
+      // repos is always an array on the wire (see backend
+      // sessioncontroller.MarshalRowUpdate). The fallback here is
+      // for older snapshots that pre-date the column — they'll
+      // get an empty array and render with no chips.
+      repos: Array.isArray(row.repos) ? row.repos : [],
+      clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
     };
   }
 
@@ -7837,6 +7931,8 @@ export function App() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
+      clone_state: raw.clone_state ?? undefined,
       row_version: typeof raw.row_version === "number" ? raw.row_version : 0,
     };
   }
@@ -8302,11 +8398,17 @@ export function App() {
     setBusy(true);
     setSidebarCollapsed(false);
     setError(null);
+    // Only forward the chip selection for modes that support it. The
+    // mode-flip effect above keeps selectedRepos empty for
+    // unsupported modes, so this is a belt-and-braces guard — a
+    // mode-override createSession() call (the Launchers section)
+    // could otherwise send repos for a CLI session and get a 400.
+    const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, repos }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = normalizeSession(await res.json());
@@ -8334,6 +8436,15 @@ export function App() {
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
+      // Clear the chip selection and refresh "Recent" so the just-
+      // used repos float to the top next time the splash opens.
+      if (repos.length > 0) {
+        setSelectedRepos([]);
+        setRepoPickerOpen(false);
+        setRepoInput("");
+        setRepoError(null);
+        void refreshRecentRepos();
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -8859,6 +8970,42 @@ export function App() {
                       )}
                     </>
                   )}
+                  {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                    <RepoPicker
+                      selected={selectedRepos}
+                      recent={recentRepos}
+                      open={repoPickerOpen}
+                      input={repoInput}
+                      error={repoError}
+                      busy={busy}
+                      onToggleOpen={() => {
+                        setRepoPickerOpen((prev) => !prev);
+                        setRepoError(null);
+                      }}
+                      onClose={() => {
+                        setRepoPickerOpen(false);
+                        setRepoError(null);
+                      }}
+                      onInputChange={(v) => {
+                        setRepoInput(v);
+                        setRepoError(null);
+                      }}
+                      onAdd={(rawSlug) => {
+                        const result = addRepoSlug(selectedRepos, rawSlug);
+                        if (result.ok) {
+                          setSelectedRepos(result.next);
+                          setRepoInput("");
+                          setRepoError(null);
+                        } else {
+                          setRepoError(result.error);
+                        }
+                      }}
+                      onRemove={(slug) => {
+                        setSelectedRepos((prev) => removeRepoSlug(prev, slug));
+                        setRepoError(null);
+                      }}
+                    />
+                  )}
                   <button
                     className="home-primary-action"
                     onClick={() => createSession(defaultSessionMode)}
@@ -8932,12 +9079,27 @@ export function App() {
                           className="home-session"
                           onClick={() => activate(s.id)}
                           disabled={closingIds.has(s.id)}
+                          title={
+                            s.repos.length > 0
+                              ? `Repos: ${s.repos.join(", ")}`
+                              : undefined
+                          }
                         >
                           <span className={sessionStatusDotClass(s, sessionActivities[s.id])} />
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
                           <span className="home-session-main">
                             <span className="home-session-title">{sessionDisplayName(s)}</span>
-                            <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
+                            <span className="home-session-sub">
+                              {MODE_LABELS[s.mode]}
+                              {s.repos.length > 0 && (
+                                <span className="home-session-repos">
+                                  {" · "}
+                                  {s.repos.length === 1
+                                    ? s.repos[0]
+                                    : `${s.repos.length} repos`}
+                                </span>
+                              )}
+                            </span>
                           </span>
                         </button>
                       ))
