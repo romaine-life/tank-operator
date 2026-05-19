@@ -669,11 +669,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(CodexRunnerMetricsPort),
 		})
-		if mode == CodexAppServerMode {
-			codexRunnerEnv = append(codexRunnerEnv, map[string]any{
-				"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
-			})
-		}
+		// The legacy SDK/codex exec transport rejects request_user_input
+		// at the binary layer, so both Codex GUI modes need app-server
+		// transport for ask-user prompts to reach the user.
+		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
+			"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
+		})
 		if opts.HotSwapAgentRunner {
 			volumes = append(volumes, map[string]any{
 				"name":     "codex-runner-hot",

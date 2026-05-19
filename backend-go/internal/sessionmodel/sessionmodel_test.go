@@ -182,6 +182,23 @@ func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 	assertVolumeMount(t, codexRunner, "oauth-gateway-ca")
 }
 
+func TestPodManifestCodexRunnerAlwaysUsesAppServerTransport(t *testing.T) {
+	for _, mode := range []string{CodexGUIMode, CodexAppServerMode} {
+		t.Run(mode, func(t *testing.T) {
+			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
+				SessionImage:      "claude-image",
+				CodexSessionImage: "codex-image",
+			})
+			spec := manifest["spec"].(map[string]any)
+			containers := spec["containers"].([]any)
+			env := containerEnv(findContainer(t, containers, "codex-runner"))
+			if got, want := env["CODEX_RUNNER_TRANSPORT"], "app-server"; got != want {
+				t.Fatalf("CODEX_RUNNER_TRANSPORT = %v, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	tests := map[string]string{
 		ClaudeGUIMode: "agent-runner",
