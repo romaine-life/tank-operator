@@ -178,11 +178,22 @@ Project metadata for Glimmung:
     "agent_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd agent-runner && npm ci && npm run build",
+      "build_command": "cd agent-runner && npm ci && npm run build && find dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g' {} +",
       "source": "agent-runner/dist",
       "target": "/var/run/agent-runner-hot/dist",
       "restart": "SIGHUP",
       "container": "agent-runner",
+      "pod_selector": "tank-operator/session-id",
+      "builder_image": "node:20-alpine"
+    },
+    "codex_runner": {
+      "enabled": true,
+      "strategy": "supervisor",
+      "build_command": "cd codex-runner && npm ci && npm run build && find dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g' {} +",
+      "source": "codex-runner/dist",
+      "target": "/var/run/codex-runner-hot/dist",
+      "restart": "SIGHUP",
+      "container": "codex-runner",
       "pod_selector": "tank-operator/session-id",
       "builder_image": "node:20-alpine"
     }
