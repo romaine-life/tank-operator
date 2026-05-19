@@ -19,14 +19,6 @@ import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   AlertCircleIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -191,6 +183,7 @@ type SdkHistoryRefreshResult = {
   terminal?: SdkTerminalResult;
 };
 type SkillStateName = "test" | "rollout";
+type HomeTab = "chat" | "settings" | "help";
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -2672,6 +2665,8 @@ const CHAT_FONT_SCALE_STEP = 0.1;
 const TURN_COMPLETE_SOUND_VOLUME_MIN = 0;
 const TURN_COMPLETE_SOUND_VOLUME_MAX = 1;
 const TURN_COMPLETE_SOUND_VOLUME_STEP = 0.05;
+const RUN_COMPOSER_PLACEHOLDER = "Ask anything...";
+const RUN_COMPOSER_HINT_SUFFIX = " · / for slash commands";
 
 function clampChatFontScale(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
@@ -4269,6 +4264,195 @@ function RunMessages({
   );
 }
 
+function RunSettingsPanel({
+  runPrefs,
+  setRunPref,
+  soundControlId,
+  turnCompleteSoundVolumePct,
+  setTurnCompleteSoundVolume,
+  playTurnCompleteSound,
+  paneFontScale,
+  paneFontScalePct,
+  setPaneFontScale,
+}: {
+  runPrefs: RunPrefs;
+  setRunPref: SetRunPref;
+  soundControlId: string;
+  turnCompleteSoundVolumePct: number;
+  setTurnCompleteSoundVolume: (value: number) => void;
+  playTurnCompleteSound: () => void;
+  paneFontScale: number;
+  paneFontScalePct: number;
+  setPaneFontScale: (value: number) => void;
+}) {
+  return (
+    <div className="run-settings-screen">
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Composer</h2>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
+          aria-pressed={runPrefs.sendByCtrlEnter}
+        >
+          <span>Send with Cmd/Ctrl+Enter</span>
+          {runPrefs.sendByCtrlEnter && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+      </section>
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Sound</h2>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
+          aria-pressed={runPrefs.turnCompleteSound}
+        >
+          <span>Turn complete sound</span>
+          {runPrefs.turnCompleteSound && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+        <div className="run-settings-panel-row run-settings-sound-row">
+          <label className="run-settings-label" htmlFor={soundControlId}>
+            Volume
+          </label>
+          <div className="run-settings-sound-controls">
+            <input
+              id={soundControlId}
+              className="run-settings-volume-slider"
+              type="range"
+              min={TURN_COMPLETE_SOUND_VOLUME_MIN}
+              max={TURN_COMPLETE_SOUND_VOLUME_MAX}
+              step={TURN_COMPLETE_SOUND_VOLUME_STEP}
+              value={runPrefs.turnCompleteSoundVolume}
+              disabled={!runPrefs.turnCompleteSound}
+              onChange={(event) =>
+                setTurnCompleteSoundVolume(Number(event.currentTarget.value))
+              }
+              aria-label="Turn complete sound volume"
+            />
+            <span className="run-settings-volume-value" aria-live="polite">
+              {turnCompleteSoundVolumePct}%
+            </span>
+            <button
+              type="button"
+              className="run-settings-test-btn"
+              disabled={!runPrefs.turnCompleteSound}
+              onClick={playTurnCompleteSound}
+            >
+              <PlayIcon aria-hidden="true" />
+              <span>Test</span>
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() =>
+            setRunPref(
+              "turnCompleteSoundOnVisible",
+              !runPrefs.turnCompleteSoundOnVisible,
+            )
+          }
+          aria-pressed={runPrefs.turnCompleteSoundOnVisible}
+          disabled={!runPrefs.turnCompleteSound}
+        >
+          <span>Ping on open chats</span>
+          {runPrefs.turnCompleteSoundOnVisible && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+      </section>
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Transcript</h2>
+        <div className="run-settings-panel-row">
+          <span className="run-settings-label">Text zoom</span>
+          <span className="run-settings-zoom-controls">
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
+              disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+              aria-label="Decrease pane text size"
+              title="Decrease text size"
+            >
+              <MinusIcon aria-hidden="true" />
+            </button>
+            <span className="run-settings-zoom-value" aria-live="polite">
+              {paneFontScalePct}%
+            </span>
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
+              disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+              aria-label="Increase pane text size"
+              title="Increase text size"
+            >
+              <PlusIcon aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
+              disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+              aria-label="Reset pane text size"
+              title="Reset text size"
+            >
+              <RotateCcwIcon aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+        {([
+          ["showThinking", "Show reasoning"],
+          ["autoExpandTools", "Auto-expand tools"],
+          ["showTimestamps", "Show timestamps"],
+          ["showDuration", "Show duration"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className="run-settings-toggle"
+            onClick={() => setRunPref(key, !runPrefs[key])}
+            aria-pressed={runPrefs[key]}
+          >
+            <span>{label}</span>
+            {runPrefs[key] && (
+              <CheckIcon className="run-settings-check" aria-hidden="true" />
+            )}
+          </button>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function RunHelpScreen() {
+  return (
+    <div className="run-help-screen">
+      <section className="run-help-section">
+        <h2 className="run-help-title">Session Help</h2>
+        <div className="run-help-list">
+          <div className="run-help-row">
+            <span className="run-help-key">/</span>
+            <span>Open commands from the composer.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">@</span>
+            <span>Mention files from the workspace.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">MCP</span>
+            <span>Inspect available MCP servers from the lower toolbar.</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ChatPane({
   session,
   visible,
@@ -4346,13 +4530,10 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
-  const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  const effortOptions = isClaude ? CLAUDE_EFFORTS : CODEX_EFFORTS;
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
-  // switching the dropdown after a turn has been submitted would silently
-  // no-op at the pod, and the UI hides the launchpad once entries.length > 0
-  // so the user can't try.
+  // the splash screen is where the user adjusts the defaults before a
+  // session is created.
   const initialModelId = isClaude
     ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
         ? runPrefs.claudeModelId
@@ -4367,33 +4548,8 @@ function ChatPane({
     : (CODEX_EFFORTS.some((opt) => opt.id === runPrefs.codexEffort)
         ? runPrefs.codexEffort
         : DEFAULT_CODEX_EFFORT_ID);
-  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialModelId);
-  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialEffortId);
-  // Persist-then-set wrappers so the dropdown's onValueChange both
-  // updates local state for the active session and writes the new pick
-  // into RunPrefs for the *next* session this browser opens.
-  const setSelectedModelId = useCallback(
-    (id: string) => {
-      setSelectedModelIdState(id);
-      if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
-        setRunPref("claudeModelId", id);
-      } else if (isCodex && CODEX_MODELS.some((opt) => opt.id === id)) {
-        setRunPref("codexModelId", id);
-      }
-    },
-    [isClaude, isCodex, setRunPref],
-  );
-  const setSelectedEffortId = useCallback(
-    (id: string) => {
-      setSelectedEffortIdState(id);
-      if (isClaude && CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
-        setRunPref("claudeEffort", id);
-      } else if (isCodex && CODEX_EFFORTS.some((opt) => opt.id === id)) {
-        setRunPref("codexEffort", id);
-      }
-    },
-    [isClaude, isCodex, setRunPref],
-  );
+  const [selectedModelId] = useState<string>(initialModelId);
+  const [selectedEffortId] = useState<string>(initialEffortId);
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
   // interval while running so the bar updates without a per-element timer.
@@ -6212,25 +6368,12 @@ function ChatPane({
         ? "error"
         : undefined;
 
-  const provider: Provider = isClaude ? "anthropic" : "codex";
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
-  const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const selectedModel =
-    modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
-  // Derived label for the launchpad's "Ready to use" status line; falls
-  // back to "High" rather than empty when the persisted value drifted
-  // out of the allowlist so the status line never reads as "...
-  // effort.". The provider default resolution mirrors the runner fallback
-  // so the SPA and pod show the same thing.
-  const selectedEffortLabel =
-    (effortOptions.find((e) => e.id === selectedEffortId)?.label) ??
-    (effortOptions.find((e) => e.id === (isClaude ? DEFAULT_CLAUDE_EFFORT_ID : DEFAULT_CODEX_EFFORT_ID))?.label ??
-      "High");
-  const contextWindow = getContextWindow(selectedModel.id);
+  const contextWindow = getContextWindow(selectedModelId);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
@@ -6285,25 +6428,6 @@ function ChatPane({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [activeTab, focusComposerTextarea, visible]);
-
-  // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
-  // cloudcli's keyboard shortcut hint.
-  useEffect(() => {
-    if (activeTab !== "chat") return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        // Open the trigger by clicking it — the dropdown manages its
-        // own open state internally via Radix.
-        const trigger = composerWrapRef.current?.parentElement?.querySelector(
-          ".run-provider-card",
-        ) as HTMLButtonElement | null;
-        trigger?.click();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [activeTab]);
 
   // Streaming-pill computeds — only meaningful while running.
   const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
@@ -6729,234 +6853,21 @@ function ChatPane({
             <span className="run-muted">waiting for session pod…</span>
           </div>
         ) : activeTab === "settings" ? (
-          <div className="run-settings-screen">
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Composer</h2>
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
-                aria-pressed={runPrefs.sendByCtrlEnter}
-              >
-                <span>Send with Cmd/Ctrl+Enter</span>
-                {runPrefs.sendByCtrlEnter && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-            </section>
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Sound</h2>
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
-                aria-pressed={runPrefs.turnCompleteSound}
-              >
-                <span>Turn complete sound</span>
-                {runPrefs.turnCompleteSound && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-              <div className="run-settings-panel-row run-settings-sound-row">
-                <label className="run-settings-label" htmlFor={`turn-sound-volume-${session.id}`}>
-                  Volume
-                </label>
-                <div className="run-settings-sound-controls">
-                  <input
-                    id={`turn-sound-volume-${session.id}`}
-                    className="run-settings-volume-slider"
-                    type="range"
-                    min={TURN_COMPLETE_SOUND_VOLUME_MIN}
-                    max={TURN_COMPLETE_SOUND_VOLUME_MAX}
-                    step={TURN_COMPLETE_SOUND_VOLUME_STEP}
-                    value={runPrefs.turnCompleteSoundVolume}
-                    disabled={!runPrefs.turnCompleteSound}
-                    onChange={(event) =>
-                      setTurnCompleteSoundVolume(Number(event.currentTarget.value))
-                    }
-                    aria-label="Turn complete sound volume"
-                  />
-                  <span className="run-settings-volume-value" aria-live="polite">
-                    {turnCompleteSoundVolumePct}%
-                  </span>
-                  <button
-                    type="button"
-                    className="run-settings-test-btn"
-                    disabled={!runPrefs.turnCompleteSound}
-                    onClick={playTurnCompleteSound}
-                  >
-                    <PlayIcon aria-hidden="true" />
-                    <span>Test</span>
-                  </button>
-                </div>
-              </div>
-              {/* Chat-app convention: Mattermost/Element suppress the
-                  ping while you're actively viewing the channel; Zulip
-                  doesn't. Our default is on (ring regardless) because
-                  the sound here is a state-transition chime, not a
-                  message-arrival ping — but users who prefer the
-                  chat-app convention can flip it off. */}
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() =>
-                  setRunPref(
-                    "turnCompleteSoundOnVisible",
-                    !runPrefs.turnCompleteSoundOnVisible,
-                  )
-                }
-                aria-pressed={runPrefs.turnCompleteSoundOnVisible}
-                disabled={!runPrefs.turnCompleteSound}
-              >
-                <span>Ping on open chats</span>
-                {runPrefs.turnCompleteSoundOnVisible && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-            </section>
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Transcript</h2>
-              <div className="run-settings-panel-row">
-                <span className="run-settings-label">Text zoom</span>
-                <span className="run-settings-zoom-controls">
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
-                    disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
-                    aria-label="Decrease pane text size"
-                    title="Decrease text size"
-                  >
-                    <MinusIcon aria-hidden="true" />
-                  </button>
-                  <span className="run-settings-zoom-value" aria-live="polite">
-                    {paneFontScalePct}%
-                  </span>
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
-                    disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
-                    aria-label="Increase pane text size"
-                    title="Increase text size"
-                  >
-                    <PlusIcon aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
-                    disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
-                    aria-label="Reset pane text size"
-                    title="Reset text size"
-                  >
-                    <RotateCcwIcon aria-hidden="true" />
-                  </button>
-                </span>
-              </div>
-              {([
-                ["showThinking", "Show reasoning"],
-                ["autoExpandTools", "Auto-expand tools"],
-                ["showTimestamps", "Show timestamps"],
-                ["showDuration", "Show duration"],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="run-settings-toggle"
-                  onClick={() => setRunPref(key, !runPrefs[key])}
-                  aria-pressed={runPrefs[key]}
-                >
-                  <span>{label}</span>
-                  {runPrefs[key] && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </button>
-              ))}
-            </section>
-          </div>
+          <RunSettingsPanel
+            runPrefs={runPrefs}
+            setRunPref={setRunPref}
+            soundControlId={`turn-sound-volume-${session.id}`}
+            turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
+            setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
+            playTurnCompleteSound={playTurnCompleteSound}
+            paneFontScale={paneFontScale}
+            paneFontScalePct={paneFontScalePct}
+            setPaneFontScale={setPaneFontScale}
+          />
         ) : activeTab === "help" ? (
-          <div className="run-help-screen">
-            <section className="run-help-section">
-              <h2 className="run-help-title">Session Help</h2>
-              <div className="run-help-list">
-                <div className="run-help-row">
-                  <span className="run-help-key">/</span>
-                  <span>Open commands from the composer.</span>
-                </div>
-                <div className="run-help-row">
-                  <span className="run-help-key">@</span>
-                  <span>Mention files from the workspace.</span>
-                </div>
-                <div className="run-help-row">
-                  <span className="run-help-key">MCP</span>
-                  <span>Inspect available MCP servers from the lower toolbar.</span>
-                </div>
-              </div>
-            </section>
-          </div>
+          <RunHelpScreen />
         ) : entries.length === 0 ? (
-          <div className="run-empty run-empty-launchpad">
-            <h3 className="run-empty-title">Choose Your AI Assistant</h3>
-            <p className="run-empty-sub">Select a provider to start a new conversation</p>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className="run-provider-card">
-                  <span className="run-provider-icon">
-                    <ProviderIcon provider={provider} />
-                  </span>
-                  <span className="run-provider-meta">
-                    <span className="run-provider-name">{selectedModel.label}</span>
-                    <span className="run-provider-sub">Click to change model</span>
-                  </span>
-                  <ChevronDownIcon className="run-provider-chevron" aria-hidden="true" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="run-model-menu">
-                <DropdownMenuLabel>Model</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={selectedModelId}
-                  onValueChange={setSelectedModelId}
-                >
-                  {modelOptions.map((opt) => (
-                    <DropdownMenuRadioItem key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                {(isClaude || isCodex) && (
-                  <>
-                    <DropdownMenuLabel>Effort</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={selectedEffortId}
-                      onValueChange={setSelectedEffortId}
-                    >
-                      {effortOptions.map((opt) => (
-                        <DropdownMenuRadioItem key={opt.id} value={opt.id}>
-                          {opt.label}
-                          {opt.hint ? (
-                            <span className="run-model-menu-hint"> — {opt.hint}</span>
-                          ) : null}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <p className="run-empty-status">
-              Ready to use {selectedModel.label}
-              {isClaude || isCodex ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
-            </p>
-            <p className="run-empty-kbd">
-              Press <kbd>⌘K</kbd> to switch model
-            </p>
-            {(isClaude || isCodex) && (
-              <p className="run-empty-lock-hint">
-                Model and effort are fixed for this session once you send the first message.
-              </p>
-            )}
-          </div>
+          null
         ) : (
           <>
             {/* Passive top-of-transcript indicator. Replaces the prior
@@ -7350,12 +7261,12 @@ function ChatPane({
       </>)}
       composer={(
         <ChatComposer
-            placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
+            placeholder={RUN_COMPOSER_PLACEHOLDER}
             onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
             permissionMode={composerMode}
             onPermissionModeChange={setComposerMode}
             sendByCtrlEnter={runPrefs.sendByCtrlEnter}
-            hintSuffix=" · / for slash commands"
+            hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
             disabled={!ready}
             submitStatus={submitStatus}
             onStop={cancelRun}
@@ -7618,6 +7529,15 @@ export function App() {
       /* ignore */
     }
   }
+  const setTurnCompleteSoundVolume = useCallback((value: number) => {
+    setRunPref(
+      "turnCompleteSoundVolume",
+      Number(clampTurnCompleteSoundVolume(value).toFixed(2)),
+    );
+  }, []);
+  const setPaneFontScale = useCallback((value: number) => {
+    setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
+  }, []);
 
   // Turn-complete sound lives at App scope so the always-on
   // /api/sessions/events SSE handler can ring for any session — including
@@ -7741,6 +7661,7 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
   // The home composer's permission-mode pick. Carries into the first turn
   // when the user types a prompt and presses Enter from the home screen,
   // so the choice they made on the launch surface persists into the live
@@ -8412,6 +8333,7 @@ export function App() {
 
   function goHome() {
     setActive(null);
+    setHomeActiveTab("chat");
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
@@ -8863,6 +8785,9 @@ export function App() {
         ? runPrefs.codexEffort
         : DEFAULT_CLAUDE_EFFORT_ID;
   const homeSessionTitle = homeSessionName.trim() || "New session";
+  const paneFontScale = runPrefs.chatFontScale;
+  const paneFontScalePct = Math.round(paneFontScale * 100);
+  const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -9052,7 +8977,7 @@ export function App() {
           // about-to-be-created session can be named before launch.
           <WorkspaceShell
             className="run-panel-home"
-            bodyClassName="run-main-home"
+            bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
             title={(<>
               {homeEditingTitle ? (
                 <input
@@ -9084,6 +9009,22 @@ export function App() {
               )}
             </>)}
             tabs={(<>
+              {homeActiveTab !== "chat" && (
+                <button
+                  type="button"
+                  className="run-tab run-tab-back"
+                  onClick={() => setHomeActiveTab("chat")}
+                  aria-label="Back to chat"
+                  title="Back to chat"
+                >
+                  <ArrowLeftIcon
+                    className="run-tab-icon"
+                    strokeWidth={2.2}
+                    aria-hidden="true"
+                  />
+                  <span>Back</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="run-tab"
@@ -9099,24 +9040,26 @@ export function App() {
               </button>
               <button
                 type="button"
-                className="run-tab"
-                disabled
-                title="Settings are available once the session starts"
+                className={`run-tab${homeActiveTab === "settings" ? " run-tab-active" : ""}`}
+                onClick={() => setHomeActiveTab((current) => current === "settings" ? "chat" : "settings")}
+                aria-pressed={homeActiveTab === "settings"}
+                title="Settings"
               >
                 <SettingsIcon className="run-tab-icon" aria-hidden="true" />
                 <span>Settings</span>
               </button>
               <button
                 type="button"
-                className="run-tab"
-                disabled
-                title="Help is available once the session starts"
+                className={`run-tab${homeActiveTab === "help" ? " run-tab-active" : ""}`}
+                onClick={() => setHomeActiveTab((current) => current === "help" ? "chat" : "help")}
+                aria-pressed={homeActiveTab === "help"}
+                title="Help"
               >
                 <InfoIcon className="run-tab-icon" aria-hidden="true" />
                 <span>Help</span>
               </button>
             </>)}
-            composerVisible={true}
+            composerVisible={homeActiveTab === "chat"}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
               if (!CHAT_MODES.has(defaultSessionMode)) return;
@@ -9148,8 +9091,24 @@ export function App() {
                 addHomeAttachments(fs);
               }
             }}
-            body={(<>
-              <div className="home-inner">
+            body={
+              homeActiveTab === "settings" ? (
+                <RunSettingsPanel
+                  runPrefs={runPrefs}
+                  setRunPref={setRunPref}
+                  soundControlId="home-turn-sound-volume"
+                  turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
+                  setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
+                  playTurnCompleteSound={playTurnCompleteSound}
+                  paneFontScale={paneFontScale}
+                  paneFontScalePct={paneFontScalePct}
+                  setPaneFontScale={setPaneFontScale}
+                />
+              ) : homeActiveTab === "help" ? (
+                <RunHelpScreen />
+              ) : (
+              <>
+                <div className="home-inner">
                 <section className="home-hero" aria-labelledby="home-title">
                   <div>
                     <h2 id="home-title" className="home-title">What do you want to build?</h2>
@@ -9404,9 +9363,10 @@ export function App() {
                   </div>
                 </section>
               </div>
-
-              </div>
-            </>)}
+                </div>
+              </>
+              )
+            }
             composerAbove={(<>
               {homeDragActive && (
                 <div className="run-composer-drop-overlay" aria-hidden="true">
@@ -9460,11 +9420,7 @@ export function App() {
             </>)}
             composer={(
               <ChatComposer
-                placeholder={
-                  CHAT_MODES.has(defaultSessionMode)
-                    ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
-                    : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
-                }
+                placeholder={RUN_COMPOSER_PLACEHOLDER}
                 onSubmit={({ text, permissionMode }) => {
                   const trimmed = text.trim();
                   void createSession(
@@ -9475,8 +9431,8 @@ export function App() {
                 }}
                 permissionMode={homeComposerMode}
                 onPermissionModeChange={setHomeComposerMode}
-                sendByCtrlEnter={false}
-                hintSuffix=" · / for slash commands"
+                sendByCtrlEnter={runPrefs.sendByCtrlEnter}
+                hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 disabled={busy}
                 toolButtons={
                     <>
