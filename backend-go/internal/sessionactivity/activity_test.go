@@ -144,4 +144,85 @@ func TestIsLifecycleChatEventTypeAllowlist(t *testing.T) {
 	if IsLifecycleChatEventType("item.started") {
 		t.Fatal("item.started is not a sidebar-indicator chat event type")
 	}
+	// Migration guard: item.failed used to flip the session pill to
+	// "error" on every failed tool call, which left healthy mid-turn
+	// sessions pinned red. The session-level error pill is owned by
+	// turn-terminal events and pod state. Re-adding item.failed to the
+	// activity-fold allowlist re-introduces the bug; this assertion
+	// blocks the regression.
+	if IsLifecycleChatEventType("item.failed") {
+		t.Fatal("item.failed is not a session-level activity event; tool errors are item-scoped, see DeriveActivitySummary docs")
+	}
+}
+
+// TestDeriveActivitySummaryIgnoresItemFailedMidTurn pins the new
+// contract: a tool returning is_error mid-turn does NOT flip the
+// session pill to error. The agent typically continues after a failed
+// tool call, and the previous behavior (item.failed → Status="error",
+// Failed=true) left healthy sessions visually pinned to "Failed" until
+// the next turn.submitted reset it.
+//
+// Session-level error stays owned by turn.failed / turn.command_failed
+// (covered by other tests) and by failedFromPod (covered by
+// TestDeriveActivitySummaryFailedFromPodOverridesStatus). The per-item
+// error badge in the transcript renders independently from the same
+// item.failed event on the wire.
+func TestDeriveActivitySummaryIgnoresItemFailedMidTurn(t *testing.T) {
+	events := []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
+		// A tool call errored. Under the old behavior the next two
+		// assertions would fail — Status would be "error" and Failed
+		// would be true even though the turn is still running.
+		{"type": "item.failed", "turn_id": "turn-1", "order_key": "3"},
+	}
+	midTurn := DeriveActivitySummary(nil, events, 0, false)
+	if midTurn.Status != "streaming" {
+		t.Fatalf("status after mid-turn item.failed = %q, want streaming (the turn is still running)", midTurn.Status)
+	}
+	if midTurn.Failed {
+		t.Fatalf("Failed should not flip on per-tool errors; got %+v", midTurn)
+	}
+	if midTurn.ActiveTurnID == nil || *midTurn.ActiveTurnID != "turn-1" {
+		t.Fatalf("ActiveTurnID cleared by item.failed; want turn-1, got %#v", midTurn.ActiveTurnID)
+	}
+
+	// The turn completes cleanly. Even though an item failed inside
+	// it, the session ends at "ready" — the agent handled the tool
+	// error and produced a turn.completed.
+	completed := DeriveActivitySummary(nil, append(events, map[string]any{
+		"type": "turn.completed", "turn_id": "turn-1", "order_key": "4",
+	}), 0, false)
+	if completed.Status != "ready" {
+		t.Fatalf("status after turn.completed (with prior item.failed) = %q, want ready", completed.Status)
+	}
+	if completed.Failed {
+		t.Fatal("Failed should be false after a clean turn.completed even if an item.failed appeared mid-turn")
+	}
+	if completed.ActiveTurnID != nil {
+		t.Fatalf("ActiveTurnID not cleared on turn.completed; got %#v", completed.ActiveTurnID)
+	}
+}
+
+// TestDeriveActivitySummaryTurnFailedStillErrors is a positive guard for
+// the legitimate error path. Item-level errors are filtered out of the
+// fold, but turn.failed (durable turn-terminal failure) MUST still
+// produce session-level error. If this test ever flips green by setting
+// Status to something else, the fix went too far.
+func TestDeriveActivitySummaryTurnFailedStillErrors(t *testing.T) {
+	events := []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
+		{"type": "turn.failed", "turn_id": "turn-1", "order_key": "3"},
+	}
+	got := DeriveActivitySummary(nil, events, 0, false)
+	if got.Status != "error" {
+		t.Fatalf("status after turn.failed = %q, want error", got.Status)
+	}
+	if !got.Failed {
+		t.Fatal("Failed should be true after turn.failed")
+	}
+	if got.ActiveTurnID != nil {
+		t.Fatalf("ActiveTurnID should clear on turn.failed; got %#v", got.ActiveTurnID)
+	}
 }

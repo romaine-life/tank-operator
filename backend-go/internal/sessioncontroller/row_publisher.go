@@ -114,7 +114,14 @@ type rowWireShape struct {
 	ActivitySummary map[string]any `json:"activity_summary,omitempty"`
 	TestState       map[string]any `json:"test_state,omitempty"`
 	RolloutState    map[string]any `json:"rollout_state,omitempty"`
-	RowVersion      int64          `json:"row_version"`
+	// Repos and CloneState: always-emit / omit-when-nil to mirror
+	// the snapshot Info struct field-for-field (see
+	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
+	// the SPA never has to special-case "absent vs. empty"; clone
+	// state is omitted until stage 3's init container writes back.
+	Repos      []string       `json:"repos"`
+	CloneState map[string]any `json:"clone_state,omitempty"`
+	RowVersion int64          `json:"row_version"`
 }
 
 // MarshalRowUpdate produces the JSON wire payload for a single row.
@@ -126,6 +133,10 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 		if err := json.Unmarshal(record.ActivitySummary, &activity); err != nil {
 			return nil, fmt.Errorf("row update marshal: activity_summary: %w", err)
 		}
+	}
+	repos := record.Repos
+	if repos == nil {
+		repos = []string{}
 	}
 	wire := RowUpdatePayload{
 		Row: rowWireShape{
@@ -145,6 +156,8 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			ActivitySummary: activity,
 			TestState:       record.TestState,
 			RolloutState:    record.RolloutState,
+			Repos:           repos,
+			CloneState:      record.CloneState,
 			RowVersion:      record.RowVersion,
 		},
 		Cursor: fmt.Sprintf("%d", record.RowVersion),

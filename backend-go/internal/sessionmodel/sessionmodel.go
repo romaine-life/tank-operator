@@ -124,7 +124,24 @@ type SessionRecord struct {
 	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
 	TestState       map[string]any // jsonb column, materialized for the handler layer
 	RolloutState    map[string]any // jsonb column
-	RowVersion      int64
+
+	// Repos is the list of "owner/name" slugs selected at session
+	// creation. Empty slice is the steady-state "no auto-cloning"
+	// shape (today every session); a non-empty slice is read by the
+	// stage 3 repo-cloner init container at pod boot. The slugs are
+	// validated at the handler boundary (handlers_sessions.go) and
+	// the durable column is the source of truth for the picker chips
+	// on existing sessions; the SPA never re-derives this from
+	// localStorage.
+	Repos []string
+	// CloneState is the per-repo init-container outcome, keyed by
+	// slug, value {status, error?, started_at?, finished_at?}. nil
+	// until stage 3's init container writes back the first state.
+	// Surfaces in the sidebar tooltip so a partial clone is visible
+	// rather than inferred from logs.
+	CloneState map[string]any
+
+	RowVersion int64
 }
 
 // sessionConfigMounts is the canonical list of files mounted into every

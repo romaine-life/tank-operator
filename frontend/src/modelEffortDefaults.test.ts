@@ -44,11 +44,20 @@ test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runne
   assert.match(appSource, /const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
 });
 
-test("RunPrefs persists claudeModelId and claudeEffort across page reloads", () => {
+test("DEFAULT_CODEX_MODEL_ID and DEFAULT_CODEX_EFFORT_ID pin the strongest Codex defaults", () => {
+  assert.match(appSource, /const DEFAULT_CODEX_MODEL_ID = "gpt-5\.5";/);
+  assert.match(appSource, /const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
+});
+
+test("RunPrefs persists provider model and effort across page reloads", () => {
   assert.match(appSource, /claudeModelId:\s*string;/);
   assert.match(appSource, /claudeEffort:\s*string;/);
+  assert.match(appSource, /codexModelId:\s*string;/);
+  assert.match(appSource, /codexEffort:\s*string;/);
   assert.match(appSource, /claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   assert.match(appSource, /claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
+  assert.match(appSource, /codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
+  assert.match(appSource, /codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
 });
 
 test("loadRunPrefs filters localStorage-loaded model/effort through the allowlist", () => {
@@ -65,6 +74,14 @@ test("loadRunPrefs filters localStorage-loaded model/effort through the allowlis
   assert.match(
     appSource,
     /key === "claudeEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID\)/,
+  );
+  assert.match(
+    appSource,
+    /key === "codexModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID\)/,
+  );
+  assert.match(
+    appSource,
+    /key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/,
   );
 });
 

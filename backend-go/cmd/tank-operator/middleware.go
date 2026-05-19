@@ -57,11 +57,11 @@ func validateSkillName(v string) string {
 	return ""
 }
 
-// allowedClaudeEfforts is the canonical extended-thinking effort
-// allowlist. Mirrors the EffortLevel union in
-// @anthropic-ai/claude-agent-sdk so a typo or stale UI value can't poison
-// the runner's options at pod boot. Empty input is allowed and means
-// "use the runner's baked-in default" — keep that mapping intact.
+// allowedClaudeEfforts is the canonical Claude extended-thinking effort
+// allowlist. Mirrors the EffortLevel union in @anthropic-ai/claude-agent-sdk
+// so a typo or stale UI value can't poison the runner's options at pod boot.
+// Empty input is allowed and means "use the runner's baked-in default" — keep
+// that mapping intact.
 //
 // Keep this list in lockstep with frontend/src/App.tsx CLAUDE_EFFORTS
 // and agent-runner/src/runner.ts DEFAULT_EFFORT. The runner does NOT
@@ -75,11 +75,24 @@ var allowedClaudeEfforts = map[string]struct{}{
 	"max":    {},
 }
 
-func validateEffort(v string) string {
+// allowedCodexEfforts mirrors @openai/codex-sdk's modelReasoningEffort values
+// exposed in Tank. Codex models do not accept Claude's "max" value.
+var allowedCodexEfforts = map[string]struct{}{
+	"low":    {},
+	"medium": {},
+	"high":   {},
+	"xhigh":  {},
+}
+
+func validateEffort(provider string, v string) string {
 	if v == "" {
 		return ""
 	}
-	if _, ok := allowedClaudeEfforts[v]; ok {
+	allowed := allowedClaudeEfforts
+	if provider == "codex" {
+		allowed = allowedCodexEfforts
+	}
+	if _, ok := allowed[v]; ok {
 		return v
 	}
 	return ""

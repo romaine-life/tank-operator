@@ -37,9 +37,30 @@ func NewMinter(signer Signer, resolver KeyResolver) *Minter {
 // no round-trip to auth.romaine.life on the read path. Exchange is what
 // pulls the role from the upstream JWT once; from then on the local key is
 // authoritative for the session window.
-func (m *Minter) MintSession(sub, email, name, role string) (string, error) {
+//
+// Service-role tokens MUST carry the human owner's email as `actor_email`
+// so handlers can scope side-effects to the actor's session tree. The
+// verifier (Verifier.Decode) refuses service-role tokens without it; this
+// constructor mirrors that contract so a minter caller can't silently
+// produce a token that fails verification on the very next call. Human
+// roles MUST pass actorEmail="" — the field exists to scope a service
+// principal to a human owner, and for a human caller the human IS the
+// owner. The dual rejection is defense in depth: prior to nelsong6/tank-
+// operator#558 the exchange path dropped actor_email between
+// auth.romaine.life and MintSession; service-role logins minted a token
+// that 401'd at every downstream verifier call. Encoding the invariant
+// in the constructor means a future refactor of any caller can't
+// reintroduce that drift silently.
+func (m *Minter) MintSession(sub, email, name, role, actorEmail string) (string, error) {
 	if m.signer == nil {
 		return "", fmt.Errorf("JWT signer not configured")
+	}
+	actorEmail = strings.ToLower(strings.TrimSpace(actorEmail))
+	if role == RoleService && actorEmail == "" {
+		return "", fmt.Errorf("mint session: role=service requires actor_email")
+	}
+	if role != RoleService && actorEmail != "" {
+		return "", fmt.Errorf("mint session: role=%s must not carry actor_email", role)
 	}
 	now := time.Now()
 	claims := jwt.MapClaims{
@@ -49,6 +70,9 @@ func (m *Minter) MintSession(sub, email, name, role string) (string, error) {
 		"role":  role,
 		"iat":   now.Unix(),
 		"exp":   now.Add(SessionTTL).Unix(),
+	}
+	if actorEmail != "" {
+		claims["actor_email"] = actorEmail
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mintTimeout)
 	defer cancel()

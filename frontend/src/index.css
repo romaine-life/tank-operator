@@ -2150,6 +2150,200 @@ button:disabled {
   display: contents;
 }
 
+/* Repo picker — splash page chip-and-picker for selecting repos to
+   auto-clone into a new session's /workspace. Inline with the home
+   panel; the panel itself opens below the trigger as a small dialog
+   so the user doesn't lose context. */
+.home-repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-sidebar-control);
+}
+
+.home-repos-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.home-repos-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.home-repos-meta {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.home-repos-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.home-repos-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+
+.home-repos-chip-slug {
+  font-family: var(--font-mono, monospace);
+}
+
+.home-repos-chip-remove {
+  background: transparent;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 0 0.15rem;
+}
+
+.home-repos-chip-remove:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.home-repos-trigger {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--border-faint);
+  color: var(--text-body);
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.home-repos-trigger:hover:not(:disabled) {
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  border: 1px solid var(--border-faint);
+}
+
+.home-repos-form {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.home-repos-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-faint);
+  background: var(--bg-sidebar-control);
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+}
+
+.home-repos-add {
+  padding: 0.3rem 0.7rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.home-repos-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.home-repos-error {
+  font-size: var(--text-xs);
+  color: var(--text-danger, #c14a4a);
+}
+
+.home-repos-recent-label {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+
+.home-repos-recent-count {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+.home-repos-empty {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  padding: var(--space-1) 0;
+}
+
+.home-repos-recent-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.home-repos-recent-chip {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-sidebar-control);
+  color: var(--text-body);
+  border: 0;
+  cursor: pointer;
+}
+
+.home-repos-recent-chip:hover:not(:disabled) {
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-recent-chip.is-disabled,
+.home-repos-recent-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.home-repos-help {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.home-session-repos {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-body);
+}
+
 @media (max-width: 900px) {
   .home-grid {
     grid-template-columns: 1fr;

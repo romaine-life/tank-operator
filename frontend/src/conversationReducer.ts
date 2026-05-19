@@ -170,13 +170,19 @@ export function conversationReducer(
         "completed",
       );
     case "item.failed":
+      // item.failed marks ONE tool call as errored — it does NOT change
+      // session run state. The agent will usually recover and continue;
+      // flipping runStatus to "error" on every tool error left the pill
+      // pinned red for healthy mid-turn sessions. Session-level error
+      // comes from turn.failed / turn.command_failed (durable turn
+      // terminal events). The per-item error indicator in the transcript
+      // continues to render off the item's "failed" status set here.
+      // Mirrors backend sessionactivity.DeriveActivitySummary — both
+      // consumers treat item.failed as item-scoped, not session-scoped.
       return upsertItem(
         {
           ...next,
-          runStatus: "error",
-          failed: true,
           activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
-          lastError: errorText(event),
         },
         event,
         "failed",

@@ -64,14 +64,28 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	// Determine the effective visible value (default true if unset).
 	visible := record.Visible
 
+	// `repos` is written on INSERT (the user's selection at create
+	// time) and intentionally NOT overwritten on conflict — the row
+	// is owned by the create call; subsequent manager updates
+	// (SetName, mark-deleted, lifecycle row writes) must not stomp
+	// the selection. `clone_state` is not touched here at all; the
+	// stage 3 init container is the only writer, via its own
+	// service-principal path. Empty slice serializes to `{}` which
+	// matches the schema default.
+	repos := record.Repos
+	if repos == nil {
+		repos = []string{}
+	}
 	const q = `
 		INSERT INTO sessions (
 			email, session_scope, session_id,
 			mode, pod_name, name, visible,
-			requested_at, created_at, updated_at
+			requested_at, created_at, updated_at,
+			repos
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
-			$8, COALESCE($9, now()), $10
+			$8, COALESCE($9, now()), $10,
+			$11
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -93,6 +107,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		nullableTimestamp(requestedAt),
 		nullableTimestamp(createdAt),
 		updatedAt,
+		repos,
 	)
 	return err
 }
@@ -178,23 +193,27 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			activity_summary,
 			test_state,
 			rollout_state,
+			COALESCE(repos, '{}'::text[]),
+			clone_state,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	var (
-		mode, podName, requestedAt, createdAt, updatedAt    string
-		status, readyAt, terminatingAt                      string
-		name                                                *string
-		visible                                             bool
-		activitySummary, testState, rolloutState            []byte
-		rowVersion                                          int64
+		mode, podName, requestedAt, createdAt, updatedAt     string
+		status, readyAt, terminatingAt                       string
+		name                                                 *string
+		visible                                              bool
+		activitySummary, testState, rolloutState, cloneState []byte
+		repos                                                []string
+		rowVersion                                           int64
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
+		&repos, &cloneState,
 		&rowVersion,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -223,6 +242,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		ActivitySummary: activitySummary,
 		TestState:       unmarshalJSONB(testState),
 		RolloutState:    unmarshalJSONB(rolloutState),
+		Repos:           repos,
+		CloneState:      unmarshalJSONB(cloneState),
 		RowVersion:      rowVersion,
 	}
 	return record, true, nil

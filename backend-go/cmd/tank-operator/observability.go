@@ -219,6 +219,50 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// sessionReposSelectedTotal counts every session-create call by the
+// coarse repo-count bucket (none | one | many). Bounded cardinality
+// (3 series) keeps Prometheus happy while still surfacing the
+// operational shape that matters before stage 3 ships:
+//
+//   - Is the splash picker being used at all? (none vs. one+many ratio)
+//   - Is the many-repo path getting real exercise? (predicts stage 3
+//     init-container parallelism / latency budget)
+//
+// The exact slug list is durable on sessions.repos, so any deeper
+// analysis (which repos, which users) is recoverable from the DB on
+// demand. Per docs/observability.md: emit the counter that answers
+// the user-trust question; don't pre-mint dimensions we won't query.
+var sessionReposSelectedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_repos_selected_total",
+		Help: "Sessions created bucketed by how many repos the user picked at create time.",
+	},
+	[]string{"count_bucket"},
+)
+
+// GET /api/github/repos counters. The endpoint proxies through to
+// mcp-github via an on-behalf-of token mint; both legs can fail
+// independently, so we surface a simple ok|error outcome label plus
+// the end-to-end latency histogram. The picker's "All repos" section
+// uses both: rate(error) > 0 → red banner on the dashboard; p95
+// > 2s → the SPA's spinner is starting to feel laggy.
+var (
+	githubRepoListRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_github_repo_list_requests_total",
+			Help: "Calls to /api/github/repos, labeled by outcome.",
+		},
+		[]string{"result"},
+	)
+	githubRepoListDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "tank_github_repo_list_duration_seconds",
+			Help:    "End-to-end /api/github/repos latency: orchestrator → auth.romaine.life exchange → mcp-github → orchestrator response.",
+			Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10},
+		},
+	)
+)
+
 // --- Admin cross-user read metrics ---
 //
 // Counts every time a role=admin caller reads a session whose Owner !=
@@ -337,6 +381,20 @@ var (
 		Name: "tank_session_activity_delta_failure_total",
 		Help: "Activity-summary delta derivation failures (store/publish errors).",
 	})
+	// sessionActivityErrorTransitionsTotal: how often the per-session
+	// activity pill flips from a non-error state into "error", labeled
+	// by cause. The previous behavior — folding item.failed (a single
+	// failed tool call) into session-level error — left healthy
+	// mid-turn sessions pinned red; the fix narrows session-level
+	// error to durable turn-terminal events and pod state. This
+	// counter is the user-trust signal that the narrowing held: a
+	// surge in reason="unknown" (or a reappearance of item-level
+	// inference if anyone rewires it) is the regression alarm.
+	// See docs/tank-conversation-protocol.md "State Machine".
+	sessionActivityErrorTransitionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_activity_error_transitions_total",
+		Help: "Session activity pill transitions into the \"error\" state, labeled by cause (pod_failed, turn_failed, turn_command_failed, unknown).",
+	}, []string{"reason"})
 	// sessionRowUpdatesTotal counts sessioncontroller.RowWriter's
 	// per-event outcomes on the sessions row. Outcome=ok dominates in
 	// steady state; outcome=failed > 0 means the sidebar's column
@@ -416,6 +474,10 @@ func (promLifecycleEmitterMetrics) RecordActivityDelta(emitted bool) {
 
 func (promLifecycleEmitterMetrics) RecordActivityFailure() {
 	sessionActivityDeltaFailureTotal.Inc()
+}
+
+func (promLifecycleEmitterMetrics) RecordActivityErrorTransition(reason string) {
+	sessionActivityErrorTransitionsTotal.WithLabelValues(reason).Inc()
 }
 
 // --- Postgres query tracer metrics ---

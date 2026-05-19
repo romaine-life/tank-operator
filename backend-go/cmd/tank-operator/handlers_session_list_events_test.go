@@ -150,6 +150,66 @@ func TestMarshalRowUpdateIncludesDeletedRow(t *testing.T) {
 	}
 }
 
+// TestMarshalRowUpdateRepos pins the SSE wire contract for the
+// repo-selection field: always an array, never absent, even when
+// the row has no repos picked. The SPA reads this directly into the
+// SessionStore so the chips on existing sessions stay in lockstep
+// with the durable column — local optimism never overrides the
+// server's view of "which repos belong to session N."
+func TestMarshalRowUpdateRepos(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         []string
+		wantOnWire []string
+	}{
+		{
+			name:       "nil round-trips as empty array",
+			in:         nil,
+			wantOnWire: []string{},
+		},
+		{
+			name:       "empty round-trips as empty array",
+			in:         []string{},
+			wantOnWire: []string{},
+		},
+		{
+			name:       "non-empty preserves order",
+			in:         []string{"nelsong6/tank-operator", "nelsong6/mcp-github"},
+			wantOnWire: []string{"nelsong6/tank-operator", "nelsong6/mcp-github"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+				ID:         "55",
+				Email:      "u@example.com",
+				Scope:      "default",
+				Visible:    true,
+				Status:     "Active",
+				RowVersion: 1,
+				Repos:      tc.in,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var probe struct {
+				Row struct {
+					Repos []string `json:"repos"`
+				} `json:"row"`
+			}
+			if err := json.Unmarshal(payload, &probe); err != nil {
+				t.Fatal(err)
+			}
+			if probe.Row.Repos == nil {
+				t.Fatalf("row.repos was nil on the wire; want explicit array")
+			}
+			if !stringSliceEqual(probe.Row.Repos, tc.wantOnWire) {
+				t.Fatalf("row.repos = %v, want %v", probe.Row.Repos, tc.wantOnWire)
+			}
+		})
+	}
+}
+
 // --- helpers ---
 
 func newTestAppServer(t *testing.T) *appServer {
