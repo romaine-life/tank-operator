@@ -136,6 +136,7 @@ export class CodexTankEventAdapter {
     opts: { fallbackText?: string; outcome?: ItemOutcome } = {},
   ): Record<string, unknown> {
     const text = codexItemText(item) ?? opts.fallbackText;
+    const exitCode = itemExitCode(item);
     return {
       kind: typeof item.type === "string" && item.type ? item.type : "item",
       title:
@@ -151,7 +152,7 @@ export class CodexTankEventAdapter {
       arguments: item.arguments,
       result: item.result,
       error: item.error,
-      exit_code: item.exit_code,
+      exit_code: exitCode,
       status: item.status,
       outcome: opts.outcome,
       raw_item: item,
@@ -172,7 +173,7 @@ function codexItemOutcome(item: Record<string, unknown>): ItemOutcome {
   if (hasExecutionError(item.error)) {
     return { kind: "execution_failed", reason: "provider_item_error" };
   }
-  const exitCode = numericExitCode(item.exit_code);
+  const exitCode = itemExitCode(item);
   if (exitCode !== undefined && exitCode !== 0) {
     return { kind: "result_failed", reason: "exit_code", code: exitCode };
   }
@@ -180,6 +181,17 @@ function codexItemOutcome(item: Record<string, unknown>): ItemOutcome {
     return { kind: "result_failed", reason: "codex_item_status_failed" };
   }
   return { kind: "ok" };
+}
+
+function itemExitCode(item: Record<string, unknown>): number | undefined {
+  const direct = numericExitCode(item.exit_code) ?? numericExitCode(item.exitCode);
+  if (direct !== undefined) return direct;
+  const result = item.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const resultRecord = result as Record<string, unknown>;
+    return numericExitCode(resultRecord.exit_code) ?? numericExitCode(resultRecord.exitCode);
+  }
+  return undefined;
 }
 
 function hasExecutionError(error: unknown): boolean {

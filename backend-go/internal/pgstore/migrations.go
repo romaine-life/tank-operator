@@ -178,19 +178,38 @@ var schemaMigrations = []string{
 		        jsonb_build_object(
 		          'kind', 'result_failed',
 		          'reason', 'exit_code',
-		          'code', (payload->'payload'->'raw_item'->>'exit_code')::int
+		          'code', exit_code
 		        ),
 		        true
 		      ),
 		      '{payload,exit_code}',
-		      to_jsonb((payload->'payload'->'raw_item'->>'exit_code')::int),
+		      to_jsonb(exit_code),
 		      true
 		    )
-		WHERE event_type = 'item.completed'
-		  AND payload->>'source' = 'codex'
-		  AND payload->'payload'->'outcome' IS NULL
-		  AND payload->'payload'->'raw_item'->>'exit_code' ~ '^-?[0-9]+$'
-		  AND (payload->'payload'->'raw_item'->>'exit_code')::int <> 0`,
+		FROM (
+		  SELECT tank_session_id, order_key,
+		         COALESCE(
+		           payload->'payload'->>'exit_code',
+		           payload->'payload'->'raw_item'->>'exit_code',
+		           payload->'payload'->'raw_item'->>'exitCode',
+		           payload->'payload'->'raw_item'->'result'->>'exit_code',
+		           payload->'payload'->'raw_item'->'result'->>'exitCode'
+		         )::int AS exit_code
+		  FROM session_events
+		  WHERE event_type = 'item.completed'
+		    AND payload->>'source' = 'codex'
+		    AND payload->'payload'->'outcome' IS NULL
+		    AND COALESCE(
+		          payload->'payload'->>'exit_code',
+		          payload->'payload'->'raw_item'->>'exit_code',
+		          payload->'payload'->'raw_item'->>'exitCode',
+		          payload->'payload'->'raw_item'->'result'->>'exit_code',
+		          payload->'payload'->'raw_item'->'result'->>'exitCode'
+		        ) ~ '^-?[0-9]+$'
+		) AS command_exit
+		WHERE session_events.tank_session_id = command_exit.tank_session_id
+		  AND session_events.order_key = command_exit.order_key
+		  AND command_exit.exit_code <> 0`,
 
 	// `session_counters` — monotonic session-id allocator, one row per scope.
 	// Replaces the Cosmos `session-counter[:scope]` document the previous

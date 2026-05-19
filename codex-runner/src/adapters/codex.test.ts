@@ -154,6 +154,32 @@ test("maps Codex nonzero exit codes to completed result_failed outcomes", () => 
   assert.equal(event.payload?.exit_code, 1);
 });
 
+test("maps camelCase or nested Codex exit codes to result_failed outcomes", () => {
+  const camel = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_command_camel_exit",
+      type: "command_execution",
+      command: "false",
+      exitCode: 2,
+    },
+  });
+  assert.deepEqual(camel.payload?.outcome, { kind: "result_failed", reason: "exit_code", code: 2 });
+  assert.equal(camel.payload?.exit_code, 2);
+
+  const nested = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_command_nested_exit",
+      type: "command_execution",
+      command: "false",
+      result: { exit_code: 3 },
+    },
+  });
+  assert.deepEqual(nested.payload?.outcome, { kind: "result_failed", reason: "exit_code", code: 3 });
+  assert.equal(nested.payload?.exit_code, 3);
+});
+
 test("maps Codex failed status without execution error to completed result_failed outcomes", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",
