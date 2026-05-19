@@ -69,6 +69,7 @@ inspect_browser_url(
         "secure": True,
         "sameSite": "Lax",
     }],
+    local_storage={"https://tank-operator-slot-1.tank.dev.romaine.life": {"tank-operator-jwt": SESSION_JWT}},
 )
 ```
 
