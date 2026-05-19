@@ -20,7 +20,7 @@ The checkout response provides the assigned slot and validation URL. If Tank's U
 
 When the environment is up, hot-swap code into the test environment. We want to save time, so don't do full image builds if you can avoid it.
 
-Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate.
+Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate. If you place screenshots in the session, they should go under workflow/screenshots.
 
 You are free to come up with a test case for the feature. This is not mandatory, but if you assess that you have tools to craft a test case, do so. It is also acceptable to say that a feature is not easy to test, or tools are missing.
 
