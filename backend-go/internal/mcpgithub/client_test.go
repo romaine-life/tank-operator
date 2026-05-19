@@ -67,9 +67,9 @@ func (f *fakeMCPServer) start(t *testing.T) (exchangeURL, mcpURL string, stop fu
 
 func defaultMCPResponse() string {
 	// MCP SDK default codec wraps tool results in
-	// {result: {structuredContent: {repos: [...]}}}. Mirror that
+	// {result: {structuredContent: {repositories: [...]}}}. Mirror that
 	// shape so the client's parser exercises the production path.
-	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[{"owner":"nelsong6","name":"tank-operator","full_name":"nelsong6/tank-operator","private":false},{"owner":"nelsong6","name":"mcp-github","full_name":"nelsong6/mcp-github","private":true}]}}}`
+	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"full_name":"nelsong6/tank-operator","private":false,"default_branch":"main"},{"full_name":"nelsong6/mcp-github","private":true,"default_branch":"main"}],"count":2,"total_count":2,"truncated":false,"has_more":false,"limit":null}}}`
 }
 
 func TestListRepos_HappyPath(t *testing.T) {
@@ -240,7 +240,7 @@ func TestListRepos_ReadTokenError(t *testing.T) {
 // JSON-RPC envelope inside a `data:` line.
 func TestParseListReposResponse_SSE(t *testing.T) {
 	sse := "event: message\n" +
-		`data: {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[{"owner":"foo","name":"bar","full_name":"foo/bar","private":false}]}}}` + "\n\n"
+		`data: {"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"full_name":"foo/bar","private":false,"default_branch":"main"}]}}}` + "\n\n"
 	repos, err := parseListReposResponse(strings.NewReader(sse))
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,22 @@ func TestParseListReposResponse_SSE(t *testing.T) {
 // `structuredContent`. Tolerated so a future SDK rev that switches
 // shapes doesn't break the picker silently.
 func TestParseListReposResponse_ContentTextFallback(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"repos\":[{\"owner\":\"foo\",\"name\":\"bar\",\"full_name\":\"foo/bar\",\"private\":false}]}"}]}}`
+	body := `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"repositories\":[{\"full_name\":\"foo/bar\",\"private\":false,\"default_branch\":\"main\"}]}"}]}}`
+	repos, err := parseListReposResponse(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "foo/bar" {
+		t.Fatalf("repos = %+v", repos)
+	}
+}
+
+// TestParseListReposResponse_LegacyReposAlias keeps the pre-fix
+// Tank-side field name readable. Production mcp-github returns
+// `repositories`, but accepting `repos` makes this client tolerant of
+// old fakes and any preexisting local dev shims.
+func TestParseListReposResponse_LegacyReposAlias(t *testing.T) {
+	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[{"owner":"foo","name":"bar","full_name":"foo/bar","private":false}]}}}`
 	repos, err := parseListReposResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +297,7 @@ func TestParseListReposResponse_RPCError(t *testing.T) {
 // it as an empty array rather than nil — keeps the SPA's downstream
 // `.map` simple.
 func TestParseListReposResponse_EmptyResult(t *testing.T) {
-	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repos":[]}}}`
+	body := `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[]}}}`
 	repos, err := parseListReposResponse(strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
