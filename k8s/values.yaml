@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-dac4f1f7bd5031f2318417d167679cf40959f652abb729f870982f02249412a8"
+  tag: "app-c67ee6e23dd333d43bd52546e9c177d69c47381b97c2098148f99c55a17b29bc"
   pullPolicy: IfNotPresent
 
 testEnv:
@@ -196,6 +196,22 @@ superAdmins:
 # hostname used to build session URLs returned by internal endpoints.
 internalApi:
   tankUiHost: "https://tank.romaine.life"
+
+# Hermes Agent integration. Tank's orchestrator drives Hermes' OpenAI-compatible
+# API server for `hermes_gui` session turns (cluster-internal, no public
+# ingress on Hermes' side). Inbound auth on Hermes' end is a service-JWT
+# verified at its auth-proxy sidecar (nelsong6/hermes#13). We mint a
+# fresh JWT here by exchanging the orchestrator's projected SA token at
+# auth.romaine.life/api/auth/exchange/k8s — same IdP every other
+# service-to-service call in the system uses. See
+# nelsong6/tank-operator#540 + nelsong6/auth#42.
+hermes:
+  apiURL: "http://hermes-api.hermes.svc.cluster.local:8642"
+  # auth.romaine.life service-exchange endpoint. Audience pinned on the
+  # projected SA token below. Configured separately from apiURL because
+  # the exchange URL is identity-provider-scoped, while apiURL is the
+  # downstream API target — they could conceivably move independently.
+  authRomaineExchangeURL: "https://auth.romaine.life/api/auth/exchange/k8s"
 
 externalSecret:
   storeName: romaine-kv

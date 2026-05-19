@@ -1,7 +1,7 @@
 export const TANK_ACTORS: readonly ["user", "assistant", "system", "tool", "runner"];
 export type TankActor = (typeof TANK_ACTORS)[number];
 
-export const TANK_EVENT_SOURCES: readonly ["tank", "claude", "codex"];
+export const TANK_EVENT_SOURCES: readonly ["tank", "claude", "codex", "hermes"];
 export type TankEventSource = (typeof TANK_EVENT_SOURCES)[number];
 
 export const TANK_VISIBILITIES: readonly ["durable"];

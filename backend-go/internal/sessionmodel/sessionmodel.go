@@ -18,16 +18,25 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode            = "api_key"
-	ClaudeCLIMode         = "claude_cli"
-	ClaudeGUIMode         = "claude_gui"
-	ConfigMode            = "config"
-	CodexConfigMode       = "codex_config"
-	CodexCLIMode          = "codex_cli"
-	CodexGUIMode          = "codex_gui"
-	PiConfigMode          = "pi_config"
-	PiCLIMode             = "pi_cli"
-	DefaultSessionMode    = ClaudeGUIMode
+	APIKeyMode      = "api_key"
+	ClaudeCLIMode   = "claude_cli"
+	ClaudeGUIMode   = "claude_gui"
+	ConfigMode      = "config"
+	CodexConfigMode = "codex_config"
+	CodexCLIMode    = "codex_cli"
+	CodexGUIMode    = "codex_gui"
+	PiConfigMode    = "pi_config"
+	PiCLIMode       = "pi_cli"
+	// HermesGUIMode routes chat turns to Hermes Agent's OpenAI-compatible
+	// API server (cluster-internal at hermes-api.hermes.svc.cluster.local)
+	// via POST /v1/runs, instead of spawning a session pod. The "pod is
+	// the product" model from CLAUDE.md does NOT apply here: Hermes is a
+	// singleton StatefulSet whose value lives in its persistent SQLite
+	// memory + skills directory; a per-Tank-session pod would discard
+	// that state on every session create. Tradeoffs and the full
+	// integration design live in nelsong6/tank-operator#540.
+	HermesGUIMode      = "hermes_gui"
+	DefaultSessionMode = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
 	SessionServiceAccount = "claude-session"
@@ -66,8 +75,28 @@ var (
 		CodexGUIMode:    {},
 		PiConfigMode:    {},
 		PiCLIMode:       {},
+		HermesGUIMode:   {},
+	}
+
+	// noPodModes are session modes that do NOT spawn a K8s session pod.
+	// The orchestrator routes their turns through an external backend
+	// instead. Today's only entry is hermes_gui, which posts to Hermes
+	// Agent's /v1/runs API. The manager.Create branch on this map keeps
+	// the rest of the pipeline (registry, snapshot, SSE) blissfully
+	// unaware of where the model actually runs.
+	noPodModes = map[string]struct{}{
+		HermesGUIMode: {},
 	}
 )
+
+// IsNoPodMode reports whether the given mode runs without a session pod.
+// Callers that spawn / delete / inspect pods (manager, session-controller,
+// reaper, handlers_session_pod_*) MUST check this before assuming a pod
+// exists. See nelsong6/tank-operator#540 → "no-pod branch."
+func IsNoPodMode(mode string) bool {
+	_, ok := noPodModes[NormalizeSessionMode(mode)]
+	return ok
+}
 
 type SessionRecord struct {
 	ID          string

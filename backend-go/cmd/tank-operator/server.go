@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -52,6 +53,14 @@ type appServer struct {
 	// previously sat alongside it was removed; see quota.go for the
 	// rationale and what to design back in next time.
 	spawnQuota *SpawnQuotaTracker
+
+	// hermes bridge drives hermes_gui session turns (no pod, external
+	// /v1/runs API in nelsong6/hermes). nil when HERMES_API_URL /
+	// HERMES_API_BEARER aren't set in env — the bridge is constructed
+	// best-effort in main.go so a missing config fails loud at the
+	// hermes_gui branch in handleEnqueueSessionTurn rather than at boot.
+	// See nelsong6/tank-operator#540.
+	hermesBridge *hermes.Bridge
 }
 
 type sessionCommandBus interface {
