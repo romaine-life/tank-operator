@@ -1760,7 +1760,8 @@ function DemoLanding() {
               {/* Demo preview of the chat composer. Same `ChatComposer`
                   component the authenticated home and the run pane use;
                   submitting redirects to sign-in instead of creating a
-                  session. */}
+                  session. The icon row mirrors the authenticated home so
+                  the demo accurately previews the chat surface. */}
               <ChatComposer
                 className="run-composer-home"
                 placeholder="Sign in to start a session…"
@@ -1770,6 +1771,46 @@ function DemoLanding() {
                 permissionMode={demoComposerMode}
                 onPermissionModeChange={setDemoComposerMode}
                 sendByCtrlEnter={false}
+                toolButtons={
+                  <>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn"
+                      disabled
+                      aria-label="Attach files"
+                      title="Sign in to attach files"
+                    >
+                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                      disabled
+                      aria-label="Start test skill"
+                      title="Sign in to start a session"
+                    >
+                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-command-menu-btn"
+                      disabled
+                      aria-label="Show slash commands"
+                      title="Sign in to use slash commands"
+                    >
+                      <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-command-menu-btn"
+                      disabled
+                      aria-label="Show MCP servers"
+                      title="Sign in to use MCP servers"
+                    >
+                      <McpIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                  </>
+                }
               />
             </div>
           </div>
@@ -2093,6 +2134,19 @@ function normalizeToolState(status: string | undefined): string {
 // now that the inline RunMessages renderer owns class names directly.)
 
 type RunTab = "chat" | "files" | "settings" | "help";
+
+/** A file the user picked / dropped / pasted on the home composer before
+ *  a session pod exists. The `file` is kept on the object so it can be
+ *  uploaded to `/api/sessions/{id}/files/upload` after the pod is Ready;
+ *  `previewUrl` is a `URL.createObjectURL` blob for image thumbnails and
+ *  is revoked on remove. */
+interface HomePendingAttachment {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
+  previewUrl?: string;
+}
 
 interface ComposerAttachment {
   id: string; // local-only id for keying
@@ -7619,6 +7673,39 @@ export function App() {
   // session's run pane (which uses its own per-session composerMode state).
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
+  // Files picked / dropped / pasted onto the home composer before the
+  // session pod exists. They are uploaded to `/api/sessions/{id}/files/upload`
+  // after the pod becomes Ready, then their absolute paths are appended to
+  // the seed turn the same way the in-chat composer appends them via
+  // `composePromptWithAttachments`. Cleared once the seed turn is submitted
+  // (or on the next createSession call).
+  const [homeAttachments, setHomeAttachments] = useState<HomePendingAttachment[]>([]);
+  const homeFileInputRef = useRef<HTMLInputElement | null>(null);
+  const addHomeAttachments = useCallback((files: FileList | File[] | null) => {
+    if (!files) return;
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setHomeAttachments((prev) => [
+      ...prev,
+      ...list.map((file) => ({
+        id: `home-att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        name: file.name || "file",
+        size: file.size,
+        previewUrl: file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined,
+      })),
+    ]);
+  }, []);
+  const removeHomeAttachment = useCallback((id: string) => {
+    setHomeAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+  const [homeDragActive, setHomeDragActive] = useState(false);
   // When non-null, the chat pane for this session id auto-opens its title
   // rename input on its next render. Used to make freshly-created sessions
   // land directly in the chat pane with the title editor focused, and to
@@ -8224,18 +8311,53 @@ export function App() {
       // chat modes have a turn endpoint; non-chat modes ignore the prompt
       // because the home composer would not have surfaced a sensible target.
       const seedPrompt = initialPrompt?.trim();
-      if (seedPrompt && CHAT_MODES.has(mode)) {
+      const pendingHomeAttachments = homeAttachments;
+      if ((seedPrompt || pendingHomeAttachments.length > 0) && CHAT_MODES.has(mode)) {
         const model =
           selectedProvider === "anthropic" ? runPrefs.claudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
         const effort = selectedProvider === "anthropic" ? runPrefs.claudeEffort : "";
         try {
           await waitForSessionReady(created.id);
+          // Upload home-buffered attachments to the new session pod before
+          // submitting the seed turn — same endpoint and shape the in-chat
+          // composer's uploadAttachment() uses, so the agent runner sees an
+          // identical attachments payload regardless of where the user
+          // started typing.
+          const uploadedPaths: { name: string; absPath: string }[] = [];
+          for (const att of pendingHomeAttachments) {
+            const upRes = await authedFetch(
+              `/api/sessions/${created.id}/files/upload?name=${encodeURIComponent(att.name)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": att.file.type || "application/octet-stream" },
+                body: att.file,
+              },
+            );
+            if (!upRes.ok) {
+              throw new Error(`attachment upload failed: ${upRes.status}`);
+            }
+            const body = (await upRes.json()) as { abs_path: string; name: string };
+            uploadedPaths.push({ name: body.name, absPath: body.abs_path });
+          }
+          // Clear the home buffer once the files are persisted on the pod.
+          setHomeAttachments((prev) => {
+            for (const a of prev) {
+              if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+            }
+            return [];
+          });
+          const composedPrompt =
+            uploadedPaths.length > 0
+              ? `${seedPrompt ?? ""}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
+                  .map((p) => `- ${p.absPath}`)
+                  .join("\n")}`
+              : (seedPrompt ?? "");
           const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               client_nonce: newForkTurnId(),
-              prompt: seedPrompt,
+              prompt: composedPrompt,
               model,
               ...(effort ? { effort } : {}),
               permission_mode: initialPermissionMode,
@@ -8870,35 +8992,176 @@ export function App() {
                 </section>
               </div>
 
-              {/* Chat-style composer. Same `ChatComposer` the run pane uses
-                  inside an active session — only the `toolButtons` slot is
-                  empty here because the session-bound features (image
-                  attach, usage ring, rollout/test, slash, MCP) aren't
-                  meaningful before a pod exists. Enter is "confirm": create
-                  a session with the current configuration and the
-                  composer's permission mode, then (for chat modes only)
-                  submit the typed text as the first turn once the pod is
-                  ready. */}
-              <ChatComposer
-                className="run-composer-home"
-                placeholder={
-                  CHAT_MODES.has(defaultSessionMode)
-                    ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
-                    : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
-                }
-                onSubmit={({ text, permissionMode }) => {
-                  const trimmed = text.trim();
-                  void createSession(
-                    defaultSessionMode,
-                    trimmed || undefined,
-                    permissionMode,
-                  );
+              {/* Chat-style composer. Renders the same `ChatComposer` the
+                  run pane uses inside an active session — including the
+                  same icon row in `toolButtons`. Image attach is wired
+                  end-to-end: files buffered here are uploaded to the new
+                  pod after Ready and appended to the seed turn the same
+                  way the in-chat `composePromptWithAttachments` does it.
+                  Rollout / test / slash / MCP render disabled with
+                  tooltips, because those surfaces are session-state
+                  driven and can't act before a pod exists. Drop and
+                  clipboard-paste of files are accepted on the surrounding
+                  wrap, matching the run-pane behavior. */}
+              <div
+                className={`run-composer-wrap run-composer-wrap-home${homeDragActive ? " run-composer-wrap-drag" : ""}`}
+                onDragOver={(e) => {
+                  if (!CHAT_MODES.has(defaultSessionMode)) return;
+                  e.preventDefault();
+                  if (!homeDragActive) setHomeDragActive(true);
                 }}
-                permissionMode={homeComposerMode}
-                onPermissionModeChange={setHomeComposerMode}
-                sendByCtrlEnter={false}
-                disabled={busy}
-              />
+                onDragLeave={(e) => {
+                  if (e.currentTarget === e.target) setHomeDragActive(false);
+                }}
+                onDrop={(e) => {
+                  if (!CHAT_MODES.has(defaultSessionMode)) return;
+                  e.preventDefault();
+                  setHomeDragActive(false);
+                  addHomeAttachments(e.dataTransfer?.files ?? null);
+                }}
+                onPaste={(e) => {
+                  if (!CHAT_MODES.has(defaultSessionMode)) return;
+                  const items = e.clipboardData?.items;
+                  if (!items) return;
+                  const fs: File[] = [];
+                  for (const it of Array.from(items)) {
+                    if (it.kind === "file") {
+                      const f = it.getAsFile();
+                      if (f) fs.push(f);
+                    }
+                  }
+                  if (fs.length > 0) {
+                    e.preventDefault();
+                    addHomeAttachments(fs);
+                  }
+                }}
+              >
+                {homeDragActive && (
+                  <div className="run-composer-drop-overlay" aria-hidden="true">
+                    Drop to attach
+                  </div>
+                )}
+                {homeAttachments.length > 0 && (
+                  <div className="run-composer-attachments">
+                    {homeAttachments.map((a) => (
+                      <div
+                        key={a.id}
+                        className="run-composer-chip run-composer-chip-ready"
+                        title={a.name}
+                      >
+                        {a.previewUrl ? (
+                          <img
+                            className="run-composer-chip-thumb"
+                            src={a.previewUrl}
+                            alt=""
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <FileIcon size={14} aria-hidden="true" />
+                        )}
+                        <span className="run-composer-chip-name">{a.name}</span>
+                        <button
+                          type="button"
+                          className="run-composer-chip-remove"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            removeHomeAttachment(a.id);
+                          }}
+                          aria-label={`Remove ${a.name}`}
+                        >
+                          <XIcon size={11} aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input
+                  ref={homeFileInputRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    addHomeAttachments(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                <ChatComposer
+                  className="run-composer-home"
+                  placeholder={
+                    CHAT_MODES.has(defaultSessionMode)
+                      ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
+                      : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
+                  }
+                  onSubmit={({ text, permissionMode }) => {
+                    const trimmed = text.trim();
+                    void createSession(
+                      defaultSessionMode,
+                      trimmed || undefined,
+                      permissionMode,
+                    );
+                  }}
+                  permissionMode={homeComposerMode}
+                  onPermissionModeChange={setHomeComposerMode}
+                  sendByCtrlEnter={false}
+                  disabled={busy}
+                  toolButtons={
+                    <>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn"
+                        aria-label="Attach files"
+                        title={
+                          CHAT_MODES.has(defaultSessionMode)
+                            ? "Attach files for the first turn"
+                            : "Attachments only apply to chat modes"
+                        }
+                        onClick={() => homeFileInputRef.current?.click()}
+                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
+                      >
+                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
+                        <button
+                          type="button"
+                          className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                          disabled
+                          aria-label="Start rollout"
+                          title="Use /rollout once your session starts"
+                        >
+                          <TankIcon className="run-composer-icon" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                        disabled
+                        aria-label="Start test skill"
+                        title="Available once your session starts"
+                      >
+                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show slash commands"
+                        title="Slash commands appear once your session has skills"
+                      >
+                        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show MCP servers"
+                        title="MCP servers appear once your session is connected"
+                      >
+                        <McpIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                    </>
+                  }
+                />
+              </div>
             </div>
           </div>
         ) : (
