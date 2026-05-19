@@ -44,6 +44,8 @@ export interface ConversationItem {
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface ConversationInterruptRequest {
@@ -170,13 +172,19 @@ export function conversationReducer(
         "completed",
       );
     case "item.failed":
+      // item.failed marks ONE tool call as errored — it does NOT change
+      // session run state. The agent will usually recover and continue;
+      // flipping runStatus to "error" on every tool error left the pill
+      // pinned red for healthy mid-turn sessions. Session-level error
+      // comes from turn.failed / turn.command_failed (durable turn
+      // terminal events). The per-item error indicator in the transcript
+      // continues to render off the item's "failed" status set here.
+      // Mirrors backend sessionactivity.DeriveActivitySummary — both
+      // consumers treat item.failed as item-scoped, not session-scoped.
       return upsertItem(
         {
           ...next,
-          runStatus: "error",
-          failed: true,
           activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
-          lastError: errorText(event),
         },
         event,
         "failed",
@@ -280,6 +288,7 @@ function upsertItem(
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, "text");
   const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
+  const isTerminalStatus = status === "completed" || status === "failed";
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
@@ -294,6 +303,10 @@ function upsertItem(
     orderKey: event.order_key ?? existing?.orderKey,
     sourceEventId: event.event_id,
     createdAt: event.created_at || existing?.createdAt,
+    startedAt: status === "started"
+      ? event.created_at
+      : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+    completedAt: isTerminalStatus ? event.created_at : existing?.completedAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))

@@ -86,6 +86,25 @@ var schemaMigrations = []string{
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS rollout_state jsonb`,
 
+	// Repo-selection columns. `repos` is the durable list of
+	// "owner/name" slugs the user picked at session creation; empty
+	// array means "no auto-cloning, agent will mint clone tokens on
+	// demand at runtime" (today's only shape). `clone_state` is the
+	// per-repo init-container outcome the cloner writes back before
+	// the agent starts — keyed by slug, value is
+	// {status: pending|cloning|cloned|failed, error?: string,
+	//  started_at?, finished_at?}. Both columns are no-ops on the
+	// pod path until stage 3 ships the init container; the schema
+	// lands now so stage 1's row plumbing (Info, SSE wire payload,
+	// recent-repos query) reads against a stable column set and the
+	// stage 3 PR is purely additive on the runtime side. Existing
+	// rows back-fill to '{}'/NULL respectively, matching the
+	// "0 repos selected" shape that has always been valid.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS repos text[] NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS clone_state jsonb`,
+
 	// `session_events` — the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.

@@ -171,10 +171,50 @@ func TestEnqueueSessionTurnRejectsInvalidEffort(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnForwardsCodexModelAndEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-strength","prompt":"hello","model":"gpt-5.5","effort":"xhigh"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Provider; got != "codex" {
+		t.Fatalf("provider = %q, want codex", got)
+	}
+	if got := bus.commands[0].Model; got != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", got)
+	}
+	if got := bus.commands[0].Effort; got != "xhigh" {
+		t.Fatalf("effort = %q, want xhigh", got)
+	}
+}
+
+func TestEnqueueSessionTurnRejectsCodexMaxEffort(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-max","prompt":"hello","model":"gpt-5.5","effort":"max"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
 // TestEnqueueSessionTurnAllowsEmptyEffort pins the "empty means use the
-// runner's baked-in default" mapping. The frontend omits the effort field
-// for Codex (and may omit it for legacy clients); enforce-but-don't-
-// require keeps the wire shape additive across providers.
+// runner's baked-in default" mapping. Legacy clients may omit effort;
+// enforce-but-don't-require keeps the wire shape additive across providers.
 func TestEnqueueSessionTurnAllowsEmptyEffort(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))

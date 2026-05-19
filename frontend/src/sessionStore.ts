@@ -58,6 +58,19 @@ export interface SessionRow {
   activity_summary?: Record<string, unknown>;
   test_state?: Record<string, unknown>;
   rollout_state?: Record<string, unknown>;
+  // repos is the durable owner/name slug list the user picked at
+  // session creation. Always present on the wire (empty array when
+  // none picked); the splash chips and the per-session detail view
+  // both read through this field so local SPA state never
+  // contradicts the row. Stage 1 of the auto-clone feature
+  // (handlers_repos.go on the backend).
+  repos: string[];
+  // clone_state surfaces the per-repo init-container outcome from
+  // stage 3 (keyed by slug). Optional on the wire — omitted until
+  // stage 3 ships and the cloner writes back. The SPA shows a
+  // tooltip / status pill off this map; null/missing means
+  // "no clone state yet" rather than "clone succeeded."
+  clone_state?: Record<string, unknown>;
   row_version: number;
 }
 
@@ -274,6 +287,14 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         : undefined,
       rollout_state: isRecord(rowRaw.rollout_state)
         ? (rowRaw.rollout_state as Record<string, unknown>)
+        : undefined,
+      repos: Array.isArray(rowRaw.repos)
+        ? (rowRaw.repos as unknown[]).filter(
+            (entry): entry is string => typeof entry === "string",
+          )
+        : [],
+      clone_state: isRecord(rowRaw.clone_state)
+        ? (rowRaw.clone_state as Record<string, unknown>)
         : undefined,
       row_version: rowVersion,
     },

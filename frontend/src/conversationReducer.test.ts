@@ -124,12 +124,14 @@ test("Tool lifecycle replays to a completed tool item", () => {
       actor: "tool",
       source: "claude",
       timeline_id: "toolu-read",
+      created_at: "2026-05-12T00:00:10.000Z",
       payload: { kind: "tool", title: "Read", text: "{\"file_path\":\"README.md\"}" },
     }),
     ev("3", "item.completed", {
       actor: "tool",
       source: "claude",
       timeline_id: "toolu-read",
+      created_at: "2026-05-12T00:00:15.000Z",
       payload: { kind: "tool", title: "Read", text: "README contents" },
     }),
     ev("4", "turn.completed"),
@@ -140,6 +142,8 @@ test("Tool lifecycle replays to a completed tool item", () => {
   assert.deepEqual(state.items.map((item) => [item.id, item.status, item.title]), [
     ["toolu-read", "completed", "Read"],
   ]);
+  assert.equal(state.items[0]?.startedAt, "2026-05-12T00:00:10.000Z");
+  assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
 });
 
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
@@ -275,6 +279,68 @@ test("Late turn.interrupt_requested after terminal state does NOT downgrade run 
   // recorded for transcript transparency, but runStatus stays ready.
   assert.equal(state.runStatus, "ready");
   assert.equal(state.interruptRequests.length, 1);
+});
+
+// item.failed marks a single tool call as errored; the agent typically
+// keeps running. Previously this flipped runStatus to "error" and set
+// failed=true, leaving the in-pane status indicator pinned red for an
+// otherwise healthy session. Session-level error is owned by turn.failed /
+// turn.command_failed (durable turn-terminal events). The per-item error
+// badge in the transcript still renders off the item's "failed" status.
+test("item.failed mid-turn does NOT flip runStatus or set failed", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "run-tool-error",
+      payload: { text: "do thing" },
+    }),
+    ev("2", "turn.submitted", { client_nonce: "run-tool-error" }),
+    ev("3", "turn.started", { source: "claude" }),
+    ev("4", "item.started", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-1",
+      payload: { kind: "tool", name: "Bash", input: { command: "false" } },
+    }),
+    ev("5", "item.failed", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-1",
+      payload: { kind: "tool_result", is_error: true, output: "exit 1" },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.failed, false);
+  assert.equal(state.lastError, null);
+  assert.equal(state.activeTurnId, "turn-1");
+  // The per-item failure must still show in the transcript so the
+  // user sees the orange error badge under the tool call.
+  const failedItem = state.items.find((item) => item.id === "tool-1");
+  assert.equal(failedItem?.status, "failed");
+});
+
+test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "item.failed", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-x",
+      payload: { kind: "tool_result", is_error: true },
+    }),
+    ev("3", "item.completed", {
+      actor: "assistant",
+      source: "claude",
+      timeline_id: "msg-recover",
+      payload: { kind: "message", text: "I'll try a different approach." },
+    }),
+    ev("4", "turn.completed", { source: "claude" }),
+  ]);
+
+  assert.equal(state.runStatus, "ready");
+  assert.equal(state.failed, false);
+  assert.equal(state.lastError, null);
 });
 
 test("Duplicate turn.interrupt_requested events dedupe by event_id", () => {

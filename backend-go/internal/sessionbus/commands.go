@@ -32,15 +32,16 @@ type Command struct {
 	ClientNonce       string `json:"client_nonce,omitempty"`
 	Prompt            string `json:"prompt,omitempty"`
 	Model             string `json:"model,omitempty"`
-	// Effort is the extended-thinking effort level requested by the user
-	// at session creation: "low" | "medium" | "high" | "xhigh" | "max".
-	// Pinned at pod boot by the agent-runner from the first submit_turn
-	// that carries a value; subsequent overrides are ignored because the
-	// SDK Options object is sealed for the runner's lifetime. Empty
-	// string means "use the runner's baked-in default". Allowlist
-	// enforcement lives in middleware.go's validateEffort — that's the
-	// single point of truth; this field is treated as already-validated
-	// when it lands on the wire.
+	// Effort is the reasoning effort level requested by the user at
+	// session creation. Claude accepts "low" | "medium" | "high" |
+	// "xhigh" | "max"; Codex accepts "low" | "medium" | "high" |
+	// "xhigh". Pinned by the runner from the first submit_turn that
+	// carries a value; subsequent overrides are ignored because the SDK
+	// options object is sealed for the runner's lifetime. Empty string
+	// means "use the runner's baked-in default". Allowlist enforcement
+	// lives in middleware.go's validateEffort — that's the single point
+	// of truth; this field is treated as already-validated when it lands
+	// on the wire.
 	Effort         string `json:"effort,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
 	SkillName      string `json:"skill_name,omitempty"`
@@ -52,8 +53,8 @@ type Command struct {
 	// migration from `item_id` to `timeline_id` (#448); renamed to match
 	// its content semantics. No consumer reads this field today — it's
 	// preserved on the wire for audit/debug visibility.
-	TargetTimelineID     string                          `json:"target_timeline_id,omitempty"`
-	TargetProviderItemID string                          `json:"target_provider_item_id,omitempty"`
+	TargetTimelineID     string `json:"target_timeline_id,omitempty"`
+	TargetProviderItemID string `json:"target_provider_item_id,omitempty"`
 	// Answers carries the user's AskUserQuestion selections keyed by
 	// question text. Each value is the list of chosen option labels:
 	// single-select questions emit a one-element slice, multi-select

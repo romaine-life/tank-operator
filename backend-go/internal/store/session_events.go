@@ -36,10 +36,10 @@ type SessionEventStore interface {
 	EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
-	// (turn.*, item.failed, tool.approval_*) for a session in ascending
-	// order_key. Bounded read used by the lifecycle emitter
-	// (chat→sidebar activity-delta bridge) instead of folding the full
-	// ledger.
+	// (turn.*, tool.approval_*) for a session in ascending order_key.
+	// Bounded read used by the lifecycle emitter (chat→sidebar activity-
+	// delta bridge) instead of folding the full ledger. item.failed is
+	// intentionally excluded — see sessionactivity.LifecycleChatEventTypes.
 	LatestLifecycleEvents(ctx context.Context, tankSessionID string, limit int) ([]map[string]any, error)
 	// UnreadOutputCount returns the number of distinct timeline_id /
 	// turn_id markers that count as "unread output" strictly after the
@@ -52,8 +52,14 @@ type SessionEventStore interface {
 // LifecycleEventTypes is the set of event types that drive run-status,
 // active-turn-id, and needs-input transitions in the activity summary.
 // Centralized here so the Postgres query, the stub, and the activity
-// handler stay in sync. Order_key fold semantics are: ASC, last-write-
-// wins per field.
+// handler stay in sync with sessionactivity.LifecycleChatEventTypes.
+// Order_key fold semantics are: ASC, last-write-wins per field.
+//
+// item.failed is intentionally excluded: see
+// sessionactivity.LifecycleChatEventTypes for the rationale. It is still
+// counted as unread output via UnreadOutputItemTypes below — the user
+// should still see "1 new" when a tool errors — it just doesn't taint
+// the session-level status.
 var LifecycleEventTypes = []string{
 	"turn.submitted",
 	"turn.started",
@@ -62,7 +68,6 @@ var LifecycleEventTypes = []string{
 	"turn.command_failed",
 	"turn.interrupt_requested",
 	"turn.interrupted",
-	"item.failed",
 	"tool.approval_requested",
 	"tool.approval_resolved",
 }

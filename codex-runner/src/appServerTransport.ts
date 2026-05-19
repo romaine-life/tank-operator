@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
+import type { ThreadOptions } from "@openai/codex-sdk";
 
 import type { CodexEvent } from "./sessionEvents.js";
 
@@ -120,9 +121,13 @@ export class CodexAppServerTransport {
     if (child && !child.killed) child.kill();
   }
 
-  async *runTurn(input: string, signal?: AbortSignal): AsyncGenerator<CodexEvent> {
+  async *runTurn(
+    input: string,
+    threadOptions: ThreadOptions,
+    signal?: AbortSignal,
+  ): AsyncGenerator<CodexEvent> {
     await this.start();
-    const threadID = await this.ensureThread();
+    const threadID = await this.ensureThread(threadOptions);
     const queue = new AsyncEventQueue();
     this.activeQueue = queue;
     this.activeProviderTurnID = null;
@@ -162,13 +167,19 @@ export class CodexAppServerTransport {
     }
   }
 
-  private async ensureThread(): Promise<string> {
+  private async ensureThread(threadOptions: ThreadOptions): Promise<string> {
     if (this.threadID) return this.threadID;
     const response = await this.request("thread/start", {
       cwd: this.opts.cwd,
       sandbox: "danger-full-access",
       approvalPolicy: "never",
-      config: { features: { default_mode_request_user_input: true } },
+      config: {
+        features: { default_mode_request_user_input: true },
+        ...(threadOptions.model ? { model: threadOptions.model } : {}),
+        ...(threadOptions.modelReasoningEffort
+          ? { model_reasoning_effort: threadOptions.modelReasoningEffort }
+          : {}),
+      },
     }) as JsonRecord;
     const thread = response.thread as JsonRecord | undefined;
     const id = typeof thread?.id === "string" ? thread.id : undefined;

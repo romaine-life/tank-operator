@@ -225,7 +225,13 @@ A conversation projection has these UI states:
   runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by
   provider failure.
-- `error`: a turn or item failed.
+- `error`: the session is in a failed state. Reached only via a durable
+  turn-terminal failure (`turn.failed` or `turn.command_failed`) or by the
+  session pod entering the Failed state (`failedFromPod`). `item.failed`
+  is a per-item transcript marker for a single failed tool call; the agent
+  routinely handles tool errors and continues, so it does not transition
+  session-level state. The per-item error badge in the transcript renders
+  from the same `item.failed` event independently.
 
 Turn transitions:
 

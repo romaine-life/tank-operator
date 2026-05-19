@@ -150,16 +150,40 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		Mode            string         `json:"mode"`
 		GlimmungContext map[string]any `json:"glimmung_context"`
 		Name            string         `json:"name"`
+		Repos           []string       `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
 
-	info, err := s.mgr.Create(r.Context(), user.ActorEmail, body.Mode, body.GlimmungContext, body.Name)
+	repos, err := validateRepoSlugs(body.Repos)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+
+	// The internal handler historically passes body.Name as the
+	// requestedAt argument — that's a pre-refactor naming oddity
+	// preserved by setting RequestedAt to body.Name here. (Yes, the
+	// field is named "name" but threads into RequestedAt — same as
+	// the prior positional code.) Worth a separate cleanup PR; out
+	// of scope for the repos feature.
+	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
+		Owner:           user.ActorEmail,
+		Mode:            body.Mode,
+		GlimmungContext: body.GlimmungContext,
+		RequestedAt:     body.Name,
+		Repos:           repos,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
 }
 

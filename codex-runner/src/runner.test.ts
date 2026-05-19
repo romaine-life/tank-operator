@@ -9,6 +9,7 @@ import {
   interruptTargetMatchesTurn,
   Runner,
   takePendingInterruptForTurn,
+  threadOptionsForCommand,
 } from "./runner.js";
 import {
   isDurableTankConversationEvent,
@@ -175,6 +176,19 @@ test("pending Codex interrupts are consumed when their turn becomes current", ()
     { target_turn_id: "client-other", client_nonce: "client-other" },
   ]);
   assert.equal(takePendingInterruptForTurn(pendingInterrupts, turn), null);
+});
+
+test("threadOptionsForCommand forwards first-turn Codex model and effort", () => {
+  const opts = threadOptionsForCommand(runnerConfig(), {
+    model: "gpt-5.5",
+    effort: "xhigh",
+  } as unknown as Parameters<typeof threadOptionsForCommand>[1]);
+
+  assert.equal(opts.workingDirectory, "/workspace");
+  assert.equal(opts.model, "gpt-5.5");
+  assert.equal(opts.modelReasoningEffort, "xhigh");
+  assert.equal(opts.sandboxMode, "danger-full-access");
+  assert.equal(opts.approvalPolicy, "never");
 });
 
 test("terminal Codex interrupts ack submit and interrupt commands after publish", async () => {

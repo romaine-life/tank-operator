@@ -94,6 +94,13 @@ import {
   type ConversationViewEntry,
 } from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
+import { RepoPicker } from "./components/RepoPicker";
+import {
+  REPO_SUPPORTED_MODES,
+  addRepoSlug,
+  isValidRepoSlug,
+  removeRepoSlug,
+} from "./repos";
 import { ProviderIcon } from "./providerIcons";
 import {
   normalizeSessionActivity,
@@ -122,6 +129,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
+import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
 
 type SessionMode =
   | "api_key"
@@ -163,6 +171,8 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  startedAt?: string;
+  completedAt?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble swaps in that session's deterministic avatar in
@@ -197,10 +207,9 @@ type ForkSessionRequest = {
   sourceSession: Session;
   forkedEntry: TranscriptEntry;
   model: string;
-  // effort is Claude-only; codex forks send "" and the runner falls back.
-  // The empty string also matches the agent-runner's "use baked-in
-  // default" branch, so legacy forks created before this field existed
-  // keep working without a migration.
+  // Empty string means the target runner should use its baked-in default,
+  // so legacy forks created before this field existed keep working without
+  // a migration.
   effort: string;
   permissionMode: string;
 };
@@ -245,6 +254,15 @@ interface Session {
   // here for the initial-state extraction in normalizeSession; runtime
   // reads go through sessionActivities[id], not session.activity.
   activity?: SessionActivitySummary | null;
+  // repos is the durable owner/name slug list the user picked at
+  // session creation. Always an array on the wire (empty when none
+  // picked). The splash chips for existing sessions read from here
+  // — never from localStorage — so the chip list never contradicts
+  // the server's view. Stage 1 of the auto-clone feature.
+  repos: string[];
+  // clone_state is the per-repo init-container outcome (stage 3).
+  // Optional until stage 3 ships and the cloner writes back.
+  clone_state?: Record<string, unknown> | null;
 }
 
 interface TestState {
@@ -369,6 +387,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
+    repos: [],
   },
   {
     id: "codex-cli",
@@ -380,6 +399,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
+    repos: [],
   },
   {
     id: "pi-agent",
@@ -391,6 +411,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
+    repos: [],
   },
 ];
 
@@ -595,6 +616,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     created_at: new Date().toISOString(),
     ready_at: null,
     name: `${label} ${index}`,
+    repos: [],
   };
 }
 
@@ -718,6 +740,12 @@ function clearSdkTranscriptPosition(sessionId: string): void {
   } catch {}
 }
 
+// Recent-repos response shape, mirrored from
+// backend cmd/tank-operator/handlers_repos.go → handleGitHubRecentRepos.
+interface RecentReposResponse {
+  repos: string[];
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -729,6 +757,11 @@ function normalizeSession(session: Session): Session {
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.activity = activity;
+  // Defend against degraded snapshots (older server, infoFromPod
+  // fallback, hand-rolled JSON in tests): repos must always be an
+  // array so downstream renderers can `.map` without a guard.
+  next.repos = Array.isArray(session.repos) ? session.repos : [];
+  next.clone_state = session.clone_state ?? null;
   return next;
 }
 
@@ -1399,6 +1432,8 @@ function DemoLanding() {
   const [demoInteraction, setDemoInteraction] = useState<SessionInteraction>("cli");
   const [demoClaudeModelId, setDemoClaudeModelId] = useState(DEFAULT_CLAUDE_MODEL_ID);
   const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
+  const [demoCodexModelId, setDemoCodexModelId] = useState(DEFAULT_CODEX_MODEL_ID);
+  const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
@@ -1412,7 +1447,11 @@ function DemoLanding() {
         : [];
   const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
-    selectedProvider === "anthropic" ? demoClaudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+    selectedProvider === "anthropic"
+      ? demoClaudeModelId
+      : selectedProvider === "codex"
+        ? demoCodexModelId
+        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -1657,7 +1696,9 @@ function DemoLanding() {
                         <span className="home-panel-meta">
                           {selectedProvider === "anthropic"
                             ? CLAUDE_EFFORTS.find((effort) => effort.id === demoClaudeEffortId)?.label
-                            : "account default"}
+                            : selectedProvider === "codex"
+                              ? CODEX_EFFORTS.find((effort) => effort.id === demoCodexEffortId)?.label
+                              : ""}
                         </span>
                       </div>
                       <div className="home-model-list" role="group" aria-label="model">
@@ -1669,6 +1710,7 @@ function DemoLanding() {
                               className={`home-model${modelSelected ? " is-selected" : ""}`}
                               onClick={() => {
                                 if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
+                                if (selectedProvider === "codex") setDemoCodexModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
@@ -1677,15 +1719,19 @@ function DemoLanding() {
                           );
                         })}
                       </div>
-                      {selectedProvider === "anthropic" && (
+                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
                         <div className="home-effort-grid" role="group" aria-label="effort">
-                          {CLAUDE_EFFORTS.map((effort) => {
-                            const effortSelected = effort.id === demoClaudeEffortId;
+                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
+                            const effortSelected =
+                              effort.id === (selectedProvider === "anthropic" ? demoClaudeEffortId : demoCodexEffortId);
                             return (
                               <button
                                 key={effort.id}
                                 className={`home-model home-effort${effortSelected ? " is-selected" : ""}`}
-                                onClick={() => setDemoClaudeEffortId(effort.id)}
+                                onClick={() => {
+                                  if (selectedProvider === "anthropic") setDemoClaudeEffortId(effort.id);
+                                  if (selectedProvider === "codex") setDemoCodexEffortId(effort.id);
+                                }}
                                 aria-pressed={effortSelected}
                                 title={effort.hint}
                               >
@@ -1975,6 +2021,10 @@ function sdkHistoryTerminalForRun(
 
 function isClaudeRunMode(mode: SessionMode): boolean {
   return mode === "claude_gui";
+}
+
+function isCodexRunMode(mode: SessionMode): boolean {
+  return mode === "codex_gui" || mode === "codex_app_server";
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -2511,6 +2561,11 @@ const CLAUDE_MODELS: ModelOption[] = [
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
 ];
 const CODEX_MODELS: ModelOption[] = [
+  { id: "gpt-5.5", label: "Codex · GPT-5.5" },
+  { id: "gpt-5.4", label: "Codex · GPT-5.4" },
+  { id: "gpt-5.4-mini", label: "Codex · GPT-5.4 Mini" },
+  { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
+  { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
 
@@ -2535,6 +2590,14 @@ const CLAUDE_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";
 const DEFAULT_CLAUDE_EFFORT_ID = "high";
+const CODEX_EFFORTS: EffortOption[] = [
+  { id: "low", label: "Low", hint: "Fast responses with lighter reasoning" },
+  { id: "medium", label: "Medium", hint: "Balanced reasoning" },
+  { id: "high", label: "High", hint: "Greater reasoning depth" },
+  { id: "xhigh", label: "Extra High", hint: "Strongest reasoning" },
+];
+const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
+const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
@@ -2557,15 +2620,17 @@ interface RunPrefs {
   // chat-app convention. See docs/product-inspirations.md analysis.
   turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
-  // claudeModelId + claudeEffort persist the user's last picks across
+  // Provider model + effort prefs persist the user's last picks across
   // sessions so a fresh session opens with them pre-selected. They drive
   // initial selectedModelId / selectedEffort state in RunPane and are
   // also written back on every change. Once a turn is submitted the
   // model + effort are sealed for that session pod's lifetime (see
-  // agent-runner/src/runner.ts), so these prefs only affect the *next*
-  // session created in this browser.
+  // agent-runner/src/runner.ts and codex-runner/src/runner.ts), so these
+  // prefs only affect the *next* session created in this browser.
   claudeModelId: string;
   claudeEffort: string;
+  codexModelId: string;
+  codexEffort: string;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2580,6 +2645,8 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   chatFontScale: 1,
   claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
+  codexModelId: DEFAULT_CODEX_MODEL_ID,
+  codexEffort: DEFAULT_CODEX_EFFORT_ID,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -2630,6 +2697,10 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
       } else if (key === "claudeEffort") {
         out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
+      } else if (key === "codexModelId") {
+        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
+      } else if (key === "codexEffort") {
+        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -2663,6 +2734,14 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, prev.claudeEffort);
       }
+    } else if (key === "codexModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, prev.codexModelId);
+      }
+    } else if (key === "codexEffort") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+      }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
     }
@@ -2693,6 +2772,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           toolInput: entry.toolInput,
           toolOutput: entry.toolOutput,
           toolStatus: entry.toolStatus,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
         };
       }
       if (entry.kind === "reasoning") {
@@ -2929,6 +3010,79 @@ function formatMessageTime(iso: string): string {
   } catch {
     return "";
   }
+}
+
+function formatToolClockTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatToolFullTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function toolTimingTitle(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+  running: boolean,
+): string | undefined {
+  const start = formatToolFullTime(startedAt);
+  const end = formatToolFullTime(completedAt);
+  if (!start && !end && !running) return undefined;
+  if (running) return start ? `Started ${start}; still running` : "Still running";
+  if (start && end) return `Started ${start}; ended ${end}`;
+  if (start) return `Started ${start}`;
+  return end ? `Ended ${end}` : undefined;
+}
+
+function ToolTiming({
+  startedAt,
+  completedAt,
+  running,
+}: {
+  startedAt?: string;
+  completedAt?: string;
+  running: boolean;
+}) {
+  const start = formatToolClockTime(startedAt);
+  const end = formatToolClockTime(completedAt);
+  if (!start && !end && !running) return null;
+  const title = toolTimingTitle(startedAt, completedAt, running);
+  return (
+    <span className="run-tool-timing" title={title} aria-label={title}>
+      {start && <span className="run-tool-timing-start">{start}</span>}
+      {start && (end || running) && (
+        <span className="run-tool-timing-arrow" aria-hidden="true">
+          →
+        </span>
+      )}
+      {running ? (
+        <span className="run-tool-timing-running">
+          <Loader2Icon
+            size={11}
+            className="run-spin run-tool-timing-spinner"
+            aria-hidden="true"
+          />
+          <span className="sr-only">running</span>
+        </span>
+      ) : (
+        end && <span className="run-tool-timing-end">{end}</span>
+      )}
+    </span>
+  );
 }
 
 function formatTurnDuration(ms: number): string {
@@ -3263,13 +3417,14 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
 const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
 function RunMarkdown({ children }: { children: string }) {
+  const linkedChildren = useMemo(() => linkWorkspacePathsInMarkdown(children), [children]);
   return (
     <Streamdown
       components={RUN_MARKDOWN_COMPONENTS}
       linkSafety={{ enabled: false }}
       shikiTheme={STREAMDOWN_DARK_THEME}
     >
-      {children}
+      {linkedChildren}
     </Streamdown>
   );
 }
@@ -3899,13 +4054,16 @@ function ToolDefaultBody({
 function RunToolItem({
   entry,
   autoExpand,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
+  const running = state === "running";
   return (
     <div
       className="run-transcript-tool"
@@ -3946,7 +4104,14 @@ function RunToolItem({
           >
             {entry.toolName ?? "tool"}
           </span>
-          {state === "running" && (
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={entry.startedAt ?? entry.time}
+              completedAt={entry.completedAt}
+              running={running}
+            />
+          )}
+          {running && !showTimestamps && (
             <Loader2Icon
               size={12}
               className="run-spin run-tool-spinner"
@@ -3981,14 +4146,20 @@ function RunToolItem({
 function RunToolGroup({
   entries,
   autoExpand,
+  showTimestamps,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   if (entries.length === 1) {
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
-        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+        <RunToolItem
+          entry={entries[0]}
+          autoExpand={autoExpand}
+          showTimestamps={showTimestamps}
+        />
       </div>
     );
   }
@@ -4007,6 +4178,8 @@ function RunToolGroup({
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
   }
   const summary = summaryParts.join(" · ");
+  const groupStartedAt = entries.find((entry) => entry.startedAt || entry.time);
+  const groupCompletedAt = [...entries].reverse().find((entry) => entry.completedAt);
   return (
     <div
       className="run-transcript-tools"
@@ -4031,7 +4204,14 @@ function RunToolGroup({
           />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
-        {runningCount > 0 && (
+        {showTimestamps && (
+          <ToolTiming
+            startedAt={groupStartedAt?.startedAt ?? groupStartedAt?.time}
+            completedAt={groupCompletedAt?.completedAt}
+            running={runningCount > 0}
+          />
+        )}
+        {runningCount > 0 && !showTimestamps && (
           <Loader2Icon
             size={12}
             className="run-spin run-tool-spinner"
@@ -4049,7 +4229,12 @@ function RunToolGroup({
       {open && (
         <div className="run-transcript-tools-body">
           {entries.map((e) => (
-            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+            <RunToolItem
+              key={e.id}
+              entry={e}
+              autoExpand={autoExpand}
+              showTimestamps={showTimestamps}
+            />
           ))}
         </div>
       )}
@@ -4159,7 +4344,13 @@ function RunMessages({
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
-        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+        return (
+          <RunToolGroup
+            entries={g.entries}
+            autoExpand={autoExpandTools}
+            showTimestamps={showTimestamps}
+          />
+        );
       }
       if (g.kind === "reasoning") {
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
@@ -4300,45 +4491,54 @@ function ChatPane({
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
+  const isCodex = isCodexRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  // Seed model + effort from RunPrefs (browser-persisted) for Claude;
-  // Codex has only one option so it skips RunPrefs. State is local
-  // because the agent-runner seals model + effort at pod boot from the
-  // first submit_turn — switching the dropdown after a turn has been
-  // submitted would silently no-op at the pod, and the UI hides the
-  // launchpad once entries.length > 0 so the user can't try.
-  const initialClaudeModelId = isClaude
+  const effortOptions = isClaude ? CLAUDE_EFFORTS : CODEX_EFFORTS;
+  // Seed model + effort from RunPrefs (browser-persisted). State is local
+  // because the runners seal model + effort from the first submit_turn —
+  // switching the dropdown after a turn has been submitted would silently
+  // no-op at the pod, and the UI hides the launchpad once entries.length > 0
+  // so the user can't try.
+  const initialModelId = isClaude
     ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
         ? runPrefs.claudeModelId
-        : modelOptions[0].id)
-    : modelOptions[0].id;
-  const initialClaudeEffortId = CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
-    ? runPrefs.claudeEffort
-    : DEFAULT_CLAUDE_EFFORT_ID;
-  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialClaudeModelId);
-  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialClaudeEffortId);
+        : DEFAULT_CLAUDE_MODEL_ID)
+    : (CODEX_MODELS.some((opt) => opt.id === runPrefs.codexModelId)
+        ? runPrefs.codexModelId
+        : DEFAULT_CODEX_MODEL_ID);
+  const initialEffortId = isClaude
+    ? (CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
+        ? runPrefs.claudeEffort
+        : DEFAULT_CLAUDE_EFFORT_ID)
+    : (CODEX_EFFORTS.some((opt) => opt.id === runPrefs.codexEffort)
+        ? runPrefs.codexEffort
+        : DEFAULT_CODEX_EFFORT_ID);
+  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialModelId);
+  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialEffortId);
   // Persist-then-set wrappers so the dropdown's onValueChange both
   // updates local state for the active session and writes the new pick
-  // into RunPrefs for the *next* session this browser opens. Codex
-  // sessions skip the persist because the only Codex model is the
-  // account default — there's no user pick to remember.
+  // into RunPrefs for the *next* session this browser opens.
   const setSelectedModelId = useCallback(
     (id: string) => {
       setSelectedModelIdState(id);
       if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
         setRunPref("claudeModelId", id);
+      } else if (isCodex && CODEX_MODELS.some((opt) => opt.id === id)) {
+        setRunPref("codexModelId", id);
       }
     },
-    [isClaude, setRunPref],
+    [isClaude, isCodex, setRunPref],
   );
   const setSelectedEffortId = useCallback(
     (id: string) => {
       setSelectedEffortIdState(id);
-      if (CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
+      if (isClaude && CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
         setRunPref("claudeEffort", id);
+      } else if (isCodex && CODEX_EFFORTS.some((opt) => opt.id === id)) {
+        setRunPref("codexEffort", id);
       }
     },
-    [setRunPref],
+    [isClaude, isCodex, setRunPref],
   );
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
@@ -4473,12 +4673,11 @@ function ChatPane({
     skillName?: string;
     followUp: boolean;
     model: string;
-    // effort is the extended-thinking level the user picked in the
-    // launchpad dropdown; empty string for Codex / pre-feature paths.
-    // The agent-runner pins effort at pod boot from the first turn that
-    // carries a non-empty value, so this is only load-bearing on the
-    // session's very first run object — but every run object carries it
-    // for telemetry parity with model.
+    // effort is the reasoning level the user picked in the launchpad
+    // dropdown. The runners pin effort from the first turn that carries a
+    // non-empty value, so this is only load-bearing on the session's very
+    // first run object — but every run object carries it for telemetry
+    // parity with model.
     effort: string;
     permissionMode: string;
     turnStart: number;
@@ -5990,11 +6189,7 @@ function ChatPane({
       skillName,
       followUp,
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
-      // effort is Claude-only; Codex sessions send empty and the agent-
-      // runner's pinning code falls back to its default. Sending the
-      // empty string from Codex paths keeps the run object shape stable
-      // across providers.
-      effort: isClaude ? selectedEffortId : "",
+      effort: isClaude || isCodex ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
@@ -6175,12 +6370,12 @@ function ChatPane({
   // Derived label for the launchpad's "Ready to use" status line; falls
   // back to "High" rather than empty when the persisted value drifted
   // out of the allowlist so the status line never reads as "...
-  // effort.". The DEFAULT_CLAUDE_EFFORT_ID resolution mirrors the
-  // agent-runner's DEFAULT_EFFORT fallback so the SPA and pod show the
-  // same thing.
+  // effort.". The provider default resolution mirrors the runner fallback
+  // so the SPA and pod show the same thing.
   const selectedEffortLabel =
-    (CLAUDE_EFFORTS.find((e) => e.id === selectedEffortId)?.label) ??
-    (CLAUDE_EFFORTS.find((e) => e.id === DEFAULT_CLAUDE_EFFORT_ID)?.label ?? "High");
+    (effortOptions.find((e) => e.id === selectedEffortId)?.label) ??
+    (effortOptions.find((e) => e.id === (isClaude ? DEFAULT_CLAUDE_EFFORT_ID : DEFAULT_CODEX_EFFORT_ID))?.label ??
+      "High");
   const contextWindow = getContextWindow(selectedModel.id);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
@@ -6848,14 +7043,14 @@ function ChatPane({
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
-                {isClaude && (
+                {(isClaude || isCodex) && (
                   <>
                     <DropdownMenuLabel>Effort</DropdownMenuLabel>
                     <DropdownMenuRadioGroup
                       value={selectedEffortId}
                       onValueChange={setSelectedEffortId}
                     >
-                      {CLAUDE_EFFORTS.map((opt) => (
+                      {effortOptions.map((opt) => (
                         <DropdownMenuRadioItem key={opt.id} value={opt.id}>
                           {opt.label}
                           {opt.hint ? (
@@ -6870,12 +7065,12 @@ function ChatPane({
             </DropdownMenu>
             <p className="run-empty-status">
               Ready to use {selectedModel.label}
-              {isClaude ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
+              {isClaude || isCodex ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
             </p>
             <p className="run-empty-kbd">
               Press <kbd>⌘K</kbd> to switch model
             </p>
-            {isClaude && (
+            {(isClaude || isCodex) && (
               <p className="run-empty-lock-hint">
                 Model and effort are fixed for this session once you send the first message.
               </p>
@@ -6945,8 +7140,8 @@ function ChatPane({
                       : selectedModelId,
                   // Fork inherits the source pane's effort pick so the
                   // forked pod boots with the same reasoning depth the
-                  // user had been working at. Codex forks send "".
-                  effort: isClaude ? selectedEffortId : "",
+                  // user had been working at.
+                  effort: isClaude || isCodex ? selectedEffortId : "",
                   permissionMode: composerMode,
                 })
               }
@@ -7796,6 +7991,39 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  // Splash-page repo picker state. Stage 1 of the auto-clone feature:
+  //
+  //   - selectedRepos: the chips the user has staged for the
+  //     about-to-be-created session. Posted to /api/sessions on
+  //     create; cleared after a successful create so the next
+  //     session starts empty.
+  //   - recentRepos: GET /api/github/recent-repos result for this
+  //     user. The picker's "Recent" section reads from here. Stays
+  //     empty (and the section hidden) when the user has never
+  //     selected a repo before — no error state, just absence.
+  //   - repoPickerOpen: tri-state — closed by default; opens on
+  //     "+ Add repo" click; closes on outside-click / Esc / explicit
+  //     close.
+  //   - repoInput: the manual-entry text field's controlled value.
+  //
+  // Stage 2 will widen the picker with an "All repos" section sourced
+  // from /api/github/repos; until then the manual text input is the
+  // escape hatch for first-use repos.
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [recentRepos, setRecentRepos] = useState<string[]>([]);
+  const [repoPickerOpen, setRepoPickerOpen] = useState(false);
+  const [repoInput, setRepoInput] = useState("");
+  const [repoError, setRepoError] = useState<string | null>(null);
+  // Stage 2: All-repos lazy-load state. Sourced from /api/github/repos,
+  // which proxies to mcp-github via an on-behalf-of token mint. The
+  // picker calls onLoadAllRepos on first open; this state is the
+  // result. Refreshed after a successful session create so just-used
+  // repos float in the list next time the splash opens.
+  const [allRepos, setAllRepos] = useState<{
+    status: "idle" | "loading" | "ready" | "error";
+    repos: string[];
+    error?: string | null;
+  }>({ status: "idle", repos: [] });
   // When non-null, the chat pane for this session id auto-opens its title
   // rename input on its next render. Used to make freshly-created sessions
   // land directly in the chat pane with the title editor focused, and to
@@ -7830,6 +8058,84 @@ export function App() {
         setBooted(true);
       });
   }, []);
+
+  // refreshRecentRepos pulls /api/github/recent-repos and seeds the
+  // splash picker's "Recent" section. Best-effort: a network blip or
+  // an older backend (pre-stage-1) without the endpoint just leaves
+  // the section empty, which is a fine product state.
+  const refreshRecentRepos = useCallback(async () => {
+    try {
+      const res = await authedFetch("/api/github/recent-repos");
+      if (!res.ok) return;
+      const body = (await res.json()) as Partial<RecentReposResponse>;
+      if (Array.isArray(body.repos)) {
+        setRecentRepos(body.repos.map(String).filter(isValidRepoSlug));
+      }
+    } catch {
+      // Picker still works without the Recent section.
+    }
+  }, []);
+
+  // Stage 2: fetch the full installation repo list. Lazy-loaded on
+  // first picker open and refreshed after a successful session create
+  // so just-installed repos appear in the list next time.
+  //
+  // The endpoint mints an on-behalf-of service JWT (auth.romaine.life
+  // PR #43) and proxies to mcp-github; failures here become a
+  // user-visible "Couldn't load your repos" line in the picker rather
+  // than a silent empty list — the user can still type owner/name and
+  // click Add to use an exact slug.
+  const loadAllRepos = useCallback(async (): Promise<void> => {
+    setAllRepos((prev) =>
+      prev.status === "ready" ? prev : { status: "loading", repos: [] },
+    );
+    try {
+      const res = await authedFetch("/api/github/repos");
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // Keep the status-only detail when response isn't JSON.
+        }
+        setAllRepos({ status: "error", repos: [], error: detail });
+        return;
+      }
+      const body = (await res.json()) as {
+        repos?: Array<{ full_name?: string } & Record<string, unknown>>;
+      };
+      const slugs = Array.isArray(body.repos)
+        ? body.repos
+            .map((r) => String(r.full_name ?? ""))
+            .filter((slug) => slug !== "" && isValidRepoSlug(slug))
+        : [];
+      setAllRepos({ status: "ready", repos: slugs });
+    } catch (e) {
+      setAllRepos({
+        status: "error",
+        repos: [],
+        error: String(e instanceof Error ? e.message : e),
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void refreshRecentRepos();
+  }, [user, refreshRecentRepos]);
+
+  // Close the picker when the user switches default mode to one
+  // that doesn't support repos, AND clear any staged selection so a
+  // mode flip on the splash can't leave behind chips that would 400
+  // the create call.
+  useEffect(() => {
+    if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
+      if (selectedRepos.length > 0) setSelectedRepos([]);
+      if (repoPickerOpen) setRepoPickerOpen(false);
+      if (repoError) setRepoError(null);
+    }
+  }, [defaultSessionMode, selectedRepos.length, repoPickerOpen, repoError]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
@@ -7871,6 +8177,12 @@ export function App() {
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       activity: undefined, // activities live in the parallel sessionActivities map
+      // repos is always an array on the wire (see backend
+      // sessioncontroller.MarshalRowUpdate). The fallback here is
+      // for older snapshots that pre-date the column — they'll
+      // get an empty array and render with no chips.
+      repos: Array.isArray(row.repos) ? row.repos : [],
+      clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
     };
   }
 
@@ -7895,6 +8207,8 @@ export function App() {
       activity_summary: raw.activity ?? undefined,
       test_state: raw.test_state ?? undefined,
       rollout_state: raw.rollout_state ?? undefined,
+      repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
+      clone_state: raw.clone_state ?? undefined,
       row_version: typeof raw.row_version === "number" ? raw.row_version : 0,
     };
   }
@@ -8360,11 +8674,17 @@ export function App() {
     setBusy(true);
     setSidebarCollapsed(false);
     setError(null);
+    // Only forward the chip selection for modes that support it. The
+    // mode-flip effect above keeps selectedRepos empty for
+    // unsupported modes, so this is a belt-and-braces guard — a
+    // mode-override createSession() call (the Launchers section)
+    // could otherwise send repos for a CLI session and get a 400.
+    const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, repos }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       const created: Session = normalizeSession(await res.json());
@@ -8392,6 +8712,19 @@ export function App() {
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
+      // Clear the chip selection and refresh "Recent" so the just-
+      // used repos float to the top next time the splash opens.
+      if (repos.length > 0) {
+        setSelectedRepos([]);
+        setRepoPickerOpen(false);
+        setRepoInput("");
+        setRepoError(null);
+        void refreshRecentRepos();
+        // Invalidate the All-repos cache too: a user who just
+        // installed our App on a new account expects the new repos
+        // to show up in the picker without a full SPA reload.
+        setAllRepos({ status: "idle", repos: [] });
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -8627,8 +8960,17 @@ export function App() {
         : [];
   const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
-    selectedProvider === "anthropic" ? runPrefs.claudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
-  const selectedHomeEffortId = runPrefs.claudeEffort;
+    selectedProvider === "anthropic"
+      ? runPrefs.claudeModelId
+      : selectedProvider === "codex"
+        ? runPrefs.codexModelId
+        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+  const selectedHomeEffortId =
+    selectedProvider === "anthropic"
+      ? runPrefs.claudeEffort
+      : selectedProvider === "codex"
+        ? runPrefs.codexEffort
+        : DEFAULT_CLAUDE_EFFORT_ID;
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -8874,7 +9216,9 @@ export function App() {
                         <span className="home-panel-meta">
                           {selectedProvider === "anthropic"
                             ? CLAUDE_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
-                            : "account default"}
+                            : selectedProvider === "codex"
+                              ? CODEX_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
+                              : ""}
                         </span>
                       </div>
                       <div className="home-model-list" role="group" aria-label="model">
@@ -8887,6 +9231,8 @@ export function App() {
                               onClick={() => {
                                 if (selectedProvider === "anthropic") {
                                   setRunPref("claudeModelId", model.id);
+                                } else if (selectedProvider === "codex") {
+                                  setRunPref("codexModelId", model.id);
                                 }
                               }}
                               aria-pressed={selected}
@@ -8896,15 +9242,21 @@ export function App() {
                           );
                         })}
                       </div>
-                      {selectedProvider === "anthropic" && (
+                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
                         <div className="home-effort-grid" role="group" aria-label="effort">
-                          {CLAUDE_EFFORTS.map((effort) => {
+                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
                             const selected = effort.id === selectedHomeEffortId;
                             return (
                               <button
                                 key={effort.id}
                                 className={`home-model home-effort${selected ? " is-selected" : ""}`}
-                                onClick={() => setRunPref("claudeEffort", effort.id)}
+                                onClick={() => {
+                                  if (selectedProvider === "anthropic") {
+                                    setRunPref("claudeEffort", effort.id);
+                                  } else if (selectedProvider === "codex") {
+                                    setRunPref("codexEffort", effort.id);
+                                  }
+                                }}
                                 aria-pressed={selected}
                                 title={effort.hint}
                               >
@@ -8916,6 +9268,44 @@ export function App() {
                         </div>
                       )}
                     </>
+                  )}
+                  {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                    <RepoPicker
+                      selected={selectedRepos}
+                      recent={recentRepos}
+                      allRepos={allRepos}
+                      onLoadAllRepos={loadAllRepos}
+                      open={repoPickerOpen}
+                      input={repoInput}
+                      error={repoError}
+                      busy={busy}
+                      onToggleOpen={() => {
+                        setRepoPickerOpen((prev) => !prev);
+                        setRepoError(null);
+                      }}
+                      onClose={() => {
+                        setRepoPickerOpen(false);
+                        setRepoError(null);
+                      }}
+                      onInputChange={(v) => {
+                        setRepoInput(v);
+                        setRepoError(null);
+                      }}
+                      onAdd={(rawSlug) => {
+                        const result = addRepoSlug(selectedRepos, rawSlug);
+                        if (result.ok) {
+                          setSelectedRepos(result.next);
+                          setRepoInput("");
+                          setRepoError(null);
+                        } else {
+                          setRepoError(result.error);
+                        }
+                      }}
+                      onRemove={(slug) => {
+                        setSelectedRepos((prev) => removeRepoSlug(prev, slug));
+                        setRepoError(null);
+                      }}
+                    />
                   )}
                   <button
                     className="home-primary-action"
@@ -8990,12 +9380,27 @@ export function App() {
                           className="home-session"
                           onClick={() => activate(s.id)}
                           disabled={closingIds.has(s.id)}
+                          title={
+                            s.repos.length > 0
+                              ? `Repos: ${s.repos.join(", ")}`
+                              : undefined
+                          }
                         >
                           <span className={sessionStatusDotClass(s, sessionActivities[s.id])} />
                           <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
                           <span className="home-session-main">
                             <span className="home-session-title">{sessionDisplayName(s)}</span>
-                            <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
+                            <span className="home-session-sub">
+                              {MODE_LABELS[s.mode]}
+                              {s.repos.length > 0 && (
+                                <span className="home-session-repos">
+                                  {" · "}
+                                  {s.repos.length === 1
+                                    ? s.repos[0]
+                                    : `${s.repos.length} repos`}
+                                </span>
+                              )}
+                            </span>
                           </span>
                         </button>
                       ))

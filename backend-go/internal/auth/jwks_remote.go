@@ -143,9 +143,19 @@ func rsaPublicKey(nB64, eB64 string) (*rsa.PublicKey, error) {
 // returns the user identity plus the platform role claim. Gating is done
 // solely on the role: auth.romaine.life mints `role: pending` for any fresh
 // Microsoft sign-in and an admin must promote the user via auth.romaine.life's
-// /admin console before they become useful here. Only `admin` and `user` are
-// accepted; everything else (including the empty string) is a 403.
-func ExchangeRomaineLifeToken(ctx context.Context, tokenString string) (email, name, sub, role string, err error) {
+// /admin console before they become useful here. Only `admin`, `user`, and
+// `service` are accepted; everything else (including the empty string) is a
+// 403.
+//
+// Service-role tokens additionally carry an `actor_email` claim — the human
+// owner whose pod is making the call. auth.romaine.life refuses to mint a
+// service token without it, so seeing role=service without actor_email here
+// means an upstream regression or a tampered/stale token; reject with 401 so
+// the broken token can't be re-stamped as a tank-operator session JWT and
+// then 401 at every downstream verifier call (which is how the bug landed in
+// the first place — see nelsong6/tank-operator#558). The returned actor_email
+// is the empty string for human roles.
+func ExchangeRomaineLifeToken(ctx context.Context, tokenString string) (email, name, sub, role, actorEmail string, err error) {
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (any, error) {
 		if t.Method.Alg() != "RS256" {
@@ -161,25 +171,41 @@ func ExchangeRomaineLifeToken(ctx context.Context, tokenString string) (email, n
 		if err == nil {
 			err = errors.New("invalid token")
 		}
-		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid auth.romaine.life token: " + err.Error()}
+		return "", "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "invalid auth.romaine.life token: " + err.Error()}
 	}
 
 	iss, _ := claims["iss"].(string)
 	if iss != authRomaineLifeIssuer {
-		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "unexpected issuer: " + iss}
+		return "", "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "unexpected issuer: " + iss}
 	}
 
 	rawEmail, _ := claims["email"].(string)
 	rawEmail = strings.ToLower(strings.TrimSpace(rawEmail))
 	if rawEmail == "" {
-		return "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "token missing email claim"}
+		return "", "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "token missing email claim"}
 	}
 	rawRole, _ := claims["role"].(string)
 	if _, ok := allowedRoles[rawRole]; !ok {
-		return "", "", "", "", errHTTP{status: http.StatusForbidden, message: "role not approved by auth.romaine.life: " + rawRole}
+		return "", "", "", "", "", errHTTP{status: http.StatusForbidden, message: "role not approved by auth.romaine.life: " + rawRole}
 	}
 
 	rawName, _ := claims["name"].(string)
 	rawSub, _ := claims["sub"].(string)
-	return rawEmail, rawName, rawSub, rawRole, nil
+
+	rawActor := strings.ToLower(strings.TrimSpace(stringClaim(claims, "actor_email")))
+	if rawRole == RoleService && rawActor == "" {
+		return "", "", "", "", "", errHTTP{status: http.StatusUnauthorized, message: "service-role auth.romaine.life token missing actor_email claim"}
+	}
+	if rawRole != RoleService {
+		// Human roles must not carry actor_email — the field exists to
+		// scope a service principal to a human owner; for a human token
+		// the human IS the owner and there's nothing to scope. A non-
+		// empty value here is upstream confusion and would silently
+		// shift the semantics of a token we re-mint. Drop it on the
+		// floor (the minter rejects setting actor_email for non-
+		// service roles too, so the layered contract holds even if a
+		// future caller skips this strip).
+		rawActor = ""
+	}
+	return rawEmail, rawName, rawSub, rawRole, rawActor, nil
 }

@@ -232,14 +232,51 @@ func (m *Manager) Touch(sessionID string) {
 	m.mu.Unlock()
 }
 
+// CreateOptions packages the inputs to a session-create call. Replaces
+// the prior positional `(owner, mode, glimmungContext, requestedAt)`
+// list now that `Repos` and any future per-create knob would push the
+// arity past readable. Per docs/quality-timeframes.md "settled
+// contracts over compatibility layers": this is the only Create
+// signature — handlers, internal-API callers, and tests all use it.
+type CreateOptions struct {
+	// Owner is the human email that owns the new session. Required.
+	Owner string
+	// Mode is the session shape (claude_gui, codex_cli, hermes_gui,
+	// …). Empty defaults to DefaultSessionMode via NormalizeSessionMode.
+	Mode string
+	// GlimmungContext is the optional opaque map serialized into the
+	// pod's TANK_GLIMMUNG_CONTEXT_JSON env var. nil for the standard
+	// human-create path; populated by handleCreateSessionWithContext
+	// when a Glimmung run hands off into a fresh session.
+	GlimmungContext map[string]any
+	// RequestedAt is an externally-supplied creation timestamp; empty
+	// defaults to now. Used by the service-principal handoff path so
+	// the registry row's requested_at matches the upstream
+	// Glimmung run, not the orchestrator's clock.
+	RequestedAt string
+	// Repos is the durable "owner/name" slug selection from the splash
+	// page. Empty slice (or nil) means "no auto-clone." The slugs are
+	// validated at the handler boundary; manager.Create only stores
+	// them on the registry row. Stage 3 wires the init container; this
+	// stage just persists.
+	Repos []string
+}
+
 // Create creates a new session pod and registers it in the registry.
-func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContext map[string]any, requestedAt string) (Info, error) {
-	mode = sessionmodel.NormalizeSessionMode(mode)
+func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) {
+	owner := opts.Owner
+	mode := sessionmodel.NormalizeSessionMode(opts.Mode)
 	if !sessionmodel.IsSessionMode(mode) {
 		return Info{}, fmt.Errorf("unknown session mode: %q", mode)
 	}
+	requestedAt := opts.RequestedAt
 	if requestedAt == "" {
 		requestedAt = nowISO()
+	}
+	glimmungContext := opts.GlimmungContext
+	repos := opts.Repos
+	if repos == nil {
+		repos = []string{}
 	}
 
 	// hermes_gui (and any future no-pod mode) short-circuits the K8s
@@ -252,7 +289,14 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 	// resolveSessionPod) — which short-circuit on the same predicate.
 	// See nelsong6/tank-operator#540.
 	if sessionmodel.IsNoPodMode(mode) {
-		return m.createNoPodSession(ctx, owner, mode, requestedAt)
+		// No-pod modes don't have a /workspace to clone into;
+		// stage 1 lets them carry a repos[] selection so the
+		// snapshot shape stays uniform, but the handler boundary
+		// rejects repos when the mode is no-pod. The repos arg is
+		// threaded for forward-compat with any future no-pod mode
+		// that wants repo metadata visible in the SPA without
+		// pod-side cloning.
+		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos)
 	}
 
 	// Lazy re-resolution for first-install ordering.
@@ -277,13 +321,13 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 		contextJSON = string(b)
 	}
 
-	opts := m.manifestOpts
-	opts.OAuthGatewayIP = m.oauthGatewayIP
-	opts.APIProxyIP = m.apiProxyIP
-	opts.CodexAPIProxyIP = m.codexAPIProxyIP
-	opts.GlimmungContextJSON = contextJSON
+	manifestOpts := m.manifestOpts
+	manifestOpts.OAuthGatewayIP = m.oauthGatewayIP
+	manifestOpts.APIProxyIP = m.apiProxyIP
+	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.GlimmungContextJSON = contextJSON
 
-	manifest := sessionmodel.PodManifest(sessionID, owner, mode, opts)
+	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return Info{}, err
@@ -318,6 +362,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 			Visible:     true,
 			RequestedAt: requestedAt,
 			UpdatedAt:   requestedAt,
+			Repos:       repos,
 		}); regErr != nil {
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -369,6 +414,7 @@ func (m *Manager) Create(ctx context.Context, owner, mode string, glimmungContex
 			RequestedAt: requestedAt,
 			CreatedAt:   *createdAt,
 			UpdatedAt:   requestedAt,
+			Repos:       repos,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -417,7 +463,7 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 // makes sense for the external backend — here, "Active" once the row is
 // written. Reaper does not touch no-pod sessions because reaper lists
 // pods, not registry rows.
-func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string) (Info, error) {
+func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string) (Info, error) {
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
 		return Info{}, err
@@ -440,6 +486,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		UpdatedAt:   now,
 		Status:      "Active",
 		ReadyAt:     now,
+		Repos:       repos,
 	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, rec); regErr != nil {

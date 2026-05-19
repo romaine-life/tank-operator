@@ -22,7 +22,12 @@
 // owned by the backend (handlers_turns.go) — the runner does not publish
 // them. On error: log and keep accepting new commands.
 
-import { Codex, type Thread } from "@openai/codex-sdk";
+import {
+  Codex,
+  type ModelReasoningEffort,
+  type Thread,
+  type ThreadOptions,
+} from "@openai/codex-sdk";
 
 import {
   CodexTankEventAdapter,
@@ -203,6 +208,26 @@ export type AcceptedTurn = CodexAdapterTurn & {
   interruptOnStart?: boolean;
 };
 
+export function threadOptionsForCommand(
+  cfg: Config,
+  record?: SessionCommandRecord,
+): ThreadOptions {
+  const model = String(record?.model ?? "").trim();
+  const effort = String(record?.effort ?? "").trim();
+  return {
+    workingDirectory: cfg.workspace,
+    // /workspace inside session pods isn't a git repo (and may never be —
+    // users mount projects ad hoc). Without this flag the CLI exits with
+    // "Not inside a trusted directory and --skip-git-repo-check was not
+    // specified."
+    skipGitRepoCheck: true,
+    sandboxMode: "danger-full-access",
+    approvalPolicy: "never",
+    ...(model ? { model } : {}),
+    ...(effort ? { modelReasoningEffort: effort as ModelReasoningEffort } : {}),
+  };
+}
+
 // OrphanInterrupt parks an interrupt_turn record that arrived before
 // the runner saw the matching submit_turn. The race resolution and
 // terminal-outcome contract are documented in
@@ -345,22 +370,13 @@ export class Runner {
     };
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      if (!this.appServerTransport) {
-        this.thread = this.codex.startThread({
-          workingDirectory: this.cfg.workspace,
-          // /workspace inside session pods isn't a git repo (and may never be —
-          // users mount projects ad hoc). Without this flag the CLI exits with
-          // "Not inside a trusted directory and --skip-git-repo-check was not
-          // specified."
-          skipGitRepoCheck: true,
-          sandboxMode: "danger-full-access",
-          approvalPolicy: "never",
-        });
-      }
       while (!signal.aborted) {
         const next = await this.userQueue.next();
         if (next.done) break;
         const { text: input, clientNonce, commandRecord } = next.value;
+        if (!this.appServerTransport && !this.thread) {
+          this.thread = this.codex.startThread(threadOptionsForCommand(this.cfg, commandRecord));
+        }
         const turnSeq = ++this.turnSeq;
         if (
           commandRecord &&
@@ -432,7 +448,11 @@ export class Runner {
 
         try {
           const events = this.appServerTransport
-            ? this.appServerTransport.runTurn(input, this.currentAbort.signal)
+            ? this.appServerTransport.runTurn(
+                input,
+                threadOptionsForCommand(this.cfg, commandRecord),
+                this.currentAbort.signal,
+              )
             : (await this.thread!.runStreamed(input, {
                 signal: this.currentAbort.signal,
               })).events;
