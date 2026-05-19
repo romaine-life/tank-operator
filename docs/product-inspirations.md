@@ -26,6 +26,10 @@ state is separate from work state.
   place product state exists.
 - Reconnect resumes from a cursor over persisted events. Unknown cursors force
   an explicit resync instead of silently skipping a gap.
+- Normal session navigation lands at the live tail. Historical positions are
+  explicit user intent only: copied message links and manual back-pagination
+  resolve through durable cursors, never through browser-local saved scroll
+  position.
 - User-visible run state comes from durable turn events, not local optimism.
   A control such as Stop is only complete when the durable terminal event
   arrives.

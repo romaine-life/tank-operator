@@ -317,12 +317,15 @@ const blocked = [
   // entire ledger forward from order_key=0 in a 50-page loop of 1000-event
   // pages. The DOM extended under the user's eyes mid-load and produced
   // the "scroll down, scroll bar learns there's more, repeat 3-4×"
-  // dance. Replaced with one anchored read (anchor=first_unread by
-  // default, fallback to anchor=newest) + bounded back-paginate via
-  // before_order_key. Block re-introduction of the old shapes so a
-  // future refactor can't quietly rebuild the forward walk.
+  // dance. Replaced with one tail read (anchor=newest) for normal
+  // navigation plus explicit message-link anchored reads and bounded
+  // back-paginate via before_order_key. Block re-introduction of the old
+  // shapes so a future refactor can't quietly rebuild the forward walk.
   { name: "removed 50-page forward-walk loop", pattern: /for\s*\(\s*let\s+page\s*=\s*0\s*;\s*page\s*<\s*50\b/ },
   { name: "removed 1000-event-per-page timeline fetch", pattern: /limit:\s*["']1000["']/ },
+  { name: "removed unread-centered default transcript anchor", pattern: /\bfirst_unread\b/ },
+  { name: "removed localStorage transcript position anchor", pattern: /\btank\.transcript\.position\b|\bSDK_TRANSCRIPT_POSITION\b|\breadSdkTranscriptPosition\b|\bwriteSdkTranscriptPosition\b|\bclearSdkTranscriptPosition\b/ },
+  { name: "removed legacy forward transcript timeline read", pattern: /\blegacy_forward\b|\bsessionEventReadLegacyForward\b/ },
   // Stage 3 (PR #503): hand-rolled scroll-detect hysteresis. Replaced
   // by react-virtuoso's atBottomStateChange callback, which is the
   // durable boolean source for "is the user viewing the live tail." The

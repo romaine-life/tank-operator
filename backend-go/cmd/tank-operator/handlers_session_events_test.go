@@ -119,12 +119,9 @@ func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 }
 
 func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
-	readState := &store.ConversationReadStateRecord{LastReadOrderKey: "order-r"}
-
 	tests := []struct {
 		name           string
 		url            string
-		readState      *store.ConversationReadStateRecord
 		wantKind       sessionEventReadKind
 		wantLabel      string
 		wantValidate   string
@@ -134,10 +131,10 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 		wantTimelineID string
 	}{
 		{
-			name:      "no params → legacy_forward (Stage 1 transitional)",
+			name:      "no params → tail",
 			url:       "/api/sessions/s/timeline",
-			wantKind:  sessionEventReadLegacyForward,
-			wantLabel: "legacy_forward",
+			wantKind:  sessionEventReadTail,
+			wantLabel: "newest",
 		},
 		{
 			name:      "anchor=newest → tail",
@@ -152,20 +149,6 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 			url:       "/api/sessions/s/timeline?anchor=oldest",
 			wantKind:  sessionEventReadHead,
 			wantLabel: "oldest",
-		},
-		{
-			name:          "anchor=first_unread with read state → around",
-			url:           "/api/sessions/s/timeline?anchor=first_unread",
-			readState:     readState,
-			wantKind:      sessionEventReadAround,
-			wantLabel:     "first_unread",
-			wantAnchorKey: "order-r",
-		},
-		{
-			name:      "anchor=first_unread without read state → tail",
-			url:       "/api/sessions/s/timeline?anchor=first_unread",
-			wantKind:  sessionEventReadTail,
-			wantLabel: "first_unread",
 		},
 		{
 			name:          "anchor=<order_key> → around with validation",
@@ -218,7 +201,7 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tc.url, nil)
-			got := sessionEventReadIntentFromRequest(req, tc.readState)
+			got := sessionEventReadIntentFromRequest(req)
 			if got.kind != tc.wantKind {
 				t.Fatalf("kind = %d, want %d", got.kind, tc.wantKind)
 			}
@@ -284,21 +267,21 @@ func TestResolveSessionEventTimelineAnchor(t *testing.T) {
 
 func TestSessionEventReadIntentDefaultsAndCaps(t *testing.T) {
 	// Defaults: limit=200, num_before=100, num_after=100.
-	req := httptest.NewRequest("GET", "/api/sessions/s/timeline?anchor=first_unread", nil)
-	got := sessionEventReadIntentFromRequest(req, &store.ConversationReadStateRecord{LastReadOrderKey: "x"})
+	req := httptest.NewRequest("GET", "/api/sessions/s/timeline?timeline_id=turn-1:item:msg-1", nil)
+	got := sessionEventReadIntentFromRequest(req)
 	if got.numBefore != 100 || got.numAfter != 100 {
 		t.Fatalf("default num_before/num_after = (%d,%d), want (100,100)", got.numBefore, got.numAfter)
 	}
 
 	// Caps: num_before > 250 clamps to 250; limit > 1000 clamps to 1000.
 	req = httptest.NewRequest("GET", "/api/sessions/s/timeline?anchor=newest&limit=5000", nil)
-	got = sessionEventReadIntentFromRequest(req, nil)
+	got = sessionEventReadIntentFromRequest(req)
 	if got.limit != 1000 {
 		t.Fatalf("limit cap = %d, want 1000", got.limit)
 	}
 
 	req = httptest.NewRequest("GET", "/api/sessions/s/timeline?anchor=order-x&num_before=9999&num_after=9999", nil)
-	got = sessionEventReadIntentFromRequest(req, nil)
+	got = sessionEventReadIntentFromRequest(req)
 	if got.numBefore != 250 || got.numAfter != 250 {
 		t.Fatalf("num_before/num_after caps = (%d,%d), want (250,250)", got.numBefore, got.numAfter)
 	}

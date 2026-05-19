@@ -75,13 +75,9 @@ var (
 		Help: "Failures of the GET /timeline snapshot used by the SPA to bootstrap a session.",
 	})
 	// sessionEventTimelineRequestTotal labels each /timeline read by the
-	// anchor shape the SPA chose. The `legacy_forward` label exists so a
-	// Prometheus alert can fire if the pre-anchor forward-walk path
-	// reappears after the Stage 2 cutover documented in
-	// docs/quality-timeframes.md ("migration guards prevent old paths
-	// from returning"). Expected steady-state values once Stage 2 lands:
-	// `newest`, `first_unread`, `around`, `before` non-zero;
-	// `legacy_forward` always zero.
+	// anchor shape the SPA chose. The tail-first navigation cutover makes
+	// `newest` the default bootstrap, with `around` used only for explicit
+	// transcript links and `before` used for back-pagination.
 	sessionEventTimelineRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_session_event_timeline_request_total",
 		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",
@@ -590,12 +586,12 @@ func (promPGMetrics) RecordQuery(operation, outcome string, duration time.Durati
 // interfaces, this won't silently fall back to "no metrics emitted" —
 // it will fail to build.
 var (
-	_ sessionbus.PersisterMetrics              = promPersisterMetrics{}
-	_ sessionbus.WakeMetrics                   = promWakeMetrics{}
-	_ sessionbus.ConnectionMetrics             = promNATSConnectionMetrics{}
-	_ pgstore.SQLMetrics                       = promPGMetrics{}
-	_ sessioncontroller.K8sWatchMetrics        = promK8sWatchMetrics{}
-	_ sessioncontroller.RowWriterMetrics       = promRowWriterMetrics{}
+	_ sessionbus.PersisterMetrics               = promPersisterMetrics{}
+	_ sessionbus.WakeMetrics                    = promWakeMetrics{}
+	_ sessionbus.ConnectionMetrics              = promNATSConnectionMetrics{}
+	_ pgstore.SQLMetrics                        = promPGMetrics{}
+	_ sessioncontroller.K8sWatchMetrics         = promK8sWatchMetrics{}
+	_ sessioncontroller.RowWriterMetrics        = promRowWriterMetrics{}
 	_ sessioncontroller.LifecycleEmitterMetrics = promLifecycleEmitterMetrics{}
 )
 

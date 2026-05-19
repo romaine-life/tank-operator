@@ -28,21 +28,12 @@ const (
 //     the SPA's "jump to start" affordance —
 //     Discord/Slack-style symmetric pair with
 //     anchor=newest.
-//   - anchor=first_unread          — page centered on the caller's
-//     last_read_order_key+1 (Zulip semantics).
-//     Falls back to newest when the session is
-//     fully read or never read.
 //   - anchor=<order_key>           — page centered on that order_key.
 //   - before_order_key=<order_key> — strictly older than the cursor (DESC).
 //   - after_order_key=<order_key>  — strictly newer than the cursor (ASC).
 //     Used for "catch up forward" inside a
 //     bounded forward-paginate from the SPA.
-//   - none of the above            — `legacy_forward`: ASC from the head of
-//     the ledger. Retained for the Stage 1
-//     rollout window before the SPA cutover
-//     deletes its only caller. A Prometheus
-//     alert on the labeled counter catches
-//     re-introduction post-cutover.
+//   - none of the above            — same as anchor=newest.
 //
 // num_before / num_after govern the symmetric anchor reads; limit governs
 // before/after cursor reads and the tail. Unknown cursors are explicit 409
@@ -78,15 +69,15 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 		return nil, http.StatusInternalServerError, err
 	}
 
-	intent := sessionEventReadIntentFromRequest(r, readState)
+	intent := sessionEventReadIntentFromRequest(r)
 	recordSessionEventTimelineRequest(intent.metricLabel)
 	if status, err := resolveSessionEventTimelineAnchor(ctx, eventStore, sessionID, &intent); err != nil {
 		return nil, status, err
 	}
 
 	// Cursor-existence validation: only meaningful for caller-supplied
-	// order_keys (after/before/anchor=<key>). Tail/around-first-unread/
-	// legacy-forward have no cursor to validate.
+	// order_keys (after/before/anchor=<key>). Tail and timeline_id anchors
+	// have no caller-supplied cursor to validate.
 	if intent.validateCursor != "" {
 		if ok, err := eventStore.HasOrderKey(ctx, sessionID, intent.validateCursor); err != nil {
 			return nil, http.StatusInternalServerError, err
@@ -320,12 +311,12 @@ func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
 type sessionEventReadKind int
 
 const (
-	sessionEventReadLegacyForward sessionEventReadKind = iota
-	sessionEventReadTail
+	sessionEventReadTail sessionEventReadKind = iota
 	// sessionEventReadHead is the symmetric counterpart of sessionEventReadTail:
 	// the FIRST N events of the ledger in ASC order. Indexed seek (same plan
-	// as legacy_forward, but as a named anchor with its own metric label) —
-	// dispatched by anchor=oldest from the SPA's "jump to start" button.
+	// as an empty-cursor ascending scan, but exposed as a named anchor with
+	// its own metric label) — dispatched by anchor=oldest from the SPA's
+	// "jump to start" button.
 	sessionEventReadHead
 	sessionEventReadAround
 	sessionEventReadAfter
@@ -350,7 +341,7 @@ type sessionEventReadIntent struct {
 	responseAnchor string
 }
 
-func sessionEventReadIntentFromRequest(r *http.Request, readState *store.ConversationReadStateRecord) sessionEventReadIntent {
+func sessionEventReadIntentFromRequest(r *http.Request) sessionEventReadIntent {
 	q := r.URL.Query()
 	anchor := strings.TrimSpace(q.Get("anchor"))
 	timelineID := strings.TrimSpace(q.Get("timeline_id"))
@@ -374,9 +365,9 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 	numAfter := parseSessionEventIntParam(q.Get("num_after"), 100, 0, 250)
 
 	// Resolution precedence: explicit before_order_key wins (back-paginate),
-	// then explicit transcript timeline_id/message anchors, then
-	// anchor=first_unread / newest / <order_key>, then after_order_key
-	// (forward catch-up), then legacy_forward fallback.
+	// then explicit transcript timeline_id/message anchors, then named
+	// newest/oldest anchors or explicit order_key anchors, then
+	// after_order_key (forward catch-up), then tail fallback.
 	if beforeOrderKey != "" {
 		return sessionEventReadIntent{
 			kind:           sessionEventReadBefore,
@@ -407,8 +398,8 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 			responseAnchor: "newest",
 		}
 	case "oldest":
-		// Head of ledger, ASC. Same underlying scan as legacy_forward
-		// (empty cursor, ascending) but exposed as a named, intentional
+		// Head of ledger, ASC. Uses an empty cursor ascending scan, exposed
+		// as a named, intentional
 		// anchor so the metric label and the SPA contract reflect the
 		// "jump to start" semantics. Sets FoundOldest=true; FoundNewest
 		// when the ledger has <=limit events.
@@ -417,28 +408,6 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 			limit:          limit,
 			metricLabel:    "oldest",
 			responseAnchor: "oldest",
-		}
-	case "first_unread":
-		anchorKey := sessionEventFirstUnreadAnchor(readState)
-		if anchorKey == "" {
-			// Fully caught up, or never read — fall through to tail.
-			return sessionEventReadIntent{
-				kind:           sessionEventReadTail,
-				limit:          limit,
-				metricLabel:    "first_unread",
-				responseAnchor: "first_unread:tail",
-			}
-		}
-		return sessionEventReadIntent{
-			kind:           sessionEventReadAround,
-			numBefore:      numBefore,
-			numAfter:       numAfter,
-			anchorOrderKey: anchorKey,
-			// Don't 409 if the read-state cursor is stale — the next
-			// fetch should silently degrade to tail rather than break.
-			validateCursor: "",
-			metricLabel:    "first_unread",
-			responseAnchor: "first_unread:" + anchorKey,
 		}
 	case "":
 		// no-op; falls through
@@ -467,10 +436,10 @@ func sessionEventReadIntentFromRequest(r *http.Request, readState *store.Convers
 	}
 
 	return sessionEventReadIntent{
-		kind:           sessionEventReadLegacyForward,
+		kind:           sessionEventReadTail,
 		limit:          limit,
-		metricLabel:    "legacy_forward",
-		responseAnchor: "legacy_forward",
+		metricLabel:    "newest",
+		responseAnchor: "newest",
 	}
 }
 
@@ -496,17 +465,6 @@ func resolveSessionEventTimelineAnchor(
 	return http.StatusOK, nil
 }
 
-// sessionEventFirstUnreadAnchor returns the order_key the SPA should anchor
-// on for `anchor=first_unread`. We anchor on `last_read_order_key` itself
-// (inclusive of the boundary in EventsAround's before-slice), so the read
-// marker sits exactly above the first unread event.
-func sessionEventFirstUnreadAnchor(rec *store.ConversationReadStateRecord) string {
-	if rec == nil {
-		return ""
-	}
-	return strings.TrimSpace(rec.LastReadOrderKey)
-}
-
 func (s *appServer) runSessionEventRead(ctx context.Context, eventStore store.SessionEventStore, sessionID string, intent sessionEventReadIntent) (store.SessionEventPage, error) {
 	switch intent.kind {
 	case sessionEventReadTail:
@@ -530,10 +488,8 @@ func (s *appServer) runSessionEventRead(ctx context.Context, eventStore store.Se
 		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{
 			AfterOrderKey: intent.afterOrderKey,
 		}, intent.limit)
-	case sessionEventReadLegacyForward:
-		fallthrough
 	default:
-		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{}, intent.limit)
+		return eventStore.LatestEvents(ctx, sessionID, intent.limit)
 	}
 }
 

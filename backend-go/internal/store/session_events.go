@@ -37,8 +37,8 @@ type SessionEventStore interface {
 	// EventsAround centers a page on `anchorOrderKey`: numBefore older
 	// events (ASC) plus numAfter newer events (ASC), inclusive of the
 	// anchor when present. Mirrors Zulip's `anchor` + `num_before` +
-	// `num_after`. Used for `anchor=first_unread` and for resuming at a
-	// localStorage-saved position. Two indexed seeks; no full scan.
+	// `num_after`. Used for explicit transcript deep links. Two indexed
+	// seeks; no full scan.
 	EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
