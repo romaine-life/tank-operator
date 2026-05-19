@@ -3334,6 +3334,24 @@ button:disabled {
   background: rgba(132, 204, 22, 0.2);
 }
 
+.run-test-action-btn.is-ready {
+  color: #d9f99d;
+}
+
+.run-test-ready-icon {
+  position: absolute;
+  right: 0.18rem;
+  top: 0.18rem;
+  width: 0.58rem;
+  height: 0.58rem;
+  color: #ecfccb;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+}
+
+.run-test-action-btn.is-ready:hover .run-test-ready-icon {
+  color: white;
+}
+
 .run-command-menu-count {
   position: absolute;
   top: -0.15rem;
