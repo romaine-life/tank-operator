@@ -337,6 +337,20 @@ var (
 		Name: "tank_session_activity_delta_failure_total",
 		Help: "Activity-summary delta derivation failures (store/publish errors).",
 	})
+	// sessionActivityErrorTransitionsTotal: how often the per-session
+	// activity pill flips from a non-error state into "error", labeled
+	// by cause. The previous behavior — folding item.failed (a single
+	// failed tool call) into session-level error — left healthy
+	// mid-turn sessions pinned red; the fix narrows session-level
+	// error to durable turn-terminal events and pod state. This
+	// counter is the user-trust signal that the narrowing held: a
+	// surge in reason="unknown" (or a reappearance of item-level
+	// inference if anyone rewires it) is the regression alarm.
+	// See docs/tank-conversation-protocol.md "State Machine".
+	sessionActivityErrorTransitionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_activity_error_transitions_total",
+		Help: "Session activity pill transitions into the \"error\" state, labeled by cause (pod_failed, turn_failed, turn_command_failed, unknown).",
+	}, []string{"reason"})
 	// sessionRowUpdatesTotal counts sessioncontroller.RowWriter's
 	// per-event outcomes on the sessions row. Outcome=ok dominates in
 	// steady state; outcome=failed > 0 means the sidebar's column
@@ -416,6 +430,10 @@ func (promLifecycleEmitterMetrics) RecordActivityDelta(emitted bool) {
 
 func (promLifecycleEmitterMetrics) RecordActivityFailure() {
 	sessionActivityDeltaFailureTotal.Inc()
+}
+
+func (promLifecycleEmitterMetrics) RecordActivityErrorTransition(reason string) {
+	sessionActivityErrorTransitionsTotal.WithLabelValues(reason).Inc()
 }
 
 // --- Postgres query tracer metrics ---

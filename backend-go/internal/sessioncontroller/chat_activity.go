@@ -48,15 +48,54 @@ type SessionToOwnerResolver interface {
 
 // LifecycleEmitterMetrics keeps the activity-delta emitter observable
 // without coupling to prometheus directly.
+//
+// RecordActivityErrorTransition fires when the session pill flips into
+// "error" from a non-error prior. The reason label localizes the cause
+// so a dashboard can answer "why did this session pill go red":
+//   - "pod_failed": the session pod entered the Failed state.
+//   - "turn_failed": the runner published a provider/agent failure.
+//   - "turn_command_failed": the backend's submit/interrupt command
+//     fabric failed durably.
+// Per docs/quality-timeframes.md "Missing counters for user-trust
+// failures." Without this, a future regression that introduces a new
+// path-to-error (or the historical item.failed inference) is invisible
+// in dashboards until a user complains.
 type LifecycleEmitterMetrics interface {
 	RecordActivityDelta(emitted bool)
 	RecordActivityFailure()
+	RecordActivityErrorTransition(reason string)
 }
 
 type noopLifecycleEmitterMetrics struct{}
 
-func (noopLifecycleEmitterMetrics) RecordActivityDelta(_ bool) {}
-func (noopLifecycleEmitterMetrics) RecordActivityFailure()     {}
+func (noopLifecycleEmitterMetrics) RecordActivityDelta(_ bool)             {}
+func (noopLifecycleEmitterMetrics) RecordActivityFailure()                 {}
+func (noopLifecycleEmitterMetrics) RecordActivityErrorTransition(_ string) {}
+
+// activityErrorReason picks the label for
+// LifecycleEmitterMetrics.RecordActivityErrorTransition. Pod-state
+// failures take precedence (a Failed pod is the most-severe cause and
+// would also produce a turn-terminal failure if the runner is still
+// reachable). Otherwise scan the most-recently-folded events for a
+// durable turn-terminal failure type. "unknown" is a defensive fallback
+// — if a new path-to-error is introduced without updating this switch,
+// it'll show up as unknown on the dashboard rather than silently
+// miscounted.
+func activityErrorReason(failedFromPod bool, folded []map[string]any) string {
+	if failedFromPod {
+		return "pod_failed"
+	}
+	for i := len(folded) - 1; i >= 0; i-- {
+		t, _ := folded[i]["type"].(string)
+		switch t {
+		case "turn.failed":
+			return "turn_failed"
+		case "turn.command_failed":
+			return "turn_command_failed"
+		}
+	}
+	return "unknown"
+}
 
 // EmitChatActivityDelta is the sessionbus.LifecycleEmitter contract.
 // Returns nil on no-op (delta unchanged); returns an error only on
@@ -149,6 +188,18 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 	if prior != nil && sessionactivity.ActivitySummariesEqual(*prior, next) {
 		metrics.RecordActivityDelta(false)
 		return nil
+	}
+
+	// Bump the error-transition counter on a non-error → error edge.
+	// Reason label localizes the cause: pod state, durable turn-terminal
+	// failure event, or backend command-fabric failure. The fold's only
+	// other path into "error" is failedFromPod, hence the precedence:
+	// pod state wins if both are present in the same emit.
+	if next.Status == "error" {
+		priorWasError := prior != nil && prior.Status == "error"
+		if !priorWasError {
+			metrics.RecordActivityErrorTransition(activityErrorReason(failedFromPod, folded))
+		}
 	}
 
 	summaryPayload, err := json.Marshal(next)

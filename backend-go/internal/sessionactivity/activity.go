@@ -37,9 +37,14 @@ type ActivitySummary struct {
 //   - prior: the previous summary (the value last written into a
 //     session.activity_changed payload) or nil if none yet.
 //   - events: chat events in ascending order_key, scoped to the lifecycle
-//     event_types that drive sidebar indicators (turn.* + tool.approval_*
-//     + item.failed). The caller is responsible for the filter — same
-//     event-type allowlist the activity handler used.
+//     event_types that drive sidebar indicators (turn.* + tool.approval_*).
+//     The caller is responsible for the filter — same event-type allowlist
+//     the activity handler used. item.failed is intentionally NOT in this
+//     set: a single failed tool call is an in-turn signal the agent will
+//     usually recover from, not a session-level failure. Session-level
+//     failure comes from turn.failed / turn.command_failed (durable turn
+//     terminal events) or failedFromPod (pod state). See
+//     docs/tank-conversation-protocol.md "State Machine" for the contract.
 //   - unreadCount: separately queried (DISTINCT timeline_id / turn_id
 //     counts past the read cursor) and passed in. The persister updates
 //     this on every emit; the SSE consumer takes it from the latest
@@ -102,9 +107,6 @@ func DeriveActivitySummary(prior *ActivitySummary, events []map[string]any, unre
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = false
-		case "item.failed":
-			out.Status = "error"
-			out.Failed = true
 		case "tool.approval_requested":
 			out.Status = "needs_input"
 			if id := optionalStringField(event, "turn_id"); id != nil {
@@ -158,10 +160,19 @@ func ActivitySummariesEqual(a, b ActivitySummary) bool {
 }
 
 // LifecycleChatEventTypes is the chat event_type allowlist that drives
-// activity-summary deltas. Kept identical to the prior
-// store.LifecycleEventTypes (and to the fold cases in DeriveActivitySummary
-// above) so the persister filter, the read-side fold, and the test
-// fixtures all stay in sync.
+// activity-summary deltas. Kept identical to store.LifecycleEventTypes
+// (and to the fold cases in DeriveActivitySummary above) so the persister
+// filter, the read-side fold, and the test fixtures all stay in sync.
+//
+// item.failed is intentionally excluded: a tool call returning is_error
+// is an in-turn signal the agent typically handles and continues from.
+// Folding it into the session pill produced a "permanent error pill on
+// a healthy session" bug — see #TBD. The session-level error pill is
+// driven by turn.failed / turn.command_failed (durable turn terminal
+// events) and by failedFromPod. The per-item error badge in the
+// transcript is unchanged and still renders from item.failed events on
+// the wire. activity_test.go pins this exclusion as a migration guard;
+// re-adding item.failed here will fail TestIsLifecycleChatEventType.
 var LifecycleChatEventTypes = []string{
 	"turn.submitted",
 	"turn.started",
@@ -170,7 +181,6 @@ var LifecycleChatEventTypes = []string{
 	"turn.command_failed",
 	"turn.interrupt_requested",
 	"turn.interrupted",
-	"item.failed",
 	"tool.approval_requested",
 	"tool.approval_resolved",
 }
