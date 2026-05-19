@@ -8294,7 +8294,10 @@ export function App() {
     setDragOverSessionId(null);
   }
 
-  async function createSession(mode: SessionMode = defaultSessionMode) {
+  async function createSession(
+    mode: SessionMode = defaultSessionMode,
+    initialPrompt?: string,
+  ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
       writeDefaultSessionMode(mode);
@@ -8334,6 +8337,43 @@ export function App() {
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
+      // If the caller seeded an initial prompt from the home composer, wait
+      // for the pod to become ready and submit it as the first turn. Only
+      // chat modes have a turn endpoint; non-chat modes ignore the prompt
+      // because the home composer would not have surfaced a sensible target.
+      const seedPrompt = initialPrompt?.trim();
+      if (seedPrompt && CHAT_MODES.has(mode)) {
+        const model =
+          selectedProvider === "anthropic" ? runPrefs.claudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+        const effort = selectedProvider === "anthropic" ? runPrefs.claudeEffort : "";
+        try {
+          await waitForSessionReady(created.id);
+          const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              client_nonce: newForkTurnId(),
+              prompt: seedPrompt,
+              model,
+              ...(effort ? { effort } : {}),
+              permission_mode: "default",
+              follow_up: false,
+            }),
+          });
+          if (!turnRes.ok) {
+            let detail = `seed turn failed: ${turnRes.status}`;
+            try {
+              const body = await turnRes.json();
+              if (typeof body?.detail === "string") detail = body.detail;
+            } catch {
+              // Status-only detail is fine when the body isn't JSON.
+            }
+            throw new Error(detail);
+          }
+        } catch (e) {
+          setError(String(e));
+        }
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -8758,8 +8798,10 @@ export function App() {
             <div className="home-inner">
               <section className="home-hero" aria-labelledby="home-title">
                 <div>
-                  <h2 id="home-title" className="home-title">New session</h2>
-                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
+                  <h2 id="home-title" className="home-title">What do you want to build?</h2>
+                  <p className="home-sub">
+                    Type below to start a session — or pick a runtime and launcher first.
+                  </p>
                 </div>
                 <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
               </section>
@@ -8945,6 +8987,51 @@ export function App() {
                   </div>
                 </section>
               </div>
+
+              {/* Chat-style composer. Enter is "confirm": create a session
+                  using the current configuration and (for chat modes) submit
+                  the typed text as the first turn once the pod is ready.
+                  For non-chat modes — terminal sessions, config-only modes —
+                  the text is ignored and pressing Enter behaves the same as
+                  clicking the Configuration panel's launch button. */}
+              <PromptInput
+                className="home-composer"
+                onSubmit={(message) => {
+                  const text = message.text.trim();
+                  void createSession(defaultSessionMode, text || undefined);
+                }}
+              >
+                <PromptInputTextarea
+                  className="home-composer-textarea"
+                  placeholder={
+                    CHAT_MODES.has(defaultSessionMode)
+                      ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
+                      : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
+                  }
+                  disabled={busy}
+                />
+                <PromptInputFooter className="home-composer-footer">
+                  <span className="home-composer-meta">
+                    <ProviderIcon
+                      provider={selectedProvider}
+                      className="home-composer-meta-icon"
+                    />
+                    <span>{MODE_LABELS[defaultSessionMode]}</span>
+                  </span>
+                  <span className="home-composer-hint">
+                    Enter to start · Shift+Enter for new line
+                  </span>
+                  <PromptInputSubmit
+                    className="home-composer-submit"
+                    disabled={busy}
+                  >
+                    <SendHorizontalIcon
+                      className="home-composer-submit-icon"
+                      aria-hidden="true"
+                    />
+                  </PromptInputSubmit>
+                </PromptInputFooter>
+              </PromptInput>
             </div>
           </div>
         ) : (

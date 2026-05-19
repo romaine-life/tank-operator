@@ -2120,6 +2120,72 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+/* Home composer — pinned chat-style input below the option grid. Pressing
+   Enter here is the "confirm" action that creates the configured session;
+   if there's text in the box and the mode is a chat mode, the text is
+   submitted as the first turn once the pod is ready. */
+.home-composer {
+  position: sticky;
+  bottom: var(--space-3);
+  margin-top: var(--space-2);
+  background: var(--bg-elevated, var(--gray-900));
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-xl, 1rem);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.home-composer-textarea {
+  min-height: 3.2rem;
+  max-height: 14rem;
+  resize: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  padding: var(--space-1) 0;
+}
+
+.home-composer-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.home-composer-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.home-composer-meta-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.home-composer-hint {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.home-composer-submit {
+  border-radius: var(--radius-md);
+}
+
+.home-composer-submit-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
 @media (max-width: 900px) {
   .home-grid {
     grid-template-columns: 1fr;
