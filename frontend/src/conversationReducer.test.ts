@@ -316,7 +316,7 @@ test("item.failed mid-turn does NOT flip runStatus or set failed", () => {
   assert.equal(failedItem?.status, "failed");
 });
 
-test("completed item with result_failed outcome warns without failing the session", () => {
+test("completed item with result_failed outcome marks the item failed without failing the session", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "codex" }),
     ev("2", "item.completed", {
@@ -333,10 +333,10 @@ test("completed item with result_failed outcome warns without failing the sessio
 
   assert.equal(state.runStatus, "streaming");
   assert.equal(state.failed, false);
-  assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "warned");
+  assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "failed");
 });
 
-test("completed command item with legacy nonzero raw exit code warns", () => {
+test("completed command item with legacy nonzero raw exit code marks the item failed", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "codex" }),
     ev("2", "item.completed", {
@@ -351,10 +351,10 @@ test("completed command item with legacy nonzero raw exit code warns", () => {
     }),
   ]);
 
-  assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "warned");
+  assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "failed");
 });
 
-test("tool.approval_resolved preserves warned status from result_failed outcome", () => {
+test("tool.approval_resolved preserves failed item status from result_failed outcome", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "claude" }),
     ev("2", "tool.approval_requested", {
@@ -375,7 +375,7 @@ test("tool.approval_resolved preserves warned status from result_failed outcome"
     }),
   ]);
 
-  assert.equal(state.items.find((item) => item.id === "tool-question")?.status, "warned");
+  assert.equal(state.items.find((item) => item.id === "tool-question")?.status, "failed");
 });
 
 test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {

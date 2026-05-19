@@ -266,8 +266,9 @@ Completed-but-unsuccessful tool results stay `item.completed` and carry
 - `{kind:"execution_failed", reason:"provider_item_error"}`: execution
   failed; the adapter emits `item.failed`.
 
-The frontend renders `result_failed` items with a warning tone. It does
-not derive session/sidebar failure from item outcomes; only turn-terminal
+The frontend renders `result_failed` items with a failed/error tone,
+matching shell and CI conventions for nonzero exit codes. It does not
+derive session/sidebar failure from item outcomes; only turn-terminal
 failures and pod failure affect session-level error state.
 
 Per-token typewriter deltas are intentionally not on the Tank event

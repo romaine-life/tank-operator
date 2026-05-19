@@ -9,7 +9,7 @@ export type ConversationRunStatus =
   | "stopped"
   | "error";
 
-export type ConversationItemStatus = "started" | "completed" | "warned" | "failed";
+export type ConversationItemStatus = "started" | "completed" | "failed";
 
 export interface ConversationMessage {
   id: string;
@@ -332,10 +332,10 @@ function stringPayload(event: TankConversationEvent, key: string): string | unde
 function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {
   const outcome = event.payload?.outcome;
   if (outcome && typeof outcome === "object" && !Array.isArray(outcome)) {
-    return (outcome as { kind?: unknown }).kind === "result_failed" ? "warned" : "completed";
+    return (outcome as { kind?: unknown }).kind === "result_failed" ? "failed" : "completed";
   }
   return nonzeroExitCode(event.payload?.exit_code) || nonzeroExitCode(rawPayload(event)?.exit_code)
-    ? "warned"
+    ? "failed"
     : "completed";
 }
 

@@ -195,7 +195,7 @@ test("projects canonical tool lifecycle and active tool state", () => {
   }
 });
 
-test("projects completed result_failed items as warned tools", () => {
+test("projects completed result_failed items as failed tools", () => {
   const projection = projectConversationState(
     reduceConversationEvents([
       ev("1", "turn.started", { source: "codex" }),
@@ -215,7 +215,7 @@ test("projects completed result_failed items as warned tools", () => {
 
   assert.equal(projection.entries[0]?.kind, "tool");
   if (projection.entries[0]?.kind === "tool") {
-    assert.equal(projection.entries[0].toolStatus, "warned");
+    assert.equal(projection.entries[0].toolStatus, "failed");
     assert.equal(projection.entries[0].toolOutput, "1 failed");
   }
 });

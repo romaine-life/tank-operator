@@ -4722,10 +4722,6 @@ textarea.run-files-viewer-editor:focus {
   background: #34d399;
 }
 
-.run-transcript-tool[data-state="warned"] .run-transcript-tool-dot {
-  background: #f59e0b;
-}
-
 .run-transcript-tool[data-state="failed"] .run-transcript-tool-dot,
 .run-transcript-tool[data-state="error"] .run-transcript-tool-dot {
   background: #ef4444;
