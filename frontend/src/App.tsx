@@ -2178,6 +2178,9 @@ function normalizeToolState(status: string | undefined): string {
   if (normalized === "done" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
+  if (normalized === "warned" || normalized === "warning" || normalized === "result_failed") {
+    return "failed";
+  }
   return normalized;
 }
 

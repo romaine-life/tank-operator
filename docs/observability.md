@@ -51,8 +51,11 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_runner_turn_duration_seconds_count{outcome="interrupted"}`
   series to drive the `TankStopNotDelivered` / `TankStopNotTerminated`
   self-telling alerts (see Alerts § below).
-- `tank_runner_*` — pod-side runner counters/histograms. Single label:
-  `mode` ("claude" or "codex"), bound at module import.
+- `tank_runner_*` — pod-side runner counters/histograms. The default
+  `mode` label is "claude" or "codex", bound at module import.
+  `tank_runner_item_outcome_total{outcome,reason}` counts bounded item
+  classifications emitted by runner adapters: `ok`, `result_failed`, and
+  `execution_failed`.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label

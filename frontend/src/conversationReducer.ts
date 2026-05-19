@@ -169,7 +169,7 @@ export function conversationReducer(
       return upsertItem(
         { ...next, activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId },
         event,
-        "completed",
+        completedItemStatus(event),
       );
     case "item.failed":
       // item.failed marks ONE tool call as errored — it does NOT change
@@ -209,7 +209,7 @@ export function conversationReducer(
           needsInput: false,
         },
         event,
-        "completed",
+        completedItemStatus(event),
       );
   }
 }
@@ -287,26 +287,41 @@ function upsertItem(
   const id = event.timeline_id;
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, "text");
-  const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
-  const isTerminalStatus = status === "completed" || status === "failed";
+  const preserveTerminal =
+    status === "started" && existing && isTerminalItemStatus(existing.status);
+  const resolvedStatus = preserveTerminal ? existing.status : status;
+  const payload = preserveTerminal
+    ? { ...(event.payload ?? {}), ...(existing.payload ?? {}) }
+    : { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
+  const isResolvedTerminalStatus = isTerminalItemStatus(resolvedStatus);
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
-    parentId: event.parent_id,
-    providerItemId: event.provider_item_id,
-    actor: event.actor === "user" ? "runner" : event.actor,
-    kind: stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
-    status,
-    title: stringPayload(event, "title") ?? existing?.title,
-    text: text ?? existing?.text,
+    parentId: preserveTerminal ? existing.parentId ?? event.parent_id : event.parent_id,
+    providerItemId: preserveTerminal
+      ? existing.providerItemId ?? event.provider_item_id
+      : event.provider_item_id,
+    actor: preserveTerminal ? existing.actor : event.actor === "user" ? "runner" : event.actor,
+    kind: preserveTerminal
+      ? existing.kind
+      : stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
+    status: resolvedStatus,
+    title: preserveTerminal
+      ? existing.title ?? stringPayload(event, "title")
+      : stringPayload(event, "title") ?? existing?.title,
+    text: preserveTerminal ? existing.text ?? text : text ?? existing?.text,
     payload,
-    orderKey: event.order_key ?? existing?.orderKey,
-    sourceEventId: event.event_id,
-    createdAt: event.created_at || existing?.createdAt,
-    startedAt: status === "started"
+    orderKey: preserveTerminal ? existing.orderKey ?? event.order_key : event.order_key ?? existing?.orderKey,
+    sourceEventId: preserveTerminal ? existing.sourceEventId : event.event_id,
+    createdAt: preserveTerminal ? existing.createdAt || event.created_at : event.created_at || existing?.createdAt,
+    startedAt: status === "started" && !preserveTerminal
       ? event.created_at
       : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
-    completedAt: isTerminalStatus ? event.created_at : existing?.completedAt,
+    completedAt: isResolvedTerminalStatus
+      ? preserveTerminal
+        ? existing.completedAt ?? existing.createdAt ?? event.created_at
+        : event.created_at
+      : existing?.completedAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))
@@ -314,8 +329,13 @@ function upsertItem(
   return {
     ...state,
     items,
-    activeItemId: status === "started" ? id : state.activeItemId,
+    activeItemId:
+      resolvedStatus === "started" ? id : state.activeItemId === id ? null : state.activeItemId,
   };
+}
+
+function isTerminalItemStatus(status: ConversationItemStatus): boolean {
+  return status === "completed" || status === "failed";
 }
 
 function matchingActiveItem(
@@ -334,6 +354,27 @@ function defaultItemKind(event: TankConversationEvent): string {
 function stringPayload(event: TankConversationEvent, key: string): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {
+  const outcome = event.payload?.outcome;
+  if (outcome && typeof outcome === "object" && !Array.isArray(outcome)) {
+    return (outcome as { kind?: unknown }).kind === "result_failed" ? "failed" : "completed";
+  }
+  return nonzeroExitCode(event.payload?.exit_code) || nonzeroExitCode(rawPayload(event)?.exit_code)
+    ? "failed"
+    : "completed";
+}
+
+function rawPayload(event: TankConversationEvent): Record<string, unknown> | undefined {
+  const raw = event.payload?.raw_item;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+}
+
+function nonzeroExitCode(value: unknown): boolean {
+  if (typeof value === "number" && Number.isInteger(value)) return value !== 0;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value) !== 0;
+  return false;
 }
 
 // stringTopLevel reads a top-level (envelope) string field from a Tank event.

@@ -183,6 +183,22 @@ func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 			},
 			error: "skill_name",
 		},
+		{
+			name: "bad item outcome",
+			edit: func(event map[string]any) {
+				event["actor"] = "tool"
+				event["source"] = "codex"
+				event["type"] = "item.completed"
+				delete(event, "client_nonce")
+				event["payload"] = map[string]any{
+					"kind": "command_execution",
+					"outcome": map[string]any{
+						"kind": "result_failed",
+					},
+				}
+			},
+			error: "payload.outcome.reason",
+		},
 	}
 
 	for _, tt := range tests {

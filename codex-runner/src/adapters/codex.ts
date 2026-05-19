@@ -2,6 +2,7 @@ import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
 import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { itemOutcomeTotal } from "../metrics.js";
 
 export interface CodexAdapterTurn {
   turnID: string;
@@ -100,17 +101,19 @@ export class CodexTankEventAdapter {
     const itemRecord = item as Record<string, unknown>;
     const providerItemID =
       typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
-    const itemFailed = itemRecord.error !== undefined;
+    const outcome = codexItemOutcome(itemRecord);
     const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
     const type =
       event.type === "item.started"
         ? "item.started"
-        : itemFailed
+        : outcome.kind === "execution_failed"
           ? "item.failed"
           : "item.completed";
     const payload = this.codexItemPayload(providerItemID, itemRecord, {
       fallbackText: event.type === "item.completed" ? this.itemTextByID.get(providerItemID) : undefined,
+      outcome: event.type === "item.completed" ? outcome : undefined,
     });
+    if (event.type === "item.completed") itemOutcomeTotal.labels(outcome.kind, outcome.reason ?? "none").inc();
     if (event.type === "item.started") this.rememberItemText(providerItemID, codexItemText(itemRecord));
     if (event.type === "item.completed") this.itemTextByID.delete(providerItemID);
     return [
@@ -130,9 +133,10 @@ export class CodexTankEventAdapter {
   private codexItemPayload(
     _providerItemID: string,
     item: Record<string, unknown>,
-    opts: { fallbackText?: string } = {},
+    opts: { fallbackText?: string; outcome?: ItemOutcome } = {},
   ): Record<string, unknown> {
     const text = codexItemText(item) ?? opts.fallbackText;
+    const exitCode = itemExitCode(item);
     return {
       kind: typeof item.type === "string" && item.type ? item.type : "item",
       title:
@@ -148,6 +152,9 @@ export class CodexTankEventAdapter {
       arguments: item.arguments,
       result: item.result,
       error: item.error,
+      exit_code: exitCode,
+      status: item.status,
+      outcome: opts.outcome,
       raw_item: item,
     };
   }
@@ -155,6 +162,48 @@ export class CodexTankEventAdapter {
   private rememberItemText(providerItemID: string, text: string | undefined): void {
     if (text !== undefined) this.itemTextByID.set(providerItemID, text);
   }
+}
+
+type ItemOutcome =
+  | { kind: "ok"; reason?: undefined; code?: undefined }
+  | { kind: "result_failed"; reason: "exit_code" | "codex_item_status_failed"; code?: number }
+  | { kind: "execution_failed"; reason: "provider_item_error"; code?: undefined };
+
+function codexItemOutcome(item: Record<string, unknown>): ItemOutcome {
+  if (hasExecutionError(item.error)) {
+    return { kind: "execution_failed", reason: "provider_item_error" };
+  }
+  const exitCode = itemExitCode(item);
+  if (exitCode !== undefined && exitCode !== 0) {
+    return { kind: "result_failed", reason: "exit_code", code: exitCode };
+  }
+  if (item.status === "failed") {
+    return { kind: "result_failed", reason: "codex_item_status_failed" };
+  }
+  return { kind: "ok" };
+}
+
+function itemExitCode(item: Record<string, unknown>): number | undefined {
+  const direct = numericExitCode(item.exit_code) ?? numericExitCode(item.exitCode);
+  if (direct !== undefined) return direct;
+  const result = item.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    const resultRecord = result as Record<string, unknown>;
+    return numericExitCode(resultRecord.exit_code) ?? numericExitCode(resultRecord.exitCode);
+  }
+  return undefined;
+}
+
+function hasExecutionError(error: unknown): boolean {
+  if (error === undefined || error === null) return false;
+  if (typeof error === "string") return error.trim().length > 0;
+  return true;
+}
+
+function numericExitCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
+  return undefined;
 }
 
 export function canonicalEventsForCodexEvent(

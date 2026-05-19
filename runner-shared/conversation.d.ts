@@ -35,6 +35,15 @@ export type UserMessageDisplay =
   | { kind: "plain" }
   | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
 
+export type TankItemOutcome =
+  | { kind: "ok" }
+  | {
+      kind: "result_failed";
+      reason: "claude_tool_result_is_error" | "codex_item_status_failed" | "exit_code";
+      code?: string | number;
+    }
+  | { kind: "execution_failed"; reason: "provider_item_error" };
+
 export interface TankConversationEvent<
   TPayload extends Record<string, unknown> = Record<string, unknown>,
 > {

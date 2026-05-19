@@ -125,6 +125,7 @@ test("maps Codex tool items to Tank tool items with command payload", () => {
   assert.equal(event.payload?.kind, "command_execution");
   assert.equal(event.payload?.title, "npm test");
   assert.equal(event.payload?.text, "ok");
+  assert.deepEqual(event.payload?.outcome, { kind: "ok" });
   assert.deepEqual(event.payload?.raw_item, {
     id: "item_command_1",
     type: "command_execution",
@@ -135,7 +136,70 @@ test("maps Codex tool items to Tank tool items with command payload", () => {
   });
 });
 
-test("maps errored Codex items to Tank item.failed", () => {
+test("maps Codex nonzero exit codes to completed result_failed outcomes", () => {
+  const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_command_failed_result",
+      type: "command_execution",
+      command: "npm test",
+      aggregated_output: "1 failed",
+      exit_code: 1,
+      status: "completed",
+    },
+  });
+
+  assert.equal(event.type, "item.completed");
+  assert.deepEqual(event.payload?.outcome, { kind: "result_failed", reason: "exit_code", code: 1 });
+  assert.equal(event.payload?.exit_code, 1);
+});
+
+test("maps camelCase or nested Codex exit codes to result_failed outcomes", () => {
+  const camel = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_command_camel_exit",
+      type: "command_execution",
+      command: "false",
+      exitCode: 2,
+    },
+  });
+  assert.deepEqual(camel.payload?.outcome, { kind: "result_failed", reason: "exit_code", code: 2 });
+  assert.equal(camel.payload?.exit_code, 2);
+
+  const nested = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_command_nested_exit",
+      type: "command_execution",
+      command: "false",
+      result: { exit_code: 3 },
+    },
+  });
+  assert.deepEqual(nested.payload?.outcome, { kind: "result_failed", reason: "exit_code", code: 3 });
+  assert.equal(nested.payload?.exit_code, 3);
+});
+
+test("maps Codex failed status without execution error to completed result_failed outcomes", () => {
+  const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.completed",
+    item: {
+      id: "item_mcp_failed_status",
+      type: "mcp_tool_call",
+      tool: "mcp__server__action",
+      error: null,
+      status: "failed",
+    },
+  });
+
+  assert.equal(event.type, "item.completed");
+  assert.deepEqual(event.payload?.outcome, {
+    kind: "result_failed",
+    reason: "codex_item_status_failed",
+  });
+});
+
+test("maps Codex execution errors to Tank item.failed", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",
     item: {
@@ -150,6 +214,10 @@ test("maps errored Codex items to Tank item.failed", () => {
   assert.equal(event.actor, "tool");
   assert.equal(event.visibility, "durable");
   assert.equal(event.payload?.error, "failed");
+  assert.deepEqual(event.payload?.outcome, {
+    kind: "execution_failed",
+    reason: "provider_item_error",
+  });
 });
 
 test("maps Codex terminal events to Tank turn lifecycle", () => {

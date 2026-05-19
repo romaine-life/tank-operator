@@ -146,6 +146,106 @@ test("Tool lifecycle replays to a completed tool item", () => {
   assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
 });
 
+test("Late item.started does not regress a completed tool back to running", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started"),
+    ev("3", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc \"printf 'success\\n'\"",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "completed",
+          command: "/bin/sh -lc \"printf 'success\\n'\"",
+          exit_code: 0,
+          aggregated_output: "success\n",
+        },
+      },
+    }),
+    ev("2", "item.started", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc \"printf 'success\\n'\"",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "in_progress",
+          command: "/bin/sh -lc \"printf 'success\\n'\"",
+          exit_code: null,
+          aggregated_output: "",
+        },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.status, "completed");
+  assert.equal(state.activeItemId, null);
+  assert.deepEqual(state.items[0]?.payload?.raw_item, {
+    id: "item_1",
+    type: "command_execution",
+    status: "completed",
+    command: "/bin/sh -lc \"printf 'success\\n'\"",
+    exit_code: 0,
+    aggregated_output: "success\n",
+  });
+});
+
+test("Late item.started does not regress a failed result back to running", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started"),
+    ev("3", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc false",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "failed",
+          command: "/bin/sh -lc false",
+          exit_code: 1,
+          aggregated_output: "",
+        },
+      },
+    }),
+    ev("2", "item.started", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc false",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "in_progress",
+          command: "/bin/sh -lc false",
+          exit_code: null,
+          aggregated_output: "",
+        },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.status, "failed");
+  assert.equal(state.activeItemId, null);
+});
+
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {
@@ -318,6 +418,68 @@ test("item.failed mid-turn does NOT flip runStatus or set failed", () => {
   // user sees the orange error badge under the tool call.
   const failedItem = state.items.find((item) => item.id === "tool-1");
   assert.equal(failedItem?.status, "failed");
+});
+
+test("completed item with result_failed outcome marks the item failed without failing the session", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "codex" }),
+    ev("2", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-warn",
+      payload: {
+        kind: "command_execution",
+        title: "npm test",
+        outcome: { kind: "result_failed", reason: "exit_code", code: 1 },
+      },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.failed, false);
+  assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "failed");
+});
+
+test("completed command item with legacy nonzero raw exit code marks the item failed", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "codex" }),
+    ev("2", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "legacy-exit",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc 'exit 1'",
+        raw_item: { exit_code: 1 },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "failed");
+});
+
+test("tool.approval_resolved preserves failed item status from result_failed outcome", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "tool.approval_requested", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-question",
+      payload: { kind: "needs_input" },
+    }),
+    ev("3", "tool.approval_resolved", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-question",
+      payload: {
+        kind: "needs_input",
+        resolved: true,
+        outcome: { kind: "result_failed", reason: "claude_tool_result_is_error" },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.find((item) => item.id === "tool-question")?.status, "failed");
 });
 
 test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {

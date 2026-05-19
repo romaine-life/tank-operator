@@ -226,8 +226,46 @@
       "additionalProperties": true,
       "required": ["kind"],
       "properties": {
-        "kind": { "$ref": "#/$defs/nonEmptyString" }
+        "kind": { "$ref": "#/$defs/nonEmptyString" },
+        "outcome": { "$ref": "#/$defs/itemOutcome" }
       }
+    },
+    "itemOutcome": {
+      "description": "Provider-neutral item outcome. Event type is lifecycle/plumbing; this outcome records completed-but-unsuccessful tool results without escalating the item to item.failed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["ok", "result_failed", "execution_failed"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "claude_tool_result_is_error",
+            "codex_item_status_failed",
+            "exit_code",
+            "provider_item_error"
+          ]
+        },
+        "code": {
+          "oneOf": [
+            { "type": "integer" },
+            { "type": "string", "minLength": 1 }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "ok" } }, "required": ["kind"] },
+          "then": { "not": { "required": ["reason"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["result_failed", "execution_failed"] } }, "required": ["kind"] },
+          "then": { "required": ["reason"] }
+        }
+      ]
     }
   },
   "allOf": [
