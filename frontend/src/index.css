@@ -1439,7 +1439,8 @@ button:disabled {
 .mode-api_key             { background: var(--mode-api-key-bg); color: var(--mode-api-key-fg); }
 .mode-config              { background: var(--mode-config-bg); color: var(--mode-config-fg); }
 .mode-codex_cli  { background: var(--mode-codex-cli-bg); color: var(--mode-codex-cli-fg); }
-.mode-codex_gui      { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
+.mode-codex_gui,
+.mode-codex_app_server { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
 .mode-pi_cli     { background: var(--mode-pi-cli-bg); color: var(--mode-pi-cli-fg); }
 .mode-pi_config           { background: var(--mode-pi-config-bg); color: var(--mode-pi-config-fg); }

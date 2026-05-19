@@ -270,9 +270,14 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	if sessionmodel.NormalizeSessionMode(info.Mode) != sessionmodel.ClaudeGUIMode {
-		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI sessions")
+	normalizedMode := sessionmodel.NormalizeSessionMode(info.Mode)
+	if normalizedMode != sessionmodel.ClaudeGUIMode && normalizedMode != sessionmodel.CodexAppServerMode {
+		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI and Codex App Server sessions")
 		return
+	}
+	provider := "claude"
+	if normalizedMode == sessionmodel.CodexAppServerMode {
+		provider = "codex"
 	}
 	if s.sessionBus == nil {
 		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
@@ -287,7 +292,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		SessionID:            sessionID,
 		SessionStorageKey:    storageKey,
 		Email:                user.Email,
-		Provider:             "claude",
+		Provider:             provider,
 		Source:               "input-reply",
 		TurnID:               inputReplyTurnID,
 		ClientNonce:          targetTurnID,
@@ -304,7 +309,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 			Email:             user.Email,
 			TurnID:            inputReplyTurnID,
 			ClientNonce:       targetTurnID,
-			Runtime:           "claude",
+			Runtime:           provider,
 			Reason:            "publish_input_reply_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
@@ -584,6 +589,8 @@ func sdkProviderForMode(mode string) (string, bool) {
 	case sessionmodel.ClaudeGUIMode:
 		return "claude", true
 	case sessionmodel.CodexGUIMode:
+		return "codex", true
+	case sessionmodel.CodexAppServerMode:
 		return "codex", true
 	default:
 		return "", false

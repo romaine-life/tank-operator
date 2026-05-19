@@ -18,15 +18,16 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode      = "api_key"
-	ClaudeCLIMode   = "claude_cli"
-	ClaudeGUIMode   = "claude_gui"
-	ConfigMode      = "config"
-	CodexConfigMode = "codex_config"
-	CodexCLIMode    = "codex_cli"
-	CodexGUIMode    = "codex_gui"
-	PiConfigMode    = "pi_config"
-	PiCLIMode       = "pi_cli"
+	APIKeyMode         = "api_key"
+	ClaudeCLIMode      = "claude_cli"
+	ClaudeGUIMode      = "claude_gui"
+	ConfigMode         = "config"
+	CodexConfigMode    = "codex_config"
+	CodexCLIMode       = "codex_cli"
+	CodexGUIMode       = "codex_gui"
+	CodexAppServerMode = "codex_app_server"
+	PiConfigMode       = "pi_config"
+	PiCLIMode          = "pi_cli"
 	// HermesGUIMode routes chat turns to Hermes Agent's OpenAI-compatible
 	// API server (cluster-internal at hermes-api.hermes.svc.cluster.local)
 	// via POST /v1/runs, instead of spawning a session pod. The "pod is
@@ -35,8 +36,8 @@ const (
 	// memory + skills directory; a per-Tank-session pod would discard
 	// that state on every session create. Tradeoffs and the full
 	// integration design live in nelsong6/tank-operator#540.
-	HermesGUIMode      = "hermes_gui"
-	DefaultSessionMode = ClaudeGUIMode
+	HermesGUIMode         = "hermes_gui"
+	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
 	SessionServiceAccount = "claude-session"
@@ -66,16 +67,17 @@ const (
 
 var (
 	sessionModes = map[string]struct{}{
-		APIKeyMode:      {},
-		ClaudeCLIMode:   {},
-		ClaudeGUIMode:   {},
-		ConfigMode:      {},
-		CodexConfigMode: {},
-		CodexCLIMode:    {},
-		CodexGUIMode:    {},
-		PiConfigMode:    {},
-		PiCLIMode:       {},
-		HermesGUIMode:   {},
+		APIKeyMode:         {},
+		ClaudeCLIMode:      {},
+		ClaudeGUIMode:      {},
+		ConfigMode:         {},
+		CodexConfigMode:    {},
+		CodexCLIMode:       {},
+		CodexGUIMode:       {},
+		CodexAppServerMode: {},
+		PiConfigMode:       {},
+		PiCLIMode:          {},
+		HermesGUIMode:      {},
 	}
 
 	// noPodModes are session modes that do NOT spawn a K8s session pod.
@@ -116,13 +118,13 @@ type SessionRecord struct {
 	// is non-empty in steady state ('Pending' / 'Active' / 'Failed');
 	// the other fields are pointers because they're optional (no
 	// ready_at until the pod first reached Ready, etc.).
-	Status         string
-	ReadyAt        string
-	TerminatingAt  string
+	Status          string
+	ReadyAt         string
+	TerminatingAt   string
 	ActivitySummary []byte         // JSON-marshaled; nil when no chat activity yet
-	TestState      map[string]any // jsonb column, materialized for the handler layer
-	RolloutState   map[string]any // jsonb column
-	RowVersion     int64
+	TestState       map[string]any // jsonb column, materialized for the handler layer
+	RolloutState    map[string]any // jsonb column
+	RowVersion      int64
 }
 
 // sessionConfigMounts is the canonical list of files mounted into every
@@ -139,11 +141,12 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 
 // noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
 var noClaudeHijackModes = map[string]bool{
-	ConfigMode:      true,
-	CodexConfigMode: true,
-	CodexCLIMode:    true,
-	CodexGUIMode:    true,
-	PiConfigMode:    true,
+	ConfigMode:         true,
+	CodexConfigMode:    true,
+	CodexCLIMode:       true,
+	CodexGUIMode:       true,
+	CodexAppServerMode: true,
+	PiConfigMode:       true,
 }
 
 type ManifestOptions struct {
@@ -264,7 +267,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
-	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode {
+	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexAppServerMode {
 		sessionImage = opts.CodexSessionImage
 	}
 	if mode == PiConfigMode || mode == PiCLIMode {
@@ -331,9 +334,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// visible in the in-browser terminal and vice versa. emptyDir lives
 	// for the pod's lifetime, matching today's "pod restart loses
 	// workspace state" semantics. claude_gui uses agent-runner,
-	// codex_gui uses codex-runner; both need the shared mount.
+	// codex_gui / codex_app_server use codex-runner; both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
-	wantCodexRunner := mode == CodexGUIMode
+	wantCodexRunner := mode == CodexGUIMode || mode == CodexAppServerMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
@@ -378,7 +381,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex API proxy host alias and CA cert. Codex is a Rust binary, so
 	// NODE_EXTRA_CA_CERTS is not enough; CODEX_CA_CERTIFICATE is the env var
 	// the upstream client uses for reqwest and websocket TLS.
-	if (mode == CodexCLIMode || mode == CodexGUIMode) && opts.CodexAPIProxyIP != "" {
+	if (mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexAppServerMode) && opts.CodexAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.CodexAPIProxyIP,
 			"hostnames": []any{"chatgpt.com"},
@@ -666,6 +669,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		codexRunnerEnv = append(codexRunnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(CodexRunnerMetricsPort),
 		})
+		if mode == CodexAppServerMode {
+			codexRunnerEnv = append(codexRunnerEnv, map[string]any{
+				"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
+			})
+		}
 		codexRunnerContainer := map[string]any{
 			"name":            "codex-runner",
 			"image":           sessionImage,
