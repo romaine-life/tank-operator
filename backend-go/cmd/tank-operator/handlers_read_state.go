@@ -32,8 +32,9 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 	// someone else's session is admin's own scroll position and doesn't
 	// affect the owner's. So this is treated as a read-side authorization
 	// — admin can advance their cursor in any session, non-admin only in
-	// their own. The Set() call below stores under (user.Email, sessionID)
-	// so the per-caller scoping is preserved either way.
+	// their own. The Set() call below stores under the effective session
+	// owner, so service principals share the human actor's cursor instead
+	// of creating synthetic pod-email rows.
 	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
 		writeError(w, status, err.Error())
 		return
@@ -54,7 +55,7 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 	if readStates == nil {
 		readStates = store.NewStubConversationReadStateStore()
 	}
-	rec, err := readStates.Set(r.Context(), user.Email, sessionID, lastReadOrderKey)
+	rec, err := readStates.Set(r.Context(), user.OwnerEmail(), sessionID, lastReadOrderKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

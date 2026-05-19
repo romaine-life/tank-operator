@@ -15,23 +15,9 @@ import {
   type Components as StreamdownComponents,
 } from "streamdown";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import {
-  PromptInput,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-  type PromptInputMessage,
-} from "@/components/ai-elements/prompt-input";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { WorkspaceShell } from "./WorkspaceShell";
 import {
   AlertCircleIcon,
   ArrowDownIcon,
@@ -70,7 +56,6 @@ import {
   PlusIcon,
   RotateCcwIcon,
   SearchIcon,
-  SendHorizontalIcon,
   SettingsIcon,
   SquareTerminalIcon,
   SquareIcon,
@@ -129,6 +114,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
+import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
 
 type SessionMode =
   | "api_key"
@@ -137,6 +123,7 @@ type SessionMode =
   | "config"
   | "codex_cli"
   | "codex_gui"
+  | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
   | "pi_cli"
@@ -147,7 +134,7 @@ type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
-  | "codex_app_server"
+  | "codex_exec_gui"
   | "pi_cli"
 >;
 type Provider = "anthropic" | "codex" | "pi";
@@ -169,6 +156,8 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  startedAt?: string;
+  completedAt?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble swaps in that session's deterministic avatar in
@@ -198,6 +187,7 @@ type SdkHistoryRefreshResult = {
   terminal?: SdkTerminalResult;
 };
 type SkillStateName = "test" | "rollout";
+type HomeTab = "chat" | "settings" | "help";
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -278,6 +268,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   config: "Claude config",
   codex_cli: "Codex CLI",
   codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   pi_cli: "Pi CLI",
@@ -293,6 +284,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_cli: "codex-cli",
   codex_gui: "codex-gui",
+  codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   pi_cli: "pi-cli",
@@ -304,6 +296,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_gui: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   pi_cli: "pi",
 };
@@ -315,6 +308,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   config: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
   pi_cli: "pi",
@@ -349,7 +343,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   api_key: "Specify an API key fallback",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
-  codex_gui: "GUI chat pane for codex exec output",
+  codex_gui: "GUI chat pane for Codex app-server transport",
+  codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
@@ -361,7 +356,7 @@ const MODE_ORDER: SessionMode[] = [
   "api_key",
   "config",
   "codex_gui",
-  "codex_app_server",
+  "codex_exec_gui",
   "codex_config",
   "pi_cli",
   "pi_config",
@@ -474,14 +469,14 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server"
+  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server") {
+    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else if (session.mode === "pi_cli") {
       lines[lines.length - 1] = `> ${promptText}`;
@@ -592,7 +587,7 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_app_server"
+  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
     ? "Codex"
     : mode === "pi_cli"
       ? "Pi"
@@ -637,7 +632,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
-    value === "codex_app_server" ||
+    value === "codex_exec_gui" ||
     value === "pi_cli"
   );
 }
@@ -645,6 +640,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(localStorage.getItem(DEFAULT_SESSION_MODE_KEY));
+    if (stored === "codex_app_server") return "codex_gui";
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
@@ -808,10 +804,10 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -1426,6 +1422,7 @@ function DemoLanding() {
   const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
+  const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
   const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
@@ -1629,8 +1626,10 @@ function DemoLanding() {
             <div className="home-inner">
               <section className="home-hero" aria-labelledby="demo-home-title">
                 <div>
-                  <h2 id="demo-home-title" className="home-title">New session</h2>
-                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
+                  <h2 id="demo-home-title" className="home-title">What do you want to build?</h2>
+                  <p className="home-sub">
+                    Type below to start a session — or pick a runtime and launcher first.
+                  </p>
                 </div>
                 <span className="home-count">{demoSessions.length} preview session{demoSessions.length === 1 ? "" : "s"}</span>
               </section>
@@ -1804,6 +1803,62 @@ function DemoLanding() {
                   </div>
                 </section>
               </div>
+
+              {/* Demo preview of the chat composer. Same `ChatComposer`
+                  component the authenticated home and the run pane use;
+                  submitting redirects to sign-in instead of creating a
+                  session. The icon row mirrors the authenticated home so
+                  the demo accurately previews the chat surface. */}
+              <ChatComposer
+                className="run-composer-home"
+                placeholder="Sign in to start a session…"
+                onSubmit={() => {
+                  startLogin();
+                }}
+                permissionMode={demoComposerMode}
+                onPermissionModeChange={setDemoComposerMode}
+                sendByCtrlEnter={false}
+                toolButtons={
+                  <>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn"
+                      disabled
+                      aria-label="Attach files"
+                      title="Sign in to attach files"
+                    >
+                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                      disabled
+                      aria-label="Start test skill"
+                      title="Sign in to start a session"
+                    >
+                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-command-menu-btn"
+                      disabled
+                      aria-label="Show slash commands"
+                      title="Sign in to use slash commands"
+                    >
+                      <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-composer-icon-btn run-command-menu-btn"
+                      disabled
+                      aria-label="Show MCP servers"
+                      title="Sign in to use MCP servers"
+                    >
+                      <McpIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                  </>
+                }
+              />
             </div>
           </div>
         ) : (
@@ -2134,6 +2189,19 @@ function normalizeToolState(status: string | undefined): string {
 
 type RunTab = "chat" | "files" | "settings" | "help";
 
+/** A file the user picked / dropped / pasted on the home composer before
+ *  a session pod exists. The `file` is kept on the object so it can be
+ *  uploaded to `/api/sessions/{id}/files/upload` after the pod is Ready;
+ *  `previewUrl` is a `URL.createObjectURL` blob for image thumbnails and
+ *  is revoked on remove. */
+interface HomePendingAttachment {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
+  previewUrl?: string;
+}
+
 interface ComposerAttachment {
   id: string; // local-only id for keying
   name: string;
@@ -2343,47 +2411,9 @@ function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
 }
-type RunComposerMode =
-  | "default"
-  | "acceptEdits"
-  | "auto"
-  | "bypassPermissions"
-  | "plan";
-
-interface PermissionModeInfo {
-  label: string;
-  desc: string;
-  /** Color of the dot rendered next to the pill label. */
-  dotColor: string;
-}
-
-const PERMISSION_MODE_INFO: Record<RunComposerMode, PermissionModeInfo> = {
-  default: {
-    label: "Default Mode",
-    desc: "Ask before edits, agree to commands",
-    dotColor: "#34d399",
-  },
-  acceptEdits: {
-    label: "Accept Edits",
-    desc: "Auto-approve file changes",
-    dotColor: "#fbbf24",
-  },
-  auto: {
-    label: "Auto",
-    desc: "Auto-approve safe operations",
-    dotColor: "#60a5fa",
-  },
-  bypassPermissions: {
-    label: "Bypass Permissions",
-    desc: "Run without permission prompts",
-    dotColor: "#f87171",
-  },
-  plan: {
-    label: "Plan Mode",
-    desc: "Plan before execution",
-    dotColor: "#a78bfa",
-  },
-};
+// RunComposerMode + PERMISSION_MODE_INFO have moved to ./ChatComposer.tsx
+// alongside the shared composer component. They are re-imported above so
+// existing call sites in this file continue to compile unchanged.
 
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
@@ -2648,6 +2678,8 @@ const CHAT_FONT_SCALE_STEP = 0.1;
 const TURN_COMPLETE_SOUND_VOLUME_MIN = 0;
 const TURN_COMPLETE_SOUND_VOLUME_MAX = 1;
 const TURN_COMPLETE_SOUND_VOLUME_STEP = 0.05;
+const RUN_COMPOSER_PLACEHOLDER = "Ask anything...";
+const RUN_COMPOSER_HINT_SUFFIX = " · / for slash commands";
 
 function clampChatFontScale(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
@@ -2765,6 +2797,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           toolInput: entry.toolInput,
           toolOutput: entry.toolOutput,
           toolStatus: entry.toolStatus,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
         };
       }
       if (entry.kind === "reasoning") {
@@ -3001,6 +3035,79 @@ function formatMessageTime(iso: string): string {
   } catch {
     return "";
   }
+}
+
+function formatToolClockTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatToolFullTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function toolTimingTitle(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+  running: boolean,
+): string | undefined {
+  const start = formatToolFullTime(startedAt);
+  const end = formatToolFullTime(completedAt);
+  if (!start && !end && !running) return undefined;
+  if (running) return start ? `Started ${start}; still running` : "Still running";
+  if (start && end) return `Started ${start}; ended ${end}`;
+  if (start) return `Started ${start}`;
+  return end ? `Ended ${end}` : undefined;
+}
+
+function ToolTiming({
+  startedAt,
+  completedAt,
+  running,
+}: {
+  startedAt?: string;
+  completedAt?: string;
+  running: boolean;
+}) {
+  const start = formatToolClockTime(startedAt);
+  const end = formatToolClockTime(completedAt);
+  if (!start && !end && !running) return null;
+  const title = toolTimingTitle(startedAt, completedAt, running);
+  return (
+    <span className="run-tool-timing" title={title} aria-label={title}>
+      {start && <span className="run-tool-timing-start">{start}</span>}
+      {start && (end || running) && (
+        <span className="run-tool-timing-arrow" aria-hidden="true">
+          →
+        </span>
+      )}
+      {running ? (
+        <span className="run-tool-timing-running">
+          <Loader2Icon
+            size={11}
+            className="run-spin run-tool-timing-spinner"
+            aria-hidden="true"
+          />
+          <span className="sr-only">running</span>
+        </span>
+      ) : (
+        end && <span className="run-tool-timing-end">{end}</span>
+      )}
+    </span>
+  );
 }
 
 function formatTurnDuration(ms: number): string {
@@ -3335,13 +3442,14 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
 const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
 function RunMarkdown({ children }: { children: string }) {
+  const linkedChildren = useMemo(() => linkWorkspacePathsInMarkdown(children), [children]);
   return (
     <Streamdown
       components={RUN_MARKDOWN_COMPONENTS}
       linkSafety={{ enabled: false }}
       shikiTheme={STREAMDOWN_DARK_THEME}
     >
-      {children}
+      {linkedChildren}
     </Streamdown>
   );
 }
@@ -3629,38 +3737,36 @@ function ToolAskUserBody({
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the in-flight click-to-submit UX.
   const durableAnswers = entry.askUserAnswers;
-  const answered =
-    (durableAnswers && Object.keys(durableAnswers).length > 0) ||
-    entry.toolStatus === "completed";
+  const hasDurableAnswers =
+    !!durableAnswers && Object.keys(durableAnswers).length > 0;
+  const answered = hasDurableAnswers || entry.toolStatus === "completed";
 
-  if (answered) {
-    return (
-      <div className="run-tool-body run-tool-ask">
-        {durableAnswers && Object.entries(durableAnswers).length > 0 ? (
-          <ul className="run-tool-ask-answered-list">
-            {Object.entries(durableAnswers).map(([question, answer]) => (
-              <li key={question} className="run-tool-ask-answered-item">
-                <span className="run-tool-ask-answered-question">{question}</span>
-                <span className="run-tool-ask-answered-arrow"> → </span>
-                <span className="run-tool-ask-answered-labels">{answer.labels.join(", ")}</span>
-                {answer.notes && (
-                  <span className="run-tool-ask-answered-notes"> ({answer.notes})</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className="run-tool-ask-answered">answered</span>
-        )}
-      </div>
-    );
+  // After answering, the per-question UI stays rendered so the user
+  // can scroll back in chat history and see exactly what was offered
+  // and what they picked. The durable answer payload drives the
+  // selected/muted state; local `selections` only matters before
+  // submit.
+  function selectedLabelsFor(q: AskUserQuestion): string[] {
+    if (answered && durableAnswers && durableAnswers[q.question]) {
+      return durableAnswers[q.question].labels;
+    }
+    return selections[q.question] ?? [];
+  }
+
+  function answeredNoteFor(question: string): string | undefined {
+    if (answered && durableAnswers && durableAnswers[question]) {
+      return durableAnswers[question].notes;
+    }
+    return undefined;
   }
 
   const isReady =
+    !answered &&
     questions.length > 0 &&
     questions.every((q) => (selections[q.question]?.length ?? 0) > 0);
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
+    if (answered) return;
     setSelections((prev) => {
       const current = prev[q.question] ?? [];
       if (q.multiSelect) {
@@ -3705,51 +3811,102 @@ function ToolAskUserBody({
     }
   }
 
+  // Edge case: tool completed without a durable answer payload (legacy
+  // events, or a non-input_reply completion path). The question UI is
+  // still useful for context, but we tag the body so the styles can
+  // make the unanswered options look inert.
+  const completedWithoutAnswers = answered && !hasDurableAnswers;
+
   return (
-    <div className="run-tool-body run-tool-ask">
+    <div
+      className={`run-tool-body run-tool-ask${answered ? " run-tool-ask-locked" : ""}`}
+      data-answered={answered ? "true" : "false"}
+    >
+      {answered && (
+        <div className="run-tool-ask-status" role="status">
+          <span className="run-tool-ask-status-icon" aria-hidden="true">✓</span>
+          <span className="run-tool-ask-status-label">
+            {completedWithoutAnswers ? "Answered" : "Your answer"}
+          </span>
+        </div>
+      )}
       {questions.map((q, qi) => {
-        const selectedLabels = selections[q.question] ?? [];
+        const selectedLabels = selectedLabelsFor(q);
+        const answeredNote = answeredNoteFor(q.question);
+        const liveNote = notes[q.question] ?? "";
+        const showPreNotesField =
+          !answered &&
+          selectedLabels.length > 0 &&
+          q.options.some((opt) => opt.preview);
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
             {q.question && <p className="run-tool-ask-text">{q.question}</p>}
-            <div className="run-tool-ask-options">
+            <div
+              className="run-tool-ask-options"
+              role={q.multiSelect ? "group" : "radiogroup"}
+              aria-label={q.question}
+            >
               {q.options.map((opt, oi) => {
                 const selected = selectedLabels.includes(opt.label);
+                const muted = answered && !selected;
+                const optionClass =
+                  "run-tool-ask-option" +
+                  (selected ? " run-tool-ask-option-selected" : "") +
+                  (muted ? " run-tool-ask-option-muted" : "") +
+                  (answered ? " run-tool-ask-option-locked" : "");
                 return (
                   <button
                     key={oi}
                     type="button"
-                    className={`run-tool-ask-option${selected ? " run-tool-ask-option-selected" : ""}`}
+                    className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting}
+                    disabled={submitting || answered}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
-                    <span className="run-tool-ask-option-label">
-                      {q.multiSelect ? (selected ? "☑ " : "☐ ") : ""}
-                      {opt.label}
+                    <span
+                      className="run-tool-ask-option-marker"
+                      aria-hidden="true"
+                      data-selected={selected ? "true" : "false"}
+                    >
+                      {q.multiSelect
+                        ? selected
+                          ? "☑"
+                          : "☐"
+                        : selected
+                          ? "●"
+                          : "○"}
                     </span>
-                    {opt.description && (
-                      <span className="run-tool-ask-option-desc">{opt.description}</span>
-                    )}
-                    {opt.preview && selected && (
-                      <span
-                        className="run-tool-ask-option-preview"
-                        // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
-                        dangerouslySetInnerHTML={{ __html: opt.preview }}
-                      />
-                    )}
+                    <span className="run-tool-ask-option-body">
+                      <span className="run-tool-ask-option-label">{opt.label}</span>
+                      {opt.description && (
+                        <span className="run-tool-ask-option-desc">{opt.description}</span>
+                      )}
+                      {opt.preview && selected && (
+                        <span
+                          className="run-tool-ask-option-preview"
+                          // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
+                          dangerouslySetInnerHTML={{ __html: opt.preview }}
+                        />
+                      )}
+                    </span>
                   </button>
                 );
               })}
             </div>
-            {selectedLabels.length > 0 && q.options.some((opt) => opt.preview) && (
+            {answered && answeredNote && (
+              <div className="run-tool-ask-notes-readonly">
+                <span className="run-tool-ask-notes-readonly-label">Notes</span>
+                <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
+              </div>
+            )}
+            {showPreNotesField && (
               <label className="run-tool-ask-notes-label">
                 <span>Notes (optional)</span>
                 <textarea
                   className="run-tool-ask-notes"
                   rows={2}
-                  value={notes[q.question] ?? ""}
+                  value={liveNote}
                   disabled={submitting}
                   onChange={(e) => setNoteFor(q.question, e.target.value)}
                   placeholder="Add any context Claude should consider…"
@@ -3759,16 +3916,18 @@ function ToolAskUserBody({
           </div>
         );
       })}
-      <div className="run-tool-ask-submit-row">
-        <button
-          type="button"
-          className="run-tool-ask-submit"
-          disabled={!isReady || submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Sending…" : "Submit answer"}
-        </button>
-      </div>
+      {!answered && (
+        <div className="run-tool-ask-submit-row">
+          <button
+            type="button"
+            className="run-tool-ask-submit"
+            disabled={!isReady || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Sending…" : "Submit answer"}
+          </button>
+        </div>
+      )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
   );
@@ -3920,13 +4079,16 @@ function ToolDefaultBody({
 function RunToolItem({
   entry,
   autoExpand,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
+  const running = state === "running";
   return (
     <div
       className="run-transcript-tool"
@@ -3967,7 +4129,14 @@ function RunToolItem({
           >
             {entry.toolName ?? "tool"}
           </span>
-          {state === "running" && (
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={entry.startedAt ?? entry.time}
+              completedAt={entry.completedAt}
+              running={running}
+            />
+          )}
+          {running && !showTimestamps && (
             <Loader2Icon
               size={12}
               className="run-spin run-tool-spinner"
@@ -4002,14 +4171,20 @@ function RunToolItem({
 function RunToolGroup({
   entries,
   autoExpand,
+  showTimestamps,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   if (entries.length === 1) {
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
-        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+        <RunToolItem
+          entry={entries[0]}
+          autoExpand={autoExpand}
+          showTimestamps={showTimestamps}
+        />
       </div>
     );
   }
@@ -4028,6 +4203,8 @@ function RunToolGroup({
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
   }
   const summary = summaryParts.join(" · ");
+  const groupStartedAt = entries.find((entry) => entry.startedAt || entry.time);
+  const groupCompletedAt = [...entries].reverse().find((entry) => entry.completedAt);
   return (
     <div
       className="run-transcript-tools"
@@ -4052,7 +4229,14 @@ function RunToolGroup({
           />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
-        {runningCount > 0 && (
+        {showTimestamps && (
+          <ToolTiming
+            startedAt={groupStartedAt?.startedAt ?? groupStartedAt?.time}
+            completedAt={groupCompletedAt?.completedAt}
+            running={runningCount > 0}
+          />
+        )}
+        {runningCount > 0 && !showTimestamps && (
           <Loader2Icon
             size={12}
             className="run-spin run-tool-spinner"
@@ -4070,7 +4254,12 @@ function RunToolGroup({
       {open && (
         <div className="run-transcript-tools-body">
           {entries.map((e) => (
-            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+            <RunToolItem
+              key={e.id}
+              entry={e}
+              autoExpand={autoExpand}
+              showTimestamps={showTimestamps}
+            />
           ))}
         </div>
       )}
@@ -4180,7 +4369,13 @@ function RunMessages({
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
-        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+        return (
+          <RunToolGroup
+            entries={g.entries}
+            autoExpand={autoExpandTools}
+            showTimestamps={showTimestamps}
+          />
+        );
       }
       if (g.kind === "reasoning") {
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
@@ -4242,6 +4437,195 @@ function RunMessages({
       // as "no anchor").
       initialTopMostItemIndex={Math.max(groups.length - 1, 0)}
     />
+  );
+}
+
+function RunSettingsPanel({
+  runPrefs,
+  setRunPref,
+  soundControlId,
+  turnCompleteSoundVolumePct,
+  setTurnCompleteSoundVolume,
+  playTurnCompleteSound,
+  paneFontScale,
+  paneFontScalePct,
+  setPaneFontScale,
+}: {
+  runPrefs: RunPrefs;
+  setRunPref: SetRunPref;
+  soundControlId: string;
+  turnCompleteSoundVolumePct: number;
+  setTurnCompleteSoundVolume: (value: number) => void;
+  playTurnCompleteSound: () => void;
+  paneFontScale: number;
+  paneFontScalePct: number;
+  setPaneFontScale: (value: number) => void;
+}) {
+  return (
+    <div className="run-settings-screen">
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Composer</h2>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
+          aria-pressed={runPrefs.sendByCtrlEnter}
+        >
+          <span>Send with Cmd/Ctrl+Enter</span>
+          {runPrefs.sendByCtrlEnter && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+      </section>
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Sound</h2>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
+          aria-pressed={runPrefs.turnCompleteSound}
+        >
+          <span>Turn complete sound</span>
+          {runPrefs.turnCompleteSound && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+        <div className="run-settings-panel-row run-settings-sound-row">
+          <label className="run-settings-label" htmlFor={soundControlId}>
+            Volume
+          </label>
+          <div className="run-settings-sound-controls">
+            <input
+              id={soundControlId}
+              className="run-settings-volume-slider"
+              type="range"
+              min={TURN_COMPLETE_SOUND_VOLUME_MIN}
+              max={TURN_COMPLETE_SOUND_VOLUME_MAX}
+              step={TURN_COMPLETE_SOUND_VOLUME_STEP}
+              value={runPrefs.turnCompleteSoundVolume}
+              disabled={!runPrefs.turnCompleteSound}
+              onChange={(event) =>
+                setTurnCompleteSoundVolume(Number(event.currentTarget.value))
+              }
+              aria-label="Turn complete sound volume"
+            />
+            <span className="run-settings-volume-value" aria-live="polite">
+              {turnCompleteSoundVolumePct}%
+            </span>
+            <button
+              type="button"
+              className="run-settings-test-btn"
+              disabled={!runPrefs.turnCompleteSound}
+              onClick={playTurnCompleteSound}
+            >
+              <PlayIcon aria-hidden="true" />
+              <span>Test</span>
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="run-settings-toggle"
+          onClick={() =>
+            setRunPref(
+              "turnCompleteSoundOnVisible",
+              !runPrefs.turnCompleteSoundOnVisible,
+            )
+          }
+          aria-pressed={runPrefs.turnCompleteSoundOnVisible}
+          disabled={!runPrefs.turnCompleteSound}
+        >
+          <span>Ping on open chats</span>
+          {runPrefs.turnCompleteSoundOnVisible && (
+            <CheckIcon className="run-settings-check" aria-hidden="true" />
+          )}
+        </button>
+      </section>
+      <section className="run-settings-section">
+        <h2 className="run-settings-title">Transcript</h2>
+        <div className="run-settings-panel-row">
+          <span className="run-settings-label">Text zoom</span>
+          <span className="run-settings-zoom-controls">
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
+              disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+              aria-label="Decrease pane text size"
+              title="Decrease text size"
+            >
+              <MinusIcon aria-hidden="true" />
+            </button>
+            <span className="run-settings-zoom-value" aria-live="polite">
+              {paneFontScalePct}%
+            </span>
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
+              disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+              aria-label="Increase pane text size"
+              title="Increase text size"
+            >
+              <PlusIcon aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="run-settings-zoom-btn"
+              onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
+              disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+              aria-label="Reset pane text size"
+              title="Reset text size"
+            >
+              <RotateCcwIcon aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+        {([
+          ["showThinking", "Show reasoning"],
+          ["autoExpandTools", "Auto-expand tools"],
+          ["showTimestamps", "Show timestamps"],
+          ["showDuration", "Show duration"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className="run-settings-toggle"
+            onClick={() => setRunPref(key, !runPrefs[key])}
+            aria-pressed={runPrefs[key]}
+          >
+            <span>{label}</span>
+            {runPrefs[key] && (
+              <CheckIcon className="run-settings-check" aria-hidden="true" />
+            )}
+          </button>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function RunHelpScreen() {
+  return (
+    <div className="run-help-screen">
+      <section className="run-help-section">
+        <h2 className="run-help-title">Session Help</h2>
+        <div className="run-help-list">
+          <div className="run-help-row">
+            <span className="run-help-key">/</span>
+            <span>Open commands from the composer.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">@</span>
+            <span>Mention files from the workspace.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">MCP</span>
+            <span>Inspect available MCP servers from the lower toolbar.</span>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -4322,13 +4706,10 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
-  const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  const effortOptions = isClaude ? CLAUDE_EFFORTS : CODEX_EFFORTS;
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
-  // switching the dropdown after a turn has been submitted would silently
-  // no-op at the pod, and the UI hides the launchpad once entries.length > 0
-  // so the user can't try.
+  // the splash screen is where the user adjusts the defaults before a
+  // session is created.
   const initialModelId = isClaude
     ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
         ? runPrefs.claudeModelId
@@ -4343,33 +4724,8 @@ function ChatPane({
     : (CODEX_EFFORTS.some((opt) => opt.id === runPrefs.codexEffort)
         ? runPrefs.codexEffort
         : DEFAULT_CODEX_EFFORT_ID);
-  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialModelId);
-  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialEffortId);
-  // Persist-then-set wrappers so the dropdown's onValueChange both
-  // updates local state for the active session and writes the new pick
-  // into RunPrefs for the *next* session this browser opens.
-  const setSelectedModelId = useCallback(
-    (id: string) => {
-      setSelectedModelIdState(id);
-      if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
-        setRunPref("claudeModelId", id);
-      } else if (isCodex && CODEX_MODELS.some((opt) => opt.id === id)) {
-        setRunPref("codexModelId", id);
-      }
-    },
-    [isClaude, isCodex, setRunPref],
-  );
-  const setSelectedEffortId = useCallback(
-    (id: string) => {
-      setSelectedEffortIdState(id);
-      if (isClaude && CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
-        setRunPref("claudeEffort", id);
-      } else if (isCodex && CODEX_EFFORTS.some((opt) => opt.id === id)) {
-        setRunPref("codexEffort", id);
-      }
-    },
-    [isClaude, isCodex, setRunPref],
-  );
+  const [selectedModelId] = useState<string>(initialModelId);
+  const [selectedEffortId] = useState<string>(initialEffortId);
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
   // interval while running so the bar updates without a per-element timer.
@@ -4906,10 +5262,11 @@ function ChatPane({
   // position. Per docs/migration-policy.md the old path is deleted, not
   // kept as a fallback.
   //
-  // Anchor resolution: prefer the saved per-session position from
-  // localStorage (so reopening a session lands where the user left off),
-  // fall back to anchor=first_unread (server resolves to
-  // last_read_order_key), final fallback to anchor=newest.
+  // Anchor resolution: an explicit ?message=<entry.id> deep link wins,
+  // then the saved per-session position from localStorage (so reopening
+  // a session lands where the user left off), then anchor=first_unread
+  // (server resolves to last_read_order_key), final fallback to
+  // anchor=newest.
   function refreshSdkRunHistoryResult(
     showHint: boolean,
     clearRealtime = false,
@@ -4918,9 +5275,14 @@ function ChatPane({
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
     const load = async (): Promise<SdkHistoryRefreshResult> => {
+      const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
       const savedAnchor = readSdkTranscriptPosition(refreshSessionId);
       const params = new URLSearchParams();
-      if (savedAnchor) {
+      if (targetTimelineId) {
+        params.set("timeline_id", targetTimelineId);
+        params.set("num_before", "100");
+        params.set("num_after", "100");
+      } else if (savedAnchor) {
         params.set("anchor", savedAnchor);
         params.set("num_before", "100");
         params.set("num_after", "100");
@@ -6188,25 +6550,12 @@ function ChatPane({
         ? "error"
         : undefined;
 
-  const provider: Provider = isClaude ? "anthropic" : "codex";
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
-  const modeLabel = MODE_LABELS[session.mode];
   const ready = session.status === "Active";
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const selectedModel =
-    modelOptions.find((m) => m.id === selectedModelId) ?? modelOptions[0];
-  // Derived label for the launchpad's "Ready to use" status line; falls
-  // back to "High" rather than empty when the persisted value drifted
-  // out of the allowlist so the status line never reads as "...
-  // effort.". The provider default resolution mirrors the runner fallback
-  // so the SPA and pod show the same thing.
-  const selectedEffortLabel =
-    (effortOptions.find((e) => e.id === selectedEffortId)?.label) ??
-    (effortOptions.find((e) => e.id === (isClaude ? DEFAULT_CLAUDE_EFFORT_ID : DEFAULT_CODEX_EFFORT_ID))?.label ??
-      "High");
-  const contextWindow = getContextWindow(selectedModel.id);
+  const contextWindow = getContextWindow(selectedModelId);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
@@ -6261,25 +6610,6 @@ function ChatPane({
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [activeTab, focusComposerTextarea, visible]);
-
-  // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
-  // cloudcli's keyboard shortcut hint.
-  useEffect(() => {
-    if (activeTab !== "chat") return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        // Open the trigger by clicking it — the dropdown manages its
-        // own open state internally via Radix.
-        const trigger = composerWrapRef.current?.parentElement?.querySelector(
-          ".run-provider-card",
-        ) as HTMLButtonElement | null;
-        trigger?.click();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [activeTab]);
 
   // Streaming-pill computeds — only meaningful while running.
   const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
@@ -6343,9 +6673,42 @@ function ChatPane({
 
   return (
     <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
-    <section className="run-panel">
-      <header className="run-header">
-        <div className="run-header-title">
+    <WorkspaceShell
+      style={chatFontScaleStyle}
+      bodyClassName={`run-main-${runStatus}`}
+      bodyRef={transcriptScrollCallbackRef}
+      composerVisible={activeTab === "chat"}
+      composerWrapRef={composerWrapRef}
+      composerWrapStyle={chatFontScaleStyle}
+      composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
+      onComposerWrapDragOver={(e) => {
+        e.preventDefault();
+        if (!dragActive) setDragActive(true);
+      }}
+      onComposerWrapDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragActive(false);
+      }}
+      onComposerWrapDrop={(e) => {
+        e.preventDefault();
+        setDragActive(false);
+        handleAttachmentFiles(e.dataTransfer?.files ?? null);
+      }}
+      onComposerWrapPaste={(e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        const fs: File[] = [];
+        for (const it of Array.from(items)) {
+          if (it.kind === "file") {
+            const f = it.getAsFile();
+            if (f) fs.push(f);
+          }
+        }
+        if (fs.length > 0) {
+          e.preventDefault();
+          for (const f of fs) void uploadAttachment(f);
+        }
+      }}
+      title={(<>
           {editingTitle ? (
             <input
               className="run-header-name-input"
@@ -6383,8 +6746,8 @@ function ChatPane({
               {sessionDisplayName(session)}
             </button>
           )}
-        </div>
-        <nav className="run-tabs" aria-label="Session actions">
+      </>)}
+      tabs={(<>
           {activeTab !== "chat" && (
             <button
               type="button"
@@ -6435,14 +6798,8 @@ function ChatPane({
             <InfoIcon className="run-tab-icon" aria-hidden="true" />
             <span>Help</span>
           </button>
-        </nav>
-      </header>
-
-      <main
-        className={`run-main run-main-${runStatus}`}
-        ref={transcriptScrollCallbackRef}
-        style={chatFontScaleStyle}
-      >
+      </>)}
+      body={(<>
         {activeTab === "files" ? (
           <div className="run-files">
             <div className="run-files-breadcrumb">
@@ -6678,234 +7035,21 @@ function ChatPane({
             <span className="run-muted">waiting for session pod…</span>
           </div>
         ) : activeTab === "settings" ? (
-          <div className="run-settings-screen">
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Composer</h2>
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
-                aria-pressed={runPrefs.sendByCtrlEnter}
-              >
-                <span>Send with Cmd/Ctrl+Enter</span>
-                {runPrefs.sendByCtrlEnter && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-            </section>
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Sound</h2>
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
-                aria-pressed={runPrefs.turnCompleteSound}
-              >
-                <span>Turn complete sound</span>
-                {runPrefs.turnCompleteSound && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-              <div className="run-settings-panel-row run-settings-sound-row">
-                <label className="run-settings-label" htmlFor={`turn-sound-volume-${session.id}`}>
-                  Volume
-                </label>
-                <div className="run-settings-sound-controls">
-                  <input
-                    id={`turn-sound-volume-${session.id}`}
-                    className="run-settings-volume-slider"
-                    type="range"
-                    min={TURN_COMPLETE_SOUND_VOLUME_MIN}
-                    max={TURN_COMPLETE_SOUND_VOLUME_MAX}
-                    step={TURN_COMPLETE_SOUND_VOLUME_STEP}
-                    value={runPrefs.turnCompleteSoundVolume}
-                    disabled={!runPrefs.turnCompleteSound}
-                    onChange={(event) =>
-                      setTurnCompleteSoundVolume(Number(event.currentTarget.value))
-                    }
-                    aria-label="Turn complete sound volume"
-                  />
-                  <span className="run-settings-volume-value" aria-live="polite">
-                    {turnCompleteSoundVolumePct}%
-                  </span>
-                  <button
-                    type="button"
-                    className="run-settings-test-btn"
-                    disabled={!runPrefs.turnCompleteSound}
-                    onClick={playTurnCompleteSound}
-                  >
-                    <PlayIcon aria-hidden="true" />
-                    <span>Test</span>
-                  </button>
-                </div>
-              </div>
-              {/* Chat-app convention: Mattermost/Element suppress the
-                  ping while you're actively viewing the channel; Zulip
-                  doesn't. Our default is on (ring regardless) because
-                  the sound here is a state-transition chime, not a
-                  message-arrival ping — but users who prefer the
-                  chat-app convention can flip it off. */}
-              <button
-                type="button"
-                className="run-settings-toggle"
-                onClick={() =>
-                  setRunPref(
-                    "turnCompleteSoundOnVisible",
-                    !runPrefs.turnCompleteSoundOnVisible,
-                  )
-                }
-                aria-pressed={runPrefs.turnCompleteSoundOnVisible}
-                disabled={!runPrefs.turnCompleteSound}
-              >
-                <span>Ping on open chats</span>
-                {runPrefs.turnCompleteSoundOnVisible && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-            </section>
-            <section className="run-settings-section">
-              <h2 className="run-settings-title">Transcript</h2>
-              <div className="run-settings-panel-row">
-                <span className="run-settings-label">Text zoom</span>
-                <span className="run-settings-zoom-controls">
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
-                    disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
-                    aria-label="Decrease pane text size"
-                    title="Decrease text size"
-                  >
-                    <MinusIcon aria-hidden="true" />
-                  </button>
-                  <span className="run-settings-zoom-value" aria-live="polite">
-                    {paneFontScalePct}%
-                  </span>
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
-                    disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
-                    aria-label="Increase pane text size"
-                    title="Increase text size"
-                  >
-                    <PlusIcon aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="run-settings-zoom-btn"
-                    onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
-                    disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
-                    aria-label="Reset pane text size"
-                    title="Reset text size"
-                  >
-                    <RotateCcwIcon aria-hidden="true" />
-                  </button>
-                </span>
-              </div>
-              {([
-                ["showThinking", "Show reasoning"],
-                ["autoExpandTools", "Auto-expand tools"],
-                ["showTimestamps", "Show timestamps"],
-                ["showDuration", "Show duration"],
-              ] as const).map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="run-settings-toggle"
-                  onClick={() => setRunPref(key, !runPrefs[key])}
-                  aria-pressed={runPrefs[key]}
-                >
-                  <span>{label}</span>
-                  {runPrefs[key] && (
-                    <CheckIcon className="run-settings-check" aria-hidden="true" />
-                  )}
-                </button>
-              ))}
-            </section>
-          </div>
+          <RunSettingsPanel
+            runPrefs={runPrefs}
+            setRunPref={setRunPref}
+            soundControlId={`turn-sound-volume-${session.id}`}
+            turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
+            setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
+            playTurnCompleteSound={playTurnCompleteSound}
+            paneFontScale={paneFontScale}
+            paneFontScalePct={paneFontScalePct}
+            setPaneFontScale={setPaneFontScale}
+          />
         ) : activeTab === "help" ? (
-          <div className="run-help-screen">
-            <section className="run-help-section">
-              <h2 className="run-help-title">Session Help</h2>
-              <div className="run-help-list">
-                <div className="run-help-row">
-                  <span className="run-help-key">/</span>
-                  <span>Open commands from the composer.</span>
-                </div>
-                <div className="run-help-row">
-                  <span className="run-help-key">@</span>
-                  <span>Mention files from the workspace.</span>
-                </div>
-                <div className="run-help-row">
-                  <span className="run-help-key">MCP</span>
-                  <span>Inspect available MCP servers from the lower toolbar.</span>
-                </div>
-              </div>
-            </section>
-          </div>
+          <RunHelpScreen />
         ) : entries.length === 0 ? (
-          <div className="run-empty run-empty-launchpad">
-            <h3 className="run-empty-title">Choose Your AI Assistant</h3>
-            <p className="run-empty-sub">Select a provider to start a new conversation</p>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className="run-provider-card">
-                  <span className="run-provider-icon">
-                    <ProviderIcon provider={provider} />
-                  </span>
-                  <span className="run-provider-meta">
-                    <span className="run-provider-name">{selectedModel.label}</span>
-                    <span className="run-provider-sub">Click to change model</span>
-                  </span>
-                  <ChevronDownIcon className="run-provider-chevron" aria-hidden="true" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="run-model-menu">
-                <DropdownMenuLabel>Model</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  value={selectedModelId}
-                  onValueChange={setSelectedModelId}
-                >
-                  {modelOptions.map((opt) => (
-                    <DropdownMenuRadioItem key={opt.id} value={opt.id}>
-                      {opt.label}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-                {(isClaude || isCodex) && (
-                  <>
-                    <DropdownMenuLabel>Effort</DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={selectedEffortId}
-                      onValueChange={setSelectedEffortId}
-                    >
-                      {effortOptions.map((opt) => (
-                        <DropdownMenuRadioItem key={opt.id} value={opt.id}>
-                          {opt.label}
-                          {opt.hint ? (
-                            <span className="run-model-menu-hint"> — {opt.hint}</span>
-                          ) : null}
-                        </DropdownMenuRadioItem>
-                      ))}
-                    </DropdownMenuRadioGroup>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <p className="run-empty-status">
-              Ready to use {selectedModel.label}
-              {isClaude || isCodex ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
-            </p>
-            <p className="run-empty-kbd">
-              Press <kbd>⌘K</kbd> to switch model
-            </p>
-            {(isClaude || isCodex) && (
-              <p className="run-empty-lock-hint">
-                Model and effort are fixed for this session once you send the first message.
-              </p>
-            )}
-          </div>
+          null
         ) : (
           <>
             {/* Passive top-of-transcript indicator. Replaces the prior
@@ -6983,8 +7127,8 @@ function ChatPane({
             />
           </>
         )}
-      </main>
-
+      </>)}
+      floatingBetweenBodyAndComposer={(<>
       {/* Streaming status pill — pinned between transcript and composer
           while the run is in flight. Provider icon, rotating verb +
           animated dots, elapsed counter, Stop button with ESC hint. */}
@@ -7101,43 +7245,8 @@ function ChatPane({
         </button>
       )}
 
-      {activeTab === "chat" && (
-        <footer
-          className={`run-composer-wrap${dragActive ? " run-composer-wrap-drag" : ""}`}
-          ref={composerWrapRef}
-          style={chatFontScaleStyle}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!dragActive) setDragActive(true);
-          }}
-          onDragLeave={(e) => {
-            // dragleave fires on child crossings; only deactivate if
-            // we've left the wrap entirely.
-            if (e.currentTarget === e.target) setDragActive(false);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            handleAttachmentFiles(e.dataTransfer?.files ?? null);
-          }}
-          onPaste={(e) => {
-            // Pull image/file data out of the clipboard. Plain text
-            // continues to paste into the textarea naturally.
-            const items = e.clipboardData?.items;
-            if (!items) return;
-            const fs: File[] = [];
-            for (const it of Array.from(items)) {
-              if (it.kind === "file") {
-                const f = it.getAsFile();
-                if (f) fs.push(f);
-              }
-            }
-            if (fs.length > 0) {
-              e.preventDefault();
-              for (const f of fs) void uploadAttachment(f);
-            }
-          }}
-        >
+      </>)}
+      composerAbove={(<>
           {dragActive && (
             <div className="run-composer-drop-overlay" aria-hidden="true">
               Drop to attach
@@ -7331,16 +7440,24 @@ function ChatPane({
               </div>
             </div>
           )}
-          <PromptInput onSubmit={handleSubmit} className="run-composer">
-            <PromptInputTextarea
-              className="run-composer-textarea"
-              placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
-            />
-            <PromptInputFooter className="run-composer-footer">
-              <PromptInputTools className="run-composer-tools">
-                {/* Image-attach button — opens the hidden file input.
-                    Drag-and-drop and clipboard paste are wired
-                    separately on the composer wrap. */}
+      </>)}
+      composer={(
+        <ChatComposer
+            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
+            permissionMode={composerMode}
+            onPermissionModeChange={setComposerMode}
+            sendByCtrlEnter={runPrefs.sendByCtrlEnter}
+            hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
+            disabled={!ready}
+            submitStatus={submitStatus}
+            onStop={cancelRun}
+            isStopping={runStatus === "stopping"}
+            onTextChange={setComposerText}
+            toolButtons={
+              <>
+                {/* Image-attach — opens the hidden file input. Drag-and-drop
+                    and clipboard paste are wired on the composer wrap. */}
                 <button
                   type="button"
                   className="run-composer-icon-btn"
@@ -7349,72 +7466,6 @@ function ChatPane({
                 >
                   <ImageIcon className="run-composer-icon" aria-hidden="true" />
                 </button>
-                {/* Permission-mode dropdown — five cloudcli-equivalent
-                    modes. Backend wire-through: `acceptEdits`/`auto`/
-                    `bypassPermissions` map to `claude -p
-                    --dangerously-skip-permissions`; `plan` is rendered
-                    as a prompt prefix because Claude does not expose a
-                    dedicated plan flag today; `default` is the
-                    no-flag baseline. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="run-mode-pill run-mode-pill-button"
-                      aria-label="Permission mode"
-                    >
-                      <span
-                        className="run-mode-dot"
-                        aria-hidden="true"
-                        style={{ background: PERMISSION_MODE_INFO[composerMode].dotColor }}
-                      />
-                      {PERMISSION_MODE_INFO[composerMode].label}
-                      <ChevronDownIcon
-                        className="run-mode-chevron"
-                        aria-hidden="true"
-                      />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    side="top"
-                    align="start"
-                    className="run-mode-menu"
-                  >
-                    {(Object.keys(PERMISSION_MODE_INFO) as RunComposerMode[]).map(
-                      (modeKey) => {
-                        const info = PERMISSION_MODE_INFO[modeKey];
-                        return (
-                          <DropdownMenuItem
-                            key={modeKey}
-                            onSelect={() => setComposerMode(modeKey)}
-                          >
-                            <span className="run-mode-menu-row">
-                              <span className="run-mode-menu-meta">
-                                <span
-                                  className="run-mode-menu-dot"
-                                  aria-hidden="true"
-                                  style={{ background: info.dotColor }}
-                                />
-                                <span className="run-mode-menu-label">
-                                  {info.label}
-                                </span>
-                                <span className="run-mode-menu-desc">
-                                  {info.desc}
-                                </span>
-                              </span>
-                              {composerMode === modeKey && (
-                                <CheckIcon
-                                  className="run-mode-menu-check"
-                                  aria-hidden="true"
-                                />
-                              )}
-                            </span>
-                          </DropdownMenuItem>
-                        );
-                      },
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
                 <span
                   className="run-usage-ring"
                   aria-label={`Context usage: ${usagePct.toFixed(1)}%`}
@@ -7522,49 +7573,11 @@ function ChatPane({
                     </span>
                   )}
                 </button>
-              </PromptInputTools>
-              <span
-                className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
-              >
-                {runPrefs.sendByCtrlEnter
-                  ? "⌘/Ctrl+Enter to send · Enter for new line · / for slash commands"
-                  : "Enter to send · Shift+Enter for new line · / for slash commands"}
-              </span>
-              {composerText.length > 0 && (
-                <button
-                  type="button"
-                  className="run-composer-clear"
-                  aria-label="Clear input"
-                  onMouseDown={(e) => {
-                    // mousedown so the button doesn't blur the textarea
-                    // before the click reaches it (which would also
-                    // close the slash palette via blur).
-                    e.preventDefault();
-                    setComposerValue("");
-                  }}
-                >
-                  <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                </button>
-              )}
-              <PromptInputSubmit
-                className="run-submit-btn"
-                status={submitStatus}
-                onStop={cancelRun}
-                isStopping={runStatus === "stopping"}
-                disabled={!ready}
-              >
-                {/* When idle, force the cloudcli-style paper-plane icon.
-                    When streaming/error, fall through to AI Elements'
-                    built-in Spinner/Stop/X (children is undefined). */}
-                {submitStatus ? undefined : (
-                  <SendHorizontalIcon className="run-submit-icon" aria-hidden="true" />
-                )}
-              </PromptInputSubmit>
-            </PromptInputFooter>
-          </PromptInput>
-        </footer>
+              </>
+            }
+          />
       )}
-    </section>
+    />
     </RunContext.Provider>
   );
 }
@@ -7698,6 +7711,15 @@ export function App() {
       /* ignore */
     }
   }
+  const setTurnCompleteSoundVolume = useCallback((value: number) => {
+    setRunPref(
+      "turnCompleteSoundVolume",
+      Number(clampTurnCompleteSoundVolume(value).toFixed(2)),
+    );
+  }, []);
+  const setPaneFontScale = useCallback((value: number) => {
+    setRunPref("chatFontScale", Number(clampChatFontScale(value).toFixed(2)));
+  }, []);
 
   // Turn-complete sound lives at App scope so the always-on
   // /api/sessions/events SSE handler can ring for any session — including
@@ -7821,6 +7843,48 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
+  // The home composer's permission-mode pick. Carries into the first turn
+  // when the user types a prompt and presses Enter from the home screen,
+  // so the choice they made on the launch surface persists into the live
+  // session's run pane (which uses its own per-session composerMode state).
+  const [homeComposerMode, setHomeComposerMode] =
+    useState<RunComposerMode>("default");
+  const [homeSessionName, setHomeSessionName] = useState("");
+  const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  // Files picked / dropped / pasted onto the home composer before the
+  // session pod exists. They are uploaded to `/api/sessions/{id}/files/upload`
+  // after the pod becomes Ready, then their absolute paths are appended to
+  // the seed turn the same way the in-chat composer appends them via
+  // `composePromptWithAttachments`. Cleared once the seed turn is submitted
+  // (or on the next createSession call).
+  const [homeAttachments, setHomeAttachments] = useState<HomePendingAttachment[]>([]);
+  const homeFileInputRef = useRef<HTMLInputElement | null>(null);
+  const addHomeAttachments = useCallback((files: FileList | File[] | null) => {
+    if (!files) return;
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    setHomeAttachments((prev) => [
+      ...prev,
+      ...list.map((file) => ({
+        id: `home-att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        file,
+        name: file.name || "file",
+        size: file.size,
+        previewUrl: file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined,
+      })),
+    ]);
+  }, []);
+  const removeHomeAttachment = useCallback((id: string) => {
+    setHomeAttachments((prev) => {
+      const att = prev.find((a) => a.id === id);
+      if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+  const [homeDragActive, setHomeDragActive] = useState(false);
   // Splash-page repo picker state. Stage 1 of the auto-clone feature:
   //
   //   - selectedRepos: the chips the user has staged for the
@@ -8451,6 +8515,7 @@ export function App() {
 
   function goHome() {
     setActive(null);
+    setHomeActiveTab("chat");
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
@@ -8496,7 +8561,11 @@ export function App() {
     setDragOverSessionId(null);
   }
 
-  async function createSession(mode: SessionMode = defaultSessionMode) {
+  async function createSession(
+    mode: SessionMode = defaultSessionMode,
+    initialPrompt?: string,
+    initialPermissionMode: RunComposerMode = "default",
+  ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
       writeDefaultSessionMode(mode);
@@ -8510,6 +8579,7 @@ export function App() {
     // mode-override createSession() call (the Launchers section)
     // could otherwise send repos for a CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
+    const requestedName = homeSessionName.trim();
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -8517,7 +8587,22 @@ export function App() {
         body: JSON.stringify({ mode, repos }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
-      const created: Session = normalizeSession(await res.json());
+      let created: Session = normalizeSession(await res.json());
+      let requestedNameApplied = false;
+      if (requestedName) {
+        try {
+          const renameRes = await authedFetch(`/api/sessions/${created.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: requestedName }),
+          });
+          if (!renameRes.ok) throw new Error(`rename failed: ${renameRes.status}`);
+          created = normalizeSession(await renameRes.json());
+          requestedNameApplied = true;
+        } catch (e) {
+          setError(String(e));
+        }
+      }
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
@@ -8537,11 +8622,91 @@ export function App() {
         return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
       activate(created.id);
-      setAutoRenameSessionId(created.id);
+      if (requestedNameApplied) {
+        setHomeSessionName("");
+        setHomeEditingTitle(false);
+      } else {
+        setAutoRenameSessionId(created.id);
+      }
       // Belt-and-braces reconcile in the background — the lifecycle SSE
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
+      // If the caller seeded an initial prompt from the home composer, wait
+      // for the pod to become ready and submit it as the first turn. Only
+      // chat modes have a turn endpoint; non-chat modes ignore the prompt
+      // because the home composer would not have surfaced a sensible target.
+      const seedPrompt = initialPrompt?.trim();
+      const pendingHomeAttachments = homeAttachments;
+      if ((seedPrompt || pendingHomeAttachments.length > 0) && CHAT_MODES.has(mode)) {
+        const model =
+          selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId;
+        const effort =
+          selectedProvider === "anthropic" || selectedProvider === "codex"
+            ? selectedHomeEffortId
+            : "";
+        try {
+          await waitForSessionReady(created.id);
+          // Upload home-buffered attachments to the new session pod before
+          // submitting the seed turn — same endpoint and shape the in-chat
+          // composer's uploadAttachment() uses, so the agent runner sees an
+          // identical attachments payload regardless of where the user
+          // started typing.
+          const uploadedPaths: { name: string; absPath: string }[] = [];
+          for (const att of pendingHomeAttachments) {
+            const upRes = await authedFetch(
+              `/api/sessions/${created.id}/files/upload?name=${encodeURIComponent(att.name)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": att.file.type || "application/octet-stream" },
+                body: att.file,
+              },
+            );
+            if (!upRes.ok) {
+              throw new Error(`attachment upload failed: ${upRes.status}`);
+            }
+            const body = (await upRes.json()) as { abs_path: string; name: string };
+            uploadedPaths.push({ name: body.name, absPath: body.abs_path });
+          }
+          // Clear the home buffer once the files are persisted on the pod.
+          setHomeAttachments((prev) => {
+            for (const a of prev) {
+              if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+            }
+            return [];
+          });
+          const composedPrompt =
+            uploadedPaths.length > 0
+              ? `${seedPrompt ?? ""}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
+                  .map((p) => `- ${p.absPath}`)
+                  .join("\n")}`
+              : (seedPrompt ?? "");
+          const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              client_nonce: newForkTurnId(),
+              prompt: composedPrompt,
+              model,
+              ...(effort ? { effort } : {}),
+              permission_mode: initialPermissionMode,
+              follow_up: false,
+            }),
+          });
+          if (!turnRes.ok) {
+            let detail = `seed turn failed: ${turnRes.status}`;
+            try {
+              const body = await turnRes.json();
+              if (typeof body?.detail === "string") detail = body.detail;
+            } catch {
+              // Status-only detail is fine when the body isn't JSON.
+            }
+            throw new Error(detail);
+          }
+        } catch (e) {
+          setError(String(e));
+        }
+      }
       // Clear the chip selection and refresh "Recent" so the just-
       // used repos float to the top next time the splash opens.
       if (repos.length > 0) {
@@ -8801,6 +8966,10 @@ export function App() {
       : selectedProvider === "codex"
         ? runPrefs.codexEffort
         : DEFAULT_CLAUDE_EFFORT_ID;
+  const homeSessionTitle = homeSessionName.trim() || "New session";
+  const paneFontScale = runPrefs.chatFontScale;
+  const paneFontScalePct = Math.round(paneFontScale * 100);
+  const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -8984,17 +9153,155 @@ export function App() {
 
       <main className="workspace">
         {active == null ? (
-          <div className="home">
-            <div className="home-inner">
-              <section className="home-hero" aria-labelledby="home-title">
-                <div>
-                  <h2 id="home-title" className="home-title">New session</h2>
-                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
-                </div>
-                <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
-              </section>
+          // Pre-session "home" state. Same workspace scaffold as an active
+          // session — same body/composer column and same composer footer at
+          // the same y-coordinate — with the header strip restored so the
+          // about-to-be-created session can be named before launch.
+          <WorkspaceShell
+            className="run-panel-home"
+            bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
+            title={(<>
+              {homeEditingTitle ? (
+                <input
+                  className="run-header-name-input"
+                  aria-label="Session name"
+                  value={homeSessionName}
+                  autoFocus
+                  onChange={(e) => setHomeSessionName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      setHomeEditingTitle(false);
+                    } else if (e.key === "Escape") {
+                      setHomeEditingTitle(false);
+                    }
+                  }}
+                  onBlur={() => setHomeEditingTitle(false)}
+                  placeholder="New session"
+                  maxLength={80}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="run-header-name-btn"
+                  title="Name this session before creating it"
+                  onClick={() => setHomeEditingTitle(true)}
+                >
+                  {homeSessionTitle}
+                </button>
+              )}
+            </>)}
+            tabs={(<>
+              {homeActiveTab !== "chat" && (
+                <button
+                  type="button"
+                  className="run-tab run-tab-back"
+                  onClick={() => setHomeActiveTab("chat")}
+                  aria-label="Back to chat"
+                  title="Back to chat"
+                >
+                  <ArrowLeftIcon
+                    className="run-tab-icon"
+                    strokeWidth={2.2}
+                    aria-hidden="true"
+                  />
+                  <span>Back</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                title="Files are available once the session starts"
+              >
+                <FolderIcon
+                  className="run-tab-icon"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <span>Files</span>
+              </button>
+              <button
+                type="button"
+                className={`run-tab${homeActiveTab === "settings" ? " run-tab-active" : ""}`}
+                onClick={() => setHomeActiveTab((current) => current === "settings" ? "chat" : "settings")}
+                aria-pressed={homeActiveTab === "settings"}
+                title="Settings"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+              <button
+                type="button"
+                className={`run-tab${homeActiveTab === "help" ? " run-tab-active" : ""}`}
+                onClick={() => setHomeActiveTab((current) => current === "help" ? "chat" : "help")}
+                aria-pressed={homeActiveTab === "help"}
+                title="Help"
+              >
+                <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Help</span>
+              </button>
+            </>)}
+            composerVisible={homeActiveTab === "chat"}
+            composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
+            onComposerWrapDragOver={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              e.preventDefault();
+              if (!homeDragActive) setHomeDragActive(true);
+            }}
+            onComposerWrapDragLeave={(e) => {
+              if (e.currentTarget === e.target) setHomeDragActive(false);
+            }}
+            onComposerWrapDrop={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              e.preventDefault();
+              setHomeDragActive(false);
+              addHomeAttachments(e.dataTransfer?.files ?? null);
+            }}
+            onComposerWrapPaste={(e) => {
+              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              const fs: File[] = [];
+              for (const it of Array.from(items)) {
+                if (it.kind === "file") {
+                  const f = it.getAsFile();
+                  if (f) fs.push(f);
+                }
+              }
+              if (fs.length > 0) {
+                e.preventDefault();
+                addHomeAttachments(fs);
+              }
+            }}
+            body={
+              homeActiveTab === "settings" ? (
+                <RunSettingsPanel
+                  runPrefs={runPrefs}
+                  setRunPref={setRunPref}
+                  soundControlId="home-turn-sound-volume"
+                  turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
+                  setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
+                  playTurnCompleteSound={playTurnCompleteSound}
+                  paneFontScale={paneFontScale}
+                  paneFontScalePct={paneFontScalePct}
+                  setPaneFontScale={setPaneFontScale}
+                />
+              ) : homeActiveTab === "help" ? (
+                <RunHelpScreen />
+              ) : (
+              <>
+                <div className="home-inner">
+                <section className="home-hero" aria-labelledby="home-title">
+                  <div>
+                    <h2 id="home-title" className="home-title">What do you want to build?</h2>
+                    <p className="home-sub">
+                      Type below to start a session — or pick a runtime and launcher first.
+                    </p>
+                  </div>
+                  <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
+                </section>
 
-              <div className="home-grid">
+                <div className="home-grid">
                 <section className="home-panel home-panel-start" aria-labelledby="home-start-title">
                   <div className="home-panel-head">
                     <h3 id="home-start-title">Configuration</h3>
@@ -9238,8 +9545,136 @@ export function App() {
                   </div>
                 </section>
               </div>
-            </div>
-          </div>
+                </div>
+              </>
+              )
+            }
+            composerAbove={(<>
+              {homeDragActive && (
+                <div className="run-composer-drop-overlay" aria-hidden="true">
+                  Drop to attach
+                </div>
+              )}
+              {homeAttachments.length > 0 && (
+                <div className="run-composer-attachments">
+                  {homeAttachments.map((a) => (
+                    <div
+                      key={a.id}
+                      className="run-composer-chip run-composer-chip-ready"
+                      title={a.name}
+                    >
+                      {a.previewUrl ? (
+                        <img
+                          className="run-composer-chip-thumb"
+                          src={a.previewUrl}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <FileIcon size={14} aria-hidden="true" />
+                      )}
+                      <span className="run-composer-chip-name">{a.name}</span>
+                      <button
+                        type="button"
+                        className="run-composer-chip-remove"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          removeHomeAttachment(a.id);
+                        }}
+                        aria-label={`Remove ${a.name}`}
+                      >
+                        <XIcon size={11} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <input
+                ref={homeFileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  addHomeAttachments(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </>)}
+            composer={(
+              <ChatComposer
+                placeholder={RUN_COMPOSER_PLACEHOLDER}
+                onSubmit={({ text, permissionMode }) => {
+                  const trimmed = text.trim();
+                  void createSession(
+                    defaultSessionMode,
+                    trimmed || undefined,
+                    permissionMode,
+                  );
+                }}
+                permissionMode={homeComposerMode}
+                onPermissionModeChange={setHomeComposerMode}
+                sendByCtrlEnter={runPrefs.sendByCtrlEnter}
+                hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
+                disabled={busy}
+                toolButtons={
+                    <>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn"
+                        aria-label="Attach files"
+                        title={
+                          CHAT_MODES.has(defaultSessionMode)
+                            ? "Attach files for the first turn"
+                            : "Attachments only apply to chat modes"
+                        }
+                        onClick={() => homeFileInputRef.current?.click()}
+                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
+                      >
+                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
+                        <button
+                          type="button"
+                          className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                          disabled
+                          aria-label="Start rollout"
+                          title="Use /rollout once your session starts"
+                        >
+                          <TankIcon className="run-composer-icon" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                        disabled
+                        aria-label="Start test skill"
+                        title="Available once your session starts"
+                      >
+                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show slash commands"
+                        title="Slash commands appear once your session has skills"
+                      >
+                        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show MCP servers"
+                        title="MCP servers appear once your session is connected"
+                      >
+                      <McpIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                  </>
+                }
+              />
+            )}
+          />
         ) : (
           <div className="terminals">
             {sessions

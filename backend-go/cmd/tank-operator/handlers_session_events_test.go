@@ -51,6 +51,22 @@ func (s fakeSessionEventStore) HasOrderKey(_ context.Context, _ string, orderKey
 	return false, nil
 }
 
+func (s fakeSessionEventStore) OrderKeyForTimelineID(_ context.Context, _ string, timelineID string) (string, error) {
+	var newest string
+	for _, page := range s.pages {
+		for _, event := range page.Events {
+			if event["timeline_id"] != timelineID {
+				continue
+			}
+			orderKey, _ := event["order_key"].(string)
+			if orderKey > newest {
+				newest = orderKey
+			}
+		}
+	}
+	return newest, nil
+}
+
 func (s fakeSessionEventStore) FindTurnTerminal(_ context.Context, _ string, turnID string) (map[string]any, error) {
 	for _, page := range s.pages {
 		for _, event := range page.Events {
@@ -115,6 +131,7 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 		wantAnchorKey  string
 		wantBeforeKey  string
 		wantAfterKey   string
+		wantTimelineID string
 	}{
 		{
 			name:      "no params → legacy_forward (Stage 1 transitional)",
@@ -157,6 +174,20 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 			wantLabel:     "around",
 			wantValidate:  "order-x",
 			wantAnchorKey: "order-x",
+		},
+		{
+			name:           "timeline_id → deferred around lookup",
+			url:            "/api/sessions/s/timeline?timeline_id=turn-1:item:msg-1",
+			wantKind:       sessionEventReadAround,
+			wantLabel:      "timeline_id",
+			wantTimelineID: "turn-1:item:msg-1",
+		},
+		{
+			name:           "message aliases timeline_id for copied links",
+			url:            "/api/sessions/s/timeline?message=turn-1:item:msg-1",
+			wantKind:       sessionEventReadAround,
+			wantLabel:      "timeline_id",
+			wantTimelineID: "turn-1:item:msg-1",
 		},
 		{
 			name:          "before_order_key → back-paginate",
@@ -206,7 +237,48 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 			if got.afterOrderKey != tc.wantAfterKey {
 				t.Fatalf("afterOrderKey = %q, want %q", got.afterOrderKey, tc.wantAfterKey)
 			}
+			if got.timelineID != tc.wantTimelineID {
+				t.Fatalf("timelineID = %q, want %q", got.timelineID, tc.wantTimelineID)
+			}
 		})
+	}
+}
+
+func TestResolveSessionEventTimelineAnchor(t *testing.T) {
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"order-002": {
+				Events: []map[string]any{
+					{"event_id": "e1", "order_key": "order-001", "timeline_id": "turn-1:item:msg-1"},
+					{"event_id": "e2", "order_key": "order-002", "timeline_id": "turn-1:item:msg-1"},
+				},
+			},
+		},
+	}
+
+	intent := sessionEventReadIntent{
+		kind:           sessionEventReadAround,
+		numBefore:      100,
+		numAfter:       100,
+		timelineID:     "turn-1:item:msg-1",
+		metricLabel:    "timeline_id",
+		responseAnchor: "timeline_id:turn-1:item:msg-1",
+	}
+	status, err := resolveSessionEventTimelineAnchor(context.Background(), eventStore, "63", &intent)
+	if err != nil {
+		t.Fatalf("resolve timeline anchor: status=%d err=%v", status, err)
+	}
+	if intent.anchorOrderKey != "order-002" {
+		t.Fatalf("anchorOrderKey = %q, want newest order-002", intent.anchorOrderKey)
+	}
+	if intent.validateCursor != "" {
+		t.Fatalf("validateCursor = %q, want empty because lookup already proved existence", intent.validateCursor)
+	}
+
+	missing := sessionEventReadIntent{timelineID: "missing"}
+	status, err = resolveSessionEventTimelineAnchor(context.Background(), eventStore, "63", &missing)
+	if err == nil || status != 404 {
+		t.Fatalf("missing timeline target: status=%d err=%v, want 404", status, err)
 	}
 }
 

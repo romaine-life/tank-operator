@@ -161,7 +161,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
 
-
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
 	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)
@@ -187,6 +186,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 			serveTankStaticFile(w, r, staticRoots, "index.html")
 		})
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+			if isTankMessageLinkRequest(r) && wantsTankMessageLinkJSON(r) {
+				s.handleTankMessageLink(w, r)
+				return
+			}
 			serveTankStaticFile(w, r, staticRoots, "index.html")
 		})
 	}
@@ -361,6 +364,10 @@ func serveTankStaticFile(w http.ResponseWriter, r *http.Request, roots tankStati
 	found, ok := tankStaticFile(roots, parts...)
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 1 && parts[0] == "index.html" && isTankMessageLinkRequest(r) {
+		serveTankStaticIndexWithMessageLink(w, r, found)
 		return
 	}
 	http.ServeFile(w, r, found)

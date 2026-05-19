@@ -38,6 +38,10 @@ type SessionRegistry interface {
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
+type sessionRegistryGetter interface {
+	Get(ctx context.Context, owner, sessionID string) (sessionmodel.SessionRecord, bool, error)
+}
+
 // RowEmitter publishes the current state of one sessions row on the
 // per-(owner, scope) NATS row-update subject. After
 // docs/session-list-redesign.md Phase 3 every Manager mutation calls
@@ -633,6 +637,24 @@ func (m *Manager) GetByOwner(ctx context.Context, owner, sessionID string) (Info
 func (m *Manager) GetByID(ctx context.Context, sessionID string) (Info, error) {
 	info, err := m.reader().GetByID(ctx, sessionID)
 	return info, err
+}
+
+// GetRegisteredByOwner retrieves a durable session row for read-only paths
+// that do not require a live pod. Transcript links must continue to resolve
+// after the session pod exits; the registry row is the cold-open authority.
+func (m *Manager) GetRegisteredByOwner(ctx context.Context, owner, sessionID string) (Info, error) {
+	getter, ok := m.registry.(sessionRegistryGetter)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	record, found, err := getter.Get(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if !found || !record.Visible {
+		return Info{}, ErrNotFound
+	}
+	return infoFromRecord(owner, record), nil
 }
 
 // GetPodName waits up to 90s for the session pod to be ready and returns its name.

@@ -147,11 +147,15 @@ test("keys assistant messages by Tank timeline id, not provider item id", () => 
 test("projects canonical tool lifecycle and active tool state", () => {
   const running = projectConversationState(
     reduceConversationEvents([
-      ev("1", "turn.started", { source: "claude" }),
+      ev("1", "turn.started", {
+        source: "claude",
+        created_at: "2026-05-12T00:00:00.000Z",
+      }),
       ev("2", "item.started", {
         actor: "tool",
         source: "claude",
         timeline_id: "toolu-read",
+        created_at: "2026-05-12T00:00:10.000Z",
         payload: {
           kind: "tool",
           title: "Read",
@@ -166,6 +170,8 @@ test("projects canonical tool lifecycle and active tool state", () => {
   if (running.entries[0]?.kind === "tool") {
     assert.equal(running.entries[0].toolStatus, "started");
     assert.match(running.entries[0].toolInput ?? "", /README\.md/);
+    assert.equal(running.entries[0].startedAt, "2026-05-12T00:00:10.000Z");
+    assert.equal(running.entries[0].completedAt, undefined);
   }
 
   const completed = projectConversationState(
@@ -175,12 +181,14 @@ test("projects canonical tool lifecycle and active tool state", () => {
         actor: "tool",
         source: "claude",
         timeline_id: "toolu-read",
+        created_at: "2026-05-12T00:00:10.000Z",
         payload: { kind: "tool", title: "Read" },
       }),
       ev("3", "item.completed", {
         actor: "tool",
         source: "claude",
         timeline_id: "toolu-read",
+        created_at: "2026-05-12T00:00:15.000Z",
         payload: { kind: "tool_result", output: "README contents" },
       }),
     ]),
@@ -192,6 +200,9 @@ test("projects canonical tool lifecycle and active tool state", () => {
     assert.equal(completed.entries[0].toolName, "Read");
     assert.equal(completed.entries[0].toolStatus, "completed");
     assert.equal(completed.entries[0].toolOutput, "README contents");
+    assert.equal(completed.entries[0].time, "2026-05-12T00:00:10.000Z");
+    assert.equal(completed.entries[0].startedAt, "2026-05-12T00:00:10.000Z");
+    assert.equal(completed.entries[0].completedAt, "2026-05-12T00:00:15.000Z");
   }
 });
 

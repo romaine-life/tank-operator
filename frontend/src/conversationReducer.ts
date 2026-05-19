@@ -44,6 +44,8 @@ export interface ConversationItem {
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface ConversationInterruptRequest {
@@ -291,6 +293,7 @@ function upsertItem(
   const payload = preserveTerminal
     ? { ...(event.payload ?? {}), ...(existing.payload ?? {}) }
     : { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
+  const isResolvedTerminalStatus = isTerminalItemStatus(resolvedStatus);
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
@@ -311,6 +314,14 @@ function upsertItem(
     orderKey: preserveTerminal ? existing.orderKey ?? event.order_key : event.order_key ?? existing?.orderKey,
     sourceEventId: preserveTerminal ? existing.sourceEventId : event.event_id,
     createdAt: preserveTerminal ? existing.createdAt || event.created_at : event.created_at || existing?.createdAt,
+    startedAt: status === "started" && !preserveTerminal
+      ? event.created_at
+      : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+    completedAt: isResolvedTerminalStatus
+      ? preserveTerminal
+        ? existing.completedAt ?? existing.createdAt ?? event.created_at
+        : event.created_at
+      : existing?.completedAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))

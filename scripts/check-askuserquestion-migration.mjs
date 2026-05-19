@@ -313,26 +313,30 @@ const required = [
     pattern: /tool\.approval_resolved[\s\S]{0,800}"answers"/,
   },
 
-  // --- Codex parity is intentional, document it -----------------------------
+  // --- Codex app-server parity is intentional, legacy exec fallback is not --
   //
-  // Codex (OpenAI Responses API) has no native AskUserQuestion equivalent.
-  // The protocol doc must say Codex explicitly fails input_reply, not
-  // because it's a TODO but because the migration policy's "unknown
-  // callers are unsupported" applies — Codex is a known caller for which
-  // this feature does not exist. If the line is removed from the doc, the
-  // guard fires.
+  // Codex app-server now has a host-call path for request_user_input. The
+  // legacy SDK/codex exec transport still does not: it rejects
+  // request_user_input below the runner. The protocol doc must state both
+  // halves so a future change cannot silently regress codex_gui back to
+  // text-only "I asked" behavior or pretend the legacy fallback supports
+  // input_reply.
+  {
+    file: "codex-runner/src/appServerTransport.ts",
+    name: "codex app-server transport handles requestUserInput server requests",
+    pattern: /item\/tool\/requestUserInput/,
+  },
   {
     file: "docs/tank-conversation-protocol.md",
-    name: "protocol doc states Codex explicitly does not support input_reply / AskUserQuestion",
-    // Two orderings (Codex...input_reply or input_reply...Codex) within a
-    // 600-char window, followed by a stance word that rules out fallback.
-    // The window has to be generous because the surrounding paragraph
-    // legitimately documents the input_reply command shape in detail
-    // before the Codex-unsupported sentence. Stance vocabulary covers
-    // "fails", "rejects", "does not support", "unsupported", "not
-    // implemented" — any of these communicates the explicit gap.
+    name: "protocol doc states codex_gui uses app-server input_reply support",
     pattern:
-      /(?:Codex[\s\S]{0,600}input_reply|input_reply[\s\S]{0,600}Codex)[\s\S]{0,400}(?:fail|reject|does not support|unsupported|not implement)/i,
+      /Codex GUI uses[\s\S]{0,160}App Server[\s\S]{0,250}codex_gui[\s\S]{0,800}(?:input_reply|requestUserInput)/i,
+  },
+  {
+    file: "docs/tank-conversation-protocol.md",
+    name: "protocol doc states codex_exec_gui fallback does not support input_reply / AskUserQuestion",
+    pattern:
+      /codex_exec_gui[\s\S]{0,800}(?:input_reply|AskUserQuestion|request_user_input)[\s\S]{0,500}(?:reject|does not support|unsupported|not implement)/i,
   },
 ];
 
