@@ -83,6 +83,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
   reduceConversationEvents,
@@ -129,6 +130,7 @@ type SessionMode =
   | "config"
   | "codex_cli"
   | "codex_gui"
+  | "codex_app_server"
   | "codex_config"
   | "pi_cli"
   | "pi_config";
@@ -138,6 +140,7 @@ type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
+  | "codex_app_server"
   | "pi_cli"
 >;
 type Provider = "anthropic" | "codex" | "pi";
@@ -260,6 +263,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   config: "Claude config",
   codex_cli: "Codex CLI",
   codex_gui: "Codex GUI",
+  codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   pi_cli: "Pi CLI",
   pi_config: "Pi config",
@@ -274,6 +278,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   config: "config",
   codex_cli: "codex-cli",
   codex_gui: "codex-gui",
+  codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   pi_cli: "pi-cli",
   pi_config: "pi-cfg",
@@ -284,6 +289,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_gui: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_app_server: "codex",
   pi_cli: "pi",
 };
 
@@ -294,6 +300,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   config: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
+  codex_app_server: "codex",
   codex_config: "codex",
   pi_cli: "pi",
   pi_config: "pi",
@@ -328,6 +335,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
   codex_gui: "GUI chat pane for codex exec output",
+  codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
@@ -338,6 +346,7 @@ const MODE_ORDER: SessionMode[] = [
   "api_key",
   "config",
   "codex_gui",
+  "codex_app_server",
   "codex_config",
   "pi_cli",
   "pi_config",
@@ -447,14 +456,14 @@ const DEMO_PI_LINES = [
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_cli" || session.mode === "codex_gui"
+  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_cli" || session.mode === "codex_gui") {
+    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else if (session.mode === "pi_cli") {
       lines[lines.length - 1] = `> ${promptText}`;
@@ -565,7 +574,7 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_cli" || mode === "codex_gui"
+  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_app_server"
     ? "Codex"
     : mode === "pi_cli"
       ? "Pi"
@@ -609,6 +618,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
+    value === "codex_app_server" ||
     value === "pi_cli"
   );
 }
@@ -768,10 +778,10 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_app_server"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -812,13 +822,11 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
-  // Platform role carried in the tank-operator session JWT, copied at exchange
-  // time from the auth.romaine.life upstream token. `admin` bypasses the
-  // OnboardingWall (the host installation of the GitHub App covers them);
-  // `user` is the standard signed-in caller. auth.romaine.life mints
-  // `pending` by default but tank-operator's exchange rejects that before
-  // a session JWT is ever issued, so this side only sees admin or user.
-  role: "admin" | "user";
+  // Platform role carried in the tank-operator session JWT. `admin` and
+  // `service` bypass the OnboardingWall; `user` is the standard signed-in
+  // caller. auth.romaine.life mints `pending` by default but tank-operator's
+  // exchange rejects that before a session JWT is ever issued.
+  role: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -1164,26 +1172,6 @@ function IconKey({ className }: { className?: string }) {
   );
 }
 
-function IconChevronDown({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 16 16"
-      width="12"
-      height="12"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      focusable="false"
-      aria-hidden="true"
-    >
-      <polyline points="4,6 8,10 12,6" />
-    </svg>
-  );
-}
-
 function IconPanelToggle({ collapsed }: { collapsed: boolean }) {
   return (
     <svg
@@ -1399,33 +1387,33 @@ function OnboardingWall({
 
 function DemoLanding() {
   const [demoSessions, setDemoSessions] = useState<Session[]>(DEMO_BASE_SESSIONS);
-  const [activeDemoSession, setActiveDemoSession] = useState(DEMO_BASE_SESSIONS[0].id);
+  const [activeDemoSession, setActiveDemoSession] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [demoInteraction, setDemoInteraction] = useState<SessionInteraction>("cli");
+  const [demoClaudeModelId, setDemoClaudeModelId] = useState(DEFAULT_CLAUDE_MODEL_ID);
+  const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
-  const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? demoSessions[0];
-  const selectedMode = defaultModeFor(selectedProvider, "cli");
+  const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
+  const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
+  const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
+  const demoModelOptions =
+    selectedProvider === "anthropic"
+      ? CLAUDE_MODELS
+      : selectedProvider === "codex"
+        ? CODEX_MODELS
+        : [];
+  const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
+  const selectedDemoModelId =
+    selectedProvider === "anthropic" ? demoClaudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
 
   useEffect(() => {
-    if (!modeMenuOpen) return;
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement | null;
-      const root = target?.closest("[data-menu]") as HTMLElement | null;
-      if (root?.dataset.menu === "mode") return;
-      setModeMenuOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [modeMenuOpen]);
-
-  useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = shiftArrowSessionDirection(event);
-      if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
+      if (!activeDemoSession || direction == null || isSessionShortcutEditableTarget(event.target)) return;
       const nextId = adjacentSessionId(demoSessions, activeDemoSession, direction);
       if (nextId == null) return;
       event.preventDefault();
@@ -1437,13 +1425,32 @@ function DemoLanding() {
   }, [demoSessions, activeDemoSession]);
 
   function setDemoProvider(provider: Provider) {
+    const interaction =
+      PROVIDER_INTERACTION_MODES[provider][demoInteraction] == null
+        ? "cli"
+        : demoInteraction;
+    setDemoInteraction(interaction);
     setSelectedProvider(provider);
-    setModeMenuOpen(false);
   }
 
-  function createPreviewSession() {
+  function setPreviewMode(mode: SessionMode) {
+    if (isDefaultSessionMode(mode)) {
+      setSelectedProvider(MODE_MENU_ICONS[mode]);
+      setDemoInteraction(sessionInteractionForSession({ ...DEMO_BASE_SESSIONS[0], mode }) ?? "cli");
+    }
+    createPreviewSession(mode);
+  }
+
+  function createPreviewSession(mode: SessionMode = selectedMode) {
     const nextOrdinal = demoSessionOrdinal + 1;
-    const next = { ...createDemoSession(selectedMode, nextOrdinal), name: null };
+    const next = isDefaultSessionMode(mode)
+      ? { ...createDemoSession(mode, nextOrdinal), name: null }
+      : {
+          ...createDemoSession(selectedMode, nextOrdinal),
+          id: `${MODE_MENU_ICONS[mode]}-preview-${nextOrdinal}`,
+          mode,
+          name: null,
+        };
     setDemoSessionOrdinal(nextOrdinal);
     setDemoSessions((prev) => [...prev, next]);
     setActiveDemoSession(next.id);
@@ -1459,7 +1466,7 @@ function DemoLanding() {
       return nextMessages;
     });
     if (activeDemoSession === id) {
-      setActiveDemoSession(next[0]?.id ?? "");
+      setActiveDemoSession(null);
     }
   }
 
@@ -1475,74 +1482,29 @@ function DemoLanding() {
     <div className="shell shell-demo">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <h1>tank-operator</h1>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="new-row new-row-launcher" data-menu="mode">
-            <button
-              className={`new-row-provider-toggle${modeMenuOpen ? " is-open" : ""}`}
-              onClick={() => setModeMenuOpen((v) => !v)}
-              aria-label="choose provider"
-              aria-expanded={modeMenuOpen}
-              title={`preview provider: ${MODE_LABELS[selectedMode]}`}
-            >
-              <span className="new-row-provider-slot">
-                <ProviderIcon provider={selectedProvider} className="new-row-provider-icon" />
-              </span>
-              <IconChevronDown className="new-row-provider-chevron" />
-            </button>
-            <div className="new-row-action-group" role="group" aria-label="preview session actions">
-              <button
-                className="new-row-action"
-                onClick={createPreviewSession}
-                aria-label={`Start ${MODE_LABELS[selectedMode]} preview session`}
-                title={`start ${MODE_LABELS[selectedMode]} preview session`}
-              >
-                <span className="row-icon"><IconPlus /></span>
-              </button>
-              <button
-                className="new-row-action"
-                onClick={() => {}}
-                aria-label="Start API key session"
-                title="API key sessions are not shown in preview"
-              >
-                <IconKey className="new-row-action-icon" />
-              </button>
-              <button
-                className="new-row-action"
-                onClick={() => {}}
-                aria-label="Start config session"
-                title="Config sessions are not shown in preview"
-              >
-                <IconWrench className="new-row-action-icon" />
-              </button>
-            </div>
-            {modeMenuOpen && (
-              <ul className="dropdown dropdown-provider" role="menu">
-                {PROVIDERS.map((provider) => {
-                  const mode = defaultModeFor(provider, "cli");
-                  return (
-                    <li key={provider}>
-                      <button
-                        onClick={() => setDemoProvider(provider)}
-                        aria-label={MODE_LABELS[mode]}
-                      >
-                        <ProviderIcon
-                          provider={provider}
-                          className="dropdown-provider-icon"
-                        />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+          <button
+            className={`sidebar-home${activeDemoSession == null ? " is-active" : ""}`}
+            onClick={() => setActiveDemoSession(null)}
+            title="Home"
+            aria-label="Home"
+            aria-current={activeDemoSession == null ? "page" : undefined}
+          >
+            <span className="sidebar-home-label">tank-operator</span>
+          </button>
         </div>
 
         <div className="sidebar-list">
-          <div className="sidebar-section-label">Preview sessions</div>
+          <div className="sidebar-list-head">
+            <div className="sidebar-section-label">Preview sessions</div>
+            <button
+              className="sidebar-new-session"
+              onClick={() => setActiveDemoSession(null)}
+              aria-label="New session"
+              title="new session"
+            >
+              <span className="row-icon"><IconPlus /></span>
+            </button>
+          </div>
           <ul className="sessions">
             {demoSessions.map((s) => {
               const isActive = s.id === selected?.id;
@@ -1626,19 +1588,196 @@ function DemoLanding() {
       </aside>
 
       <main className="workspace demo-workspace">
-        <div
-          className={`demo-terminal${selected?.mode === "claude_cli" || selected?.mode === "claude_gui" ? " is-claude" : " is-codex"}`}
-          role="img"
-          aria-label="tank-operator terminal preview"
-          tabIndex={0}
-          onKeyDown={handleDemoTerminalKeyDown}
-        >
-          <div className="demo-terminal-screen">
-            {terminalLines.map((line, index) => (
-              <AnsiLine key={index} line={line} />
-            ))}
+        {activeDemoSession == null ? (
+          <div className="home">
+            <div className="home-inner">
+              <section className="home-hero" aria-labelledby="demo-home-title">
+                <div>
+                  <h2 id="demo-home-title" className="home-title">New session</h2>
+                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
+                </div>
+                <span className="home-count">{demoSessions.length} preview session{demoSessions.length === 1 ? "" : "s"}</span>
+              </section>
+
+              <div className="home-grid">
+                <section className="home-panel home-panel-start" aria-labelledby="demo-home-start-title">
+                  <div className="home-panel-head">
+                    <h3 id="demo-home-start-title">Configuration</h3>
+                    <span className="home-panel-meta">{MODE_LABELS[selectedMode]}</span>
+                  </div>
+                  <div className="home-choice-grid" role="group" aria-label="provider">
+                    {PROVIDERS.map((provider) => {
+                      const mode = defaultModeFor(provider, demoInteraction);
+                      const providerSelected = provider === selectedProvider;
+                      return (
+                        <button
+                          key={provider}
+                          className={`home-choice${providerSelected ? " is-selected" : ""}`}
+                          onClick={() => setDemoProvider(provider)}
+                          aria-pressed={providerSelected}
+                          title={MODE_LABELS[mode]}
+                        >
+                          <ProviderIcon provider={provider} className="home-choice-icon" />
+                          <span>{provider === "anthropic" ? "Claude" : provider === "codex" ? "Codex" : "Pi"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="home-choice-grid" role="group" aria-label="interaction">
+                    {INTERACTION_OPTIONS.map((interaction) => {
+                      const unavailable =
+                        PROVIDER_INTERACTION_MODES[selectedProvider][interaction] == null;
+                      const interactionSelected = demoInteraction === interaction && !unavailable;
+                      return (
+                        <button
+                          key={interaction}
+                          className={`home-choice${interactionSelected ? " is-selected" : ""}`}
+                          onClick={() => setDemoInteraction(interaction)}
+                          disabled={unavailable}
+                          aria-pressed={interactionSelected}
+                          title={unavailable ? "not available for this provider" : INTERACTION_LABELS[interaction]}
+                        >
+                          <InteractionIcon interaction={interaction} className="home-choice-icon" />
+                          <span>{INTERACTION_LABELS[interaction]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {demoModelApplies && (
+                    <>
+                      <div className="home-panel-head home-panel-subhead">
+                        <h3>Model</h3>
+                        <span className="home-panel-meta">
+                          {selectedProvider === "anthropic"
+                            ? CLAUDE_EFFORTS.find((effort) => effort.id === demoClaudeEffortId)?.label
+                            : "account default"}
+                        </span>
+                      </div>
+                      <div className="home-model-list" role="group" aria-label="model">
+                        {demoModelOptions.map((model) => {
+                          const modelSelected = model.id === selectedDemoModelId;
+                          return (
+                            <button
+                              key={model.id}
+                              className={`home-model${modelSelected ? " is-selected" : ""}`}
+                              onClick={() => {
+                                if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
+                              }}
+                              aria-pressed={modelSelected}
+                            >
+                              <span className="home-model-title">{model.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {selectedProvider === "anthropic" && (
+                        <div className="home-effort-grid" role="group" aria-label="effort">
+                          {CLAUDE_EFFORTS.map((effort) => {
+                            const effortSelected = effort.id === demoClaudeEffortId;
+                            return (
+                              <button
+                                key={effort.id}
+                                className={`home-model home-effort${effortSelected ? " is-selected" : ""}`}
+                                onClick={() => setDemoClaudeEffortId(effort.id)}
+                                aria-pressed={effortSelected}
+                                title={effort.hint}
+                              >
+                                <span className="home-model-title">{effort.label}</span>
+                                {effort.hint && <span className="home-model-sub">{effort.hint}</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  <button
+                    className="home-primary-action"
+                    onClick={() => createPreviewSession()}
+                  >
+                    <span className="home-action-icons">
+                      <ProviderIcon provider={selectedProvider} className="home-provider-icon" />
+                      <InteractionIcon interaction={demoInteraction} className="home-interaction-icon" />
+                    </span>
+                    <span>
+                      <span className="home-action-title">{MODE_LABELS[selectedMode]}</span>
+                      <span className="home-action-sub">{MODE_HINTS[selectedMode]}</span>
+                    </span>
+                  </button>
+                  <div className="home-quick-actions">
+                    <button className="home-quick-action" onClick={() => createPreviewSession("api_key")}>
+                      <IconKey className="home-quick-icon" />
+                      <span>API key</span>
+                    </button>
+                    <button className="home-quick-action" onClick={() => createPreviewSession(configMode)}>
+                      <IconWrench className="home-quick-icon" />
+                      <span>{MODE_LABELS[configMode]}</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="home-panel" aria-labelledby="demo-home-modes-title">
+                  <div className="home-panel-head">
+                    <h3 id="demo-home-modes-title">Launchers</h3>
+                  </div>
+                  <div className="home-mode-list" role="list">
+                    {MODE_ORDER.map((m) => (
+                      <button
+                        key={m}
+                        className="home-mode"
+                        onClick={() => setPreviewMode(m)}
+                        role="listitem"
+                      >
+                        <ProviderIcon provider={MODE_MENU_ICONS[m]} className="home-mode-icon" />
+                        <span>
+                          <span className="home-mode-title">{MODE_LABELS[m]}</span>
+                          <span className="home-mode-sub">{MODE_HINTS[m]}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="home-panel" aria-labelledby="demo-home-sessions-title">
+                  <div className="home-panel-head">
+                    <h3 id="demo-home-sessions-title">Sessions</h3>
+                    <span className="home-panel-meta">{demoSessions.length} available</span>
+                  </div>
+                  <div className="home-session-list">
+                    {demoSessions.slice(0, 6).map((s) => (
+                      <button
+                        key={s.id}
+                        className="home-session"
+                        onClick={() => setActiveDemoSession(s.id)}
+                      >
+                        <span className={sessionStatusDotClass(s)} />
+                        <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
+                        <span className="home-session-main">
+                          <span className="home-session-title">{sessionDisplayName(s)}</span>
+                          <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div
+            className={`demo-terminal${selected?.mode === "claude_cli" || selected?.mode === "claude_gui" ? " is-claude" : " is-codex"}`}
+            role="img"
+            aria-label="tank-operator terminal preview"
+            tabIndex={0}
+            onKeyDown={handleDemoTerminalKeyDown}
+          >
+            <div className="demo-terminal-screen">
+              {terminalLines.map((line, index) => (
+                <AnsiLine key={index} line={line} />
+              ))}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
@@ -2008,6 +2147,65 @@ function joinFilesPath(parent: string, name: string): string {
 function parentFilesPath(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx <= 0 ? "" : path.slice(0, idx);
+}
+
+const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
+  "/api/",
+  "/assets/",
+  "/_",
+  "/manifest.webmanifest",
+];
+
+function normalizeWorkspacePath(rawPath: string): string | null {
+  let path = rawPath.trim();
+  if (!path) return null;
+  path = path.split(/[?#]/, 1)[0] ?? "";
+  try {
+    path = decodeURI(path);
+  } catch {
+    // Keep the raw path if it is not valid percent-encoded text.
+  }
+  path = path.replace(/\\/g, "/");
+  if (path === "/workspace" || path === "workspace") return "";
+  path = path.replace(/^\/workspace\/?/, "");
+  path = path.replace(/^workspace\/+/, "");
+  path = path.replace(/^\/+/, "");
+  path = path.replace(/^\.\//, "");
+  if (!path || path === ".") return null;
+  if (path.split("/").some((seg) => seg === "..")) return null;
+  return path;
+}
+
+function workspacePathFromHref(href: string | undefined): string | null {
+  if (!href) return null;
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  if (trimmed.startsWith("file://")) {
+    try {
+      const url = new URL(trimmed);
+      return normalizeWorkspacePath(url.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
+    return null;
+  }
+
+  if (trimmed.startsWith("/")) {
+    if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+      return null;
+    }
+    return normalizeWorkspacePath(trimmed);
+  }
+
+  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
+    return normalizeWorkspacePath(trimmed);
+  }
+
+  return null;
 }
 
 function humanFileSize(bytes: number): string {
@@ -2984,15 +3182,13 @@ function linkifyUrls(text: string): ReactNode[] {
     if (start > lastIndex) parts.push(text.slice(lastIndex, start));
     const { href, trailing } = splitTrailingUrlPunctuation(rawUrl);
     parts.push(
-      <a
+      <RunMarkdownLink
         key={`${start}-${href}`}
         className="run-markdown-code-link"
         href={href}
-        rel="noreferrer"
-        target="_blank"
       >
         {href}
-      </a>,
+      </RunMarkdownLink>,
     );
     if (trailing) parts.push(trailing);
     lastIndex = start + rawUrl.length;
@@ -3033,7 +3229,23 @@ function RunMarkdownInlineCode({ children, className, node: _node, ...props }: R
 }
 
 function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  return <a {...props} rel="noreferrer" target="_blank" />;
+  const { openWorkspacePath } = useContext(RunContext);
+  const workspacePath = typeof props.href === "string"
+    ? workspacePathFromHref(props.href)
+    : null;
+  return (
+    <a
+      {...props}
+      rel={workspacePath ? undefined : "noreferrer"}
+      target={workspacePath ? undefined : "_blank"}
+      onClick={(e) => {
+        props.onClick?.(e);
+        if (e.defaultPrevented || !workspacePath) return;
+        e.preventDefault();
+        openWorkspacePath(workspacePath);
+      }}
+    />
+  );
 }
 
 const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
@@ -3061,9 +3273,11 @@ interface InputReplyPayload {
 }
 
 const RunContext = createContext<{
+  openWorkspacePath: (path: string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
 }>({
+  openWorkspacePath: () => {},
   sendInputReply: async () => {},
   user: null,
 });
@@ -3148,6 +3362,13 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
+          {variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
+          <QuoteButton text={text} style="fence" onQuote={onQuote} />
+          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+          <CopyButton text={text} />
+          <LinkButton sessionId={sessionId} entryId={entry.id} />
           <div className="run-msg-timings">
             {showDuration && durationMs != null && (
               <span className="run-msg-timing-row">
@@ -3161,13 +3382,6 @@ function RunMessageBubble({
               </span>
             )}
           </div>
-          {variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          <QuoteButton text={text} style="fence" onQuote={onQuote} />
-          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
-          <CopyButton text={text} />
-          <LinkButton sessionId={sessionId} entryId={entry.id} />
         </div>
       </div>
       {variant === "user" && (() => {
@@ -4199,6 +4413,7 @@ function ChatPane({
     "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
   } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  const pendingComposerFocusRef = useRef(false);
   // transcriptScrollEl is a state-backed reference to the <main> element.
   // Virtuoso's customScrollParent expects the actual DOM node, and React
   // refs populate AFTER render — passing `ref.current` would give Virtuoso
@@ -5063,6 +5278,16 @@ function ChatPane({
     }
     // Trigger content fetch by setting a placeholder.
     setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setFileDraft(null);
+    setFileSaveError(null);
+  }
+
+  function openWorkspacePath(path: string) {
+    const normalized = normalizeWorkspacePath(path);
+    if (!normalized) return;
+    setActiveTab("files");
+    setFilesPath(parentFilesPath(normalized));
+    setSelectedFile({ path: normalized, size: 0, truncated: false, text: "", binary: false });
     setFileDraft(null);
     setFileSaveError(null);
   }
@@ -5953,6 +6178,58 @@ function ChatPane({
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
+  const focusComposerTextarea = useCallback((): boolean => {
+    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current) return;
+    pendingComposerFocusRef.current = false;
+    requestAnimationFrame(() => {
+      focusComposerTextarea();
+    });
+  }, [activeTab, focusComposerTextarea, visible]);
+
+  // `/` is a "return to prompt" shortcut when focus is anywhere except the
+  // composer textarea. Once the textarea is focused, `/` keeps its normal
+  // typing behavior and opens the slash-command palette through input events.
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.key !== "/" ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.isComposing
+      ) {
+        return;
+      }
+      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (textarea && e.target === textarea) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      pendingComposerFocusRef.current = true;
+      if (activeTab !== "chat") {
+        setActiveTab("chat");
+        return;
+      }
+      pendingComposerFocusRef.current = false;
+      requestAnimationFrame(() => {
+        focusComposerTextarea();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [activeTab, focusComposerTextarea, visible]);
+
   // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
   // cloudcli's keyboard shortcut hint.
   useEffect(() => {
@@ -6033,7 +6310,7 @@ function ChatPane({
   };
 
   return (
-    <RunContext.Provider value={{ sendInputReply, user }}>
+    <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
@@ -7152,22 +7429,18 @@ function ChatPane({
                 )}
                 {testState?.active && testState.url ? (
                   <a
-                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${testActionActive ? " is-active" : ""}`}
                     href={testState.url}
                     target="_blank"
                     rel="noreferrer"
                     onClick={() => {
                       void markTestState({ ...testState, active: true });
                     }}
-                    aria-label="Open test environment"
-                    title="Open test environment"
+                    aria-label="Open test environment in new tab"
+                    title="Open test environment in new tab"
                   >
                     <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    {testState.slot_index != null && (
-                      <span className="run-command-menu-count">
-                        {testState.slot_index}
-                      </span>
-                    )}
+                    <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
                   </a>
                 ) : (
                   <button
@@ -7179,11 +7452,6 @@ function ChatPane({
                     title={testState?.active ? "Test skill is active" : "Use the test skill"}
                   >
                     <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    {testState?.slot_index != null && (
-                      <span className="run-command-menu-count">
-                        {testState.slot_index}
-                      </span>
-                    )}
                   </button>
                 )}
                 <button
@@ -7513,8 +7781,6 @@ export function App() {
   const activitySnapshotAppliedRef = useRef(false);
   const lastSoundedOrderKeyRef = useRef<Map<string, string>>(new Map());
   const activeRef = useRef<string | null>(null);
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
-  const [interactionMenuOpen, setInteractionMenuOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [defaultInteraction, setDefaultInteraction] =
     useState<SessionInteraction>(readDefaultInteraction);
@@ -7558,23 +7824,19 @@ export function App() {
       });
   }, []);
 
-  // Close any open dropdown on an outside click. Menus use a `data-menu`
+  // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
   useEffect(() => {
-    if (!modeMenuOpen && !profileMenuOpen && !interactionMenuOpen) return;
+    if (!profileMenuOpen) return;
     const close = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       const root = target?.closest("[data-menu]") as HTMLElement | null;
-      if (root?.dataset.menu === "mode") return;
       if (root?.dataset.menu === "profile") return;
-      if (root?.dataset.menu === "interaction") return;
-      setModeMenuOpen(false);
       setProfileMenuOpen(false);
-      setInteractionMenuOpen(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
-  }, [modeMenuOpen, profileMenuOpen, interactionMenuOpen]);
+  }, [profileMenuOpen]);
 
   // refresh re-fetches the per-owner session snapshot from
   // /api/sessions and hydrates BOTH the sessions list and the
@@ -7734,7 +7996,7 @@ export function App() {
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
-    if (!user || user.installation_id == null || !context) return;
+    if (!user || requiresGitHubOnboarding(user) || !context) return;
     glimmungLaunchContext.current = null;
 
     async function launch() {
@@ -8089,7 +8351,6 @@ export function App() {
       writeDefaultSessionMode(mode);
     }
     setBusy(true);
-    setModeMenuOpen(false);
     setSidebarCollapsed(false);
     setError(null);
     try {
@@ -8178,6 +8439,7 @@ export function App() {
           ...(request.effort ? { effort: request.effort } : {}),
           permission_mode: request.permissionMode,
           follow_up: false,
+          origin_session_id: request.sourceSession.id,
         }),
       });
       if (!turnRes.ok) {
@@ -8211,7 +8473,7 @@ export function App() {
       const res = await authedFetch(`/api/sessions/${id}`);
       if (res.ok) {
         const session: Session = normalizeSession(await res.json());
-        if (session.status === "Active") return session;
+        if (session.status === "Active" || session.ready_at) return session;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
     }
@@ -8230,7 +8492,6 @@ export function App() {
     }
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
-    setModeMenuOpen(false);
   }
 
   function selectDefaultInteraction(interaction: SessionInteraction) {
@@ -8240,7 +8501,6 @@ export function App() {
     writeDefaultInteraction(interaction);
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
-    setInteractionMenuOpen(false);
   }
 
   async function renameSession(id: string, nextName: string | null) {
@@ -8343,16 +8603,25 @@ export function App() {
     return <DemoLanding />;
   }
 
-  // Admins bypass the wall: the host installation of the GitHub App covers
-  // their MCP-github access (see CLAUDE.md "Two GitHub Apps live alongside
-  // each other") so they don't need to install on their own GitHub account
-  // before the orchestrator becomes useful.
-  if (user.installation_id == null && user.role !== "admin") {
+  // Admins and service principals bypass the wall: admins use the host
+  // installation for MCP-github, and service principals are platform-internal
+  // callers used by test automation and session-pod handoffs.
+  if (requiresGitHubOnboarding(user)) {
     return <OnboardingWall user={user} onLogout={logout} />;
   }
 
   const selectedProvider = MODE_MENU_ICONS[defaultSessionMode];
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
+  const homeModelOptions =
+    selectedProvider === "anthropic"
+      ? CLAUDE_MODELS
+      : selectedProvider === "codex"
+        ? CODEX_MODELS
+        : [];
+  const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
+  const selectedHomeModelId =
+    selectedProvider === "anthropic" ? runPrefs.claudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+  const selectedHomeEffortId = runPrefs.claudeEffort;
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -8367,126 +8636,33 @@ export function App() {
           >
             <span className="sidebar-home-label">tank-operator</span>
           </button>
-          <button
-            className="sidebar-collapse"
-            onClick={() => setSidebarCollapsed((v) => !v)}
-            title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-            aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-            aria-pressed={sidebarCollapsed}
-          >
-            <IconPanelToggle collapsed={sidebarCollapsed} />
-          </button>
-        </div>
-
-        <div className="sidebar-section">
-          <div className="new-row new-row-launcher" data-menu="mode">
+          <div className="sidebar-brand-actions">
             <button
-              className={`new-row-provider-toggle${modeMenuOpen ? " is-open" : ""}`}
-              onClick={() => setModeMenuOpen((v) => !v)}
-              disabled={busy}
-              aria-label="choose provider"
-              aria-expanded={modeMenuOpen}
+              className="sidebar-collapse"
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+              aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+              aria-pressed={sidebarCollapsed}
             >
-              <span className="new-row-provider-slot">
-                <ProviderIcon
-                  provider={selectedProvider}
-                  className="new-row-provider-icon"
-                />
-              </span>
-              <IconChevronDown className="new-row-provider-chevron" />
+              <IconPanelToggle collapsed={sidebarCollapsed} />
             </button>
-            <div className="new-row-interaction-container" data-menu="interaction">
-              <button
-                className={`new-row-interaction-toggle${interactionMenuOpen ? " is-open" : ""}`}
-                onClick={() => setInteractionMenuOpen((v) => !v)}
-                disabled={busy}
-                aria-label={`choose interaction: ${INTERACTION_LABELS[defaultInteraction]}`}
-                aria-expanded={interactionMenuOpen}
-                title={INTERACTION_LABELS[defaultInteraction]}
-              >
-                <InteractionIcon
-                  interaction={defaultInteraction}
-                  className="new-row-interaction-icon"
-                />
-              </button>
-              {interactionMenuOpen && (
-                <ul className="dropdown dropdown-interaction" role="menu">
-                  {INTERACTION_OPTIONS.map((interaction) => (
-                    <li key={interaction}>
-                      <button
-                        onClick={() => selectDefaultInteraction(interaction)}
-                        disabled={
-                          busy ||
-                          PROVIDER_INTERACTION_MODES[MODE_MENU_ICONS[defaultSessionMode]][interaction] == null
-                        }
-                        aria-label={`Use ${INTERACTION_LABELS[interaction]} interaction`}
-                        title={INTERACTION_LABELS[interaction]}
-                        className={defaultInteraction === interaction ? "is-selected" : undefined}
-                      >
-                        <InteractionIcon
-                          interaction={interaction}
-                          className="dropdown-interaction-icon"
-                        />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="new-row-action-group" role="group" aria-label="session actions">
-              <button
-                className="new-row-action"
-                onClick={() => createSession(defaultSessionMode)}
-                disabled={busy}
-                aria-label={`Start ${MODE_LABELS[defaultSessionMode]} session`}
-              >
-                <span className="row-icon"><IconPlus /></span>
-              </button>
-              <button
-                className="new-row-action"
-                onClick={() => createSession("api_key")}
-                disabled={busy}
-                aria-label="Start API key session"
-              >
-                <IconKey className="new-row-action-icon" />
-              </button>
-              <button
-                className="new-row-action"
-                onClick={() => createSession(configMode)}
-                disabled={busy}
-                aria-label={`Start ${MODE_LABELS[configMode]} session`}
-              >
-                <IconWrench className="new-row-action-icon" />
-              </button>
-            </div>
-            {modeMenuOpen && (
-              <ul className="dropdown dropdown-provider" role="menu">
-                {PROVIDERS.map((provider) => {
-                  const mode = defaultModeFor(provider, defaultInteraction);
-                  return (
-                    <li key={provider}>
-                    <button
-                      onClick={() => setDefaultProvider(provider)}
-                      disabled={busy}
-                      aria-label={MODE_LABELS[mode]}
-                    >
-                      <ProviderIcon
-                        provider={provider}
-                        className="dropdown-provider-icon"
-                      />
-                    </button>
-                  </li>
-                  );
-                })}
-              </ul>
-            )}
           </div>
         </div>
 
         {error && <pre className="error">{error}</pre>}
 
         <div className="sidebar-list">
-          <div className="sidebar-section-label">Sessions</div>
+          <div className="sidebar-list-head">
+            <div className="sidebar-section-label">Sessions</div>
+            <button
+              className="sidebar-new-session"
+              onClick={goHome}
+              aria-label="New session"
+              title="new session"
+            >
+              <span className="row-icon"><IconPlus /></span>
+            </button>
+          </div>
           <ul className="sessions">
             {sessions.length === 0 && <li className="sessions-empty">no sessions</li>}
             {sessions.map((s) => {
@@ -8633,8 +8809,8 @@ export function App() {
             <div className="home-inner">
               <section className="home-hero" aria-labelledby="home-title">
                 <div>
-                  <h2 id="home-title" className="home-title">tank-operator</h2>
-                  <p className="home-sub">Launchers, credentials, and active sessions</p>
+                  <h2 id="home-title" className="home-title">New session</h2>
+                  <p className="home-sub">Choose the runtime shape, then start a pod</p>
                 </div>
                 <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
               </section>
@@ -8642,9 +8818,98 @@ export function App() {
               <div className="home-grid">
                 <section className="home-panel home-panel-start" aria-labelledby="home-start-title">
                   <div className="home-panel-head">
-                    <h3 id="home-start-title">Start</h3>
-                    <span className="home-panel-meta">{INTERACTION_LABELS[defaultInteraction]}</span>
+                    <h3 id="home-start-title">Configuration</h3>
+                    <span className="home-panel-meta">{MODE_LABELS[defaultSessionMode]}</span>
                   </div>
+                  <div className="home-choice-grid" role="group" aria-label="provider">
+                    {PROVIDERS.map((provider) => {
+                      const mode = defaultModeFor(provider, defaultInteraction);
+                      const selected = provider === selectedProvider;
+                      return (
+                        <button
+                          key={provider}
+                          className={`home-choice${selected ? " is-selected" : ""}`}
+                          onClick={() => setDefaultProvider(provider)}
+                          disabled={busy}
+                          aria-pressed={selected}
+                          title={MODE_LABELS[mode]}
+                        >
+                          <ProviderIcon provider={provider} className="home-choice-icon" />
+                          <span>{provider === "anthropic" ? "Claude" : provider === "codex" ? "Codex" : "Pi"}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="home-choice-grid" role="group" aria-label="interaction">
+                    {INTERACTION_OPTIONS.map((interaction) => {
+                      const unavailable =
+                        PROVIDER_INTERACTION_MODES[selectedProvider][interaction] == null;
+                      const selected = defaultInteraction === interaction && !unavailable;
+                      return (
+                        <button
+                          key={interaction}
+                          className={`home-choice${selected ? " is-selected" : ""}`}
+                          onClick={() => selectDefaultInteraction(interaction)}
+                          disabled={busy || unavailable}
+                          aria-pressed={selected}
+                          title={unavailable ? "not available for this provider" : INTERACTION_LABELS[interaction]}
+                        >
+                          <InteractionIcon interaction={interaction} className="home-choice-icon" />
+                          <span>{INTERACTION_LABELS[interaction]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {homeModelApplies && (
+                    <>
+                      <div className="home-panel-head home-panel-subhead">
+                        <h3>Model</h3>
+                        <span className="home-panel-meta">
+                          {selectedProvider === "anthropic"
+                            ? CLAUDE_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
+                            : "account default"}
+                        </span>
+                      </div>
+                      <div className="home-model-list" role="group" aria-label="model">
+                        {homeModelOptions.map((model) => {
+                          const selected = model.id === selectedHomeModelId;
+                          return (
+                            <button
+                              key={model.id}
+                              className={`home-model${selected ? " is-selected" : ""}`}
+                              onClick={() => {
+                                if (selectedProvider === "anthropic") {
+                                  setRunPref("claudeModelId", model.id);
+                                }
+                              }}
+                              aria-pressed={selected}
+                            >
+                              <span className="home-model-title">{model.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {selectedProvider === "anthropic" && (
+                        <div className="home-effort-grid" role="group" aria-label="effort">
+                          {CLAUDE_EFFORTS.map((effort) => {
+                            const selected = effort.id === selectedHomeEffortId;
+                            return (
+                              <button
+                                key={effort.id}
+                                className={`home-model home-effort${selected ? " is-selected" : ""}`}
+                                onClick={() => setRunPref("claudeEffort", effort.id)}
+                                aria-pressed={selected}
+                                title={effort.hint}
+                              >
+                                <span className="home-model-title">{effort.label}</span>
+                                {effort.hint && <span className="home-model-sub">{effort.hint}</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  )}
                   <button
                     className="home-primary-action"
                     onClick={() => createSession(defaultSessionMode)}

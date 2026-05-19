@@ -11,6 +11,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
+	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,13 +71,14 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		ClientNonce    string `json:"client_nonce"`
-		Prompt         string `json:"prompt"`
-		Model          string `json:"model"`
-		Effort         string `json:"effort"`
-		PermissionMode string `json:"permission_mode"`
-		SkillName      string `json:"skill_name"`
-		FollowUp       bool   `json:"follow_up"`
+		ClientNonce     string `json:"client_nonce"`
+		Prompt          string `json:"prompt"`
+		Model           string `json:"model"`
+		Effort          string `json:"effort"`
+		PermissionMode  string `json:"permission_mode"`
+		SkillName       string `json:"skill_name"`
+		FollowUp        bool   `json:"follow_up"`
+		OriginSessionID string `json:"origin_session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -84,14 +86,15 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
-		ClientNonce:    body.ClientNonce,
-		RequireNonce:   true,
-		Prompt:         body.Prompt,
-		Model:          body.Model,
-		Effort:         body.Effort,
-		PermissionMode: body.PermissionMode,
-		SkillName:      body.SkillName,
-		FollowUp:       body.FollowUp,
+		ClientNonce:     body.ClientNonce,
+		RequireNonce:    true,
+		Prompt:          body.Prompt,
+		Model:           body.Model,
+		Effort:          body.Effort,
+		PermissionMode:  body.PermissionMode,
+		SkillName:       body.SkillName,
+		FollowUp:        body.FollowUp,
+		OriginSessionID: body.OriginSessionID,
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -117,6 +120,25 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
+
+	// hermes_gui interrupts go through the bridge's StopRun → emits a
+	// turn.interrupt_requested marker; the durable terminal event lands
+	// on the bridge's SSE-tailing goroutine when Hermes acks the stop.
+	// Same "Stop is only complete when the durable terminal arrives"
+	// contract Tank's pod-side runners follow per #532.
+	if sessionmodel.IsNoPodMode(info.Mode) {
+		if s.hermesBridge == nil {
+			writeError(w, http.StatusServiceUnavailable, "hermes bridge not configured")
+			return
+		}
+		if err := s.hermesBridge.StopTurn(r.Context(), sessionID, user.Email, targetTurnID, targetTurnID); err != nil {
+			writeError(w, http.StatusBadGateway, "hermes stop: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
+		return
+	}
+
 	provider, ok := sdkProviderForMode(info.Mode)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "session mode does not support app chat turns")
@@ -197,9 +219,9 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 // Claude Agent SDK's AskUserQuestion zod preprocess. `annotations` is
 // optional `{questionText: {preview?, notes?}}` from the SDK schema.
 type inputReplyRequest struct {
-	ProviderItemID string                                    `json:"provider_item_id"`
-	TimelineID     string                                    `json:"timeline_id"`
-	Answers        map[string][]string                       `json:"answers"`
+	ProviderItemID string                                     `json:"provider_item_id"`
+	TimelineID     string                                     `json:"timeline_id"`
+	Answers        map[string][]string                        `json:"answers"`
 	Annotations    map[string]sessionbus.InputReplyAnnotation `json:"annotations,omitempty"`
 }
 
@@ -248,9 +270,14 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	if sessionmodel.NormalizeSessionMode(info.Mode) != sessionmodel.ClaudeGUIMode {
-		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI sessions")
+	normalizedMode := sessionmodel.NormalizeSessionMode(info.Mode)
+	if normalizedMode != sessionmodel.ClaudeGUIMode && normalizedMode != sessionmodel.CodexAppServerMode {
+		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI and Codex App Server sessions")
 		return
+	}
+	provider := "claude"
+	if normalizedMode == sessionmodel.CodexAppServerMode {
+		provider = "codex"
 	}
 	if s.sessionBus == nil {
 		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
@@ -265,7 +292,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		SessionID:            sessionID,
 		SessionStorageKey:    storageKey,
 		Email:                user.Email,
-		Provider:             "claude",
+		Provider:             provider,
 		Source:               "input-reply",
 		TurnID:               inputReplyTurnID,
 		ClientNonce:          targetTurnID,
@@ -282,7 +309,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 			Email:             user.Email,
 			TurnID:            inputReplyTurnID,
 			ClientNonce:       targetTurnID,
-			Runtime:           "claude",
+			Runtime:           provider,
 			Reason:            "publish_input_reply_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
@@ -382,11 +409,10 @@ type sdkTurnRequest struct {
 	SkillName      string
 	FollowUp       bool
 	// OriginSessionID identifies the sibling tank-operator session that
-	// authored this turn via an MCP handoff. Set only on the
-	// service-principal path (handleInternalSendMessage); the human-typed
-	// browser path leaves it empty. Threaded into UserSubmissionArgs so
-	// the persisted user_message.created event carries it for the
-	// frontend's avatar selection.
+	// authored this turn via an MCP handoff, or the source session for a
+	// browser-created fork. Human-typed browser turns leave it empty.
+	// Threaded into UserSubmissionArgs so the persisted user_message.created
+	// event carries it for the frontend's avatar selection.
 	OriginSessionID string
 }
 
@@ -413,6 +439,26 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	info, err := s.mgr.GetByOwner(ctx, email, sessionID)
 	if err != nil {
 		return nil, http.StatusNotFound, "session not found"
+	}
+
+	// hermes_gui short-circuits the NATS / pod path entirely. The bridge
+	// owns the durable boundary events, the /v1/runs POST, and the
+	// SSE-tailing goroutine that writes translated events into
+	// session_events. See nelsong6/tank-operator#540.
+	if sessionmodel.IsNoPodMode(info.Mode) {
+		if s.hermesBridge == nil {
+			return nil, http.StatusServiceUnavailable, "hermes bridge not configured (HERMES_API_URL / HERMES_API_BEARER missing on the orchestrator)"
+		}
+		result, err := s.hermesBridge.SubmitTurn(ctx, hermes.SubmitArgs{
+			SessionID:   sessionID,
+			Email:       email,
+			ClientNonce: clientNonce,
+			Text:        prompt,
+		})
+		if err != nil {
+			return nil, http.StatusBadGateway, "hermes submit: " + err.Error()
+		}
+		return map[string]string{"turn_id": result.TurnID, "run_id": result.RunID}, http.StatusAccepted, ""
 	}
 
 	provider, ok := sdkProviderForMode(info.Mode)
@@ -543,6 +589,8 @@ func sdkProviderForMode(mode string) (string, bool) {
 	case sessionmodel.ClaudeGUIMode:
 		return "claude", true
 	case sessionmodel.CodexGUIMode:
+		return "codex", true
+	case sessionmodel.CodexAppServerMode:
 		return "codex", true
 	default:
 		return "", false

@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-dac4f1f7bd5031f2318417d167679cf40959f652abb729f870982f02249412a8"
+  tag: "app-117867c91be41402994b75c1c76c658c8482a50d6ebba35d6dfff59be0fec87d"
   pullPolicy: IfNotPresent
 
 testEnv:
@@ -48,9 +48,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-46ef299854371fada1eedc24fea450e3495f63fe56f55e41c98ae9b3ff057adc
-  codexImage: romainecr.azurecr.io/codex-container:codex-36c8ef2b715d25bfc9a054b91f2ec94f91e8c3c1f554bc454f5588a88b328dac
-  piImage: romainecr.azurecr.io/pi-container:pi-688956a782c67c6cdc05fe9c921af7858faac3fd6fffde37f7603b8c9d0b3b09
+  image: romainecr.azurecr.io/claude-container:claude-2499f1f5a269c5f9087ed447a2f848f9d922661778a4dae78d3e8f06319ac857
+  codexImage: romainecr.azurecr.io/codex-container:codex-5203ed06da20657d27228d776b77b5b377bf1e9de2713441e81d58eb005525c9
+  piImage: romainecr.azurecr.io/pi-container:pi-6727b65fb565d1a81a9dc7e3d1b93241733e3a0f80d2756d18d6fee632003327
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -196,6 +196,22 @@ superAdmins:
 # hostname used to build session URLs returned by internal endpoints.
 internalApi:
   tankUiHost: "https://tank.romaine.life"
+
+# Hermes Agent integration. Tank's orchestrator drives Hermes' OpenAI-compatible
+# API server for `hermes_gui` session turns (cluster-internal, no public
+# ingress on Hermes' side). Inbound auth on Hermes' end is a service-JWT
+# verified at its auth-proxy sidecar (nelsong6/hermes#13). We mint a
+# fresh JWT here by exchanging the orchestrator's projected SA token at
+# auth.romaine.life/api/auth/exchange/k8s — same IdP every other
+# service-to-service call in the system uses. See
+# nelsong6/tank-operator#540 + nelsong6/auth#42.
+hermes:
+  apiURL: "http://hermes-api.hermes.svc.cluster.local:8642"
+  # auth.romaine.life service-exchange endpoint. Audience pinned on the
+  # projected SA token below. Configured separately from apiURL because
+  # the exchange URL is identity-provider-scoped, while apiURL is the
+  # downstream API target — they could conceivably move independently.
+  authRomaineExchangeURL: "https://auth.romaine.life/api/auth/exchange/k8s"
 
 externalSecret:
   storeName: romaine-kv

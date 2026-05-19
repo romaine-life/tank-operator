@@ -203,6 +203,16 @@ EOF
 COPY --from=codex-runner-build /src/codex-runner/dist /opt/codex-runner/dist
 COPY --from=codex-runner-build /src/codex-runner/node_modules /opt/codex-runner/node_modules
 COPY --from=codex-runner-build /src/codex-runner/package.json /opt/codex-runner/package.json
+RUN cat > /app/codex-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/codex-runner-launch-binary.sh
+#!/bin/sh
+if [ ! -e /var/run/codex-runner-hot/node_modules ]; then
+  ln -sfn /opt/codex-runner/node_modules /var/run/codex-runner-hot/node_modules
+fi
+if [ -f /var/run/codex-runner-hot/dist/index.js ]; then
+  exec node /var/run/codex-runner-hot/dist/index.js
+fi
+exec node /opt/codex-runner/dist/index.js
+EOF
 
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and
 # launcher scripts are mounted from the chart-managed tank-session-config

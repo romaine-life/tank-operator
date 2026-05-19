@@ -161,6 +161,41 @@ var (
 	)
 )
 
+// --- Hermes bridge metrics (hermes_gui session mode) ---
+//
+// Counters for the external-backend bridge driving Hermes Agent's
+// /v1/runs API. Cardinality is bounded: outcome is a closed string set
+// (created / failed_to_create), terminal is closed (completed / failed /
+// interrupted / command_failed / lost), reason is closed (provider /
+// stream / decode / unhandled_type). No per-session / per-user labels.
+// See nelsong6/tank-operator#540's observability section.
+
+var (
+	hermesRunTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_run_total",
+			Help: "POST /v1/runs attempts from the hermes bridge, by outcome.",
+		},
+		[]string{"outcome"},
+	)
+
+	hermesRunTerminalTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_run_terminal_total",
+			Help: "Terminal outcomes observed on a hermes run's SSE stream.",
+		},
+		[]string{"terminal"},
+	)
+
+	hermesTranslatorErrorTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_translator_error_total",
+			Help: "Hermes event shapes the translator could not map. Non-zero is a Hermes-upstream schema-drift signal.",
+		},
+		[]string{"reason"},
+	)
+)
+
 // --- Service-principal (role=service) request metrics ---
 
 // serviceRoleRequestsTotal counts every call to a service-principal-gated

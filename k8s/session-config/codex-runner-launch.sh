@@ -50,6 +50,12 @@ sandbox_mode = "danger-full-access"
 approval_policy = "never"
 cli_auth_credentials_store = "file"
 
+# Tank GUI sessions run Codex through codex exec, which uses Codex's
+# default mode. Keep the ask-user tool available there so Codex GUI can
+# surface request_user_input instead of falling back to a text-only prompt.
+[features]
+default_mode_request_user_input = true
+
 ${mcp_block}
 EOF
 
@@ -69,7 +75,11 @@ if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
   sh /opt/tank/session-config/install-tank-skills.sh || true
 fi
 
-# Hand off to the runner. Node is PID 1 from this point; SIGTERM goes
-# straight to it, which propagates AbortSignal to any in-flight codex
-# turn via TurnOptions.signal.
+# Hand off to the runner. In test-slot mode (orchestrator sets
+# GLIMMUNG_SUPERVISOR_CHILD on the container), exec tank-supervisor as
+# PID 1 so the codex-runner code can be hot-swapped via SIGHUP re-exec.
+# In production, GLIMMUNG_SUPERVISOR_CHILD is unset and node runs as PID 1.
+if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
+  exec /app/tank-supervisor
+fi
 exec node /opt/codex-runner/dist/index.js

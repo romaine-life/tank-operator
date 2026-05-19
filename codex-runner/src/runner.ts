@@ -37,6 +37,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import {
   stampTankEvent,
+  itemEvent,
   turnEvent,
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
@@ -57,6 +58,12 @@ import {
   recordTurnStart,
   recordTurnTerminal,
 } from "./metrics.js";
+import {
+  CodexAppServerTransport,
+  type AppServerUserInputQuestion,
+  type AppServerUserInputRequest,
+  type AppServerUserInputResponse,
+} from "./appServerTransport.js";
 
 // INTERRUPT_BUFFER_MS bounds how long an interrupt_turn record can sit
 // in orphanInterrupts waiting for a matching submit_turn before the
@@ -215,6 +222,30 @@ interface OrphanInterrupt {
   orphanTimer: ReturnType<typeof setTimeout>;
 }
 
+type PendingUserInput = {
+  request: AppServerUserInputRequest;
+  turn: AcceptedTurn;
+  resolve: (response: AppServerUserInputResponse) => void;
+  reject: (err: Error) => void;
+};
+
+function inputReplyTargetProviderItemID(record: SessionCommandRecord): string {
+  return String(record.target_provider_item_id ?? "").trim();
+}
+
+function inputReplyAnswers(record: SessionCommandRecord): Record<string, string[]> {
+  const raw = record.answers;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string[]> = {};
+  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
+    const trimmedQuestion = String(question).trim();
+    if (!trimmedQuestion || !Array.isArray(value)) continue;
+    const cleaned = value.map((label) => String(label ?? "").trim()).filter(Boolean);
+    if (cleaned.length > 0) out[trimmedQuestion] = cleaned;
+  }
+  return out;
+}
+
 export function interruptTargetMatchesTurn(
   targetTurnID: string,
   turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
@@ -249,6 +280,7 @@ export class Runner {
     commandRecord?: SessionCommandRecord;
   }>();
   private readonly codex: Codex;
+  private readonly appServerTransport: CodexAppServerTransport | null;
   private readonly codexAdapter: CodexTankEventAdapter;
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
@@ -270,6 +302,7 @@ export class Runner {
   // path picks it up.
   private readonly orphanInterrupts: OrphanInterrupt[] = [];
   private readonly pendingCommandTurnTargets = new Set<string>();
+  private readonly pendingUserInputs = new Map<string, PendingUserInput>();
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
@@ -281,6 +314,14 @@ export class Runner {
     // auth and codex-api-proxy injects/rotates the real token centrally.
     // No CODEX_API_KEY needed — subscription auth path.
     this.codex = new Codex();
+    this.appServerTransport =
+      process.env.CODEX_RUNNER_TRANSPORT === "app-server"
+        ? new CodexAppServerTransport({
+            cwd: cfg.workspace,
+            onRequestUserInput: (request, requestSignal) =>
+              this.requestAppServerUserInput(request, requestSignal),
+          })
+        : null;
     this.codexAdapter = new CodexTankEventAdapter(cfg);
   }
 
@@ -304,16 +345,18 @@ export class Runner {
     };
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      this.thread = this.codex.startThread({
-        workingDirectory: this.cfg.workspace,
-        // /workspace inside session pods isn't a git repo (and may never be —
-        // users mount projects ad hoc). Without this flag the CLI exits with
-        // "Not inside a trusted directory and --skip-git-repo-check was not
-        // specified."
-        skipGitRepoCheck: true,
-        sandboxMode: "danger-full-access",
-        approvalPolicy: "never",
-      });
+      if (!this.appServerTransport) {
+        this.thread = this.codex.startThread({
+          workingDirectory: this.cfg.workspace,
+          // /workspace inside session pods isn't a git repo (and may never be —
+          // users mount projects ad hoc). Without this flag the CLI exits with
+          // "Not inside a trusted directory and --skip-git-repo-check was not
+          // specified."
+          skipGitRepoCheck: true,
+          sandboxMode: "danger-full-access",
+          approvalPolicy: "never",
+        });
+      }
       while (!signal.aborted) {
         const next = await this.userQueue.next();
         if (next.done) break;
@@ -388,10 +431,12 @@ export class Runner {
         signal.addEventListener("abort", onOuterAbort, { once: true });
 
         try {
-          const streamed = await this.thread.runStreamed(input, {
-            signal: this.currentAbort.signal,
-          });
-          for await (const event of streamed.events) {
+          const events = this.appServerTransport
+            ? this.appServerTransport.runTurn(input, this.currentAbort.signal)
+            : (await this.thread!.runStreamed(input, {
+                signal: this.currentAbort.signal,
+              })).events;
+          for await (const event of events) {
             if (signal.aborted) break;
             // Codex provider events are adapter inputs, not bus content. The
             // adapter converts them into Tank conversation events; only those
@@ -506,6 +551,7 @@ export class Runner {
       signal.removeEventListener("abort", onAbort);
       stopConsumer();
       stopControl();
+      await this.appServerTransport?.stop();
       this.userQueue.close();
     }
   }
@@ -515,10 +561,10 @@ export class Runner {
     void this.commandBus
       .startCommandConsumer(async (record) => {
         if (isInputReplyCommand(record)) {
-          commandsConsumedTotal.labels("input_reply", "unsupported").inc();
+          commandsConsumedTotal.labels("input_reply", "wrong_plane").inc();
           await this.commandBus.markFailed(
             record,
-            new Error("input replies are not supported by codex"),
+            new Error("input replies must be delivered on the codex control plane"),
           );
           return;
         }
@@ -553,6 +599,104 @@ export class Runner {
     };
   }
 
+  private async requestAppServerUserInput(
+    request: AppServerUserInputRequest,
+    signal?: AbortSignal,
+  ): Promise<AppServerUserInputResponse> {
+    const turn = this.currentTurn;
+    if (!turn) throw new Error("request_user_input arrived with no active Codex turn");
+    await dispatch(
+      this.sink,
+      itemEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        source: "codex",
+        type: "tool.approval_requested",
+        providerItemID: request.providerItemID,
+        actor: "tool",
+        providerEventID: request.requestID,
+        payload: {
+          kind: "needs_input",
+          title: "Ask user question",
+          name: "AskUserQuestion",
+          input: { questions: request.questions },
+        },
+      }),
+    );
+    return new Promise<AppServerUserInputResponse>((resolve, reject) => {
+      const pending: PendingUserInput = { request, turn, resolve, reject };
+      this.pendingUserInputs.set(request.providerItemID, pending);
+      const onAbort = () => {
+        if (this.pendingUserInputs.get(request.providerItemID) !== pending) return;
+        this.pendingUserInputs.delete(request.providerItemID);
+        reject(new Error("turn interrupted"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
+    if (!this.appServerTransport) {
+      commandsConsumedTotal.labels("input_reply", "unsupported").inc();
+      await this.commandBus.markFailed(
+        record,
+        new Error("input replies are only supported by codex app-server transport"),
+      );
+      return;
+    }
+    commandsConsumedTotal.labels("input_reply", "accepted").inc();
+    const providerItemID = inputReplyTargetProviderItemID(record);
+    const answers = inputReplyAnswers(record);
+    if (!providerItemID || Object.keys(answers).length === 0) {
+      commandsConsumedTotal.labels("input_reply", "invalid").inc();
+      await this.commandBus.markFailed(record, new Error("input reply missing target or answers"));
+      return;
+    }
+    const pending = this.pendingUserInputs.get(providerItemID);
+    if (!pending) {
+      commandsConsumedTotal.labels("input_reply", "not_waiting_for_input").inc();
+      await this.commandBus.markFailed(record, new Error("input reply target is not waiting for input"));
+      return;
+    }
+    if (
+      !this.currentTurn ||
+      !interruptTargetMatchesTurn(record.target_turn_id || record.client_nonce || "", pending.turn)
+    ) {
+      commandsConsumedTotal.labels("input_reply", "no_active_turn").inc();
+      await this.commandBus.markFailed(record, new Error("input reply target turn is not active"));
+      return;
+    }
+    this.pendingUserInputs.delete(providerItemID);
+    const answersByQuestionID: Record<string, { answers: string[] }> = {};
+    for (const question of pending.request.questions) {
+      const labels = answers[question.question] ?? answers[question.id];
+      if (labels && labels.length > 0) {
+        answersByQuestionID[question.id] = { answers: labels };
+      }
+    }
+    pending.resolve({ answers: answersByQuestionID });
+    const dispatched = await dispatch(
+      this.sink,
+      itemEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: pending.turn.turnID,
+        source: "codex",
+        type: "tool.approval_resolved",
+        providerItemID,
+        actor: "tool",
+        providerEventID: pending.request.requestID,
+        payload: {
+          kind: "needs_input",
+          resolved: true,
+          answers,
+        },
+      }),
+    );
+    if (dispatched) {
+      await this.commandBus.markCompleted(record);
+    }
+  }
+
   // startControlConsumer drives the control-plane JetStream consumer.
   // Today: interrupt_turn (and only interrupt_turn — codex doesn't
   // support input_reply). Future control signals land here as added
@@ -561,6 +705,10 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
+        if (isInputReplyCommand(record)) {
+          await this.acceptInputReply(record);
+          return;
+        }
         if (isInterruptCommand(record)) {
           commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
           await this.acceptInterrupt(record);

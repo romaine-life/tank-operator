@@ -83,13 +83,6 @@ func me(verifier *auth.Verifier, store profileGetter) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"sub":             user.Sub,
-			"email":           user.Email,
-			"name":            user.Name,
-			"avatar_url":      auth.GravatarURL(user.Email, 64),
-			"github_login":    profile.GitHubLogin,
-			"installation_id": profile.InstallationID,
-		})
+		writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, profile))
 	}
 }

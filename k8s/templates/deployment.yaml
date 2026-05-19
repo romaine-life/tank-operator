@@ -174,6 +174,21 @@ spec:
               value: {{ .Values.jwt.kvVault | quote }}
             - name: JWT_KV_KEY_NAME
               value: {{ .Values.jwt.kvKeyName | quote }}
+            # Hermes Agent's OpenAI-compatible API server (cluster-internal).
+            # Tank's backend posts to /v1/runs for `hermes_gui` session
+            # turns (no pod), tails the SSE stream, and translates events
+            # into Tank's conversation schema. Inbound auth on Hermes'
+            # end is a service-JWT verified at its auth-proxy sidecar
+            # (nelsong6/hermes#13); the orchestrator mints a fresh JWT
+            # by exchanging the audience-pinned projected SA token
+            # mounted at /var/run/secrets/auth.romaine.life/token. See
+            # nelsong6/tank-operator#540 + nelsong6/auth#42.
+            - name: HERMES_API_URL
+              value: {{ .Values.hermes.apiURL | quote }}
+            - name: HERMES_AUTH_ROMAINE_EXCHANGE_URL
+              value: {{ .Values.hermes.authRomaineExchangeURL | quote }}
+            - name: HERMES_AUTH_ROMAINE_SA_TOKEN_PATH
+              value: "/var/run/secrets/auth.romaine.life/token"
           envFrom:
             - secretRef:
                 name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}
@@ -186,6 +201,18 @@ spec:
               readOnly: true
             - name: app-config
               mountPath: /etc/tank-operator/app-config
+              readOnly: true
+            # Audience-pinned projected SA token used by the hermes
+            # bridge to exchange at auth.romaine.life/api/auth/exchange/k8s
+            # for a role=service JWT. Distinct file path (and distinct
+            # audience) from the default cluster-API SA token at
+            # /var/run/secrets/kubernetes.io/serviceaccount/token so a
+            # stolen token cannot be replayed across services. Same
+            # shape Tank session pods use for their mcp-auth-proxy
+            # sidecar (see backend-go/internal/sessionmodel/sessionmodel.go).
+            # See nelsong6/tank-operator#540 + nelsong6/auth#42.
+            - name: auth-romaine-sa-token
+              mountPath: /var/run/secrets/auth.romaine.life
               readOnly: true
             {{- if and .Values.testEnv.enabled .Values.hotSwapBackend.enabled }}
             - name: hot-backend
@@ -244,6 +271,22 @@ spec:
         - name: app-config
           configMap:
             name: {{ include "tank-operator.appConfigMap" . }}
+        # Projected SA token bound to the orchestrator pod, audience
+        # https://auth.romaine.life. auth.romaine.life's
+        # /api/auth/exchange/k8s validates the audience claim against
+        # its K8S_SERVICE_AUDIENCE config and exchanges this token for
+        # a role=service JWT (per nelsong6/auth#42 the orchestrator
+        # is admitted as a `pod-stable` consumer with slug
+        # `tank-operator`). The hermes bridge in
+        # backend-go/internal/hermes/ reads this file fresh per
+        # exchange and caches the resulting JWT until ~30s before exp.
+        - name: auth-romaine-sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: "https://auth.romaine.life"
+                  expirationSeconds: 3600
+                  path: token
         {{- if and .Values.testEnv.enabled .Values.staticOverride.enabled }}
         - name: static-override
           emptyDir: {}
