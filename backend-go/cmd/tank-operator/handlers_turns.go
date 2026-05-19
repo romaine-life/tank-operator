@@ -477,8 +477,11 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	// runner trusts whatever lands on the wire and has no rejection path
 	// of its own, so the choke point is here. Empty is allowed and means
 	// "use the runner's baked-in default" — that mapping is preserved.
-	effort := validateEffort(strings.TrimSpace(req.Effort))
+	effort := validateEffort(provider, strings.TrimSpace(req.Effort))
 	if strings.TrimSpace(req.Effort) != "" && effort == "" {
+		if provider == "codex" {
+			return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
+		}
 		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
 	}
 	if info.PodName == nil {
