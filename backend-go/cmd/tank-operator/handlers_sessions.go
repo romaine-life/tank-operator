@@ -63,8 +63,9 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
+	owner := user.OwnerEmail()
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
-		Owner: user.Email,
+		Owner: owner,
 		Mode:  body.Mode,
 		Repos: repos,
 	})
@@ -324,7 +325,8 @@ func (s *appServer) handleDeleteSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "missing session_id")
 		return
 	}
-	if err := s.mgr.Delete(r.Context(), user.Email, sessionID); err != nil {
+	owner := user.OwnerEmail()
+	if err := s.mgr.Delete(r.Context(), owner, sessionID); err != nil {
 		switch {
 		case errors.Is(err, sessions.ErrNotFound):
 			writeError(w, http.StatusNotFound, "session not found")
@@ -368,7 +370,8 @@ func (s *appServer) handleTouchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Verify ownership.
-	if _, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID); err != nil {
+	owner := user.OwnerEmail()
+	if _, err := s.mgr.GetByOwner(r.Context(), owner, sessionID); err != nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -394,7 +397,8 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetName(r.Context(), user.Email, sessionID, body.Name)
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetName(r.Context(), owner, sessionID, body.Name)
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, info)
@@ -421,7 +425,8 @@ func (s *appServer) handleSetTestState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetTestState(r.Context(), user.Email, sessionID, body.Active, body.SlotIndex, body.URL)
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetTestState(r.Context(), owner, sessionID, body.Active, body.SlotIndex, body.URL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -443,7 +448,8 @@ func (s *appServer) handleSetRolloutState(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetRolloutState(r.Context(), user.Email, sessionID, body.Active)
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetRolloutState(r.Context(), owner, sessionID, body.Active)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -459,13 +465,14 @@ func (s *appServer) handleSaveCredentials(w http.ResponseWriter, r *http.Request
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 
-	info, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	info, podName, herr := s.resolveSessionPod(r.Context(), owner, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
 	}
 
-	doSaveCredentials(w, r, s, user.Email, info.Mode, podName)
+	doSaveCredentials(w, r, s, owner, info.Mode, podName)
 }
 
 // handlePasteImage saves a pasted image into /workspace/.tank-pastes/{session_id}/.
@@ -476,7 +483,8 @@ func (s *appServer) handlePasteImage(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	_, podName, herr := s.resolveSessionPod(r.Context(), owner, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -527,7 +535,8 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
+	owner := user.OwnerEmail()
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
 		Prompt:         body.Prompt,
 		Model:          body.Model,
 		PermissionMode: body.PermissionMode,
@@ -561,7 +570,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		return
 	}
 
-	email := user.Email
+	email := user.OwnerEmail()
 	if body.CallerEmail != "" {
 		email = body.CallerEmail
 	}

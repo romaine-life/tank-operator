@@ -41,6 +41,18 @@ func (s *appServer) authorizeSessionRead(
 	if sessionID == "" {
 		return sessions.Info{}, http.StatusBadRequest, errors.New("missing session_id")
 	}
+
+	if user.Role != auth.RoleAdmin {
+		owner := user.OwnerEmail()
+		registered, regErr := s.mgr.GetRegisteredByOwner(ctx, owner, sessionID)
+		if regErr == nil {
+			return registered, http.StatusOK, nil
+		}
+		if regErr != nil && !errors.Is(regErr, sessions.ErrNotFound) {
+			return sessions.Info{}, http.StatusInternalServerError, regErr
+		}
+	}
+
 	info, err := s.mgr.GetByID(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, sessions.ErrNotFound) {

@@ -94,6 +94,67 @@ func adminTestServer(t *testing.T) *appServer {
 	}
 }
 
+type testSessionRegistry struct {
+	records map[string]map[string]sessionmodel.SessionRecord
+}
+
+func newTestSessionRegistry(records ...sessionmodel.SessionRecord) *testSessionRegistry {
+	out := &testSessionRegistry{records: map[string]map[string]sessionmodel.SessionRecord{}}
+	for _, record := range records {
+		owner := record.Email
+		if owner == "" {
+			continue
+		}
+		if out.records[owner] == nil {
+			out.records[owner] = map[string]sessionmodel.SessionRecord{}
+		}
+		out.records[owner][record.ID] = record
+	}
+	return out
+}
+
+func (r *testSessionRegistry) List(_ context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
+	var out []sessionmodel.SessionRecord
+	for _, record := range r.records[owner] {
+		out = append(out, record)
+	}
+	return out, nil
+}
+
+func (r *testSessionRegistry) Get(_ context.Context, owner, sessionID string) (sessionmodel.SessionRecord, bool, error) {
+	records := r.records[owner]
+	if records == nil {
+		return sessionmodel.SessionRecord{}, false, nil
+	}
+	record, ok := records[sessionID]
+	return record, ok, nil
+}
+
+func (r *testSessionRegistry) NextSessionID(_ context.Context) (string, error) {
+	return "", nil
+}
+
+func (r *testSessionRegistry) Upsert(_ context.Context, record sessionmodel.SessionRecord) error {
+	if r.records == nil {
+		r.records = map[string]map[string]sessionmodel.SessionRecord{}
+	}
+	owner := record.Email
+	if r.records[owner] == nil {
+		r.records[owner] = map[string]sessionmodel.SessionRecord{}
+	}
+	r.records[owner][record.ID] = record
+	return nil
+}
+
+func (r *testSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *testSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
+func (r *testSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
+
 func TestAuthorizeSessionRead_AdminCanReadAnyOwner(t *testing.T) {
 	app := adminTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63", nil)
@@ -154,6 +215,43 @@ func TestAuthorizeSessionRead_ServiceActorOwnSessionAllowed(t *testing.T) {
 	}
 	if info.Owner != otherUser {
 		t.Fatalf("service actor read returned owner=%q, want %q", info.Owner, otherUser)
+	}
+}
+
+func TestAuthorizeSessionRead_UsesRegistryWhenPodIsGone(t *testing.T) {
+	reg := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: true,
+		Status:  "Failed",
+	})
+	app := &appServer{
+		verifier: auth.NewVerifier(testJWT(t)),
+		mgr: sessions.NewManager(
+			fake.NewSimpleClientset(),
+			nil,
+			sessionmodel.SessionsNamespace,
+			reg,
+			nil,
+			sessions.ManagerOptions{},
+		),
+		sessionEvents: store.StubSessionEventStore{},
+		readStates:    store.NewStubConversationReadStateStore(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/71/timeline", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(
+		t,
+		"pod-94@service.tank.romaine.life",
+		otherUser,
+	))
+	user, _ := app.verifier.CurrentUser(req)
+	info, status, err := app.authorizeSessionRead(req.Context(), user, "71")
+	if err != nil {
+		t.Fatalf("registry-backed service read: err=%v status=%d", err, status)
+	}
+	if info.Owner != otherUser || info.ID != "71" || info.Status != "Failed" {
+		t.Fatalf("registry-backed info = %+v, want id=71 owner=%s status=Failed", info, otherUser)
 	}
 }
 
