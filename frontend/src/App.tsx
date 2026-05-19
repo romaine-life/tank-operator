@@ -2010,6 +2010,65 @@ function parentFilesPath(path: string): string {
   return idx <= 0 ? "" : path.slice(0, idx);
 }
 
+const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
+  "/api/",
+  "/assets/",
+  "/_",
+  "/manifest.webmanifest",
+];
+
+function normalizeWorkspacePath(rawPath: string): string | null {
+  let path = rawPath.trim();
+  if (!path) return null;
+  path = path.split(/[?#]/, 1)[0] ?? "";
+  try {
+    path = decodeURI(path);
+  } catch {
+    // Keep the raw path if it is not valid percent-encoded text.
+  }
+  path = path.replace(/\\/g, "/");
+  if (path === "/workspace" || path === "workspace") return "";
+  path = path.replace(/^\/workspace\/?/, "");
+  path = path.replace(/^workspace\/+/, "");
+  path = path.replace(/^\/+/, "");
+  path = path.replace(/^\.\//, "");
+  if (!path || path === ".") return null;
+  if (path.split("/").some((seg) => seg === "..")) return null;
+  return path;
+}
+
+function workspacePathFromHref(href: string | undefined): string | null {
+  if (!href) return null;
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  if (trimmed.startsWith("file://")) {
+    try {
+      const url = new URL(trimmed);
+      return normalizeWorkspacePath(url.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
+    return null;
+  }
+
+  if (trimmed.startsWith("/")) {
+    if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+      return null;
+    }
+    return normalizeWorkspacePath(trimmed);
+  }
+
+  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
+    return normalizeWorkspacePath(trimmed);
+  }
+
+  return null;
+}
+
 function humanFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
@@ -2984,15 +3043,13 @@ function linkifyUrls(text: string): ReactNode[] {
     if (start > lastIndex) parts.push(text.slice(lastIndex, start));
     const { href, trailing } = splitTrailingUrlPunctuation(rawUrl);
     parts.push(
-      <a
+      <RunMarkdownLink
         key={`${start}-${href}`}
         className="run-markdown-code-link"
         href={href}
-        rel="noreferrer"
-        target="_blank"
       >
         {href}
-      </a>,
+      </RunMarkdownLink>,
     );
     if (trailing) parts.push(trailing);
     lastIndex = start + rawUrl.length;
@@ -3033,7 +3090,23 @@ function RunMarkdownInlineCode({ children, className, node: _node, ...props }: R
 }
 
 function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  return <a {...props} rel="noreferrer" target="_blank" />;
+  const { openWorkspacePath } = useContext(RunContext);
+  const workspacePath = typeof props.href === "string"
+    ? workspacePathFromHref(props.href)
+    : null;
+  return (
+    <a
+      {...props}
+      rel={workspacePath ? undefined : "noreferrer"}
+      target={workspacePath ? undefined : "_blank"}
+      onClick={(e) => {
+        props.onClick?.(e);
+        if (e.defaultPrevented || !workspacePath) return;
+        e.preventDefault();
+        openWorkspacePath(workspacePath);
+      }}
+    />
+  );
 }
 
 const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
@@ -3061,9 +3134,11 @@ interface InputReplyPayload {
 }
 
 const RunContext = createContext<{
+  openWorkspacePath: (path: string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
 }>({
+  openWorkspacePath: () => {},
   sendInputReply: async () => {},
   user: null,
 });
@@ -5017,6 +5092,16 @@ function ChatPane({
     setFileSaveError(null);
   }
 
+  function openWorkspacePath(path: string) {
+    const normalized = normalizeWorkspacePath(path);
+    if (!normalized) return;
+    setActiveTab("files");
+    setFilesPath(parentFilesPath(normalized));
+    setSelectedFile({ path: normalized, size: 0, truncated: false, text: "", binary: false });
+    setFileDraft(null);
+    setFileSaveError(null);
+  }
+
   async function uploadAttachment(file: File) {
     const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const previewUrl = file.type.startsWith("image/")
@@ -6035,7 +6120,7 @@ function ChatPane({
   };
 
   return (
-    <RunContext.Provider value={{ sendInputReply, user }}>
+    <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
     <section className="run-panel">
       <header className="run-header">
         <div className="run-header-title">
