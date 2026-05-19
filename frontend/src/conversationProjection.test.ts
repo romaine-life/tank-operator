@@ -195,6 +195,31 @@ test("projects canonical tool lifecycle and active tool state", () => {
   }
 });
 
+test("projects completed result_failed items as warned tools", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "turn.started", { source: "codex" }),
+      ev("2", "item.completed", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "tool-test",
+        payload: {
+          kind: "command_execution",
+          title: "npm test",
+          output: "1 failed",
+          outcome: { kind: "result_failed", reason: "exit_code", code: 1 },
+        },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.entries[0]?.kind, "tool");
+  if (projection.entries[0]?.kind === "tool") {
+    assert.equal(projection.entries[0].toolStatus, "warned");
+    assert.equal(projection.entries[0].toolOutput, "1 failed");
+  }
+});
+
 test("projects active client nonce for resumed running turn", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

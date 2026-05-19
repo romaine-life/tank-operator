@@ -316,6 +316,50 @@ test("item.failed mid-turn does NOT flip runStatus or set failed", () => {
   assert.equal(failedItem?.status, "failed");
 });
 
+test("completed item with result_failed outcome warns without failing the session", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "codex" }),
+    ev("2", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-warn",
+      payload: {
+        kind: "command_execution",
+        title: "npm test",
+        outcome: { kind: "result_failed", reason: "exit_code", code: 1 },
+      },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.failed, false);
+  assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "warned");
+});
+
+test("tool.approval_resolved preserves warned status from result_failed outcome", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "tool.approval_requested", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-question",
+      payload: { kind: "needs_input" },
+    }),
+    ev("3", "tool.approval_resolved", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "tool-question",
+      payload: {
+        kind: "needs_input",
+        resolved: true,
+        outcome: { kind: "result_failed", reason: "claude_tool_result_is_error" },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.find((item) => item.id === "tool-question")?.status, "warned");
+});
+
 test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "claude" }),

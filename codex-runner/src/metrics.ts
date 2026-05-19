@@ -38,6 +38,13 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+export const itemOutcomeTotal = new Counter({
+  name: "tank_runner_item_outcome_total",
+  help: "Provider item outcomes emitted into the Tank conversation ledger.",
+  labelNames: ["outcome", "reason"],
+  registers: [registry],
+});
+
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
 // command this runner accepts. Sibling of the agent-runner counter
 // shipped with #535 (PR 1 of #532); same labels and same four-outcome

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
 import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { itemOutcomeTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
 // shape consumed by this adapter. Kept loose because the adapter has to
@@ -164,11 +165,15 @@ export function canonicalEventsForClaudeMessage(
               block: item,
             });
       const failed = item.is_error === true;
+      const outcome = failed
+        ? { kind: "result_failed", reason: "claude_tool_result_is_error" }
+        : { kind: "ok" };
+      itemOutcomeTotal.labels(outcome.kind, failed ? "claude_tool_result_is_error" : "none").inc();
       const completed = itemEvent({
         sessionID: cfg.sessionId,
         turnID: turn.turnID,
         source: "claude",
-        type: failed ? "item.failed" : "item.completed",
+        type: "item.completed",
         providerItemID,
         actor: "tool",
         providerEventID: providerID,
@@ -176,6 +181,7 @@ export function canonicalEventsForClaudeMessage(
           kind: "tool_result",
           output: item.content,
           is_error: failed,
+          outcome,
         },
       });
       if (!needsInputProviderItemIDs.has(providerItemID)) return [completed];
@@ -186,6 +192,7 @@ export function canonicalEventsForClaudeMessage(
         kind: "needs_input",
         resolved: true,
         is_error: failed,
+        outcome,
       };
       if (resolved && Object.keys(resolved.answers).length > 0) {
         approvalPayload.answers = resolved.answers;

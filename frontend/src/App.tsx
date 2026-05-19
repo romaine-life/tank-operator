@@ -2123,6 +2123,9 @@ function normalizeToolState(status: string | undefined): string {
   if (normalized === "done" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
+  if (normalized === "warned" || normalized === "warning" || normalized === "result_failed") {
+    return "warned";
+  }
   return normalized;
 }
 
@@ -4017,12 +4020,16 @@ function RunToolGroup({
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
+  const warnedCount = entries.filter((e) => normalizeToolState(e.toolStatus) === "warned").length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
     summaryParts.push(`${runningCount} running`);
   }
   if (errorCount > 0) {
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
+  }
+  if (warnedCount > 0) {
+    summaryParts.push(`${warnedCount} warning${warnedCount === 1 ? "" : "s"}`);
   }
   const summary = summaryParts.join(" · ");
   return (

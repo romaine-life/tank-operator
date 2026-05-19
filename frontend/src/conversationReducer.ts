@@ -9,7 +9,7 @@ export type ConversationRunStatus =
   | "stopped"
   | "error";
 
-export type ConversationItemStatus = "started" | "completed" | "failed";
+export type ConversationItemStatus = "started" | "completed" | "warned" | "failed";
 
 export interface ConversationMessage {
   id: string;
@@ -167,7 +167,7 @@ export function conversationReducer(
       return upsertItem(
         { ...next, activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId },
         event,
-        "completed",
+        completedItemStatus(event),
       );
     case "item.failed":
       // item.failed marks ONE tool call as errored — it does NOT change
@@ -207,7 +207,7 @@ export function conversationReducer(
           needsInput: false,
         },
         event,
-        "completed",
+        completedItemStatus(event),
       );
   }
 }
@@ -327,6 +327,12 @@ function defaultItemKind(event: TankConversationEvent): string {
 function stringPayload(event: TankConversationEvent, key: string): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {
+  const outcome = event.payload?.outcome;
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return "completed";
+  return (outcome as { kind?: unknown }).kind === "result_failed" ? "warned" : "completed";
 }
 
 // stringTopLevel reads a top-level (envelope) string field from a Tank event.

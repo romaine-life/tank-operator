@@ -128,6 +128,70 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS session_events_created_at
 		ON session_events (created_at)`,
 
+	// Normalize historical item outcomes after #561 split item-scoped
+	// failures from session failure. Tool results that completed with a bad
+	// provider result now stay item.completed and carry payload.outcome;
+	// item.failed is reserved for adapter/provider execution failures.
+	`UPDATE session_events
+		SET event_type = 'item.completed',
+		    payload = jsonb_set(
+		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
+		      '{payload,outcome}',
+		      '{"kind":"result_failed","reason":"claude_tool_result_is_error"}'::jsonb,
+		      true
+		    )
+		WHERE event_type = 'item.failed'
+		  AND payload->>'source' = 'claude'
+		  AND payload->'payload'->>'kind' = 'tool_result'
+		  AND payload->'payload'->>'is_error' = 'true'`,
+	`UPDATE session_events
+		SET event_type = 'item.completed',
+		    payload = jsonb_set(
+		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
+		      '{payload,outcome}',
+		      '{"kind":"ok"}'::jsonb,
+		      true
+		    )
+		WHERE event_type = 'item.failed'
+		  AND payload->>'source' = 'codex'
+		  AND payload->'payload'->>'kind' = 'mcp_tool_call'
+		  AND jsonb_typeof(payload->'payload'->'error') = 'null'
+		  AND payload->'payload'->'raw_item'->>'status' = 'completed'`,
+	`UPDATE session_events
+		SET event_type = 'item.completed',
+		    payload = jsonb_set(
+		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
+		      '{payload,outcome}',
+		      '{"kind":"result_failed","reason":"codex_item_status_failed"}'::jsonb,
+		      true
+		    )
+		WHERE event_type = 'item.failed'
+		  AND payload->>'source' = 'codex'
+		  AND payload->'payload'->>'kind' = 'mcp_tool_call'
+		  AND jsonb_typeof(payload->'payload'->'error') = 'null'
+		  AND payload->'payload'->'raw_item'->>'status' = 'failed'`,
+	`UPDATE session_events
+		SET payload = jsonb_set(
+		      jsonb_set(
+		        payload,
+		        '{payload,outcome}',
+		        jsonb_build_object(
+		          'kind', 'result_failed',
+		          'reason', 'exit_code',
+		          'code', (payload->'payload'->'raw_item'->>'exit_code')::int
+		        ),
+		        true
+		      ),
+		      '{payload,exit_code}',
+		      to_jsonb((payload->'payload'->'raw_item'->>'exit_code')::int),
+		      true
+		    )
+		WHERE event_type = 'item.completed'
+		  AND payload->>'source' = 'codex'
+		  AND payload->'payload'->'outcome' IS NULL
+		  AND payload->'payload'->'raw_item'->>'exit_code' ~ '^-?[0-9]+$'
+		  AND (payload->'payload'->'raw_item'->>'exit_code')::int <> 0`,
+
 	// `session_counters` — monotonic session-id allocator, one row per scope.
 	// Replaces the Cosmos `session-counter[:scope]` document the previous
 	// store kept under a sentinel email. The atomic INCREMENT-AND-RETURN

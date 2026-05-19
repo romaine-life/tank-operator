@@ -329,7 +329,45 @@
         "payload": {
           "kind": "command_execution",
           "title": "npm test",
-          "error": "exit code 1"
+          "error": "provider process failed before a result was available",
+          "outcome": {
+            "kind": "execution_failed",
+            "reason": "provider_item_error"
+          }
+        }
+      }
+    },
+    {
+      "name": "item result failed",
+      "event": {
+        "event_id": "turn_contract:item.completed:toolu-test:provider-item-3",
+        "order_key": "order-0012b",
+        "sequence": 120,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "timeline_id": "toolu-test",
+        "parent_id": "turn_contract",
+        "actor": "tool",
+        "source": "codex",
+        "type": "item.completed",
+        "created_at": "2026-05-12T00:00:11.500Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex",
+          "provider_event_id": "provider-item-3"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "command_execution",
+          "title": "npm test",
+          "text": "1 test failed",
+          "exit_code": 1,
+          "outcome": {
+            "kind": "result_failed",
+            "reason": "exit_code",
+            "code": 1
+          }
         }
       }
     },

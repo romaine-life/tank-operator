@@ -42,19 +42,19 @@ const (
 type EventType string
 
 const (
-	EventUserMessageCreated      EventType = "user_message.created"
-	EventTurnSubmitted           EventType = "turn.submitted"
-	EventTurnStarted             EventType = "turn.started"
-	EventTurnCompleted           EventType = "turn.completed"
-	EventTurnFailed              EventType = "turn.failed"
-	EventTurnCommandFailed       EventType = "turn.command_failed"
-	EventTurnInterruptRequested  EventType = "turn.interrupt_requested"
-	EventTurnInterrupted         EventType = "turn.interrupted"
-	EventItemStarted             EventType = "item.started"
-	EventItemCompleted           EventType = "item.completed"
-	EventItemFailed              EventType = "item.failed"
-	EventApprovalRequested       EventType = "tool.approval_requested"
-	EventApprovalResolved        EventType = "tool.approval_resolved"
+	EventUserMessageCreated     EventType = "user_message.created"
+	EventTurnSubmitted          EventType = "turn.submitted"
+	EventTurnStarted            EventType = "turn.started"
+	EventTurnCompleted          EventType = "turn.completed"
+	EventTurnFailed             EventType = "turn.failed"
+	EventTurnCommandFailed      EventType = "turn.command_failed"
+	EventTurnInterruptRequested EventType = "turn.interrupt_requested"
+	EventTurnInterrupted        EventType = "turn.interrupted"
+	EventItemStarted            EventType = "item.started"
+	EventItemCompleted          EventType = "item.completed"
+	EventItemFailed             EventType = "item.failed"
+	EventApprovalRequested      EventType = "tool.approval_requested"
+	EventApprovalResolved       EventType = "tool.approval_resolved"
 )
 
 type ProducerMetadata struct {
@@ -188,7 +188,10 @@ func validateEventMap(event map[string]any) error {
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
 		}
-		return requirePayloadString(event, "kind")
+		if err := requirePayloadString(event, "kind"); err != nil {
+			return err
+		}
+		return validateItemOutcome(event)
 	case EventApprovalRequested, EventApprovalResolved:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
@@ -196,7 +199,10 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorTool {
 			return fmt.Errorf("%s must be actor=tool", eventType)
 		}
-		return requirePayloadString(event, "kind")
+		if err := requirePayloadString(event, "kind"); err != nil {
+			return err
+		}
+		return validateItemOutcome(event)
 	}
 	return nil
 }
@@ -264,6 +270,44 @@ func requirePayload(event map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("payload is required for %s", stringField(event, "type"))
 	}
 	return payload, nil
+}
+
+func validateItemOutcome(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	raw, ok := payload["outcome"]
+	if !ok {
+		return nil
+	}
+	outcome, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("payload.outcome must be an object")
+	}
+	kind := stringField(outcome, "kind")
+	reason := stringField(outcome, "reason")
+	switch kind {
+	case "ok":
+		if reason != "" {
+			return fmt.Errorf("payload.outcome.reason must be absent for ok")
+		}
+		return nil
+	case "result_failed":
+		switch reason {
+		case "claude_tool_result_is_error", "codex_item_status_failed", "exit_code":
+			return nil
+		default:
+			return fmt.Errorf("payload.outcome.reason is required for result_failed")
+		}
+	case "execution_failed":
+		if reason == "provider_item_error" {
+			return nil
+		}
+		return fmt.Errorf("payload.outcome.reason is required for execution_failed")
+	default:
+		return fmt.Errorf("payload.outcome.kind must be ok, result_failed, or execution_failed")
+	}
 }
 
 func stringField(event map[string]any, field string) string {

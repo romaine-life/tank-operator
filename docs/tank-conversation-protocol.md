@@ -250,12 +250,32 @@ Turn transitions:
 7. `turn.interrupted` returns to `stopped`.
 8. `turn.failed` returns to `error`.
 
-`item.*` events update transcript units under a turn. Per-token typewriter
-deltas are intentionally not on the Tank event surface: the `item.delta`
-event type and the `live-only` visibility were retired together once it
-became clear no consumer subscribed to either. Items are snapshotted via
-`item.started` → `item.completed`; if a future live channel for partial
-tokens lands, restore both the event type and the visibility together.
+`item.*` events update transcript units under a turn. The event type is
+the lifecycle/plumbing axis:
+
+- `item.completed`: the provider item reached a durable result.
+- `item.failed`: the provider item failed before a usable result existed
+  (adapter/provider execution failure).
+
+Completed-but-unsuccessful tool results stay `item.completed` and carry
+`payload.outcome`. Supported outcome kinds are:
+
+- `{kind:"ok"}`: normal completion.
+- `{kind:"result_failed", reason:"exit_code" | "claude_tool_result_is_error" | "codex_item_status_failed", code?}`:
+  the tool ran and returned a bad result.
+- `{kind:"execution_failed", reason:"provider_item_error"}`: execution
+  failed; the adapter emits `item.failed`.
+
+The frontend renders `result_failed` items with a warning tone. It does
+not derive session/sidebar failure from item outcomes; only turn-terminal
+failures and pod failure affect session-level error state.
+
+Per-token typewriter deltas are intentionally not on the Tank event
+surface: the `item.delta` event type and the `live-only` visibility were
+retired together once it became clear no consumer subscribed to either.
+Items are snapshotted via `item.started` → `item.completed`; if a future
+live channel for partial tokens lands, restore both the event type and
+the visibility together.
 
 ## Provider Mappings
 
@@ -267,7 +287,7 @@ Claude SDK adapter:
 | First SDK output for a turn | `turn.started` | Current Claude SDK stream does not always expose a clean turn marker; adapter may synthesize this after the durable user message. |
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |
-| `user` tool_result block | `item.completed` or `item.failed` | Completes the matching tool item by `timeline_id`; provider ids remain metadata. |
+| `user` tool_result block | `item.completed` | Completes the matching tool item by `timeline_id`; `is_error=true` maps to `payload.outcome.kind="result_failed"`, not `item.failed`. |
 | `result` success | `turn.completed` | Include usage when present. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |
@@ -281,7 +301,7 @@ Codex SDK adapter:
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | ignored (no Tank event) | Adapter still observes these frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. |
-| `item.completed` message/reasoning/tool | `item.completed` | Map command, file change, MCP, and web search to tool item payloads. |
+| `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
 | `turn.completed` | `turn.completed` | Include usage. |
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |

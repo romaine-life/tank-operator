@@ -169,6 +169,36 @@ test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
   assert.equal(needsInputProviderItemIDs.has("toolu_ask"), false);
 });
 
+test("adapter maps Claude tool_result is_error to completed result_failed outcome", () => {
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "user",
+      uuid: "claude-tool-result-error",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_read",
+            content: "exit 1",
+            is_error: true,
+          },
+        ],
+      },
+    },
+    new Set<string>(),
+  );
+
+  assert.equal(events.length, 1);
+  assertTankEventFixture(events[0]!);
+  assert.equal(events[0]?.type, "item.completed");
+  assert.deepEqual(events[0]?.payload?.outcome, {
+    kind: "result_failed",
+    reason: "claude_tool_result_is_error",
+  });
+});
+
 test("adapter maps Claude result failures and interrupts to terminal turn events", () => {
   const failed = canonicalEventsForClaudeMessage(
     cfg(),

@@ -105,12 +105,15 @@ function isValidEventByType(event) {
     case "item.started":
     case "item.completed":
     case "item.failed":
-      return hasStrings(event, ["turn_id", "timeline_id"]) && isStringPayload(event.payload, "kind");
+      return hasStrings(event, ["turn_id", "timeline_id"]) &&
+        isStringPayload(event.payload, "kind") &&
+        isItemOutcome(event.payload.outcome);
     case "tool.approval_requested":
     case "tool.approval_resolved":
       return event.actor === "tool" &&
         hasStrings(event, ["turn_id", "timeline_id"]) &&
-        isStringPayload(event.payload, "kind");
+        isStringPayload(event.payload, "kind") &&
+        isItemOutcome(event.payload.outcome);
     default:
       return false;
   }
@@ -142,6 +145,16 @@ function isStringPayload(payload, key) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const value = payload[key];
   return typeof value === "string" && value.length > 0;
+}
+
+function isItemOutcome(outcome) {
+  if (outcome === undefined) return true;
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return false;
+  if (outcome.kind === "ok") return outcome.reason === undefined;
+  if (outcome.kind === "result_failed") {
+    return ["claude_tool_result_is_error", "codex_item_status_failed", "exit_code"].includes(outcome.reason);
+  }
+  return outcome.kind === "execution_failed" && outcome.reason === "provider_item_error";
 }
 
 function isSkillName(value) {
