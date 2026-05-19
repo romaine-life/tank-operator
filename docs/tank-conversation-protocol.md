@@ -374,6 +374,11 @@ directly; unauthenticated callers get the contract plus auth instructions,
 while authenticated callers get the resolved timeline payload inline. The
 payload is the same durable `/timeline` response: `target_timeline_id`,
 `target_order_key`, and a bounded `events` window around the persisted cursor.
+The JSON contract carries an `agent_recipe` array with copyable curl commands:
+send the projected service-account token to auth.romaine.life as
+`Authorization: Bearer <token>`, exchange the returned `auth_jwt` at this Tank
+origin, fetch the `json_url`, and page older context with
+`before_order_key=<prev_order_key>` when `found_oldest=false`.
 
 Durable turn interruption:
 

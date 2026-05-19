@@ -104,6 +104,26 @@ func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
 	if !strings.Contains(timelineURL, "/api/sessions/93/timeline") || !strings.Contains(timelineURL, "message=turn_1%3Aitem%3Amsg_1") {
 		t.Fatalf("timeline_url = %q", timelineURL)
 	}
+	if got, _ := api["page_before_url"].(string); !strings.Contains(got, "before_order_key=%3Cprev_order_key%3E") {
+		t.Fatalf("page_before_url = %q", got)
+	}
+	recipe, ok := body["agent_recipe"].([]any)
+	if !ok || len(recipe) == 0 {
+		t.Fatalf("agent_recipe missing: %#v", body["agent_recipe"])
+	}
+	recipeJSON, err := json.Marshal(recipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Authorization: Bearer $(cat /run/secrets/auth.romaine.life/token)",
+		"before_order_key",
+		"do not send it as JSON",
+	} {
+		if !strings.Contains(string(recipeJSON), want) {
+			t.Fatalf("agent_recipe missing %q: %s", want, recipeJSON)
+		}
+	}
 }
 
 func TestTankMessageLinkContentNegotiationDefaultsNonBrowserToJSON(t *testing.T) {
