@@ -2120,70 +2120,23 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
-/* Home composer — pinned chat-style input below the option grid. Pressing
-   Enter here is the "confirm" action that creates the configured session;
-   if there's text in the box and the mode is a chat mode, the text is
-   submitted as the first turn once the pod is ready. */
-.home-composer {
+/* Home/demo variant of the shared chat composer. The composer itself
+   (`run-composer` + friends) is styled inline alongside the run pane; the
+   `-home` modifier only adds the sticky-bottom placement and a soft shadow
+   so the same composer floats above the home grid. Visual parity with the
+   in-session composer is the whole point — the user types here and the
+   same composer keeps going inside the chat. */
+.run-composer-home {
   position: sticky;
   bottom: var(--space-3);
   margin-top: var(--space-2);
-  background: var(--bg-elevated, var(--gray-900));
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-xl, 1rem);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  padding: var(--space-2) var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
 }
 
-.home-composer-textarea {
-  min-height: 3.2rem;
-  max-height: 14rem;
-  resize: none;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-primary);
-  font-family: var(--font-primary);
-  font-size: var(--text-sm);
-  padding: var(--space-1) 0;
-}
-
-.home-composer-footer {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.home-composer-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-}
-
-.home-composer-meta-icon {
-  width: 0.9rem;
-  height: 0.9rem;
-}
-
-.home-composer-hint {
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
-.home-composer-submit {
-  border-radius: var(--radius-md);
-}
-
-.home-composer-submit-icon {
-  width: 1rem;
-  height: 1rem;
+/* Internal wrapper added by the shared <ChatComposer>; keeps `display` out
+   of the way so the PromptInput's own layout owns positioning. */
+.chat-composer-shell {
+  display: contents;
 }
 
 @media (max-width: 900px) {

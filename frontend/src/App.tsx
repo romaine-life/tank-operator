@@ -15,18 +15,11 @@ import {
   type Components as StreamdownComponents,
 } from "streamdown";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import {
-  PromptInput,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-  type PromptInputMessage,
-} from "@/components/ai-elements/prompt-input";
+import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
@@ -70,7 +63,6 @@ import {
   PlusIcon,
   RotateCcwIcon,
   SearchIcon,
-  SendHorizontalIcon,
   SettingsIcon,
   SquareTerminalIcon,
   SquareIcon,
@@ -1394,6 +1386,7 @@ function DemoLanding() {
   const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
+  const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
   const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
@@ -1764,42 +1757,20 @@ function DemoLanding() {
                 </section>
               </div>
 
-              {/* Demo preview of the home chat composer. Reuses the same
-                  PromptInput components as the authenticated home — the only
-                  difference is that submitting on the marketing page
-                  redirects to sign-in instead of creating a session. */}
-              <PromptInput
-                className="home-composer"
+              {/* Demo preview of the chat composer. Same `ChatComposer`
+                  component the authenticated home and the run pane use;
+                  submitting redirects to sign-in instead of creating a
+                  session. */}
+              <ChatComposer
+                className="run-composer-home"
+                placeholder="Sign in to start a session…"
                 onSubmit={() => {
                   startLogin();
                 }}
-              >
-                <PromptInputTextarea
-                  className="home-composer-textarea"
-                  placeholder="Sign in to start a session…"
-                />
-                <PromptInputFooter className="home-composer-footer">
-                  <span className="home-composer-meta">
-                    <ProviderIcon
-                      provider={selectedProvider}
-                      className="home-composer-meta-icon"
-                    />
-                    <span>{MODE_LABELS[selectedMode]}</span>
-                  </span>
-                  <span className="home-composer-hint">
-                    Enter to start · Shift+Enter for new line
-                  </span>
-                  <PromptInputSubmit
-                    className="home-composer-submit"
-                    aria-label="Sign in"
-                  >
-                    <SendHorizontalIcon
-                      className="home-composer-submit-icon"
-                      aria-hidden="true"
-                    />
-                  </PromptInputSubmit>
-                </PromptInputFooter>
-              </PromptInput>
+                permissionMode={demoComposerMode}
+                onPermissionModeChange={setDemoComposerMode}
+                sendByCtrlEnter={false}
+              />
             </div>
           </div>
         ) : (
@@ -2332,47 +2303,9 @@ function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
 }
-type RunComposerMode =
-  | "default"
-  | "acceptEdits"
-  | "auto"
-  | "bypassPermissions"
-  | "plan";
-
-interface PermissionModeInfo {
-  label: string;
-  desc: string;
-  /** Color of the dot rendered next to the pill label. */
-  dotColor: string;
-}
-
-const PERMISSION_MODE_INFO: Record<RunComposerMode, PermissionModeInfo> = {
-  default: {
-    label: "Default Mode",
-    desc: "Ask before edits, agree to commands",
-    dotColor: "#34d399",
-  },
-  acceptEdits: {
-    label: "Accept Edits",
-    desc: "Auto-approve file changes",
-    dotColor: "#fbbf24",
-  },
-  auto: {
-    label: "Auto",
-    desc: "Auto-approve safe operations",
-    dotColor: "#60a5fa",
-  },
-  bypassPermissions: {
-    label: "Bypass Permissions",
-    desc: "Run without permission prompts",
-    dotColor: "#f87171",
-  },
-  plan: {
-    label: "Plan Mode",
-    desc: "Plan before execution",
-    dotColor: "#a78bfa",
-  },
-};
+// RunComposerMode + PERMISSION_MODE_INFO have moved to ./ChatComposer.tsx
+// alongside the shared composer component. They are re-imported above so
+// existing call sites in this file continue to compile unchanged.
 
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
@@ -7287,16 +7220,22 @@ function ChatPane({
               </div>
             </div>
           )}
-          <PromptInput onSubmit={handleSubmit} className="run-composer">
-            <PromptInputTextarea
-              className="run-composer-textarea"
-              placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
-            />
-            <PromptInputFooter className="run-composer-footer">
-              <PromptInputTools className="run-composer-tools">
-                {/* Image-attach button — opens the hidden file input.
-                    Drag-and-drop and clipboard paste are wired
-                    separately on the composer wrap. */}
+          <ChatComposer
+            placeholder={`Type / for commands, @ for files, or ask ${modeLabel} anything...`}
+            onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
+            permissionMode={composerMode}
+            onPermissionModeChange={setComposerMode}
+            sendByCtrlEnter={runPrefs.sendByCtrlEnter}
+            hintSuffix=" · / for slash commands"
+            disabled={!ready}
+            submitStatus={submitStatus}
+            onStop={cancelRun}
+            isStopping={runStatus === "stopping"}
+            onTextChange={setComposerText}
+            toolButtons={
+              <>
+                {/* Image-attach — opens the hidden file input. Drag-and-drop
+                    and clipboard paste are wired on the composer wrap. */}
                 <button
                   type="button"
                   className="run-composer-icon-btn"
@@ -7305,72 +7244,6 @@ function ChatPane({
                 >
                   <ImageIcon className="run-composer-icon" aria-hidden="true" />
                 </button>
-                {/* Permission-mode dropdown — five cloudcli-equivalent
-                    modes. Backend wire-through: `acceptEdits`/`auto`/
-                    `bypassPermissions` map to `claude -p
-                    --dangerously-skip-permissions`; `plan` is rendered
-                    as a prompt prefix because Claude does not expose a
-                    dedicated plan flag today; `default` is the
-                    no-flag baseline. */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="run-mode-pill run-mode-pill-button"
-                      aria-label="Permission mode"
-                    >
-                      <span
-                        className="run-mode-dot"
-                        aria-hidden="true"
-                        style={{ background: PERMISSION_MODE_INFO[composerMode].dotColor }}
-                      />
-                      {PERMISSION_MODE_INFO[composerMode].label}
-                      <ChevronDownIcon
-                        className="run-mode-chevron"
-                        aria-hidden="true"
-                      />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    side="top"
-                    align="start"
-                    className="run-mode-menu"
-                  >
-                    {(Object.keys(PERMISSION_MODE_INFO) as RunComposerMode[]).map(
-                      (modeKey) => {
-                        const info = PERMISSION_MODE_INFO[modeKey];
-                        return (
-                          <DropdownMenuItem
-                            key={modeKey}
-                            onSelect={() => setComposerMode(modeKey)}
-                          >
-                            <span className="run-mode-menu-row">
-                              <span className="run-mode-menu-meta">
-                                <span
-                                  className="run-mode-menu-dot"
-                                  aria-hidden="true"
-                                  style={{ background: info.dotColor }}
-                                />
-                                <span className="run-mode-menu-label">
-                                  {info.label}
-                                </span>
-                                <span className="run-mode-menu-desc">
-                                  {info.desc}
-                                </span>
-                              </span>
-                              {composerMode === modeKey && (
-                                <CheckIcon
-                                  className="run-mode-menu-check"
-                                  aria-hidden="true"
-                                />
-                              )}
-                            </span>
-                          </DropdownMenuItem>
-                        );
-                      },
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
                 <span
                   className="run-usage-ring"
                   aria-label={`Context usage: ${usagePct.toFixed(1)}%`}
@@ -7478,46 +7351,9 @@ function ChatPane({
                     </span>
                   )}
                 </button>
-              </PromptInputTools>
-              <span
-                className={`run-composer-hint${composerText.length > 0 ? " run-composer-hint-faded" : ""}`}
-              >
-                {runPrefs.sendByCtrlEnter
-                  ? "⌘/Ctrl+Enter to send · Enter for new line · / for slash commands"
-                  : "Enter to send · Shift+Enter for new line · / for slash commands"}
-              </span>
-              {composerText.length > 0 && (
-                <button
-                  type="button"
-                  className="run-composer-clear"
-                  aria-label="Clear input"
-                  onMouseDown={(e) => {
-                    // mousedown so the button doesn't blur the textarea
-                    // before the click reaches it (which would also
-                    // close the slash palette via blur).
-                    e.preventDefault();
-                    setComposerValue("");
-                  }}
-                >
-                  <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-                </button>
-              )}
-              <PromptInputSubmit
-                className="run-submit-btn"
-                status={submitStatus}
-                onStop={cancelRun}
-                isStopping={runStatus === "stopping"}
-                disabled={!ready}
-              >
-                {/* When idle, force the cloudcli-style paper-plane icon.
-                    When streaming/error, fall through to AI Elements'
-                    built-in Spinner/Stop/X (children is undefined). */}
-                {submitStatus ? undefined : (
-                  <SendHorizontalIcon className="run-submit-icon" aria-hidden="true" />
-                )}
-              </PromptInputSubmit>
-            </PromptInputFooter>
-          </PromptInput>
+              </>
+            }
+          />
         </footer>
       )}
     </section>
@@ -7777,6 +7613,12 @@ export function App() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  // The home composer's permission-mode pick. Carries into the first turn
+  // when the user types a prompt and presses Enter from the home screen,
+  // so the choice they made on the launch surface persists into the live
+  // session's run pane (which uses its own per-session composerMode state).
+  const [homeComposerMode, setHomeComposerMode] =
+    useState<RunComposerMode>("default");
   // When non-null, the chat pane for this session id auto-opens its title
   // rename input on its next render. Used to make freshly-created sessions
   // land directly in the chat pane with the title editor focused, and to
@@ -8336,6 +8178,7 @@ export function App() {
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
+    initialPermissionMode: RunComposerMode = "default",
   ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
@@ -8395,7 +8238,7 @@ export function App() {
               prompt: seedPrompt,
               model,
               ...(effort ? { effort } : {}),
-              permission_mode: "default",
+              permission_mode: initialPermissionMode,
               follow_up: false,
             }),
           });
@@ -9027,50 +8870,35 @@ export function App() {
                 </section>
               </div>
 
-              {/* Chat-style composer. Enter is "confirm": create a session
-                  using the current configuration and (for chat modes) submit
-                  the typed text as the first turn once the pod is ready.
-                  For non-chat modes — terminal sessions, config-only modes —
-                  the text is ignored and pressing Enter behaves the same as
-                  clicking the Configuration panel's launch button. */}
-              <PromptInput
-                className="home-composer"
-                onSubmit={(message) => {
-                  const text = message.text.trim();
-                  void createSession(defaultSessionMode, text || undefined);
+              {/* Chat-style composer. Same `ChatComposer` the run pane uses
+                  inside an active session — only the `toolButtons` slot is
+                  empty here because the session-bound features (image
+                  attach, usage ring, rollout/test, slash, MCP) aren't
+                  meaningful before a pod exists. Enter is "confirm": create
+                  a session with the current configuration and the
+                  composer's permission mode, then (for chat modes only)
+                  submit the typed text as the first turn once the pod is
+                  ready. */}
+              <ChatComposer
+                className="run-composer-home"
+                placeholder={
+                  CHAT_MODES.has(defaultSessionMode)
+                    ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
+                    : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
+                }
+                onSubmit={({ text, permissionMode }) => {
+                  const trimmed = text.trim();
+                  void createSession(
+                    defaultSessionMode,
+                    trimmed || undefined,
+                    permissionMode,
+                  );
                 }}
-              >
-                <PromptInputTextarea
-                  className="home-composer-textarea"
-                  placeholder={
-                    CHAT_MODES.has(defaultSessionMode)
-                      ? `Ask ${MODE_LABELS[defaultSessionMode]} anything to start a session...`
-                      : `Press Enter to start ${MODE_LABELS[defaultSessionMode]}...`
-                  }
-                  disabled={busy}
-                />
-                <PromptInputFooter className="home-composer-footer">
-                  <span className="home-composer-meta">
-                    <ProviderIcon
-                      provider={selectedProvider}
-                      className="home-composer-meta-icon"
-                    />
-                    <span>{MODE_LABELS[defaultSessionMode]}</span>
-                  </span>
-                  <span className="home-composer-hint">
-                    Enter to start · Shift+Enter for new line
-                  </span>
-                  <PromptInputSubmit
-                    className="home-composer-submit"
-                    disabled={busy}
-                  >
-                    <SendHorizontalIcon
-                      className="home-composer-submit-icon"
-                      aria-hidden="true"
-                    />
-                  </PromptInputSubmit>
-                </PromptInputFooter>
-              </PromptInput>
+                permissionMode={homeComposerMode}
+                onPermissionModeChange={setHomeComposerMode}
+                sendByCtrlEnter={false}
+                disabled={busy}
+              />
             </div>
           </div>
         ) : (
