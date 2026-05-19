@@ -7954,6 +7954,16 @@ export function App() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
+  // Stage 2: All-repos lazy-load state. Sourced from /api/github/repos,
+  // which proxies to mcp-github via an on-behalf-of token mint. The
+  // picker calls onLoadAllRepos on first open; this state is the
+  // result. Refreshed after a successful session create so just-used
+  // repos float in the list next time the splash opens.
+  const [allRepos, setAllRepos] = useState<{
+    status: "idle" | "loading" | "ready" | "error";
+    repos: string[];
+    error?: string | null;
+  }>({ status: "idle", repos: [] });
   // When non-null, the chat pane for this session id auto-opens its title
   // rename input on its next render. Used to make freshly-created sessions
   // land directly in the chat pane with the title editor focused, and to
@@ -8003,6 +8013,50 @@ export function App() {
       }
     } catch {
       // Picker still works without the Recent section.
+    }
+  }, []);
+
+  // Stage 2: fetch the full installation repo list. Lazy-loaded on
+  // first picker open and refreshed after a successful session create
+  // so just-installed repos appear in the list next time.
+  //
+  // The endpoint mints an on-behalf-of service JWT (auth.romaine.life
+  // PR #43) and proxies to mcp-github; failures here become a
+  // user-visible "Couldn't load your repos" line in the picker rather
+  // than a silent empty list — the user can still type owner/name and
+  // click Add to use an exact slug.
+  const loadAllRepos = useCallback(async (): Promise<void> => {
+    setAllRepos((prev) =>
+      prev.status === "ready" ? prev : { status: "loading", repos: [] },
+    );
+    try {
+      const res = await authedFetch("/api/github/repos");
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch {
+          // Keep the status-only detail when response isn't JSON.
+        }
+        setAllRepos({ status: "error", repos: [], error: detail });
+        return;
+      }
+      const body = (await res.json()) as {
+        repos?: Array<{ full_name?: string } & Record<string, unknown>>;
+      };
+      const slugs = Array.isArray(body.repos)
+        ? body.repos
+            .map((r) => String(r.full_name ?? ""))
+            .filter((slug) => slug !== "" && isValidRepoSlug(slug))
+        : [];
+      setAllRepos({ status: "ready", repos: slugs });
+    } catch (e) {
+      setAllRepos({
+        status: "error",
+        repos: [],
+        error: String(e instanceof Error ? e.message : e),
+      });
     }
   }, []);
 
@@ -8606,6 +8660,10 @@ export function App() {
         setRepoInput("");
         setRepoError(null);
         void refreshRecentRepos();
+        // Invalidate the All-repos cache too: a user who just
+        // installed our App on a new account expects the new repos
+        // to show up in the picker without a full SPA reload.
+        setAllRepos({ status: "idle", repos: [] });
       }
     } catch (e) {
       setError(String(e));
@@ -9155,6 +9213,8 @@ export function App() {
                     <RepoPicker
                       selected={selectedRepos}
                       recent={recentRepos}
+                      allRepos={allRepos}
+                      onLoadAllRepos={loadAllRepos}
                       open={repoPickerOpen}
                       input={repoInput}
                       error={repoError}

@@ -183,6 +183,13 @@ spec:
             # by exchanging the audience-pinned projected SA token
             # mounted at /var/run/secrets/auth.romaine.life/token. See
             # nelsong6/tank-operator#540 + nelsong6/auth#42.
+            #
+            # The same projected SA token is reused by stage 2 of the
+            # session-repo-selection feature for /api/github/repos:
+            # mcpgithub.Client exchanges it on-behalf-of the SPA caller
+            # at auth.romaine.life (PR #43 added the actor_email
+            # override surface), then calls mcp-github. No additional
+            # mount needed — one volume, two consumers, one audience.
             - name: HERMES_API_URL
               value: {{ .Values.hermes.apiURL | quote }}
             - name: HERMES_AUTH_ROMAINE_EXCHANGE_URL

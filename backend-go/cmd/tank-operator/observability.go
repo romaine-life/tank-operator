@@ -240,6 +240,29 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// GET /api/github/repos counters. The endpoint proxies through to
+// mcp-github via an on-behalf-of token mint; both legs can fail
+// independently, so we surface a simple ok|error outcome label plus
+// the end-to-end latency histogram. The picker's "All repos" section
+// uses both: rate(error) > 0 → red banner on the dashboard; p95
+// > 2s → the SPA's spinner is starting to feel laggy.
+var (
+	githubRepoListRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_github_repo_list_requests_total",
+			Help: "Calls to /api/github/repos, labeled by outcome.",
+		},
+		[]string{"result"},
+	)
+	githubRepoListDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "tank_github_repo_list_duration_seconds",
+			Help:    "End-to-end /api/github/repos latency: orchestrator → auth.romaine.life exchange → mcp-github → orchestrator response.",
+			Buckets: []float64{.05, .1, .25, .5, 1, 2, 5, 10},
+		},
+	)
+)
+
 // --- Admin cross-user read metrics ---
 //
 // Counts every time a role=admin caller reads a session whose Owner !=

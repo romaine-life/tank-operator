@@ -21,6 +21,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
+	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
@@ -85,6 +86,34 @@ func (promHermesRecorder) RunTerminal(terminal string) {
 }
 func (promHermesRecorder) TranslatorError(reason string) {
 	hermesTranslatorErrorTotal.WithLabelValues(reason).Inc()
+}
+
+// buildMCPGitHubClient wires up the mcpgithub client when the
+// orchestrator pod has the auth.romaine.life-audience projected SA
+// token mounted. The same token Hermes already uses today — stage 2
+// reuses the path rather than minting a parallel projected volume.
+// Returns nil (and logs) when the token isn't mounted; the
+// /api/github/repos handler then 503s loudly rather than failing
+// open. Endpoint overrides (MCP_GITHUB_URL,
+// MCP_GITHUB_EXCHANGE_URL) let tests + local dev point at fakes.
+func buildMCPGitHubClient() *mcpgithub.Client {
+	saPath := strings.TrimSpace(os.Getenv("MCP_GITHUB_SA_TOKEN_PATH"))
+	if saPath == "" {
+		saPath = strings.TrimSpace(os.Getenv("HERMES_AUTH_ROMAINE_SA_TOKEN_PATH"))
+	}
+	if saPath == "" {
+		saPath = mcpgithub.DefaultSATokenPath
+	}
+	if _, err := os.Stat(saPath); err != nil {
+		slog.Warn("mcp-github client disabled (auth-romaine projected SA token volume not mounted); /api/github/repos will 503",
+			"path", saPath, "error", err)
+		return nil
+	}
+	return mcpgithub.NewClient(mcpgithub.Options{
+		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", os.Getenv("HERMES_AUTH_ROMAINE_EXCHANGE_URL")),
+		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
+		SATokenPath:  saPath,
+	})
 }
 
 func main() {
@@ -322,6 +351,7 @@ func main() {
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
 		hermesBridge:             buildHermesBridge(sessionEventsStore, sessionScope),
+		mcpGitHub:                buildMCPGitHubClient(),
 	}
 	srv.registerRoutes(mux)
 
