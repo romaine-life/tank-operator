@@ -549,11 +549,13 @@ canonical `tool_result` content from `updatedInput`. The runner acks the
 durable command only after publishing `tool.approval_resolved` whose payload
 mirrors the answers (and annotations, if any) that resolved the call.
 
-Codex does not implement AskUserQuestion: there is no provider tool the
-codex-runner could route the `input_reply` payload into, so the codex-runner
-explicitly fails the command rather than ignoring it. Browser tabs must
-not send AskUserQuestion answers through a runner socket or any other
-non-durable control channel.
+Legacy `codex_gui` runs through `codex exec` and does not implement a usable
+AskUserQuestion path: there is no provider callback the codex-runner can route
+the `input_reply` payload into. `codex_app_server` is the experimental Codex
+GUI transport that uses Codex App Server's `item/tool/requestUserInput`
+server request and resolves it through this same durable `input_reply`
+control command. Browser tabs must not send AskUserQuestion answers through a
+runner socket or any other non-durable control channel.
 
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while
