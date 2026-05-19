@@ -52,13 +52,13 @@ export interface SessionCommand {
   prompt?: string;
   model?: string;
   /**
-   * Extended-thinking effort level, one of "low" | "medium" | "high" |
-   * "xhigh" | "max". Pinned at pod boot from the first submit_turn that
-   * carries a value (subsequent overrides are ignored — the SDK Options
-   * are sealed for the runner's lifetime, see agent-runner/runner.ts).
-   * Allowlist enforcement is upstream in backend-go's middleware; the
-   * runner trusts whatever string lands here and falls back to its
-   * baked-in default when the field is empty.
+   * Reasoning effort level. Claude accepts "low" | "medium" | "high" |
+   * "xhigh" | "max"; Codex accepts "low" | "medium" | "high" | "xhigh".
+   * Pinned from the first submit_turn that carries a value (subsequent
+   * overrides are ignored — the SDK options are sealed for the runner's
+   * lifetime). Allowlist enforcement is upstream in backend-go's middleware;
+   * the runner trusts whatever string lands here and falls back to its baked-in
+   * default when the field is empty.
    */
   effort?: string;
   permission_mode?: string;

@@ -63,13 +63,18 @@ func (s *appServer) handleAuthExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, name, sub, role, err := auth.ExchangeRomaineLifeToken(r.Context(), body.AuthJWT)
+	email, name, sub, role, actorEmail, err := auth.ExchangeRomaineLifeToken(r.Context(), body.AuthJWT)
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return
 	}
 
-	token, err := s.minter.MintSession(sub, email, name, role)
+	// actorEmail comes back non-empty only for role=service. MintSession
+	// enforces both directions of the role↔actor_email invariant (see
+	// nelsong6/tank-operator#558): the upstream regression that dropped
+	// actor_email between auth.romaine.life and the mint surface is the
+	// exact failure mode this thread-through fixes.
+	token, err := s.minter.MintSession(sub, email, name, role, actorEmail)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mint token: "+err.Error())
 		return
@@ -195,8 +200,10 @@ func (s *appServer) handleK8sAuth(w http.ResponseWriter, r *http.Request) {
 	// mcp-github sidecar minting a tank-operator session to call back
 	// for installation_id resolution). Stamp role=user so the resulting
 	// JWT passes the verifier's role check; SA-bound endpoints do their
-	// own authorization layer on top of authentication.
-	token, err := s.minter.MintSession(subject.Qualified(), email, "", "user")
+	// own authorization layer on top of authentication. No actor_email
+	// — the K8s-SA path is human-role and the constructor rejects a
+	// non-empty actor_email for role!=service.
+	token, err := s.minter.MintSession(subject.Qualified(), email, "", "user", "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mint token")
 		return
