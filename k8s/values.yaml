@@ -197,18 +197,21 @@ superAdmins:
 internalApi:
   tankUiHost: "https://tank.romaine.life"
 
-# Hermes Agent integration. Tank's backend drives Hermes' OpenAI-compatible
+# Hermes Agent integration. Tank's orchestrator drives Hermes' OpenAI-compatible
 # API server for `hermes_gui` session turns (cluster-internal, no public
-# ingress on Hermes' side). The bearer is shared with nelsong6/hermes —
-# both pull from the same KV secret. See nelsong6/tank-operator#540.
+# ingress on Hermes' side). Inbound auth on Hermes' end is a service-JWT
+# verified at its auth-proxy sidecar (nelsong6/hermes#13). We mint a
+# fresh JWT here by exchanging the orchestrator's projected SA token at
+# auth.romaine.life/api/auth/exchange/k8s — same IdP every other
+# service-to-service call in the system uses. See
+# nelsong6/tank-operator#540 + nelsong6/auth#42.
 hermes:
   apiURL: "http://hermes-api.hermes.svc.cluster.local:8642"
-  bearerSecret:
-    # ExternalSecret synced from KV `hermes-api-bearer`. Tank's
-    # orchestrator and Hermes' StatefulSet read the same secret; rotating
-    # in KV updates both sides on the next ExternalSecret refresh.
-    name: hermes-api-bearer
-    key: API_SERVER_KEY
+  # auth.romaine.life service-exchange endpoint. Audience pinned on the
+  # projected SA token below. Configured separately from apiURL because
+  # the exchange URL is identity-provider-scoped, while apiURL is the
+  # downstream API target — they could conceivably move independently.
+  authRomaineExchangeURL: "https://auth.romaine.life/api/auth/exchange/k8s"
 
 externalSecret:
   storeName: romaine-kv

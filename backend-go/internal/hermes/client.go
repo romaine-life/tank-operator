@@ -33,19 +33,27 @@ const (
 	DefaultTimeout = 10 * time.Minute // worst-case run duration
 )
 
+// TokenSource produces a fresh bearer for outbound calls. Concrete
+// implementation today is AuthRomaineServiceProvider (exchanges the
+// orchestrator's audience-pinned projected SA token at
+// auth.romaine.life/api/auth/exchange/k8s; caches until ~30s before exp).
+// Goroutine-safe by contract.
+type TokenSource interface {
+	Token(ctx context.Context) (string, error)
+}
+
 // Client speaks Hermes' /v1 surface. Goroutine-safe; an underlying
 // *http.Client is shared across calls.
 type Client struct {
 	baseURL string
-	bearer  string
+	tokens  TokenSource
 	http    *http.Client
 }
 
-// Options configures NewClient. All fields are optional; zero values map
-// to the documented defaults.
+// Options configures NewClient. All fields except Tokens are optional.
 type Options struct {
 	BaseURL string        // default DefaultBaseURL
-	Bearer  string        // required; bearer auth against API_SERVER_KEY
+	Tokens  TokenSource   // required; produces a fresh role=service JWT per call
 	Timeout time.Duration // default DefaultTimeout (per non-streaming call)
 }
 
@@ -63,7 +71,7 @@ func NewClient(opts Options) *Client {
 	// streamEvents.
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		bearer:  opts.Bearer,
+		tokens:  opts.Tokens,
 		http: &http.Client{
 			Timeout: timeout,
 		},
@@ -225,7 +233,9 @@ func (c *Client) StreamEvents(ctx context.Context, runID string, handler func(Ru
 	if err != nil {
 		return fmt.Errorf("stream events %s: build request: %w", runID, err)
 	}
-	c.applyAuth(req)
+	if err := c.applyAuth(ctx, req); err != nil {
+		return fmt.Errorf("stream events %s: %w", runID, err)
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
 
@@ -302,10 +312,19 @@ func parseSSE(body io.Reader, handler func(RunEvent) error) error {
 // ─────────────────────────────────────────────────────────────────────────
 // Internal helpers
 
-func (c *Client) applyAuth(req *http.Request) {
-	if c.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearer)
+func (c *Client) applyAuth(ctx context.Context, req *http.Request) error {
+	if c.tokens == nil {
+		return errors.New("hermes client has no token source")
 	}
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return fmt.Errorf("hermes auth: %w", err)
+	}
+	if token == "" {
+		return errors.New("hermes token source returned empty token")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, out any) error {
@@ -321,7 +340,9 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	if err != nil {
 		return err
 	}
-	c.applyAuth(req)
+	if err := c.applyAuth(ctx, req); err != nil {
+		return err
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

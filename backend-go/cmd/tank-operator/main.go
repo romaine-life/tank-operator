@@ -32,24 +32,36 @@ import (
 )
 
 // buildHermesBridge constructs the hermes bridge from env config. Returns
-// nil when HERMES_API_URL or HERMES_API_BEARER is unset; handlers branch
-// on nil and return 503 so a missing-config surfaces as a visible error
-// rather than a silent NPE. See nelsong6/tank-operator#540 for the env wiring.
+// nil when HERMES_API_URL is unset OR the audience-pinned projected SA
+// token volume is not mounted (which would mean the orchestrator can't
+// mint a role=service JWT to call Hermes); handlers branch on nil and
+// return 503 so a missing-config surfaces as a visible error rather
+// than a silent NPE. See nelsong6/tank-operator#540 + nelsong6/auth#42.
+//
+// Token shape: a fresh role=service JWT minted per cache-miss by
+// exchanging the projected SA token at auth.romaine.life/api/auth/exchange/k8s.
+// The orchestrator is admitted as a pod-stable consumer in nelsong6/auth#42
+// (slug=tank-operator, stableId=orchestrator). Cache TTL = (token exp -
+// 30s) so a steady-state load issues ~one exchange call per 15min.
 //
 // The bridge's row-publish hook is unset for now: hermes_gui sessions
 // don't yet wire activity-summary updates onto the SPA sidebar's row
-// stream. Tracked as a follow-up; the existing per-turn-terminal row
-// publish on the pod-backed path is what users see today, so omitting it
-// for hermes_gui matches the current "activity-summary follows the turn"
-// behavior at degraded fidelity (no live count, but the chat itself works).
+// stream. Tracked as a follow-up.
 func buildHermesBridge(eventStore store.SessionEventStore, scope string) *hermes.Bridge {
 	baseURL := strings.TrimSpace(os.Getenv("HERMES_API_URL"))
-	bearer := strings.TrimSpace(os.Getenv("HERMES_API_BEARER"))
-	if baseURL == "" || bearer == "" {
-		slog.Warn("hermes bridge disabled (missing HERMES_API_URL or HERMES_API_BEARER); hermes_gui sessions will return 503")
+	if baseURL == "" {
+		slog.Warn("hermes bridge disabled (missing HERMES_API_URL); hermes_gui sessions will return 503")
 		return nil
 	}
-	client := hermes.NewClient(hermes.Options{BaseURL: baseURL, Bearer: bearer})
+	tokenSource := hermes.NewAuthRomaineServiceProvider(hermes.AuthRomaineOptions{
+		ExchangeURL: os.Getenv("HERMES_AUTH_ROMAINE_EXCHANGE_URL"),
+		SATokenPath: os.Getenv("HERMES_AUTH_ROMAINE_SA_TOKEN_PATH"),
+	})
+	if tokenSource == nil {
+		slog.Warn("hermes bridge disabled (auth-romaine projected SA token volume not mounted); hermes_gui sessions will return 503")
+		return nil
+	}
+	client := hermes.NewClient(hermes.Options{BaseURL: baseURL, Tokens: tokenSource})
 	return hermes.NewBridge(hermes.BridgeOptions{
 		Client:   client,
 		Store:    eventStore,
