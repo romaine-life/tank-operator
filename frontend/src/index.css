@@ -4665,8 +4665,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript-tools[data-state="running"] .run-transcript-tools-icon {
-  color: #34d399;
-  background: rgba(52, 211, 153, 0.14);
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.14);
 }
 
 .run-transcript-tools-label {
@@ -4713,13 +4713,13 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript-tool[data-state="running"] .run-transcript-tool-dot {
-  background: #34d399;
-  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+  background: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18);
   animation: run-tool-dot-pulse 1.4s ease-in-out infinite;
 }
 
 .run-transcript-tool[data-state="completed"] .run-transcript-tool-dot {
-  background: #60a5fa;
+  background: #34d399;
 }
 
 .run-transcript-tool[data-state="warned"] .run-transcript-tool-dot {
