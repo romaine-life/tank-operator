@@ -40,6 +40,21 @@ type Info struct {
 	Name         *string        `json:"name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
+	// Repos is the "owner/name" slug list the user picked at
+	// session creation; always present on the wire (empty array
+	// when none were selected). Driven by the durable
+	// sessions.repos column, not local SPA state, so the splash
+	// chips and the per-session detail view both read through to
+	// the same source. Stage 3's repo-cloner init container reads
+	// this same list from the pod side.
+	Repos []string `json:"repos"`
+	// CloneState carries the per-repo init-container outcome the
+	// repo-cloner writes back to sessions.clone_state. nil until
+	// stage 3 ships the cloner; the SPA renders the tooltip /
+	// status pill from this map (keyed by slug). Omitted from the
+	// wire when nil to keep the snapshot lean for the every-row
+	// today shape.
+	CloneState map[string]any `json:"clone_state,omitempty"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).
 	// The SPA's SessionStore reads this to seed its EventSource
@@ -199,6 +214,13 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		// records (tests with empty fixtures).
 		status = "Pending"
 	}
+	// Repos defaults to an empty slice on the wire so the SPA never
+	// has to distinguish "field absent" from "no repos picked" —
+	// they're the same product state.
+	repos := record.Repos
+	if repos == nil {
+		repos = []string{}
+	}
 	info := Info{
 		ID:           record.ID,
 		PodName:      optionalString(record.PodName),
@@ -211,6 +233,8 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Name:         record.Name,
 		TestState:    record.TestState,
 		RolloutState: record.RolloutState,
+		Repos:        repos,
+		CloneState:   record.CloneState,
 		RowVersion:   record.RowVersion,
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
@@ -258,6 +282,12 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		Name:         name,
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
+		// Pod-only Info (per-session GET fallback when the registry
+		// row isn't reachable) doesn't carry repos — the durable
+		// source is the registry row, and any caller hitting this
+		// path is in degraded mode anyway. Default to empty so the
+		// wire shape stays consistent with infoFromRecord.
+		Repos: []string{},
 	}
 }
 

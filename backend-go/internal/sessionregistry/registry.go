@@ -55,6 +55,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			activity_summary,
 			test_state,
 			rollout_state,
+			COALESCE(repos, '{}'::text[]),
+			clone_state,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2
@@ -73,7 +75,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			status, readyAt, terminatingAt                              string
 			name                                                        *string
 			visible                                                     bool
-			activitySummary, testState, rolloutState                    []byte
+			activitySummary, testState, rolloutState, cloneState        []byte
+			repos                                                       []string
 			rowVersion                                                  int64
 		)
 		if err := rows.Scan(
@@ -81,6 +84,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
+			&repos, &cloneState,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -105,6 +109,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			ActivitySummary: activitySummary,
 			TestState:       unmarshalJSONB(testState),
 			RolloutState:    unmarshalJSONB(rolloutState),
+			Repos:           repos,
+			CloneState:      unmarshalJSONB(cloneState),
 			RowVersion:      rowVersion,
 		})
 	}

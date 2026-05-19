@@ -219,6 +219,27 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// sessionReposSelectedTotal counts every session-create call by the
+// coarse repo-count bucket (none | one | many). Bounded cardinality
+// (3 series) keeps Prometheus happy while still surfacing the
+// operational shape that matters before stage 3 ships:
+//
+//   - Is the splash picker being used at all? (none vs. one+many ratio)
+//   - Is the many-repo path getting real exercise? (predicts stage 3
+//     init-container parallelism / latency budget)
+//
+// The exact slug list is durable on sessions.repos, so any deeper
+// analysis (which repos, which users) is recoverable from the DB on
+// demand. Per docs/observability.md: emit the counter that answers
+// the user-trust question; don't pre-mint dimensions we won't query.
+var sessionReposSelectedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_repos_selected_total",
+		Help: "Sessions created bucketed by how many repos the user picked at create time.",
+	},
+	[]string{"count_bucket"},
+)
+
 // --- Admin cross-user read metrics ---
 //
 // Counts every time a role=admin caller reads a session whose Owner !=

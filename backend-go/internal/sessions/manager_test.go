@@ -82,7 +82,10 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 		},
 	})
 
-	info, err := mgr.Create(context.Background(), "nelson@romaine.life", sessionmodel.ClaudeCLIMode, nil, "")
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.ClaudeCLIMode,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

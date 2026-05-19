@@ -89,6 +89,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// GitHub install.
 	mux.HandleFunc("GET /api/github/install/url", s.handleGitHubInstallURL)
 	mux.HandleFunc("GET /api/github/install/callback", s.handleGitHubInstallCallback)
+	// /api/github/recent-repos surfaces the caller's recently-selected
+	// repo slugs to the splash-page picker. Stage 1 of the auto-clone
+	// feature; reads sessions.repos directly with no mcp-github hop, so
+	// it works the moment the schema migration lands. See
+	// handlers_repos.go for the SQL.
+	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
 	// Sessions CRUD.
