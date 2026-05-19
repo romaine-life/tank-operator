@@ -161,7 +161,7 @@ func TestVerifierRejectsHS256Tokens(t *testing.T) {
 func TestMinterIssuesVerifiableSession(t *testing.T) {
 	jwtKey := newTestJWT(t)
 	minter := NewMinter(jwtKey, jwtKey)
-	tok, err := minter.MintSession("sub-1", "user@example.com", "User", "user")
+	tok, err := minter.MintSession("sub-1", "user@example.com", "User", "user", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,6 +172,71 @@ func TestMinterIssuesVerifiableSession(t *testing.T) {
 	}
 	if got.Email != "user@example.com" || got.Sub != "sub-1" || got.Role != "user" {
 		t.Fatalf("user = %#v", got)
+	}
+	if got.ActorEmail != "" {
+		t.Fatalf("ActorEmail = %q on user-role token, want empty", got.ActorEmail)
+	}
+}
+
+// TestMinterIssuesVerifiableServiceSession is the round-trip the verifier-
+// side TestVerifierAcceptsServiceRoleWithActorEmail asserts on the read
+// side: a service-role token minted with actor_email decodes back into a
+// User carrying the same lowercased actor_email. The regression this
+// guards against (nelsong6/tank-operator#558): MintSession previously
+// took no actor_email parameter, so /api/auth/exchange minted service
+// tokens that 401'd on the very next call.
+func TestMinterIssuesVerifiableServiceSession(t *testing.T) {
+	jwtKey := newTestJWT(t)
+	minter := NewMinter(jwtKey, jwtKey)
+	tok, err := minter.MintSession(
+		"svc:tank:42",
+		"pod-42@service.tank.romaine.life",
+		"Service: tank pod-42",
+		RoleService,
+		"Owner@Example.com",
+	)
+	if err != nil {
+		t.Fatalf("MintSession: %v", err)
+	}
+	verifier := NewVerifier(jwtKey)
+	got, err := verifier.Decode(tok)
+	if err != nil {
+		t.Fatalf("minted service token did not verify: %v", err)
+	}
+	if !got.IsService() {
+		t.Fatalf("IsService() = false, want true; user = %#v", got)
+	}
+	if got.ActorEmail != "owner@example.com" {
+		t.Fatalf("ActorEmail = %q, want lowercased owner@example.com", got.ActorEmail)
+	}
+	if got.Email != "pod-42@service.tank.romaine.life" {
+		t.Fatalf("Email = %q, want service principal email", got.Email)
+	}
+}
+
+func TestMinterRejectsServiceRoleWithoutActorEmail(t *testing.T) {
+	// Constructor enforces the verifier's contract — the failure mode
+	// in #558 was that MintSession silently produced a token the
+	// verifier would refuse. Refuse at mint time too.
+	jwtKey := newTestJWT(t)
+	minter := NewMinter(jwtKey, jwtKey)
+	if _, err := minter.MintSession("svc:tank:1", "pod-1@service.tank.romaine.life", "", RoleService, ""); err == nil {
+		t.Fatal("MintSession(role=service, actor_email=\"\") returned nil error; want rejection")
+	}
+}
+
+func TestMinterRejectsHumanRoleWithActorEmail(t *testing.T) {
+	// Defense in depth: actor_email is only meaningful for service
+	// principals (it carries the human owner). On a human-role token
+	// the human IS the owner; a stray actor_email would silently shift
+	// scope semantics for any handler that learns to consult both
+	// fields. Reject at mint time.
+	jwtKey := newTestJWT(t)
+	minter := NewMinter(jwtKey, jwtKey)
+	for _, role := range []string{RoleAdmin, RoleUser} {
+		if _, err := minter.MintSession("sub-1", "user@example.com", "User", role, "someone@example.com"); err == nil {
+			t.Fatalf("MintSession(role=%s, actor_email=\"someone@…\") returned nil error; want rejection", role)
+		}
 	}
 }
 
@@ -210,7 +275,7 @@ func TestInstallStateRoundtrips(t *testing.T) {
 func TestInstallStateRejectsSessionTokenWithDifferentAudience(t *testing.T) {
 	jwtKey := newTestJWT(t)
 	minter := NewMinter(jwtKey, jwtKey)
-	sessionTok, err := minter.MintSession("sub-1", "user@example.com", "User", "user")
+	sessionTok, err := minter.MintSession("sub-1", "user@example.com", "User", "user", "")
 	if err != nil {
 		t.Fatal(err)
 	}
