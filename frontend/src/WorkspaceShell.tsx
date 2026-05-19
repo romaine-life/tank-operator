@@ -9,7 +9,7 @@ import type {
 // The single workspace scaffold rendered in App's main pane, regardless of
 // whether a session is active. Both the home starter and the per-session
 // chat pane fill the same structural slots — body and composer, with an
-// optional session header — so the user types in the same composer at the
+// optional workspace header — so the user types in the same composer at the
 // same y-coordinate and the active-session pane can still expose its
 // session-bound controls.
 //
@@ -25,13 +25,13 @@ export interface WorkspaceShellProps {
   style?: CSSProperties;
   /**
    * Header title slot — typically the session-name editor for an active
-   * session. Omitted on the pre-session home starter to avoid an empty
-   * action strip above the actual starter content.
+   * session or the pre-create name editor for the home starter.
    */
   title?: ReactNode;
   /**
    * Tab nav slot — Files / Settings / Help (plus the Back-to-chat row when
-   * inside the run pane). Omitted when the pane has no session-bound tabs.
+   * inside the run pane). Callers may pass disabled tabs when the workspace
+   * chrome should be visible before session-bound targets exist.
    */
   tabs?: ReactNode;
   /**

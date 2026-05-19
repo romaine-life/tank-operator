@@ -7747,6 +7747,8 @@ export function App() {
   // session's run pane (which uses its own per-session composerMode state).
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
+  const [homeSessionName, setHomeSessionName] = useState("");
+  const [homeEditingTitle, setHomeEditingTitle] = useState(false);
   // Files picked / dropped / pasted onto the home composer before the
   // session pod exists. They are uploaded to `/api/sessions/{id}/files/upload`
   // after the pod becomes Ready, then their absolute paths are appended to
@@ -8473,6 +8475,7 @@ export function App() {
     // mode-override createSession() call (the Launchers section)
     // could otherwise send repos for a CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
+    const requestedName = homeSessionName.trim();
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -8480,7 +8483,22 @@ export function App() {
         body: JSON.stringify({ mode, repos }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
-      const created: Session = normalizeSession(await res.json());
+      let created: Session = normalizeSession(await res.json());
+      let requestedNameApplied = false;
+      if (requestedName) {
+        try {
+          const renameRes = await authedFetch(`/api/sessions/${created.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: requestedName }),
+          });
+          if (!renameRes.ok) throw new Error(`rename failed: ${renameRes.status}`);
+          created = normalizeSession(await renameRes.json());
+          requestedNameApplied = true;
+        } catch (e) {
+          setError(String(e));
+        }
+      }
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
@@ -8500,7 +8518,12 @@ export function App() {
         return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
       activate(created.id);
-      setAutoRenameSessionId(created.id);
+      if (requestedNameApplied) {
+        setHomeSessionName("");
+        setHomeEditingTitle(false);
+      } else {
+        setAutoRenameSessionId(created.id);
+      }
       // Belt-and-braces reconcile in the background — the lifecycle SSE
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
@@ -8839,6 +8862,7 @@ export function App() {
       : selectedProvider === "codex"
         ? runPrefs.codexEffort
         : DEFAULT_CLAUDE_EFFORT_ID;
+  const homeSessionTitle = homeSessionName.trim() || "New session";
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -9024,13 +9048,74 @@ export function App() {
         {active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
           // session — same body/composer column and same composer footer at
-          // the same y-coordinate — with the configuration grid rendered
-          // *in the transcript area* instead of an actual transcript. The
-          // session-only header/tabs are omitted here because Files,
-          // Settings, and Help have no useful target until a session exists.
+          // the same y-coordinate — with the header strip restored so the
+          // about-to-be-created session can be named before launch.
           <WorkspaceShell
             className="run-panel-home"
             bodyClassName="run-main-home"
+            title={(<>
+              {homeEditingTitle ? (
+                <input
+                  className="run-header-name-input"
+                  aria-label="Session name"
+                  value={homeSessionName}
+                  autoFocus
+                  onChange={(e) => setHomeSessionName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      setHomeEditingTitle(false);
+                    } else if (e.key === "Escape") {
+                      setHomeEditingTitle(false);
+                    }
+                  }}
+                  onBlur={() => setHomeEditingTitle(false)}
+                  placeholder="New session"
+                  maxLength={80}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="run-header-name-btn"
+                  title="Name this session before creating it"
+                  onClick={() => setHomeEditingTitle(true)}
+                >
+                  {homeSessionTitle}
+                </button>
+              )}
+            </>)}
+            tabs={(<>
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                title="Files are available once the session starts"
+              >
+                <FolderIcon
+                  className="run-tab-icon"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <span>Files</span>
+              </button>
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                title="Settings are available once the session starts"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                title="Help is available once the session starts"
+              >
+                <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Help</span>
+              </button>
+            </>)}
             composerVisible={true}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
