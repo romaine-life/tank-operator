@@ -174,9 +174,9 @@ type ManifestOptions struct {
 	NATSAuthSecret string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
-	// HotSwapAgentRunner gates the test-slot hot-swap surface on the
-	// agent-runner container. When true, PodManifest attaches a writable
-	// emptyDir at /var/run/agent-runner-hot, mounts it on the agent-runner
+	// HotSwapAgentRunner gates the test-slot hot-swap surface on SDK
+	// runner containers. When true, PodManifest attaches a writable
+	// emptyDir at /var/run/<runner>-hot, mounts it on the active runner
 	// container, and sets GLIMMUNG_SUPERVISOR_CHILD/HOT_ARTIFACT env vars
 	// so the launch script execs tank-supervisor (instead of node) as PID 1.
 	// Default false; the orchestrator's deployment.yaml sets this to true
@@ -673,6 +673,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			codexRunnerEnv = append(codexRunnerEnv, map[string]any{
 				"name": "CODEX_RUNNER_TRANSPORT", "value": "app-server",
 			})
+		}
+		if opts.HotSwapAgentRunner {
+			volumes = append(volumes, map[string]any{
+				"name":     "codex-runner-hot",
+				"emptyDir": map[string]any{},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "codex-runner-hot",
+				"mountPath": "/var/run/codex-runner-hot",
+			})
+			codexRunnerEnv = append(codexRunnerEnv,
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/codex-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/codex-runner-hot/codex-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
+			)
 		}
 		codexRunnerContainer := map[string]any{
 			"name":            "codex-runner",

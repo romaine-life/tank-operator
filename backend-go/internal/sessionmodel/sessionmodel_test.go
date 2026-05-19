@@ -409,6 +409,51 @@ func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
 	}
 }
 
+func TestPodManifestSlotModeAttachesCodexRunnerHotSwap(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", CodexGUIMode, ManifestOptions{
+		SessionImage:       "claude-image",
+		CodexSessionImage:  "codex-image",
+		PiSessionImage:     "pi-image",
+		HotSwapAgentRunner: true,
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertVolume(t, volumes, "codex-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "codex-runner")
+	assertVolumeMount(t, runner, "codex-runner-hot")
+
+	mounts := runner["volumeMounts"].([]any)
+	var hotMountPath string
+	for _, m := range mounts {
+		mm := m.(map[string]any)
+		if mm["name"] == "codex-runner-hot" {
+			hotMountPath, _ = mm["mountPath"].(string)
+		}
+	}
+	if hotMountPath != "/var/run/codex-runner-hot" {
+		t.Fatalf("codex-runner-hot mountPath = %q, want /var/run/codex-runner-hot", hotMountPath)
+	}
+
+	env := containerEnv(runner)
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/codex-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/codex-runner-hot/codex-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
+	}
+
+	cmd := runner["command"].([]any)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/codex-runner-launch.sh" {
+		t.Fatalf("codex-runner command = %v, want [bash /opt/tank/codex-runner-launch.sh]", cmd)
+	}
+}
+
 // TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
 // scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
 // (HotSwapAgentRunner=false, the default), the agent-runner container has
@@ -429,6 +474,33 @@ func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
 	containers := spec["containers"].([]any)
 	runner := findContainer(t, containers, "agent-runner")
 	assertNoVolumeMount(t, runner, "agent-runner-hot")
+
+	env := containerEnv(runner)
+	for _, name := range []string{
+		"GLIMMUNG_SUPERVISOR_CHILD",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED",
+	} {
+		if _, present := env[name]; present {
+			t.Fatalf("env %s leaked into prod (HotSwapAgentRunner=false); value=%v", name, env[name])
+		}
+	}
+}
+
+func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", CodexGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+		PiSessionImage:    "pi-image",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertNoVolume(t, volumes, "codex-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "codex-runner")
+	assertNoVolumeMount(t, runner, "codex-runner-hot")
 
 	env := containerEnv(runner)
 	for _, name := range []string{
