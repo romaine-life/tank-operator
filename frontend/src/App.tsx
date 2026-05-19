@@ -4148,6 +4148,7 @@ function ChatPane({
     "--run-chat-font-star": `${(0.95 * runPrefs.chatFontScale).toFixed(3)}rem`,
   } as CSSProperties;
   const composerWrapRef = useRef<HTMLDivElement | null>(null);
+  const pendingComposerFocusRef = useRef(false);
   // transcriptScrollEl is a state-backed reference to the <main> element.
   // Virtuoso's customScrollParent expects the actual DOM node, and React
   // refs populate AFTER render — passing `ref.current` would give Virtuoso
@@ -5901,6 +5902,58 @@ function ChatPane({
   const contextWindow = getContextWindow(selectedModel.id);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
+
+  const focusComposerTextarea = useCallback((): boolean => {
+    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current) return;
+    pendingComposerFocusRef.current = false;
+    requestAnimationFrame(() => {
+      focusComposerTextarea();
+    });
+  }, [activeTab, focusComposerTextarea, visible]);
+
+  // `/` is a "return to prompt" shortcut when focus is anywhere except the
+  // composer textarea. Once the textarea is focused, `/` keeps its normal
+  // typing behavior and opens the slash-command palette through input events.
+  useEffect(() => {
+    if (!visible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.key !== "/" ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.isComposing
+      ) {
+        return;
+      }
+      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (textarea && e.target === textarea) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      pendingComposerFocusRef.current = true;
+      if (activeTab !== "chat") {
+        setActiveTab("chat");
+        return;
+      }
+      pendingComposerFocusRef.current = false;
+      requestAnimationFrame(() => {
+        focusComposerTextarea();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [activeTab, focusComposerTextarea, visible]);
 
   // ⌘K / Ctrl+K opens the model picker on the empty state. Mirrors
   // cloudcli's keyboard shortcut hint.
