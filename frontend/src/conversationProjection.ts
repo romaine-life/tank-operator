@@ -41,6 +41,8 @@ export interface ConversationToolEntry extends ConversationEntryBase {
   toolInput?: string;
   toolOutput?: string;
   toolStatus?: string;
+  startedAt?: string;
+  completedAt?: string;
   /**
    * For AskUserQuestion tools that completed via a durable input_reply
    * command, the answers the user selected — keyed by question text.
@@ -226,7 +228,9 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       askUserAnswers: askUserAnswers(item),
       turnId: item.turnId,
       providerItemId: item.providerItemId,
-      time: item.createdAt ?? "",
+      time: item.startedAt ?? item.createdAt ?? "",
+      startedAt: item.startedAt ?? item.createdAt,
+      completedAt: item.completedAt,
       sourceEventId: item.sourceEventId,
       orderKey: item.orderKey,
     };

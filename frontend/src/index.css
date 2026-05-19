@@ -4812,6 +4812,40 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-primary);
 }
 
+.run-tool-timing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--run-chat-font-code-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.run-tool-timing-arrow {
+  color: rgba(255, 255, 255, 0.34);
+}
+
+.run-tool-timing-end,
+.run-tool-timing-running {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.run-tool-timing-running {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+}
+
+.run-tool-timing-spinner {
+  color: #34d399;
+}
+
 .run-transcript-tool-chevron {
   color: var(--text-muted);
   display: inline-flex;
