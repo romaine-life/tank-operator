@@ -513,7 +513,7 @@ Provider mapping for the new event: there is no provider mapping.
 boundary, regardless of provider. `actor=system`, `source=tank`. Runners
 remain the sole producers of `turn.interrupted`.
 
-Durable Claude AskUserQuestion answer (`input_reply` command):
+Durable AskUserQuestion answer (`input_reply` command):
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`
 
@@ -538,9 +538,10 @@ multi-select questions and single-select questions share one shape.
 the Claude Agent SDK's AskUserQuestion schema and carries free-text notes
 the user attached to a selected option.
 
-The backend validates ownership, Claude GUI mode, target ids, that the
-answers map is non-empty, and total payload size, then publishes a durable
-JetStream `input_reply` command with `target_turn_id=<turn_id>`,
+The backend validates ownership, that the session mode supports durable
+AskUserQuestion replies, target ids, that the answers map is non-empty, and
+total payload size, then publishes a durable JetStream `input_reply` command
+with `target_turn_id=<turn_id>`,
 `target_provider_item_id=<provider_item_id>`,
 `target_timeline_id=<timeline_id>`, `answers`, and (optionally)
 `annotations`.
@@ -555,13 +556,19 @@ canonical `tool_result` content from `updatedInput`. The runner acks the
 durable command only after publishing `tool.approval_resolved` whose payload
 mirrors the answers (and annotations, if any) that resolved the call.
 
-Legacy `codex_gui` runs through `codex exec` and does not implement a usable
-AskUserQuestion path: there is no provider callback the codex-runner can route
-the `input_reply` payload into. `codex_app_server` is the experimental Codex
-GUI transport that uses Codex App Server's `item/tool/requestUserInput`
-server request and resolves it through this same durable `input_reply`
-control command. Browser tabs must not send AskUserQuestion answers through a
-runner socket or any other non-durable control channel.
+Codex GUI uses the Codex App Server transport as its primary path. In
+`codex_gui` and the backwards-compatible `codex_app_server` mode, Codex App
+Server emits an `item/tool/requestUserInput` server request; the codex-runner
+publishes the same durable `tool.approval_requested` event as Claude and
+resolves the provider request after receiving this durable `input_reply`
+control command.
+
+The explicit `codex_exec_gui` fallback preserves the old SDK / `codex exec`
+transport. That fallback does not support durable AskUserQuestion replies:
+`codex exec` rejects `request_user_input` at the provider layer, and
+codex-runner rejects `input_reply` commands when it is not running the
+app-server transport. Browser tabs must not send AskUserQuestion answers
+through a runner socket or any other non-durable control channel.
 
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while
