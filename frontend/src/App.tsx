@@ -7154,22 +7154,18 @@ function ChatPane({
                 )}
                 {testState?.active && testState.url ? (
                   <a
-                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
+                    className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${testActionActive ? " is-active" : ""}`}
                     href={testState.url}
                     target="_blank"
                     rel="noreferrer"
                     onClick={() => {
                       void markTestState({ ...testState, active: true });
                     }}
-                    aria-label="Open test environment"
-                    title="Open test environment"
+                    aria-label="Open test environment in new tab"
+                    title="Open test environment in new tab"
                   >
                     <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    {testState.slot_index != null && (
-                      <span className="run-command-menu-count">
-                        {testState.slot_index}
-                      </span>
-                    )}
+                    <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
                   </a>
                 ) : (
                   <button
@@ -7181,11 +7177,6 @@ function ChatPane({
                     title={testState?.active ? "Test skill is active" : "Use the test skill"}
                   >
                     <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    {testState?.slot_index != null && (
-                      <span className="run-command-menu-count">
-                        {testState.slot_index}
-                      </span>
-                    )}
                   </button>
                 )}
                 <button
