@@ -4687,10 +4687,37 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-tool-ask {
-  padding: 0.5rem 0.75rem;
+  padding: 0.75rem 0.9rem;
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.85rem;
+}
+
+/* Answered state stays in the chat history — desaturate the body
+   slightly so the live elements above it pop more, but keep the
+   per-option layout intact so the user can review what was offered. */
+.run-tool-ask-locked {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.run-tool-ask-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  align-self: flex-start;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-pill);
+  background: var(--status-online-bg);
+  border: 1px solid var(--status-online-border);
+  color: var(--status-online);
+  font-size: var(--run-chat-font-meta);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.run-tool-ask-status-icon {
+  font-size: 0.7rem;
+  line-height: 1;
 }
 
 .run-tool-ask-question {
@@ -4699,41 +4726,114 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.5rem;
 }
 
+.run-tool-ask-chip {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 0.12rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  font-size: var(--run-chat-font-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .run-tool-ask-text {
   margin: 0;
   font-size: var(--run-chat-font-sm);
   color: var(--text-primary);
   font-weight: 500;
+  line-height: 1.4;
 }
 
 .run-tool-ask-options {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.4rem;
 }
 
 .run-tool-ask-option {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: flex-start;
-  gap: 0.15rem;
-  padding: 0.5rem 0.75rem;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 0.4rem;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-sidebar-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
-  transition: background 0.1s, border-color 0.1s;
+  color: inherit;
+  font: inherit;
+  transition:
+    background var(--motion-fast) var(--ease-out-soft),
+    border-color var(--motion-fast) var(--ease-out-soft),
+    box-shadow var(--motion-fast) var(--ease-out-soft),
+    transform var(--motion-fast) var(--ease-out-soft);
 }
 
-.run-tool-ask-option:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.25);
+.run-tool-ask-option:hover:not(:disabled) {
+  background: var(--bg-sidebar-hover);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.run-tool-ask-option:focus-visible {
+  outline: none;
+  border-color: var(--unread);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.run-tool-ask-option:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.run-tool-ask-option-selected {
+  background: var(--accent-soft);
+  border-color: rgba(79, 140, 247, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(79, 140, 247, 0.35);
+}
+
+.run-tool-ask-option-selected:hover:not(:disabled) {
+  background: rgba(79, 140, 247, 0.22);
+  border-color: rgba(79, 140, 247, 0.7);
+}
+
+.run-tool-ask-option-muted {
+  opacity: 0.5;
+}
+
+.run-tool-ask-option-locked {
+  cursor: default;
 }
 
 .run-tool-ask-option:disabled {
-  cursor: progress;
-  opacity: 0.72;
+  cursor: default;
+}
+
+.run-tool-ask-option-marker {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.run-tool-ask-option-marker[data-selected="true"] {
+  color: var(--unread);
+}
+
+.run-tool-ask-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .run-tool-ask-option-label {
@@ -4745,6 +4845,120 @@ textarea.run-files-viewer-editor:focus {
 .run-tool-ask-option-desc {
   font-size: var(--run-chat-font-meta);
   color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.run-tool-ask-option-preview {
+  margin-top: 0.3rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px dashed rgba(255, 255, 255, 0.08);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: var(--run-chat-font-meta);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-tool-ask-notes-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: var(--run-chat-font-meta);
+  color: var(--text-muted);
+}
+
+.run-tool-ask-notes {
+  width: 100%;
+  resize: vertical;
+  min-height: 2.5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--run-chat-font-sm);
+  line-height: 1.4;
+  transition: border-color var(--motion-fast) var(--ease-out-soft),
+    box-shadow var(--motion-fast) var(--ease-out-soft);
+}
+
+.run-tool-ask-notes:focus {
+  outline: none;
+  border-color: var(--unread);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.run-tool-ask-notes:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.run-tool-ask-notes-readonly {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-row-rest);
+  border-left: 2px solid var(--unread);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.run-tool-ask-notes-readonly-label {
+  font-size: var(--run-chat-font-meta);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.run-tool-ask-notes-readonly-text {
+  margin: 0;
+  font-size: var(--run-chat-font-sm);
+  color: var(--text-secondary);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-tool-ask-submit-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.1rem;
+}
+
+.run-tool-ask-submit {
+  appearance: none;
+  border: 1px solid rgba(79, 140, 247, 0.55);
+  background: var(--accent-soft);
+  color: var(--accent-fg);
+  padding: 0.4rem 1rem;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: var(--run-chat-font-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out-soft),
+    border-color var(--motion-fast) var(--ease-out-soft),
+    color var(--motion-fast) var(--ease-out-soft);
+}
+
+.run-tool-ask-submit:hover:not(:disabled) {
+  background: rgba(79, 140, 247, 0.25);
+  border-color: rgba(79, 140, 247, 0.8);
+  color: var(--text-primary);
+}
+
+.run-tool-ask-submit:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--unread);
+}
+
+.run-tool-ask-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .run-tool-ask-answered {

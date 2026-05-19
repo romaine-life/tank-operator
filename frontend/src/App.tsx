@@ -3336,38 +3336,36 @@ function ToolAskUserBody({
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the in-flight click-to-submit UX.
   const durableAnswers = entry.askUserAnswers;
-  const answered =
-    (durableAnswers && Object.keys(durableAnswers).length > 0) ||
-    entry.toolStatus === "completed";
+  const hasDurableAnswers =
+    !!durableAnswers && Object.keys(durableAnswers).length > 0;
+  const answered = hasDurableAnswers || entry.toolStatus === "completed";
 
-  if (answered) {
-    return (
-      <div className="run-tool-body run-tool-ask">
-        {durableAnswers && Object.entries(durableAnswers).length > 0 ? (
-          <ul className="run-tool-ask-answered-list">
-            {Object.entries(durableAnswers).map(([question, answer]) => (
-              <li key={question} className="run-tool-ask-answered-item">
-                <span className="run-tool-ask-answered-question">{question}</span>
-                <span className="run-tool-ask-answered-arrow"> → </span>
-                <span className="run-tool-ask-answered-labels">{answer.labels.join(", ")}</span>
-                {answer.notes && (
-                  <span className="run-tool-ask-answered-notes"> ({answer.notes})</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className="run-tool-ask-answered">answered</span>
-        )}
-      </div>
-    );
+  // After answering, the per-question UI stays rendered so the user
+  // can scroll back in chat history and see exactly what was offered
+  // and what they picked. The durable answer payload drives the
+  // selected/muted state; local `selections` only matters before
+  // submit.
+  function selectedLabelsFor(q: AskUserQuestion): string[] {
+    if (answered && durableAnswers && durableAnswers[q.question]) {
+      return durableAnswers[q.question].labels;
+    }
+    return selections[q.question] ?? [];
+  }
+
+  function answeredNoteFor(question: string): string | undefined {
+    if (answered && durableAnswers && durableAnswers[question]) {
+      return durableAnswers[question].notes;
+    }
+    return undefined;
   }
 
   const isReady =
+    !answered &&
     questions.length > 0 &&
     questions.every((q) => (selections[q.question]?.length ?? 0) > 0);
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
+    if (answered) return;
     setSelections((prev) => {
       const current = prev[q.question] ?? [];
       if (q.multiSelect) {
@@ -3412,51 +3410,102 @@ function ToolAskUserBody({
     }
   }
 
+  // Edge case: tool completed without a durable answer payload (legacy
+  // events, or a non-input_reply completion path). The question UI is
+  // still useful for context, but we tag the body so the styles can
+  // make the unanswered options look inert.
+  const completedWithoutAnswers = answered && !hasDurableAnswers;
+
   return (
-    <div className="run-tool-body run-tool-ask">
+    <div
+      className={`run-tool-body run-tool-ask${answered ? " run-tool-ask-locked" : ""}`}
+      data-answered={answered ? "true" : "false"}
+    >
+      {answered && (
+        <div className="run-tool-ask-status" role="status">
+          <span className="run-tool-ask-status-icon" aria-hidden="true">✓</span>
+          <span className="run-tool-ask-status-label">
+            {completedWithoutAnswers ? "Answered" : "Your answer"}
+          </span>
+        </div>
+      )}
       {questions.map((q, qi) => {
-        const selectedLabels = selections[q.question] ?? [];
+        const selectedLabels = selectedLabelsFor(q);
+        const answeredNote = answeredNoteFor(q.question);
+        const liveNote = notes[q.question] ?? "";
+        const showPreNotesField =
+          !answered &&
+          selectedLabels.length > 0 &&
+          q.options.some((opt) => opt.preview);
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
             {q.question && <p className="run-tool-ask-text">{q.question}</p>}
-            <div className="run-tool-ask-options">
+            <div
+              className="run-tool-ask-options"
+              role={q.multiSelect ? "group" : "radiogroup"}
+              aria-label={q.question}
+            >
               {q.options.map((opt, oi) => {
                 const selected = selectedLabels.includes(opt.label);
+                const muted = answered && !selected;
+                const optionClass =
+                  "run-tool-ask-option" +
+                  (selected ? " run-tool-ask-option-selected" : "") +
+                  (muted ? " run-tool-ask-option-muted" : "") +
+                  (answered ? " run-tool-ask-option-locked" : "");
                 return (
                   <button
                     key={oi}
                     type="button"
-                    className={`run-tool-ask-option${selected ? " run-tool-ask-option-selected" : ""}`}
+                    className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting}
+                    disabled={submitting || answered}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
-                    <span className="run-tool-ask-option-label">
-                      {q.multiSelect ? (selected ? "☑ " : "☐ ") : ""}
-                      {opt.label}
+                    <span
+                      className="run-tool-ask-option-marker"
+                      aria-hidden="true"
+                      data-selected={selected ? "true" : "false"}
+                    >
+                      {q.multiSelect
+                        ? selected
+                          ? "☑"
+                          : "☐"
+                        : selected
+                          ? "●"
+                          : "○"}
                     </span>
-                    {opt.description && (
-                      <span className="run-tool-ask-option-desc">{opt.description}</span>
-                    )}
-                    {opt.preview && selected && (
-                      <span
-                        className="run-tool-ask-option-preview"
-                        // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
-                        dangerouslySetInnerHTML={{ __html: opt.preview }}
-                      />
-                    )}
+                    <span className="run-tool-ask-option-body">
+                      <span className="run-tool-ask-option-label">{opt.label}</span>
+                      {opt.description && (
+                        <span className="run-tool-ask-option-desc">{opt.description}</span>
+                      )}
+                      {opt.preview && selected && (
+                        <span
+                          className="run-tool-ask-option-preview"
+                          // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; <script>/<style> are blocked by the SDK's own Ki_ validator before the question is rendered.
+                          dangerouslySetInnerHTML={{ __html: opt.preview }}
+                        />
+                      )}
+                    </span>
                   </button>
                 );
               })}
             </div>
-            {selectedLabels.length > 0 && q.options.some((opt) => opt.preview) && (
+            {answered && answeredNote && (
+              <div className="run-tool-ask-notes-readonly">
+                <span className="run-tool-ask-notes-readonly-label">Notes</span>
+                <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
+              </div>
+            )}
+            {showPreNotesField && (
               <label className="run-tool-ask-notes-label">
                 <span>Notes (optional)</span>
                 <textarea
                   className="run-tool-ask-notes"
                   rows={2}
-                  value={notes[q.question] ?? ""}
+                  value={liveNote}
                   disabled={submitting}
                   onChange={(e) => setNoteFor(q.question, e.target.value)}
                   placeholder="Add any context Claude should consider…"
@@ -3466,16 +3515,18 @@ function ToolAskUserBody({
           </div>
         );
       })}
-      <div className="run-tool-ask-submit-row">
-        <button
-          type="button"
-          className="run-tool-ask-submit"
-          disabled={!isReady || submitting}
-          onClick={() => void submit()}
-        >
-          {submitting ? "Sending…" : "Submit answer"}
-        </button>
-      </div>
+      {!answered && (
+        <div className="run-tool-ask-submit-row">
+          <button
+            type="button"
+            className="run-tool-ask-submit"
+            disabled={!isReady || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Sending…" : "Submit answer"}
+          </button>
+        </div>
+      )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
   );
