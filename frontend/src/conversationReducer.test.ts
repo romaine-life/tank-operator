@@ -142,6 +142,106 @@ test("Tool lifecycle replays to a completed tool item", () => {
   ]);
 });
 
+test("Late item.started does not regress a completed tool back to running", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started"),
+    ev("3", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc \"printf 'success\\n'\"",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "completed",
+          command: "/bin/sh -lc \"printf 'success\\n'\"",
+          exit_code: 0,
+          aggregated_output: "success\n",
+        },
+      },
+    }),
+    ev("2", "item.started", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc \"printf 'success\\n'\"",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "in_progress",
+          command: "/bin/sh -lc \"printf 'success\\n'\"",
+          exit_code: null,
+          aggregated_output: "",
+        },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.status, "completed");
+  assert.equal(state.activeItemId, null);
+  assert.deepEqual(state.items[0]?.payload?.raw_item, {
+    id: "item_1",
+    type: "command_execution",
+    status: "completed",
+    command: "/bin/sh -lc \"printf 'success\\n'\"",
+    exit_code: 0,
+    aggregated_output: "success\n",
+  });
+});
+
+test("Late item.started does not regress a failed result back to running", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started"),
+    ev("3", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc false",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "failed",
+          command: "/bin/sh -lc false",
+          exit_code: 1,
+          aggregated_output: "",
+        },
+      },
+    }),
+    ev("2", "item.started", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "tool-call",
+      provider_item_id: "item_1",
+      payload: {
+        kind: "command_execution",
+        title: "/bin/sh -lc false",
+        raw_item: {
+          id: "item_1",
+          type: "command_execution",
+          status: "in_progress",
+          command: "/bin/sh -lc false",
+          exit_code: null,
+          aggregated_output: "",
+        },
+      },
+    }),
+  ]);
+
+  assert.equal(state.items.length, 1);
+  assert.equal(state.items[0]?.status, "failed");
+  assert.equal(state.activeItemId, null);
+});
+
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

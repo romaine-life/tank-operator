@@ -285,21 +285,32 @@ function upsertItem(
   const id = event.timeline_id;
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, "text");
-  const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
+  const preserveTerminal =
+    status === "started" && existing && isTerminalItemStatus(existing.status);
+  const resolvedStatus = preserveTerminal ? existing.status : status;
+  const payload = preserveTerminal
+    ? { ...(event.payload ?? {}), ...(existing.payload ?? {}) }
+    : { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
-    parentId: event.parent_id,
-    providerItemId: event.provider_item_id,
-    actor: event.actor === "user" ? "runner" : event.actor,
-    kind: stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
-    status,
-    title: stringPayload(event, "title") ?? existing?.title,
-    text: text ?? existing?.text,
+    parentId: preserveTerminal ? existing.parentId ?? event.parent_id : event.parent_id,
+    providerItemId: preserveTerminal
+      ? existing.providerItemId ?? event.provider_item_id
+      : event.provider_item_id,
+    actor: preserveTerminal ? existing.actor : event.actor === "user" ? "runner" : event.actor,
+    kind: preserveTerminal
+      ? existing.kind
+      : stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
+    status: resolvedStatus,
+    title: preserveTerminal
+      ? existing.title ?? stringPayload(event, "title")
+      : stringPayload(event, "title") ?? existing?.title,
+    text: preserveTerminal ? existing.text ?? text : text ?? existing?.text,
     payload,
-    orderKey: event.order_key ?? existing?.orderKey,
-    sourceEventId: event.event_id,
-    createdAt: event.created_at || existing?.createdAt,
+    orderKey: preserveTerminal ? existing.orderKey ?? event.order_key : event.order_key ?? existing?.orderKey,
+    sourceEventId: preserveTerminal ? existing.sourceEventId : event.event_id,
+    createdAt: preserveTerminal ? existing.createdAt || event.created_at : event.created_at || existing?.createdAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))
@@ -307,8 +318,12 @@ function upsertItem(
   return {
     ...state,
     items,
-    activeItemId: status === "started" ? id : state.activeItemId,
+    activeItemId: resolvedStatus === "started" ? id : state.activeItemId,
   };
+}
+
+function isTerminalItemStatus(status: ConversationItemStatus): boolean {
+  return status === "completed" || status === "failed";
 }
 
 function matchingActiveItem(
