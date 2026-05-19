@@ -196,10 +196,9 @@ type ForkSessionRequest = {
   sourceSession: Session;
   forkedEntry: TranscriptEntry;
   model: string;
-  // effort is Claude-only; codex forks send "" and the runner falls back.
-  // The empty string also matches the agent-runner's "use baked-in
-  // default" branch, so legacy forks created before this field existed
-  // keep working without a migration.
+  // Empty string means the target runner should use its baked-in default,
+  // so legacy forks created before this field existed keep working without
+  // a migration.
   effort: string;
   permissionMode: string;
 };
@@ -1392,6 +1391,8 @@ function DemoLanding() {
   const [demoInteraction, setDemoInteraction] = useState<SessionInteraction>("cli");
   const [demoClaudeModelId, setDemoClaudeModelId] = useState(DEFAULT_CLAUDE_MODEL_ID);
   const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
+  const [demoCodexModelId, setDemoCodexModelId] = useState(DEFAULT_CODEX_MODEL_ID);
+  const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
@@ -1405,7 +1406,11 @@ function DemoLanding() {
         : [];
   const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
-    selectedProvider === "anthropic" ? demoClaudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+    selectedProvider === "anthropic"
+      ? demoClaudeModelId
+      : selectedProvider === "codex"
+        ? demoCodexModelId
+        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -1650,7 +1655,9 @@ function DemoLanding() {
                         <span className="home-panel-meta">
                           {selectedProvider === "anthropic"
                             ? CLAUDE_EFFORTS.find((effort) => effort.id === demoClaudeEffortId)?.label
-                            : "account default"}
+                            : selectedProvider === "codex"
+                              ? CODEX_EFFORTS.find((effort) => effort.id === demoCodexEffortId)?.label
+                              : ""}
                         </span>
                       </div>
                       <div className="home-model-list" role="group" aria-label="model">
@@ -1662,6 +1669,7 @@ function DemoLanding() {
                               className={`home-model${modelSelected ? " is-selected" : ""}`}
                               onClick={() => {
                                 if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
+                                if (selectedProvider === "codex") setDemoCodexModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
@@ -1670,15 +1678,19 @@ function DemoLanding() {
                           );
                         })}
                       </div>
-                      {selectedProvider === "anthropic" && (
+                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
                         <div className="home-effort-grid" role="group" aria-label="effort">
-                          {CLAUDE_EFFORTS.map((effort) => {
-                            const effortSelected = effort.id === demoClaudeEffortId;
+                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
+                            const effortSelected =
+                              effort.id === (selectedProvider === "anthropic" ? demoClaudeEffortId : demoCodexEffortId);
                             return (
                               <button
                                 key={effort.id}
                                 className={`home-model home-effort${effortSelected ? " is-selected" : ""}`}
-                                onClick={() => setDemoClaudeEffortId(effort.id)}
+                                onClick={() => {
+                                  if (selectedProvider === "anthropic") setDemoClaudeEffortId(effort.id);
+                                  if (selectedProvider === "codex") setDemoCodexEffortId(effort.id);
+                                }}
                                 aria-pressed={effortSelected}
                                 title={effort.hint}
                               >
@@ -1968,6 +1980,10 @@ function sdkHistoryTerminalForRun(
 
 function isClaudeRunMode(mode: SessionMode): boolean {
   return mode === "claude_gui";
+}
+
+function isCodexRunMode(mode: SessionMode): boolean {
+  return mode === "codex_gui" || mode === "codex_app_server";
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -2504,6 +2520,11 @@ const CLAUDE_MODELS: ModelOption[] = [
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
 ];
 const CODEX_MODELS: ModelOption[] = [
+  { id: "gpt-5.5", label: "Codex · GPT-5.5" },
+  { id: "gpt-5.4", label: "Codex · GPT-5.4" },
+  { id: "gpt-5.4-mini", label: "Codex · GPT-5.4 Mini" },
+  { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
+  { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
 
@@ -2528,6 +2549,14 @@ const CLAUDE_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";
 const DEFAULT_CLAUDE_EFFORT_ID = "high";
+const CODEX_EFFORTS: EffortOption[] = [
+  { id: "low", label: "Low", hint: "Fast responses with lighter reasoning" },
+  { id: "medium", label: "Medium", hint: "Balanced reasoning" },
+  { id: "high", label: "High", hint: "Greater reasoning depth" },
+  { id: "xhigh", label: "Extra High", hint: "Strongest reasoning" },
+];
+const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
+const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
@@ -2550,15 +2579,17 @@ interface RunPrefs {
   // chat-app convention. See docs/product-inspirations.md analysis.
   turnCompleteSoundOnVisible: boolean;
   chatFontScale: number;
-  // claudeModelId + claudeEffort persist the user's last picks across
+  // Provider model + effort prefs persist the user's last picks across
   // sessions so a fresh session opens with them pre-selected. They drive
   // initial selectedModelId / selectedEffort state in RunPane and are
   // also written back on every change. Once a turn is submitted the
   // model + effort are sealed for that session pod's lifetime (see
-  // agent-runner/src/runner.ts), so these prefs only affect the *next*
-  // session created in this browser.
+  // agent-runner/src/runner.ts and codex-runner/src/runner.ts), so these
+  // prefs only affect the *next* session created in this browser.
   claudeModelId: string;
   claudeEffort: string;
+  codexModelId: string;
+  codexEffort: string;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2573,6 +2604,8 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   chatFontScale: 1,
   claudeModelId: DEFAULT_CLAUDE_MODEL_ID,
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
+  codexModelId: DEFAULT_CODEX_MODEL_ID,
+  codexEffort: DEFAULT_CODEX_EFFORT_ID,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -2623,6 +2656,10 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
       } else if (key === "claudeEffort") {
         out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
+      } else if (key === "codexModelId") {
+        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
+      } else if (key === "codexEffort") {
+        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -2655,6 +2692,14 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "claudeEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, prev.claudeEffort);
+      }
+    } else if (key === "codexModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, prev.codexModelId);
+      }
+    } else if (key === "codexEffort") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -4242,45 +4287,54 @@ function ChatPane({
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
+  const isCodex = isCodexRunMode(session.mode);
   const modelOptions = isClaude ? CLAUDE_MODELS : CODEX_MODELS;
-  // Seed model + effort from RunPrefs (browser-persisted) for Claude;
-  // Codex has only one option so it skips RunPrefs. State is local
-  // because the agent-runner seals model + effort at pod boot from the
-  // first submit_turn — switching the dropdown after a turn has been
-  // submitted would silently no-op at the pod, and the UI hides the
-  // launchpad once entries.length > 0 so the user can't try.
-  const initialClaudeModelId = isClaude
+  const effortOptions = isClaude ? CLAUDE_EFFORTS : CODEX_EFFORTS;
+  // Seed model + effort from RunPrefs (browser-persisted). State is local
+  // because the runners seal model + effort from the first submit_turn —
+  // switching the dropdown after a turn has been submitted would silently
+  // no-op at the pod, and the UI hides the launchpad once entries.length > 0
+  // so the user can't try.
+  const initialModelId = isClaude
     ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
         ? runPrefs.claudeModelId
-        : modelOptions[0].id)
-    : modelOptions[0].id;
-  const initialClaudeEffortId = CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
-    ? runPrefs.claudeEffort
-    : DEFAULT_CLAUDE_EFFORT_ID;
-  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialClaudeModelId);
-  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialClaudeEffortId);
+        : DEFAULT_CLAUDE_MODEL_ID)
+    : (CODEX_MODELS.some((opt) => opt.id === runPrefs.codexModelId)
+        ? runPrefs.codexModelId
+        : DEFAULT_CODEX_MODEL_ID);
+  const initialEffortId = isClaude
+    ? (CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
+        ? runPrefs.claudeEffort
+        : DEFAULT_CLAUDE_EFFORT_ID)
+    : (CODEX_EFFORTS.some((opt) => opt.id === runPrefs.codexEffort)
+        ? runPrefs.codexEffort
+        : DEFAULT_CODEX_EFFORT_ID);
+  const [selectedModelId, setSelectedModelIdState] = useState<string>(initialModelId);
+  const [selectedEffortId, setSelectedEffortIdState] = useState<string>(initialEffortId);
   // Persist-then-set wrappers so the dropdown's onValueChange both
   // updates local state for the active session and writes the new pick
-  // into RunPrefs for the *next* session this browser opens. Codex
-  // sessions skip the persist because the only Codex model is the
-  // account default — there's no user pick to remember.
+  // into RunPrefs for the *next* session this browser opens.
   const setSelectedModelId = useCallback(
     (id: string) => {
       setSelectedModelIdState(id);
       if (isClaude && CLAUDE_MODELS.some((opt) => opt.id === id)) {
         setRunPref("claudeModelId", id);
+      } else if (isCodex && CODEX_MODELS.some((opt) => opt.id === id)) {
+        setRunPref("codexModelId", id);
       }
     },
-    [isClaude, setRunPref],
+    [isClaude, isCodex, setRunPref],
   );
   const setSelectedEffortId = useCallback(
     (id: string) => {
       setSelectedEffortIdState(id);
-      if (CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
+      if (isClaude && CLAUDE_EFFORTS.some((opt) => opt.id === id)) {
         setRunPref("claudeEffort", id);
+      } else if (isCodex && CODEX_EFFORTS.some((opt) => opt.id === id)) {
+        setRunPref("codexEffort", id);
       }
     },
-    [setRunPref],
+    [isClaude, isCodex, setRunPref],
   );
   // Run timing — drives the streaming status pill's elapsed counter and the
   // rotating action verb / animated dots. Both refresh on a single 250ms
@@ -4415,12 +4469,11 @@ function ChatPane({
     skillName?: string;
     followUp: boolean;
     model: string;
-    // effort is the extended-thinking level the user picked in the
-    // launchpad dropdown; empty string for Codex / pre-feature paths.
-    // The agent-runner pins effort at pod boot from the first turn that
-    // carries a non-empty value, so this is only load-bearing on the
-    // session's very first run object — but every run object carries it
-    // for telemetry parity with model.
+    // effort is the reasoning level the user picked in the launchpad
+    // dropdown. The runners pin effort from the first turn that carries a
+    // non-empty value, so this is only load-bearing on the session's very
+    // first run object — but every run object carries it for telemetry
+    // parity with model.
     effort: string;
     permissionMode: string;
     turnStart: number;
@@ -5932,11 +5985,7 @@ function ChatPane({
       skillName,
       followUp,
       model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
-      // effort is Claude-only; Codex sessions send empty and the agent-
-      // runner's pinning code falls back to its default. Sending the
-      // empty string from Codex paths keeps the run object shape stable
-      // across providers.
-      effort: isClaude ? selectedEffortId : "",
+      effort: isClaude || isCodex ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
@@ -6117,12 +6166,12 @@ function ChatPane({
   // Derived label for the launchpad's "Ready to use" status line; falls
   // back to "High" rather than empty when the persisted value drifted
   // out of the allowlist so the status line never reads as "...
-  // effort.". The DEFAULT_CLAUDE_EFFORT_ID resolution mirrors the
-  // agent-runner's DEFAULT_EFFORT fallback so the SPA and pod show the
-  // same thing.
+  // effort.". The provider default resolution mirrors the runner fallback
+  // so the SPA and pod show the same thing.
   const selectedEffortLabel =
-    (CLAUDE_EFFORTS.find((e) => e.id === selectedEffortId)?.label) ??
-    (CLAUDE_EFFORTS.find((e) => e.id === DEFAULT_CLAUDE_EFFORT_ID)?.label ?? "High");
+    (effortOptions.find((e) => e.id === selectedEffortId)?.label) ??
+    (effortOptions.find((e) => e.id === (isClaude ? DEFAULT_CLAUDE_EFFORT_ID : DEFAULT_CODEX_EFFORT_ID))?.label ??
+      "High");
   const contextWindow = getContextWindow(selectedModel.id);
   const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
   const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
@@ -6790,14 +6839,14 @@ function ChatPane({
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
-                {isClaude && (
+                {(isClaude || isCodex) && (
                   <>
                     <DropdownMenuLabel>Effort</DropdownMenuLabel>
                     <DropdownMenuRadioGroup
                       value={selectedEffortId}
                       onValueChange={setSelectedEffortId}
                     >
-                      {CLAUDE_EFFORTS.map((opt) => (
+                      {effortOptions.map((opt) => (
                         <DropdownMenuRadioItem key={opt.id} value={opt.id}>
                           {opt.label}
                           {opt.hint ? (
@@ -6812,12 +6861,12 @@ function ChatPane({
             </DropdownMenu>
             <p className="run-empty-status">
               Ready to use {selectedModel.label}
-              {isClaude ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
+              {isClaude || isCodex ? ` · ${selectedEffortLabel} effort` : ""}. Start typing your message below.
             </p>
             <p className="run-empty-kbd">
               Press <kbd>⌘K</kbd> to switch model
             </p>
-            {isClaude && (
+            {(isClaude || isCodex) && (
               <p className="run-empty-lock-hint">
                 Model and effort are fixed for this session once you send the first message.
               </p>
@@ -6887,8 +6936,8 @@ function ChatPane({
                       : selectedModelId,
                   // Fork inherits the source pane's effort pick so the
                   // forked pod boots with the same reasoning depth the
-                  // user had been working at. Codex forks send "".
-                  effort: isClaude ? selectedEffortId : "",
+                  // user had been working at.
+                  effort: isClaude || isCodex ? selectedEffortId : "",
                   permissionMode: composerMode,
                 })
               }
@@ -8569,8 +8618,17 @@ export function App() {
         : [];
   const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
-    selectedProvider === "anthropic" ? runPrefs.claudeModelId : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
-  const selectedHomeEffortId = runPrefs.claudeEffort;
+    selectedProvider === "anthropic"
+      ? runPrefs.claudeModelId
+      : selectedProvider === "codex"
+        ? runPrefs.codexModelId
+        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+  const selectedHomeEffortId =
+    selectedProvider === "anthropic"
+      ? runPrefs.claudeEffort
+      : selectedProvider === "codex"
+        ? runPrefs.codexEffort
+        : DEFAULT_CLAUDE_EFFORT_ID;
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -8816,7 +8874,9 @@ export function App() {
                         <span className="home-panel-meta">
                           {selectedProvider === "anthropic"
                             ? CLAUDE_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
-                            : "account default"}
+                            : selectedProvider === "codex"
+                              ? CODEX_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
+                              : ""}
                         </span>
                       </div>
                       <div className="home-model-list" role="group" aria-label="model">
@@ -8829,6 +8889,8 @@ export function App() {
                               onClick={() => {
                                 if (selectedProvider === "anthropic") {
                                   setRunPref("claudeModelId", model.id);
+                                } else if (selectedProvider === "codex") {
+                                  setRunPref("codexModelId", model.id);
                                 }
                               }}
                               aria-pressed={selected}
@@ -8838,15 +8900,21 @@ export function App() {
                           );
                         })}
                       </div>
-                      {selectedProvider === "anthropic" && (
+                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
                         <div className="home-effort-grid" role="group" aria-label="effort">
-                          {CLAUDE_EFFORTS.map((effort) => {
+                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
                             const selected = effort.id === selectedHomeEffortId;
                             return (
                               <button
                                 key={effort.id}
                                 className={`home-model home-effort${selected ? " is-selected" : ""}`}
-                                onClick={() => setRunPref("claudeEffort", effort.id)}
+                                onClick={() => {
+                                  if (selectedProvider === "anthropic") {
+                                    setRunPref("claudeEffort", effort.id);
+                                  } else if (selectedProvider === "codex") {
+                                    setRunPref("codexEffort", effort.id);
+                                  }
+                                }}
                                 aria-pressed={selected}
                                 title={effort.hint}
                               >
