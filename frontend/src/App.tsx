@@ -1764,29 +1764,21 @@ function DemoLanding() {
                 </section>
               </div>
 
-              {/* Demo preview of the home chat composer. Submitting on the
-                  marketing page redirects to sign-in rather than creating a
-                  session — the real composer lives in the authenticated
-                  home below. */}
-              <form
+              {/* Demo preview of the home chat composer. Reuses the same
+                  PromptInput components as the authenticated home — the only
+                  difference is that submitting on the marketing page
+                  redirects to sign-in instead of creating a session. */}
+              <PromptInput
                 className="home-composer"
-                onSubmit={(event) => {
-                  event.preventDefault();
+                onSubmit={() => {
                   startLogin();
                 }}
               >
-                <textarea
+                <PromptInputTextarea
                   className="home-composer-textarea"
                   placeholder="Sign in to start a session…"
-                  rows={2}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      startLogin();
-                    }
-                  }}
                 />
-                <div className="home-composer-footer">
+                <PromptInputFooter className="home-composer-footer">
                   <span className="home-composer-meta">
                     <ProviderIcon
                       provider={selectedProvider}
@@ -1797,8 +1789,7 @@ function DemoLanding() {
                   <span className="home-composer-hint">
                     Enter to start · Shift+Enter for new line
                   </span>
-                  <button
-                    type="submit"
+                  <PromptInputSubmit
                     className="home-composer-submit"
                     aria-label="Sign in"
                   >
@@ -1806,9 +1797,9 @@ function DemoLanding() {
                       className="home-composer-submit-icon"
                       aria-hidden="true"
                     />
-                  </button>
-                </div>
-              </form>
+                  </PromptInputSubmit>
+                </PromptInputFooter>
+              </PromptInput>
             </div>
           </div>
         ) : (
