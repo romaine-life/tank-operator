@@ -8793,12 +8793,11 @@ export function App() {
       <main className="workspace">
         {active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
-          // session — same header, same tab row, same composer footer at
+          // session — same body/composer column and same composer footer at
           // the same y-coordinate — with the configuration grid rendered
-          // *in the transcript area* instead of an actual transcript. When
-          // the user submits, the session opens and the only thing that
-          // changes inside the same scaffold is the body: configuration
-          // gives way to the live transcript.
+          // *in the transcript area* instead of an actual transcript. The
+          // session-only header/tabs are omitted here because Files,
+          // Settings, and Help have no useful target until a session exists.
           <WorkspaceShell
             className="run-panel-home"
             bodyClassName="run-main-home"
@@ -8834,48 +8833,6 @@ export function App() {
                 addHomeAttachments(fs);
               }
             }}
-            title={(
-              <span className="run-header-name-btn run-header-name-btn-static" aria-label="New session">
-                New session
-              </span>
-            )}
-            tabs={(<>
-              {/* Same Files / Settings / Help tab buttons the run pane
-                  renders, disabled-with-tooltip because they each read
-                  session-bound state (workspace files, per-session
-                  settings, in-session help). The user sees the same row
-                  in the same spot pre- and post-session. */}
-              <button
-                type="button"
-                className="run-tab"
-                disabled
-                aria-disabled="true"
-                title="Browse files once a session is open"
-              >
-                <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
-                <span>Files</span>
-              </button>
-              <button
-                type="button"
-                className="run-tab"
-                disabled
-                aria-disabled="true"
-                title="Session settings appear once a session is open"
-              >
-                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Settings</span>
-              </button>
-              <button
-                type="button"
-                className="run-tab"
-                disabled
-                aria-disabled="true"
-                title="Help appears once a session is open"
-              >
-                <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Help</span>
-              </button>
-            </>)}
             body={(<>
               <div className="home-inner">
                 <section className="home-hero" aria-labelledby="home-title">

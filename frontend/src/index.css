@@ -1792,10 +1792,10 @@ button:disabled {
 
 .run-main-home {
   /* Home variant of the chat transcript area: no auto-scroll-to-bottom
-     constraints, just normal vertical scroll with comfortable padding so
-     the configuration grid breathes. The composer footer below remains
-     pinned by `.run-composer-wrap`. */
-  padding: var(--space-6) var(--space-5);
+     constraints, just normal vertical scroll. No session header renders
+     above it, so keep the starter close to the top of the pane without
+     recreating the old empty strip. */
+  padding: var(--space-4) var(--space-5) var(--space-6);
   font-family: var(--font-primary);
 }
 
@@ -1806,13 +1806,6 @@ button:disabled {
   flex-direction: column;
   gap: var(--space-5);
   animation: welcome-fade var(--motion-slow) var(--ease-out);
-}
-
-/* Pre-session, the session-name editor slot just holds a static label.
-   Strip the rename-button hover affordances so the slot reads as text. */
-.run-header-name-btn-static {
-  cursor: default;
-  pointer-events: none;
 }
 
 /* The home composer-wrap reuses the run-composer-wrap styles. No

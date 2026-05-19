@@ -8,10 +8,10 @@ import type {
 
 // The single workspace scaffold rendered in App's main pane, regardless of
 // whether a session is active. Both the home starter and the per-session
-// chat pane fill the same slots — title, tabs, body, composer — so the user
-// types in the same composer at the same y-coordinate, the same tab row
-// stays in place, and the only thing that changes when a session opens is
-// the *body* swapping from the configuration starter to the live transcript.
+// chat pane fill the same structural slots — body and composer, with an
+// optional session header — so the user types in the same composer at the
+// same y-coordinate and the active-session pane can still expose its
+// session-bound controls.
 //
 // Owning these in one component is what makes "the home is an empty state
 // of the chat surface" structurally true rather than visually approximated.
@@ -25,16 +25,15 @@ export interface WorkspaceShellProps {
   style?: CSSProperties;
   /**
    * Header title slot — typically the session-name editor for an active
-   * session, or a static label / chip on the home starter.
+   * session. Omitted on the pre-session home starter to avoid an empty
+   * action strip above the actual starter content.
    */
-  title: ReactNode;
+  title?: ReactNode;
   /**
    * Tab nav slot — Files / Settings / Help (plus the Back-to-chat row when
-   * inside the run pane). Both pages render the same buttons; the home
-   * starter passes the disabled-with-tooltip variants because those tabs
-   * read session-bound data.
+   * inside the run pane). Omitted when the pane has no session-bound tabs.
    */
-  tabs: ReactNode;
+  tabs?: ReactNode;
   /**
    * Floating UI between the body and the composer footer — status pill,
    * scroll-to-top, scroll-to-bottom. Optional; the home starter doesn't
@@ -95,14 +94,20 @@ export function WorkspaceShell({
   onComposerWrapDrop,
   onComposerWrapPaste,
 }: WorkspaceShellProps) {
+  const hasHeader = title != null || tabs != null;
+
   return (
     <section className={["run-panel", className].filter(Boolean).join(" ")} style={style}>
-      <header className="run-header">
-        <div className="run-header-title">{title}</div>
-        <nav className="run-tabs" aria-label="Session actions">
-          {tabs}
-        </nav>
-      </header>
+      {hasHeader && (
+        <header className="run-header">
+          {title != null && <div className="run-header-title">{title}</div>}
+          {tabs != null && (
+            <nav className="run-tabs" aria-label="Session actions">
+              {tabs}
+            </nav>
+          )}
+        </header>
+      )}
 
       <main
         className={["run-main", bodyClassName].filter(Boolean).join(" ")}
