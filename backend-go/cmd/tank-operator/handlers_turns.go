@@ -71,13 +71,14 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		ClientNonce    string `json:"client_nonce"`
-		Prompt         string `json:"prompt"`
-		Model          string `json:"model"`
-		Effort         string `json:"effort"`
-		PermissionMode string `json:"permission_mode"`
-		SkillName      string `json:"skill_name"`
-		FollowUp       bool   `json:"follow_up"`
+		ClientNonce     string `json:"client_nonce"`
+		Prompt          string `json:"prompt"`
+		Model           string `json:"model"`
+		Effort          string `json:"effort"`
+		PermissionMode  string `json:"permission_mode"`
+		SkillName       string `json:"skill_name"`
+		FollowUp        bool   `json:"follow_up"`
+		OriginSessionID string `json:"origin_session_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -85,14 +86,15 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
-		ClientNonce:    body.ClientNonce,
-		RequireNonce:   true,
-		Prompt:         body.Prompt,
-		Model:          body.Model,
-		Effort:         body.Effort,
-		PermissionMode: body.PermissionMode,
-		SkillName:      body.SkillName,
-		FollowUp:       body.FollowUp,
+		ClientNonce:     body.ClientNonce,
+		RequireNonce:    true,
+		Prompt:          body.Prompt,
+		Model:           body.Model,
+		Effort:          body.Effort,
+		PermissionMode:  body.PermissionMode,
+		SkillName:       body.SkillName,
+		FollowUp:        body.FollowUp,
+		OriginSessionID: body.OriginSessionID,
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -217,9 +219,9 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 // Claude Agent SDK's AskUserQuestion zod preprocess. `annotations` is
 // optional `{questionText: {preview?, notes?}}` from the SDK schema.
 type inputReplyRequest struct {
-	ProviderItemID string                                    `json:"provider_item_id"`
-	TimelineID     string                                    `json:"timeline_id"`
-	Answers        map[string][]string                       `json:"answers"`
+	ProviderItemID string                                     `json:"provider_item_id"`
+	TimelineID     string                                     `json:"timeline_id"`
+	Answers        map[string][]string                        `json:"answers"`
 	Annotations    map[string]sessionbus.InputReplyAnnotation `json:"annotations,omitempty"`
 }
 
@@ -402,11 +404,10 @@ type sdkTurnRequest struct {
 	SkillName      string
 	FollowUp       bool
 	// OriginSessionID identifies the sibling tank-operator session that
-	// authored this turn via an MCP handoff. Set only on the
-	// service-principal path (handleInternalSendMessage); the human-typed
-	// browser path leaves it empty. Threaded into UserSubmissionArgs so
-	// the persisted user_message.created event carries it for the
-	// frontend's avatar selection.
+	// authored this turn via an MCP handoff, or the source session for a
+	// browser-created fork. Human-typed browser turns leave it empty.
+	// Threaded into UserSubmissionArgs so the persisted user_message.created
+	// event carries it for the frontend's avatar selection.
 	OriginSessionID string
 }
 

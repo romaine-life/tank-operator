@@ -8127,6 +8127,7 @@ export function App() {
           ...(request.effort ? { effort: request.effort } : {}),
           permission_mode: request.permissionMode,
           follow_up: false,
+          origin_session_id: request.sourceSession.id,
         }),
       });
       if (!turnRes.ok) {
@@ -8160,7 +8161,7 @@ export function App() {
       const res = await authedFetch(`/api/sessions/${id}`);
       if (res.ok) {
         const session: Session = normalizeSession(await res.json());
-        if (session.status === "Active") return session;
+        if (session.status === "Active" || session.ready_at) return session;
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
     }
