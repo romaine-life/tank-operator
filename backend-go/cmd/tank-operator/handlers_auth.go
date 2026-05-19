@@ -21,9 +21,10 @@ import (
 // undefined → undefined == null in JS → the OnboardingWall renders even
 // for users with the GitHub App installed.
 //
-// `role` rides along so the SPA's OnboardingWall can skip itself for
-// admins (the host installation covers their MCP-github access; they
-// don't need to install the App on their own GitHub account).
+// `role` rides along so the SPA's OnboardingWall can skip itself for callers
+// that do not need a user-facing GitHub installation: admins (covered by the
+// host installation) and service principals (platform-internal test/session
+// automation).
 //
 // Keep this the single source of truth so the shape can't drift
 // between the two paths again.
