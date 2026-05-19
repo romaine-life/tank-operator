@@ -21,12 +21,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -204,4 +207,53 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 		out = append(out, slug)
 	}
 	return out, rows.Err()
+}
+
+// handleGitHubRepos returns the full set of repos visible to the
+// caller's GitHub App installation, by way of mcp-github.
+//
+// Stage 2 of the per-session repo-selection feature: pairs with the
+// nelsong6/auth on-behalf-of exchange (PR #43) so the orchestrator
+// can present a service JWT carrying the SPA caller's email as
+// `actor_email`, which mcp-github routes back to that user's
+// installation_id via tank-operator's existing
+// /api/internal/github/installation surface. mcp-github needs no
+// changes — the same MCP tool session pods already call.
+//
+// This endpoint is hidden behind the same authedFetch wrapper the
+// recent-repos endpoint uses. Failures from mcp-github (unconnected
+// installation, IdP down, transport error) surface as 502 with a
+// stable detail string the SPA can render in the picker.
+func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if s.mcpGitHub == nil {
+		writeError(w, http.StatusServiceUnavailable, "mcp-github client not configured")
+		return
+	}
+	start := time.Now()
+	// Bound the upstream call independently of the inbound HTTP
+	// request — the picker is willing to wait a few seconds, but the
+	// SPA's fetch budget is the only ceiling we want callers to hit.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	repos, err := s.mcpGitHub.ListRepos(ctx, user.Email)
+	if err != nil {
+		githubRepoListRequestsTotal.WithLabelValues("error").Inc()
+		slog.Warn("mcp-github list_installation_repos failed", "email", user.Email, "error", err)
+		writeError(w, http.StatusBadGateway, "list repos: "+err.Error())
+		return
+	}
+	githubRepoListRequestsTotal.WithLabelValues("ok").Inc()
+	githubRepoListDurationSeconds.Observe(time.Since(start).Seconds())
+	writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+}
+
+// AppServerMCPGitHub abstracts the mcpgithub client surface so tests
+// can swap in a recorder without standing up a fake HTTP server.
+// Production wires *mcpgithub.Client directly via main.go.
+type AppServerMCPGitHub interface {
+	ListRepos(ctx context.Context, userEmail string) ([]mcpgithub.Repo, error)
 }

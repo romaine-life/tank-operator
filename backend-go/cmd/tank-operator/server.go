@@ -61,6 +61,14 @@ type appServer struct {
 	// hermes_gui branch in handleEnqueueSessionTurn rather than at boot.
 	// See nelsong6/tank-operator#540.
 	hermesBridge *hermes.Bridge
+
+	// mcpGitHub drives GET /api/github/repos — the picker's "All repos"
+	// section. Mints an on-behalf-of service JWT for the SPA caller
+	// (auth.romaine.life #43) and proxies the call to mcp-github.
+	// nil when the orchestrator deployment hasn't mounted the
+	// auth.romaine.life-audience projected SA token — the endpoint
+	// then 503s loudly rather than mis-routing the request.
+	mcpGitHub AppServerMCPGitHub
 }
 
 type sessionCommandBus interface {
@@ -95,6 +103,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// it works the moment the schema migration lands. See
 	// handlers_repos.go for the SQL.
 	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
+	// /api/github/repos enumerates the caller's GitHub App installation
+	// repos via mcp-github. Stage 2 of the auto-clone feature; pairs
+	// with the auth.romaine.life on-behalf-of exchange so the
+	// orchestrator can mint a service JWT acting for the SPA user.
+	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
 	// Sessions CRUD.
