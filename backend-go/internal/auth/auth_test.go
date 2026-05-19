@@ -140,6 +140,46 @@ func TestUser_IsHuman_IsService_ConvenienceHelpers(t *testing.T) {
 	}
 }
 
+func TestUser_OwnerEmail(t *testing.T) {
+	cases := []struct {
+		name string
+		user User
+		want string
+	}{
+		{
+			name: "human",
+			user: User{Email: "user@example.com", Role: RoleUser},
+			want: "user@example.com",
+		},
+		{
+			name: "admin",
+			user: User{Email: "admin@example.com", Role: RoleAdmin},
+			want: "admin@example.com",
+		},
+		{
+			name: "service uses actor",
+			user: User{
+				Email:      "pod-94@service.tank.romaine.life",
+				Role:       RoleService,
+				ActorEmail: "owner@example.com",
+			},
+			want: "owner@example.com",
+		},
+		{
+			name: "service missing actor falls back to principal",
+			user: User{Email: "pod-94@service.tank.romaine.life", Role: RoleService},
+			want: "pod-94@service.tank.romaine.life",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.user.OwnerEmail(); got != tc.want {
+				t.Fatalf("OwnerEmail() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVerifierRejectsHS256Tokens(t *testing.T) {
 	verifier := NewVerifier(newTestJWT(t))
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

@@ -71,6 +71,16 @@ func (u User) IsService() bool { return u.Role == RoleService }
 // callers without enumerating both human roles at each call site.
 func (u User) IsHuman() bool { return u.Role == RoleAdmin || u.Role == RoleUser }
 
+// OwnerEmail returns the human owner email that should scope session-owned
+// resources. Human callers own resources as themselves; service principals
+// act on behalf of the actor_email stamped by auth.romaine.life.
+func (u User) OwnerEmail() string {
+	if u.Role == RoleService && u.ActorEmail != "" {
+		return u.ActorEmail
+	}
+	return u.Email
+}
+
 type Verifier struct {
 	resolver KeyResolver
 }

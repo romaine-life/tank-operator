@@ -22,6 +22,12 @@ type SessionEventStore interface {
 	Upsert(ctx context.Context, event map[string]any) error
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 	HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error)
+	// OrderKeyForTimelineID resolves a rendered transcript entry id
+	// (`timeline_id`) to the newest durable order_key that contributed to
+	// that entry. Message deep links use this before dispatching the
+	// normal EventsAround read, keeping share resolution on the persisted
+	// conversation ledger instead of the browser DOM.
+	OrderKeyForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error)
 	// LatestEvents returns the most recent `limit` events for a session in
 	// ASC order_key. Implemented as a DESC LIMIT N indexed scan reversed in
 	// Go; bounded and indexed regardless of ledger size. Powers the SPA's
@@ -445,6 +451,31 @@ func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSession
 	return true, nil
 }
 
+func (s *postgresSessionEventStore) OrderKeyForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error) {
+	timelineID = strings.TrimSpace(timelineID)
+	if timelineID == "" {
+		return "", nil
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT order_key
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND payload ->> 'timeline_id' = $2
+		ORDER BY order_key DESC
+		LIMIT 1
+	`
+	var orderKey string
+	err := s.pool.QueryRow(ctx, q, storageKey, timelineID).Scan(&orderKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return orderKey, nil
+}
+
 func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error) {
 	if strings.TrimSpace(turnID) == "" {
 		return nil, nil
@@ -705,6 +736,10 @@ func (StubSessionEventStore) EventsAround(_ context.Context, _, _ string, _, _ i
 
 func (StubSessionEventStore) HasOrderKey(_ context.Context, _, orderKey string) (bool, error) {
 	return strings.TrimSpace(orderKey) == "", nil
+}
+
+func (StubSessionEventStore) OrderKeyForTimelineID(_ context.Context, _, _ string) (string, error) {
+	return "", nil
 }
 
 func (StubSessionEventStore) FindTurnTerminal(_ context.Context, _, _ string) (map[string]any, error) {

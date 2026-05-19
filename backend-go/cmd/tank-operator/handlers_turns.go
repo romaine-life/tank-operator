@@ -85,7 +85,8 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.Email, sessionID, sdkTurnRequest{
+	owner := user.OwnerEmail()
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
 		ClientNonce:     body.ClientNonce,
 		RequireNonce:    true,
 		Prompt:          body.Prompt,
@@ -115,7 +116,8 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
@@ -131,7 +133,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusServiceUnavailable, "hermes bridge not configured")
 			return
 		}
-		if err := s.hermesBridge.StopTurn(r.Context(), sessionID, user.Email, targetTurnID, targetTurnID); err != nil {
+		if err := s.hermesBridge.StopTurn(r.Context(), sessionID, owner, targetTurnID, targetTurnID); err != nil {
 			writeError(w, http.StatusBadGateway, "hermes stop: "+err.Error())
 			return
 		}
@@ -160,7 +162,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	requestedEvent := conversation.TurnInterruptRequestedEventMap(conversation.TurnInterruptRequestedArgs{
 		SessionID:         sessionID,
 		SessionStorageKey: storageKey,
-		Email:             user.Email,
+		Email:             owner,
 		TurnID:            targetTurnID,
 		ClientNonce:       targetTurnID,
 		Runtime:           provider,
@@ -177,7 +179,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		Type:              sessionbus.CommandInterrupt,
 		SessionID:         sessionID,
 		SessionStorageKey: storageKey,
-		Email:             user.Email,
+		Email:             owner,
 		Provider:          provider,
 		Source:            "interrupt",
 		TurnID:            interruptTurnID,
@@ -189,7 +191,7 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
 			SessionID:         sessionID,
 			SessionStorageKey: storageKey,
-			Email:             user.Email,
+			Email:             owner,
 			TurnID:            interruptTurnID,
 			ClientNonce:       targetTurnID,
 			Runtime:           provider,
@@ -265,7 +267,8 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session not found")
 		return
@@ -291,7 +294,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		Type:                 sessionbus.CommandInputReply,
 		SessionID:            sessionID,
 		SessionStorageKey:    storageKey,
-		Email:                user.Email,
+		Email:                owner,
 		Provider:             provider,
 		Source:               "input-reply",
 		TurnID:               inputReplyTurnID,
@@ -306,7 +309,7 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
 			SessionID:         sessionID,
 			SessionStorageKey: storageKey,
-			Email:             user.Email,
+			Email:             owner,
 			TurnID:            inputReplyTurnID,
 			ClientNonce:       targetTurnID,
 			Runtime:           provider,

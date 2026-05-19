@@ -34,7 +34,7 @@ func authenticatedListSessions(verifier *auth.Verifier, reader sessionReader) ht
 			writeError(w, auth.ErrorStatus(err), err.Error())
 			return
 		}
-		infos, err := reader.List(r.Context(), user.Email)
+		infos, err := reader.List(r.Context(), user.OwnerEmail())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -53,7 +53,7 @@ func authenticatedGetSession(verifier *auth.Verifier, reader sessionReader) http
 			return
 		}
 		sessionID := r.PathValue("session_id")
-		info, err := reader.Get(r.Context(), user.Email, sessionID)
+		info, err := reader.Get(r.Context(), user.OwnerEmail(), sessionID)
 		switch {
 		case err == nil:
 			writeJSON(w, http.StatusOK, info)

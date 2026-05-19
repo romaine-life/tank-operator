@@ -125,6 +125,9 @@ var schemaMigrations = []string{
 		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.interrupted')`,
 	`CREATE INDEX IF NOT EXISTS session_events_event_id
 		ON session_events (tank_session_id, event_id)`,
+	`CREATE INDEX IF NOT EXISTS session_events_timeline_id_order_key
+		ON session_events (tank_session_id, (payload ->> 'timeline_id'), order_key DESC)
+		WHERE payload ? 'timeline_id'`,
 	`CREATE INDEX IF NOT EXISTS session_events_created_at
 		ON session_events (created_at)`,
 

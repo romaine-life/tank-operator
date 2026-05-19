@@ -479,7 +479,8 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	_, podName, herr := s.resolveSessionPod(r.Context(), owner, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
@@ -578,7 +579,8 @@ func (s *appServer) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.PathValue("session_id")
-	_, podName, herr := s.resolveSessionPod(r.Context(), user.Email, sessionID)
+	owner := user.OwnerEmail()
+	_, podName, herr := s.resolveSessionPod(r.Context(), owner, sessionID)
 	if herr != nil {
 		writeError(w, herr.status, herr.msg)
 		return
