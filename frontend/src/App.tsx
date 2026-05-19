@@ -169,6 +169,8 @@ type TranscriptEntry = SandboxTranscriptEntry & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  startedAt?: string;
+  completedAt?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble swaps in that session's deterministic avatar in
@@ -2762,6 +2764,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           toolInput: entry.toolInput,
           toolOutput: entry.toolOutput,
           toolStatus: entry.toolStatus,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
         };
       }
       if (entry.kind === "reasoning") {
@@ -2998,6 +3002,79 @@ function formatMessageTime(iso: string): string {
   } catch {
     return "";
   }
+}
+
+function formatToolClockTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatToolFullTime(iso: string | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  });
+}
+
+function toolTimingTitle(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+  running: boolean,
+): string | undefined {
+  const start = formatToolFullTime(startedAt);
+  const end = formatToolFullTime(completedAt);
+  if (!start && !end && !running) return undefined;
+  if (running) return start ? `Started ${start}; still running` : "Still running";
+  if (start && end) return `Started ${start}; ended ${end}`;
+  if (start) return `Started ${start}`;
+  return end ? `Ended ${end}` : undefined;
+}
+
+function ToolTiming({
+  startedAt,
+  completedAt,
+  running,
+}: {
+  startedAt?: string;
+  completedAt?: string;
+  running: boolean;
+}) {
+  const start = formatToolClockTime(startedAt);
+  const end = formatToolClockTime(completedAt);
+  if (!start && !end && !running) return null;
+  const title = toolTimingTitle(startedAt, completedAt, running);
+  return (
+    <span className="run-tool-timing" title={title} aria-label={title}>
+      {start && <span className="run-tool-timing-start">{start}</span>}
+      {start && (end || running) && (
+        <span className="run-tool-timing-arrow" aria-hidden="true">
+          →
+        </span>
+      )}
+      {running ? (
+        <span className="run-tool-timing-running">
+          <Loader2Icon
+            size={11}
+            className="run-spin run-tool-timing-spinner"
+            aria-hidden="true"
+          />
+          <span className="sr-only">running</span>
+        </span>
+      ) : (
+        end && <span className="run-tool-timing-end">{end}</span>
+      )}
+    </span>
+  );
 }
 
 function formatTurnDuration(ms: number): string {
@@ -3917,13 +3994,16 @@ function ToolDefaultBody({
 function RunToolItem({
   entry,
   autoExpand,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
+  const running = state === "running";
   return (
     <div
       className="run-transcript-tool"
@@ -3964,7 +4044,14 @@ function RunToolItem({
           >
             {entry.toolName ?? "tool"}
           </span>
-          {state === "running" && (
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={entry.startedAt ?? entry.time}
+              completedAt={entry.completedAt}
+              running={running}
+            />
+          )}
+          {running && !showTimestamps && (
             <Loader2Icon
               size={12}
               className="run-spin run-tool-spinner"
@@ -3999,14 +4086,20 @@ function RunToolItem({
 function RunToolGroup({
   entries,
   autoExpand,
+  showTimestamps,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
+  showTimestamps: boolean;
 }) {
   if (entries.length === 1) {
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
-        <RunToolItem entry={entries[0]} autoExpand={autoExpand} />
+        <RunToolItem
+          entry={entries[0]}
+          autoExpand={autoExpand}
+          showTimestamps={showTimestamps}
+        />
       </div>
     );
   }
@@ -4025,6 +4118,8 @@ function RunToolGroup({
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
   }
   const summary = summaryParts.join(" · ");
+  const groupStartedAt = entries.find((entry) => entry.startedAt || entry.time);
+  const groupCompletedAt = [...entries].reverse().find((entry) => entry.completedAt);
   return (
     <div
       className="run-transcript-tools"
@@ -4049,7 +4144,14 @@ function RunToolGroup({
           />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
-        {runningCount > 0 && (
+        {showTimestamps && (
+          <ToolTiming
+            startedAt={groupStartedAt?.startedAt ?? groupStartedAt?.time}
+            completedAt={groupCompletedAt?.completedAt}
+            running={runningCount > 0}
+          />
+        )}
+        {runningCount > 0 && !showTimestamps && (
           <Loader2Icon
             size={12}
             className="run-spin run-tool-spinner"
@@ -4067,7 +4169,12 @@ function RunToolGroup({
       {open && (
         <div className="run-transcript-tools-body">
           {entries.map((e) => (
-            <RunToolItem key={e.id} entry={e} autoExpand={autoExpand} />
+            <RunToolItem
+              key={e.id}
+              entry={e}
+              autoExpand={autoExpand}
+              showTimestamps={showTimestamps}
+            />
           ))}
         </div>
       )}
@@ -4177,7 +4284,13 @@ function RunMessages({
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
-        return <RunToolGroup entries={g.entries} autoExpand={autoExpandTools} />;
+        return (
+          <RunToolGroup
+            entries={g.entries}
+            autoExpand={autoExpandTools}
+            showTimestamps={showTimestamps}
+          />
+        );
       }
       if (g.kind === "reasoning") {
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;

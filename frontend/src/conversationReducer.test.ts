@@ -124,12 +124,14 @@ test("Tool lifecycle replays to a completed tool item", () => {
       actor: "tool",
       source: "claude",
       timeline_id: "toolu-read",
+      created_at: "2026-05-12T00:00:10.000Z",
       payload: { kind: "tool", title: "Read", text: "{\"file_path\":\"README.md\"}" },
     }),
     ev("3", "item.completed", {
       actor: "tool",
       source: "claude",
       timeline_id: "toolu-read",
+      created_at: "2026-05-12T00:00:15.000Z",
       payload: { kind: "tool", title: "Read", text: "README contents" },
     }),
     ev("4", "turn.completed"),
@@ -140,6 +142,8 @@ test("Tool lifecycle replays to a completed tool item", () => {
   assert.deepEqual(state.items.map((item) => [item.id, item.status, item.title]), [
     ["toolu-read", "completed", "Read"],
   ]);
+  assert.equal(state.items[0]?.startedAt, "2026-05-12T00:00:10.000Z");
+  assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
 });
 
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {

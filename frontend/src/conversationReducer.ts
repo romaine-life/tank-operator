@@ -44,6 +44,8 @@ export interface ConversationItem {
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
 }
 
 export interface ConversationInterruptRequest {
@@ -286,6 +288,7 @@ function upsertItem(
   const existing = state.items.find((item) => item.id === id);
   const text = stringPayload(event, "text");
   const payload = { ...(existing?.payload ?? {}), ...(event.payload ?? {}) };
+  const isTerminalStatus = status === "completed" || status === "failed";
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
@@ -300,6 +303,10 @@ function upsertItem(
     orderKey: event.order_key ?? existing?.orderKey,
     sourceEventId: event.event_id,
     createdAt: event.created_at || existing?.createdAt,
+    startedAt: status === "started"
+      ? event.created_at
+      : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+    completedAt: isTerminalStatus ? event.created_at : existing?.completedAt,
   };
   const items = existing
     ? state.items.map((candidate) => (candidate.id === id ? item : candidate))
