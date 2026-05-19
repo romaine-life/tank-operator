@@ -3149,15 +3149,15 @@ function RunMessageBubble({
           data-always-visible={alwaysVisible ? "" : undefined}
         >
           <div className="run-msg-timings">
+            {showTimestamps && time && (
+              <span className="run-msg-timing-row">
+                {time}
+              </span>
+            )}
             {showDuration && durationMs != null && (
               <span className="run-msg-timing-row">
                 {formatTurnDuration(durationMs)}
                 <TimerIcon size={9} aria-hidden="true" />
-              </span>
-            )}
-            {showTimestamps && time && (
-              <span className="run-msg-timing-row">
-                {time}
               </span>
             )}
           </div>
