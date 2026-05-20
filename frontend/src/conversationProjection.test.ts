@@ -20,6 +20,11 @@ function ev(
     defaults.client_nonce = "client-1";
     defaults.payload = { status: "submitted" };
   }
+  if (type === "session.status") {
+    defaults.actor = "system";
+    defaults.timeline_id = "session:63:status:ready";
+    defaults.payload = { status: "ready", text: "Session is ready." };
+  }
   return {
     event_id,
     order_key: event_id.padStart(4, "0"),
@@ -63,6 +68,35 @@ test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order
     assert.equal(meta.turnId, "turn-1");
     assert.equal(meta.orderKey, "0004");
   }
+});
+
+test("session.status projects as a system transcript message", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("session:63:status:loading", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:status:loading",
+        created_at: "2026-05-20T10:00:00.000Z",
+        payload: { status: "loading", text: "Session is loading." },
+      }),
+      ev("session:63:status:ready", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:status:ready",
+        created_at: "2026-05-20T10:00:08.000Z",
+        payload: { status: "ready", text: "Session is ready." },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(projection.entries.map((entry) => entry.kind), ["message", "message"]);
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind === "message" ? entry.role : ""),
+    ["system", "system"],
+  );
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind === "message" ? entry.text : ""),
+    ["Session is loading.", "Session is ready."],
+  );
 });
 
 test("background shell task projects as its own transcript artifact", () => {
