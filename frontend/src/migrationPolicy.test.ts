@@ -152,6 +152,12 @@ test("chat back-pagination keeps an explicit access path", () => {
   assert.equal(appSource.includes("older-missing-cursor"), true);
 });
 
+test("chat back-pagination keeps the focused load button mounted while loading", () => {
+  assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
+  assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
+  assert.equal(appSource.includes("run-transcript-load-older-passive"), false);
+});
+
 test("chat scroll diagnostics are debug gated", () => {
   assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
   assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
