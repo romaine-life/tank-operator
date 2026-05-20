@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const chatScrollTelemetrySource = readFileSync(
+  new URL("./chatScrollTelemetry.ts", import.meta.url),
+  "utf8",
+);
+const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -71,7 +76,8 @@ test("ToolAskUserBody reads the answered state from the durable event payload", 
 test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("isPendingAskUserQuestionTool"), true);
   assert.equal(appSource.includes("pendingAskUserCount"), true);
-  assert.match(appSource, /if \(forceOpen\) setOpen\(true\);/);
+  assert.match(appSource, /entries\.some\(isPendingAskUserQuestionTool\)/);
+  assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
 test("AskUserQuestion placeholder 'Answer questions?' never leaks into App source", () => {
@@ -99,10 +105,32 @@ test("chat live stream waits for timeline bootstrap", () => {
   );
 });
 
+test("sidebar order is not browser-local", () => {
+  assert.equal(appSource.includes("tank.sessionOrder"), false);
+  assert.equal(appSource.includes("readSessionOrder"), false);
+  assert.equal(appSource.includes("writeSessionOrder"), false);
+  assert.equal(mainSource.includes("tank.sessionOrder"), false);
+  assert.equal(appSource.includes("/api/sessions/order"), true);
+});
+
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);
   assert.match(appSource, /\.\.\.\(initialSkillName \? \{ skill_name: initialSkillName \} : \{\}\)/);
   assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
   assert.equal(appSource.includes("Available once your session starts"), false);
+});
+
+test("mounted chat reactivation resets local timeline state before bootstrap", () => {
+  assert.equal(appSource.includes("visible-reactivation"), true);
+  assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
+  assert.match(appSource, /if \(!visible\) return;\s+if \(historyAttempted\) return;/);
+  assert.equal(appSource.includes("pendingVisibleTailBootstrapRef"), true);
+});
+
+test("chat scroll diagnostics are debug gated", () => {
+  assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
+  assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
+  assert.equal(appSource.includes("logChatScrollGroups"), true);
+  assert.equal(appSource.includes("logChatScrollEntries"), true);
 });

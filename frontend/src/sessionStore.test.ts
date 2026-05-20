@@ -15,6 +15,8 @@ function row(id: string, overrides: Partial<SessionRow> = {}): SessionRow {
     session_scope: "default",
     visible: true,
     status: "Active",
+    repos: [],
+    sidebar_position: 1,
     row_version: 1,
     ...overrides,
   };
@@ -79,6 +81,41 @@ test("applyRowUpdate with visible=false tombstones and removes", () => {
   assert.equal(store.list().length, 0);
 });
 
+test("list uses sidebar_position instead of row_version", () => {
+  const store = new SessionStore();
+  store.applySnapshot([
+    row("a", { sidebar_position: 3, row_version: 1 }),
+    row("b", { sidebar_position: 2, row_version: 2 }),
+    row("c", { sidebar_position: 1, row_version: 3 }),
+  ], "3");
+
+  store.applyRowUpdate({
+    cursor: "99",
+    row: row("c", { sidebar_position: 1, row_version: 99, test_state: { active: true } }),
+  });
+
+  assert.deepEqual(store.list().map((r) => r.id), ["a", "b", "c"]);
+});
+
+test("applyLocalOrder preserves drag order through later row updates", () => {
+  const store = new SessionStore();
+  store.applySnapshot([
+    row("a", { sidebar_position: 3, row_version: 1 }),
+    row("b", { sidebar_position: 2, row_version: 2 }),
+    row("c", { sidebar_position: 1, row_version: 3 }),
+  ], "3");
+
+  assert.equal(store.applyLocalOrder(["b", "c", "a"]), true);
+  assert.deepEqual(store.list().map((r) => r.id), ["b", "c", "a"]);
+
+  store.applyRowUpdate({
+    cursor: "4",
+    row: row("a", { sidebar_position: 1, row_version: 4, rollout_state: { active: true } }),
+  });
+
+  assert.deepEqual(store.list().map((r) => r.id), ["b", "c", "a"]);
+});
+
 // TestApplySnapshotClearsTombstonesForVisibleIds is the recovery
 // path for an optimistic delete that failed server-side: the user
 // clicked X locally, the DELETE API call never reached the server
@@ -136,7 +173,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       row: { id: "8", owner: "u@example.com", session_scope: "default", visible: true },
     }),
     null,
-    "missing row_version must be rejected",
+    "missing row_version + sidebar_position must be rejected",
   );
   const good = normalizeSessionRowUpdate({
     cursor: "1",
@@ -146,11 +183,13 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       session_scope: "default",
       visible: true,
       status: "Active",
+      sidebar_position: 7,
       row_version: 1,
     },
   });
   assert.ok(good, "valid payload must parse");
   assert.equal(good!.row.id, "8");
+  assert.equal(good!.row.sidebar_position, 7);
   assert.equal(good!.row.row_version, 1);
 });
 

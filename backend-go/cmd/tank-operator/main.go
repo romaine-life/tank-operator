@@ -588,6 +588,9 @@ func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map
 func (r *stubSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
+	return orderedIDs, nil
+}
 func (r *stubSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
 
 func envDefault(name, fallback string) string {
@@ -624,4 +627,3 @@ func parseEmailSet(raw string) map[string]bool {
 	}
 	return m
 }
-

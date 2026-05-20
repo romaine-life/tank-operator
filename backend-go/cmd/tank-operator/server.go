@@ -127,6 +127,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// able server-side observability that replaces "share a Network
 	// tab screenshot."
 	mux.HandleFunc("GET /api/debug/session-list-state", s.handleDebugSessionListState)
+	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)

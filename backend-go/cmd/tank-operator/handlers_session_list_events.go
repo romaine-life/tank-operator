@@ -88,6 +88,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			sidebar_position,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2 AND row_version > $3
@@ -108,14 +109,14 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos                                                       []string
-			rowVersion                                                  int64
+			sidebarPosition, rowVersion                                 int64
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState,
+			&repos, &cloneState, &sidebarPosition,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -142,6 +143,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			RolloutState:    unmarshalJSONBField(rolloutState),
 			Repos:           repos,
 			CloneState:      unmarshalJSONBField(cloneState),
+			SidebarPosition: sidebarPosition,
 			RowVersion:      rowVersion,
 		})
 	}

@@ -119,9 +119,10 @@ type rowWireShape struct {
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
 	// the SPA never has to special-case "absent vs. empty"; clone
 	// state is omitted until stage 3's init container writes back.
-	Repos      []string       `json:"repos"`
-	CloneState map[string]any `json:"clone_state,omitempty"`
-	RowVersion int64          `json:"row_version"`
+	Repos           []string       `json:"repos"`
+	CloneState      map[string]any `json:"clone_state,omitempty"`
+	SidebarPosition int64          `json:"sidebar_position"`
+	RowVersion      int64          `json:"row_version"`
 }
 
 // MarshalRowUpdate produces the JSON wire payload for a single row.
@@ -158,6 +159,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			RolloutState:    record.RolloutState,
 			Repos:           repos,
 			CloneState:      record.CloneState,
+			SidebarPosition: record.SidebarPosition,
 			RowVersion:      record.RowVersion,
 		},
 		Cursor: fmt.Sprintf("%d", record.RowVersion),
