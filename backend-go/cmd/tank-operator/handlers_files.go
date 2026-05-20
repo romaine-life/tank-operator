@@ -259,6 +259,12 @@ import sys
 p = sys.argv[1]
 rel_path = sys.argv[2]
 entries = []
+if not os.path.exists(p):
+    print(json.dumps({"path": rel_path, "entries": entries, "error": "not_found"}))
+    raise SystemExit(0)
+if not os.path.isdir(p):
+    print(json.dumps({"path": rel_path, "entries": entries, "error": "not_directory"}))
+    raise SystemExit(0)
 for name in os.listdir(p):
     full = os.path.join(p, name)
     try:
@@ -294,12 +300,25 @@ PY`,
 		return
 	}
 
-	var body fileListResponse
+	var body struct {
+		Path    string              `json:"path"`
+		Entries []fileEntryResponse `json:"entries"`
+		Error   string              `json:"error"`
+	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		writeError(w, http.StatusInternalServerError, "parse dir listing: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, body)
+	switch body.Error {
+	case "":
+		writeJSON(w, http.StatusOK, fileListResponse{Path: body.Path, Entries: body.Entries})
+	case "not_found":
+		writeError(w, http.StatusNotFound, "path not found: "+body.Path)
+	case "not_directory":
+		writeError(w, http.StatusBadRequest, "path is not a directory: "+body.Path)
+	default:
+		writeError(w, http.StatusInternalServerError, "list dir: "+body.Error)
+	}
 }
 
 // handleGetFileContent returns the first 262144 bytes of a file as text.

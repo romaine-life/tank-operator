@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -115,7 +115,14 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
-import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
+import {
+  linkWorkspacePathsInMarkdown,
+  normalizeWorkspacePathTarget,
+  workspacePathFromHref,
+  type WorkspacePathTarget,
+} from "./workspaceLinks";
+
+const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 
 type SessionMode =
   | "api_key"
@@ -2222,143 +2229,10 @@ function parentFilesPath(path: string): string {
   return idx <= 0 ? "" : path.slice(0, idx);
 }
 
-const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
-  "/api/",
-  "/assets/",
-  "/_",
-  "/manifest.webmanifest",
-];
-
-function normalizeWorkspacePath(rawPath: string): string | null {
-  let path = rawPath.trim();
-  if (!path) return null;
-  path = path.split(/[?#]/, 1)[0] ?? "";
-  try {
-    path = decodeURI(path);
-  } catch {
-    // Keep the raw path if it is not valid percent-encoded text.
-  }
-  path = path.replace(/\\/g, "/");
-  if (path === "/workspace" || path === "workspace") return "";
-  path = path.replace(/^\/workspace\/?/, "");
-  path = path.replace(/^workspace\/+/, "");
-  path = path.replace(/^\/+/, "");
-  path = path.replace(/^\.\//, "");
-  if (!path || path === ".") return null;
-  if (path.split("/").some((seg) => seg === "..")) return null;
-  return path;
-}
-
-function workspacePathFromHref(href: string | undefined): string | null {
-  if (!href) return null;
-  const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#")) return null;
-
-  if (trimmed.startsWith("file://")) {
-    try {
-      const url = new URL(trimmed);
-      return normalizeWorkspacePath(url.pathname);
-    } catch {
-      return null;
-    }
-  }
-
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
-    return null;
-  }
-
-  if (trimmed.startsWith("/")) {
-    if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
-      return null;
-    }
-    return normalizeWorkspacePath(trimmed);
-  }
-
-  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
-    return normalizeWorkspacePath(trimmed);
-  }
-
-  return null;
-}
-
 function humanFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** Map a filename to a syntax-highlighter language hint. Streamdown
- *  pipes through Prism so common short identifiers work out of the box. */
-function syntaxLangForPath(path: string): string {
-  const lower = path.toLowerCase();
-  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
-  const name = lower.slice(lower.lastIndexOf("/") + 1);
-  // Special-cased filenames first.
-  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
-  if (name === "makefile") return "makefile";
-  if (name === ".gitignore" || name.endsWith(".gitignore")) return "ini";
-  if (name.endsWith(".env") || name === ".env") return "ini";
-  // Then by extension. Limited to common cases — Prism falls back to plain
-  // text on unknown lang, which is fine.
-  return (
-    {
-      ts: "ts",
-      tsx: "tsx",
-      js: "js",
-      jsx: "jsx",
-      mjs: "js",
-      cjs: "js",
-      py: "python",
-      rb: "ruby",
-      go: "go",
-      rs: "rust",
-      java: "java",
-      kt: "kotlin",
-      cs: "csharp",
-      cpp: "cpp",
-      cc: "cpp",
-      c: "c",
-      h: "c",
-      hpp: "cpp",
-      sh: "bash",
-      bash: "bash",
-      zsh: "bash",
-      fish: "bash",
-      yml: "yaml",
-      yaml: "yaml",
-      json: "json",
-      jsonc: "json",
-      md: "markdown",
-      mdx: "markdown",
-      sql: "sql",
-      html: "html",
-      htm: "html",
-      xml: "xml",
-      svg: "xml",
-      css: "css",
-      scss: "scss",
-      sass: "sass",
-      less: "less",
-      tf: "hcl",
-      hcl: "hcl",
-      toml: "toml",
-      lua: "lua",
-      php: "php",
-      swift: "swift",
-      dart: "dart",
-      ex: "elixir",
-      exs: "elixir",
-      erl: "erlang",
-      hs: "haskell",
-      r: "r",
-      scala: "scala",
-      vue: "html",
-      svelte: "html",
-      proto: "protobuf",
-      graphql: "graphql",
-      gql: "graphql",
-    }[ext] ?? "text"
-  );
 }
 
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
@@ -3446,19 +3320,19 @@ function RunMarkdownInlineCode({ children, className, node: _node, ...props }: R
 
 function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { openWorkspacePath } = useContext(RunContext);
-  const workspacePath = typeof props.href === "string"
+  const workspaceTarget = typeof props.href === "string"
     ? workspacePathFromHref(props.href)
     : null;
   return (
     <a
       {...props}
-      rel={workspacePath ? undefined : "noreferrer"}
-      target={workspacePath ? undefined : "_blank"}
+      rel={workspaceTarget ? undefined : "noreferrer"}
+      target={workspaceTarget ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
-        if (e.defaultPrevented || !workspacePath) return;
+        if (e.defaultPrevented || !workspaceTarget) return;
         e.preventDefault();
-        openWorkspacePath(workspacePath);
+        openWorkspacePath(workspaceTarget);
       }}
     />
   );
@@ -3490,7 +3364,7 @@ interface InputReplyPayload {
 }
 
 const RunContext = createContext<{
-  openWorkspacePath: (path: string) => void;
+  openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
 }>({
@@ -4916,6 +4790,7 @@ function ChatPane({
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
   // Edit-mode bookkeeping for the file viewer.
   const [fileDraft, setFileDraft] = useState<string | null>(null);
@@ -5977,22 +5852,27 @@ function ChatPane({
     if (type === "dir") {
       setFilesPath(next);
       setSelectedFile(null);
+      setSelectedFileLine(null);
       setFileDraft(null);
       setFileSaveError(null);
       return;
     }
     // Trigger content fetch by setting a placeholder.
     setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFileLine(null);
     setFileDraft(null);
     setFileSaveError(null);
   }
 
-  function openWorkspacePath(path: string) {
-    const normalized = normalizeWorkspacePath(path);
+  function openWorkspacePath(target: WorkspacePathTarget | string) {
+    const normalized = typeof target === "string"
+      ? normalizeWorkspacePathTarget(target)
+      : target;
     if (!normalized) return;
     setActiveTab("files");
-    setFilesPath(parentFilesPath(normalized));
-    setSelectedFile({ path: normalized, size: 0, truncated: false, text: "", binary: false });
+    setFilesPath(parentFilesPath(normalized.path));
+    setSelectedFile({ path: normalized.path, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFileLine(normalized.line);
     setFileDraft(null);
     setFileSaveError(null);
   }
@@ -7113,6 +6993,7 @@ function ChatPane({
                 onClick={() => {
                   setFilesPath("");
                   setSelectedFile(null);
+                  setSelectedFileLine(null);
                 }}
               >
                 /workspace
@@ -7131,6 +7012,7 @@ function ChatPane({
                         onClick={() => {
                           setFilesPath(target);
                           setSelectedFile(null);
+                          setSelectedFileLine(null);
                         }}
                       >
                         {seg}
@@ -7148,6 +7030,7 @@ function ChatPane({
                     onClick={() => {
                       setFilesPath(parentFilesPath(filesPath));
                       setSelectedFile(null);
+                      setSelectedFileLine(null);
                     }}
                   >
                     <ArrowUpFromLineIcon size={14} className="run-files-row-icon" aria-hidden="true" />
@@ -7254,6 +7137,7 @@ function ChatPane({
                     <div className="run-files-viewer-header">
                       <span className="run-files-viewer-path">
                         {selectedFile.path}
+                        {selectedFileLine ? `:${selectedFileLine}` : ""}
                       </span>
                       <div className="run-files-viewer-actions">
                         {fileDraft != null && fileDraft !== selectedFile.text && (
@@ -7292,18 +7176,28 @@ function ChatPane({
                     )}
                     {/* Editable when not truncated. Truncated reads aren't
                         safe to overwrite — would silently destroy the
-                        unread tail. Read-only highlighted view when the
+                        unread tail. Read-only CodeMirror view when the
                         user hasn't started editing yet (fileDraft==null);
-                        switches to the textarea on first focus. */}
+                        switches to editable CodeMirror on first focus. */}
                     {selectedFile.truncated ? (
-                      <div className="run-files-viewer-content">
-                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
-                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
-                        </Streamdown>
+                      <div className="run-files-viewer-content run-files-viewer-codemirror">
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable={false}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={selectedFile.text}
+                          />
+                        </Suspense>
                       </div>
                     ) : fileDraft == null ? (
                       <div
-                        className="run-files-viewer-content run-files-viewer-readonly"
+                        className="run-files-viewer-content run-files-viewer-codemirror run-files-viewer-readonly"
                         onClick={() => setFileDraft(selectedFile.text)}
                         role="button"
                         tabIndex={0}
@@ -7315,18 +7209,37 @@ function ChatPane({
                         }}
                         title="Click to edit"
                       >
-                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
-                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
-                        </Streamdown>
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable={false}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={selectedFile.text}
+                          />
+                        </Suspense>
                       </div>
                     ) : (
-                      <textarea
-                        className="run-files-viewer-content run-files-viewer-editor"
-                        value={fileDraft}
-                        onChange={(e) => setFileDraft(e.target.value)}
-                        spellCheck={false}
-                        autoFocus
-                      />
+                      <div className="run-files-viewer-content run-files-viewer-codemirror">
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable
+                            onChange={setFileDraft}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={fileDraft}
+                          />
+                        </Suspense>
+                      </div>
                     )}
                   </>
                 )}
