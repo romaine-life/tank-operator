@@ -2192,6 +2192,14 @@ function normalizeToolState(status: string | undefined): string {
   return normalized;
 }
 
+function isAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return entry.toolName === "AskUserQuestion";
+}
+
+function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return isAskUserQuestionTool(entry) && normalizeToolState(entry.toolStatus) === "running";
+}
+
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
@@ -4102,7 +4110,11 @@ function RunToolItem({
   autoExpand: boolean;
   showTimestamps: boolean;
 }) {
-  const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
+  const forceExpanded = autoExpand || isPendingAskUserQuestionTool(entry);
+  const [expanded, setExpanded] = useState(forceExpanded || isAskUserQuestionTool(entry));
+  useEffect(() => {
+    if (forceExpanded) setExpanded(true);
+  }, [forceExpanded]);
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
@@ -4205,16 +4217,24 @@ function RunToolGroup({
       </div>
     );
   }
-  const [open, setOpen] = useState(autoExpand);
   const runningCount = entries.filter(
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
+  const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
+  const forceOpen = autoExpand || pendingAskUserCount > 0;
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
     summaryParts.push(`${runningCount} running`);
+  }
+  if (pendingAskUserCount > 0) {
+    summaryParts.push("needs input");
   }
   if (errorCount > 0) {
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
