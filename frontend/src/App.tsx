@@ -997,16 +997,6 @@ function sessionSkillStateClass(session: Session): string {
   return "";
 }
 
-function mergeMutualSessionSkillState(incoming: Session, existing?: Session): Session {
-  if (!existing) return incoming;
-  if (!incoming.test_state?.active || !incoming.rollout_state?.active) return incoming;
-
-  const existingSkill = currentSessionSkillState(existing.test_state, existing.rollout_state);
-  if (existingSkill === "test") return { ...incoming, rollout_state: null };
-  if (existingSkill === "rollout") return { ...incoming, test_state: null };
-  return incoming;
-}
-
 function sessionBootStartMs(session: Session): number {
   const requestedMs = session.requested_at ? Date.parse(session.requested_at) : NaN;
   if (Number.isFinite(requestedMs)) return requestedMs;
@@ -8643,12 +8633,7 @@ export function App() {
         source: "initial",
       });
       const sessionsFromStore = sessionStoreRef.current.list().map(rowToSession);
-      setSessions((prev) => {
-        const previousById = new Map(prev.map((session) => [session.id, session]));
-        return sessionsFromStore.map((session) =>
-          mergeMutualSessionSkillState(session, previousById.get(session.id)),
-        );
-      });
+      setSessions(sessionsFromStore);
       const nextActivities: Record<string, SessionActivitySummary> = {};
       for (const row of sessionStoreRef.current.list()) {
         const activity = sessionStoreRef.current.activityForRender(row.id);
@@ -9187,9 +9172,7 @@ export function App() {
       throw new Error(`test state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
-    setSessions((prev) =>
-      prev.map((s) => (s.id === id ? mergeMutualSessionSkillState(updated, s) : s)),
-    );
+    setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
   }
 
   async function createSession(
@@ -9301,11 +9284,7 @@ export function App() {
             : "";
         try {
           const readySession = await waitForSessionReady(created.id);
-          setSessions((prev) =>
-            prev.map((s) =>
-              s.id === created.id ? mergeMutualSessionSkillState(readySession, s) : s,
-            ),
-          );
+          setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
           if (initialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
               setError(String(e));

@@ -117,6 +117,33 @@ var schemaMigrations = []string{
 		ADD COLUMN IF NOT EXISTS test_state jsonb`,
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS rollout_state jsonb`,
+	// Skill state is mutually exclusive at the durable row. The
+	// frontend renders the row as canonical truth; it must not repair
+	// both-active historical data locally. Prefer rollout when normalizing
+	// ambiguous rows because rollout is the deployment flow whose sidebar
+	// color was masked by the stale test marker.
+	`UPDATE sessions
+		SET test_state = NULL,
+			updated_at = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE test_state @> '{"active": true}'::jsonb
+		  AND rollout_state @> '{"active": true}'::jsonb`,
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (
+			SELECT 1
+			FROM pg_constraint
+			WHERE conname = 'sessions_skill_state_mutual_exclusion'
+			  AND conrelid = 'sessions'::regclass
+		) THEN
+			ALTER TABLE sessions
+				ADD CONSTRAINT sessions_skill_state_mutual_exclusion
+				CHECK (NOT (
+					test_state @> '{"active": true}'::jsonb
+					AND rollout_state @> '{"active": true}'::jsonb
+				));
+		END IF;
+	END $$`,
 
 	// Repo-selection columns. `repos` is the durable list of
 	// "owner/name" slugs the user picked at session creation; empty

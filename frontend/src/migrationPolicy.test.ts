@@ -113,6 +113,17 @@ test("sidebar order is not browser-local", () => {
   assert.equal(appSource.includes("/api/sessions/order"), true);
 });
 
+test("sidebar skill-state conflicts are not repaired in the frontend", () => {
+  const skillStateMatch = appSource.match(
+    /function currentSessionSkillState\([\s\S]*?\n\}/,
+  );
+  assert.ok(skillStateMatch, "currentSessionSkillState should be present");
+  const skillStateBody = skillStateMatch[0]!;
+  assert.equal(appSource.includes("mergeMutualSessionSkillState"), false);
+  assert.equal(skillStateBody.includes('if (rolloutActive) return "rollout"'), false);
+  assert.equal(skillStateBody.includes('if (testActive) return "test"'), false);
+});
+
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);

@@ -101,8 +101,13 @@ sidebar cares about. It folds three input streams into row updates:
 
 The `sessions` row absorbs every field the sidebar renders today:
 `status`, `ready_at`, `terminating_at`, `activity_summary jsonb`,
-`unread_count`, and `sidebar_position`. `row_version` is only the
-update cursor; it is not a render-order key. There is no
+`unread_count`, `test_state jsonb`, `rollout_state jsonb`, and
+`sidebar_position`. `row_version` is only the update cursor; it is
+not a render-order key. `test_state.active` means the test workflow
+has started; it is not proof that a Glimmung slot still exists.
+`rollout_state.active` means the rollout workflow has started, which
+ends the test workflow. The two states are mutually exclusive at the
+row: at most one can carry `{"active": true}`. There is no
 `session_lifecycle_events` read on the sidebar path. The K8s pod is
 the SessionController's input, not the SPA's input.
 
