@@ -79,6 +79,11 @@
       "type": "string",
       "minLength": 1
     },
+    "task_id": {
+      "description": "Provider or Tank task identifier for session-level background shell tasks.",
+      "type": "string",
+      "minLength": 1
+    },
     "parent_id": {
       "type": "string",
       "minLength": 1
@@ -109,6 +114,9 @@
         "item.started",
         "item.completed",
         "item.failed",
+        "shell_task.started",
+        "shell_task.updated",
+        "shell_task.exited",
         "tool.approval_requested",
         "tool.approval_resolved"
       ]
@@ -266,6 +274,21 @@
           "then": { "required": ["reason"] }
         }
       ]
+    },
+    "shellTaskPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "task_id", "status"],
+      "properties": {
+        "kind": { "const": "shell_task" },
+        "task_id": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "$ref": "#/$defs/nonEmptyString" },
+        "summary": { "type": "string" },
+        "description": { "type": "string" },
+        "tool_use_id": { "type": "string", "minLength": 1 },
+        "last_tool_name": { "type": "string" },
+        "error": {}
+      }
     }
   },
   "allOf": [
@@ -355,6 +378,23 @@
         "required": ["turn_id", "timeline_id", "payload"],
         "properties": {
           "payload": { "$ref": "#/$defs/itemPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": ["shell_task.started", "shell_task.updated", "shell_task.exited"]
+          }
+        },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["turn_id", "timeline_id", "task_id", "payload"],
+        "properties": {
+          "actor": { "const": "tool" },
+          "payload": { "$ref": "#/$defs/shellTaskPayload" }
         }
       }
     },

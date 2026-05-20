@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Config } from "../config.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
-import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 import { itemOutcomeTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
@@ -67,6 +67,9 @@ export function canonicalEventsForClaudeMessage(
 ): TankConversationEvent[] {
   if (!turn) return [];
   const providerID = providerEventID(message);
+  if (message.type === "system" && isClaudeTaskLifecycleMessage(message)) {
+    return canonicalEventsForClaudeTaskLifecycle(cfg, turn, message, providerID);
+  }
   if (message.type === "assistant") {
     const events: TankConversationEvent[] = [];
     for (const [index, block] of claudeMessageContent(message).entries()) {
@@ -235,12 +238,88 @@ export function canonicalEventsForClaudeMessage(
   return [];
 }
 
+export function claudeTaskIdentifiers(
+  message: ClaudeProviderEvent,
+): { taskID: string | null; toolUseID: string | null } {
+  return {
+    taskID: nonEmptyString(message.task_id),
+    toolUseID: nonEmptyString(message.tool_use_id),
+  };
+}
+
+export function isClaudeTaskLifecycleMessage(message: ClaudeProviderEvent): boolean {
+  return (
+    message.type === "system" &&
+    (
+      message.subtype === "task_started" ||
+      message.subtype === "task_progress" ||
+      message.subtype === "task_notification" ||
+      message.subtype === "task_updated"
+    )
+  );
+}
+
+function canonicalEventsForClaudeTaskLifecycle(
+  cfg: Config,
+  turn: ClaudeTurnContext,
+  message: ClaudeProviderEvent,
+  providerID: string | undefined,
+): TankConversationEvent[] {
+  const taskID = nonEmptyString(message.task_id);
+  if (!taskID) return [];
+  const status = shellTaskStatus(message);
+  const type =
+    message.subtype === "task_started"
+      ? "shell_task.started"
+      : isTerminalShellTaskStatus(status)
+        ? "shell_task.exited"
+        : "shell_task.updated";
+  const toolUseID = nonEmptyString(message.tool_use_id);
+  const payload: Record<string, unknown> = {
+    status,
+    provider_subtype: message.subtype,
+  };
+  for (const key of ["summary", "description", "last_tool_name", "error"] as const) {
+    if (message[key] !== undefined) payload[key] = message[key];
+  }
+  if (toolUseID) payload.tool_use_id = toolUseID;
+  return [
+    shellTaskEvent({
+      sessionID: cfg.sessionId,
+      turnID: turn.turnID,
+      source: "claude",
+      type,
+      taskID,
+      status,
+      providerItemID: toolUseID ?? taskID,
+      providerEventID: providerID,
+      payload,
+    }),
+  ];
+}
+
+function shellTaskStatus(message: ClaudeProviderEvent): string {
+  const status = nonEmptyString(message.status);
+  if (status) return status;
+  return message.subtype === "task_started" ? "running" : "updated";
+}
+
+function isTerminalShellTaskStatus(status: string): boolean {
+  return ["completed", "failed", "stopped", "cancelled", "canceled", "exited"].includes(
+    status.toLowerCase(),
+  );
+}
+
 function providerEventID(message: ClaudeProviderEvent): string | undefined {
   for (const key of ["uuid", "id", "message_id", "session_id"]) {
     const value = message[key];
     if (typeof value === "string" && value) return value;
   }
   return undefined;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
 }
 
 function claudeMessageContent(message: ClaudeProviderEvent): unknown[] {

@@ -19,6 +19,10 @@ export function itemTimelineID(turnID, providerItemID) {
   return `${turnID}:item:${stableIDPart(providerItemID)}`;
 }
 
+export function shellTaskTimelineID(turnID, taskID) {
+  return `${turnID}:shell_task:${stableIDPart(taskID)}`;
+}
+
 export function userSubmissionEvents(args) {
   const text = requireNonEmpty(args.text, "text");
   const clientNonce = requireNonEmpty(args.clientNonce, "clientNonce");
@@ -113,6 +117,40 @@ export function itemEvent(args) {
   };
   if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
   if (args.payload) event.payload = args.payload;
+  return event;
+}
+
+export function shellTaskEvent(args) {
+  const taskID = requireNonEmpty(args.taskID, "taskID");
+  const status = requireNonEmpty(args.status, "status");
+  const payload = {
+    ...(args.payload ?? {}),
+    kind: "shell_task",
+    task_id: taskID,
+    status,
+  };
+  const providerEventPart = args.providerEventID ?? stableIDPart(JSON.stringify(payload));
+  const event = {
+    event_id: `${args.turnID}:${args.type}:${stableIDPart(taskID)}:${providerEventPart}`,
+    conversation_id: args.sessionID,
+    session_id: args.sessionID,
+    turn_id: args.turnID,
+    timeline_id: shellTaskTimelineID(args.turnID, taskID),
+    task_id: taskID,
+    provider_item_id: args.providerItemID ?? taskID,
+    parent_id: args.parentID ?? args.turnID,
+    actor: "tool",
+    source: args.source,
+    type: args.type,
+    created_at: new Date().toISOString(),
+    producer: {
+      name: `${args.source}-runner`,
+      runtime: args.source,
+    },
+    visibility: "durable",
+    payload,
+  };
+  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
   return event;
 }
 

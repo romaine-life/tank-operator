@@ -58,10 +58,58 @@ test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order
   assert.ok(meta, "Stop requested chip should appear in projection entries");
   if (meta?.kind === "meta") {
     assert.equal(meta.meta.title, "Stop requested");
+    assert.equal(meta.meta.detail, "Terminating the active turn.");
     assert.equal(meta.meta.severity, "info");
     assert.equal(meta.turnId, "turn-1");
     assert.equal(meta.orderKey, "0004");
   }
+});
+
+test("background shell task projects as its own transcript artifact", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "item.started", {
+        actor: "tool",
+        source: "claude",
+        timeline_id: "tool-before",
+        payload: { kind: "tool", name: "Read" },
+      }),
+      ev("2", "shell_task.started", {
+        actor: "tool",
+        source: "claude",
+        timeline_id: "turn-1:shell_task:task-abc",
+        task_id: "task-abc",
+        provider_item_id: "toolu-monitor",
+        payload: {
+          kind: "shell_task",
+          task_id: "task-abc",
+          status: "running",
+          tool_use_id: "toolu-monitor",
+          summary: "Watching logs",
+        },
+      }),
+      ev("3", "item.started", {
+        actor: "tool",
+        source: "claude",
+        timeline_id: "tool-after",
+        payload: { kind: "tool", name: "Grep" },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind),
+    ["tool", "background_task", "tool"],
+  );
+  const task = projection.entries.find((entry) => entry.kind === "background_task");
+  assert.ok(task);
+  if (task?.kind === "background_task") {
+    assert.equal(task.taskId, "task-abc");
+    assert.equal(task.taskStatus, "running");
+    assert.equal(task.taskSummary, "Watching logs");
+    assert.equal(task.taskToolUseId, "toolu-monitor");
+  }
+  assert.equal(projection.backgroundTasks.length, 1);
 });
 
 test("projects canonical user and assistant events into chat messages", () => {

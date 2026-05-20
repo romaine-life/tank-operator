@@ -571,8 +571,12 @@ func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, act
 		state["url"] = *url
 	}
 	raw, _ := json.Marshal(state)
-	return m.patchStateAnnotation(ctx, owner, sessionID,
-		"tank-operator/test-state", string(raw),
+	annotations := map[string]string{testStateAnnotation: string(raw)}
+	if active {
+		annotations[rolloutStateAnnotation] = `{"active":false}`
+	}
+	return m.patchStateAnnotations(ctx, owner, sessionID,
+		annotations,
 		func(c context.Context) error {
 			if m.registry == nil {
 				return nil
@@ -586,8 +590,12 @@ func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, act
 func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, active bool) (Info, error) {
 	state := map[string]any{"active": active}
 	raw, _ := json.Marshal(state)
-	return m.patchStateAnnotation(ctx, owner, sessionID,
-		"tank-operator/rollout-state", string(raw),
+	annotations := map[string]string{rolloutStateAnnotation: string(raw)}
+	if active {
+		annotations[testStateAnnotation] = `{"active":false}`
+	}
+	return m.patchStateAnnotations(ctx, owner, sessionID,
+		annotations,
 		func(c context.Context) error {
 			if m.registry == nil {
 				return nil
@@ -627,14 +635,15 @@ func (m *Manager) ReorderSessions(ctx context.Context, owner string, orderedIDs 
 	return nil
 }
 
-func (m *Manager) patchStateAnnotation(
+func (m *Manager) patchStateAnnotations(
 	ctx context.Context,
-	owner, sessionID, annotation, value string,
+	owner, sessionID string,
+	annotations map[string]string,
 	writeColumn func(context.Context) error,
 ) (Info, error) {
 	patch := map[string]any{
 		"metadata": map[string]any{
-			"annotations": map[string]any{annotation: value},
+			"annotations": annotations,
 		},
 	}
 	raw, _ := json.Marshal(patch)
@@ -643,13 +652,13 @@ func (m *Manager) patchStateAnnotation(
 		return Info{}, err
 	}
 	if _, patchErr := m.client.CoreV1().Pods(m.namespace).Patch(ctx, pod.Name, types.MergePatchType, raw, metav1.PatchOptions{}); patchErr != nil && !k8serrors.IsNotFound(patchErr) {
-		return Info{}, fmt.Errorf("patch annotation %s: %w", annotation, patchErr)
+		return Info{}, fmt.Errorf("patch state annotations: %w", patchErr)
 	}
 	if writeColumn != nil {
 		if err := writeColumn(ctx); err != nil {
 			slog.Warn("session-state column write failed",
 				"session_id", sessionID, "owner", owner,
-				"annotation", annotation, "error", err)
+				"annotations", annotations, "error", err)
 		}
 	}
 	if m.emitter != nil {

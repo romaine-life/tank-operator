@@ -233,3 +233,57 @@ test("adapter maps Claude result failures and interrupts to terminal turn events
   assert.equal(interrupted[0]?.type, "turn.interrupted");
   assert.equal(interrupted[0]?.payload?.reason, "client_interrupt");
 });
+
+test("adapter maps Claude background task lifecycle to shell task events", () => {
+  const started = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-abc",
+      tool_use_id: "toolu_monitor",
+      status: "running",
+      summary: "Watching logs",
+      uuid: "task-event-1",
+    },
+    new Set<string>(),
+  );
+
+  assert.equal(started.length, 1);
+  assertTankEventFixture(started[0]!);
+  assert.equal(started[0]?.type, "shell_task.started");
+  assert.equal(started[0]?.actor, "tool");
+  assert.equal(started[0]?.timeline_id, "turn-run-123:shell_task:task-abc");
+  assert.equal(started[0]?.task_id, "task-abc");
+  assert.equal(started[0]?.provider_item_id, "toolu_monitor");
+  assert.deepEqual(started[0]?.payload, {
+    kind: "shell_task",
+    task_id: "task-abc",
+    status: "running",
+    provider_subtype: "task_started",
+    summary: "Watching logs",
+    tool_use_id: "toolu_monitor",
+  });
+
+  const exited = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-abc",
+      status: "failed",
+      summary: "Monitor exited nonzero",
+      error: "exit 1",
+      uuid: "task-event-2",
+    },
+    new Set<string>(),
+  );
+
+  assert.equal(exited.length, 1);
+  assertTankEventFixture(exited[0]!);
+  assert.equal(exited[0]?.type, "shell_task.exited");
+  assert.equal(exited[0]?.payload?.status, "failed");
+  assert.equal(exited[0]?.payload?.error, "exit 1");
+});

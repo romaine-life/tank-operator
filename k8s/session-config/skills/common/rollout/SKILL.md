@@ -25,4 +25,4 @@ When the user invokes `/rollout`, carry the current change all the way through d
 
 ## Lease/Glimmung
 
-- If you had the /test skill called previously, or if you took a lease using the glimmung mcp tool to utilize a test slot, return the lease and allow glimmung to handle the test environment cleanup.
+- Starting rollout means the test workflow is over. If you had the /test skill called previously, or if you took a lease using the glimmung mcp tool to utilize a test slot, return the lease and allow glimmung to handle the test environment cleanup.

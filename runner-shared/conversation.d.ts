@@ -19,6 +19,9 @@ export const TANK_EVENT_TYPES: readonly [
   "item.started",
   "item.completed",
   "item.failed",
+  "shell_task.started",
+  "shell_task.updated",
+  "shell_task.exited",
   "tool.approval_requested",
   "tool.approval_resolved",
 ];
@@ -56,6 +59,7 @@ export interface TankConversationEvent<
   turn_id?: string;
   timeline_id?: string;
   provider_item_id?: string;
+  task_id?: string;
   parent_id?: string;
   client_nonce?: string;
   actor: TankActor;
