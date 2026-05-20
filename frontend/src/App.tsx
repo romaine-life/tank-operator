@@ -1934,6 +1934,12 @@ function skillTrigger(providerIsClaude: boolean, name: string): string {
   return `${providerIsClaude ? "/" : "$"}${name}`;
 }
 
+function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: string): string {
+  const trigger = skillTrigger(MODE_MENU_ICONS[mode] === "anthropic", name);
+  const trimmed = text.trim();
+  return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
+}
+
 function stripSkillTrigger(name: string, text: string): string {
   const trimmed = text.trim();
   const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
@@ -7866,6 +7872,7 @@ export function App() {
   // session's run pane (which uses its own per-session composerMode state).
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
+  const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
   // Files picked / dropped / pasted onto the home composer before the
@@ -8587,10 +8594,30 @@ export function App() {
     setDragOverSessionId(null);
   }
 
+  async function markCreatedSessionTestState(id: string): Promise<void> {
+    const state: TestState = { active: true };
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, test_state: state, rollout_state: null } : s)),
+    );
+    const res = await authedFetch(`/api/sessions/${id}/test-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+    if (!res.ok) {
+      throw new Error(`test state update failed: ${res.status}`);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? mergeMutualSessionSkillState(updated, s) : s)),
+    );
+  }
+
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
     initialPermissionMode: RunComposerMode = "default",
+    initialSkillName?: SkillStateName,
   ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
@@ -8662,9 +8689,9 @@ export function App() {
       // for the pod to become ready and submit it as the first turn. Only
       // chat modes have a turn endpoint; non-chat modes ignore the prompt
       // because the home composer would not have surfaced a sensible target.
-      const seedPrompt = initialPrompt?.trim();
+      const seedPrompt = initialPrompt?.trim() ?? "";
       const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? homeAttachments : [];
-      if ((seedPrompt || pendingHomeAttachments.length > 0) && CHAT_MODES.has(mode)) {
+      if ((seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) && CHAT_MODES.has(mode)) {
         const model =
           selectedProvider === "anthropic" || selectedProvider === "codex"
             ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
@@ -8675,6 +8702,11 @@ export function App() {
             : "";
         try {
           await waitForSessionReady(created.id);
+          if (initialSkillName === "test") {
+            void markCreatedSessionTestState(created.id).catch((e) => {
+              setError(String(e));
+            });
+          }
           // Upload home-buffered attachments to the new session pod before
           // submitting the seed turn — same endpoint and shape the in-chat
           // composer's uploadAttachment() uses, so the agent runner sees an
@@ -8705,19 +8737,23 @@ export function App() {
           });
           const composedPrompt =
             uploadedPaths.length > 0
-              ? `${seedPrompt ?? ""}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
+              ? `${seedPrompt}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
                   .map((p) => `- ${p.absPath}`)
                   .join("\n")}`
-              : (seedPrompt ?? "");
+              : seedPrompt;
+          const turnPrompt = initialSkillName
+            ? composeSkillPrompt(mode, initialSkillName, composedPrompt)
+            : composedPrompt;
           const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               client_nonce: newForkTurnId(),
-              prompt: composedPrompt,
+              prompt: turnPrompt,
               model,
               ...(effort ? { effort } : {}),
               permission_mode: initialPermissionMode,
+              ...(initialSkillName ? { skill_name: initialSkillName } : {}),
               follow_up: false,
             }),
           });
@@ -9644,6 +9680,7 @@ export function App() {
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 disabled={busy}
+                onTextChange={setHomeComposerText}
                 toolButtons={
                     <>
                       <button
@@ -9674,9 +9711,23 @@ export function App() {
                       <button
                         type="button"
                         className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                        disabled
+                        onClick={() => {
+                          void createSession(
+                            defaultSessionMode,
+                            homeComposerText.trim() || undefined,
+                            homeComposerMode,
+                            "test",
+                          );
+                        }}
+                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
                         aria-label="Start test skill"
-                        title="Available once your session starts"
+                        title={
+                          CHAT_MODES.has(defaultSessionMode)
+                            ? selectedProvider === "anthropic"
+                              ? "Start with /test"
+                              : "Start with $test"
+                            : "Choose a GUI chat runtime to start with test"
+                        }
                       >
                         <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
