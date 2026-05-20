@@ -4057,6 +4057,20 @@ button:disabled {
   cursor: text;
 }
 
+.run-files-viewer-codemirror {
+  padding: 0;
+  white-space: normal;
+}
+
+.run-files-code-viewer,
+.run-files-code-viewer .cm-editor {
+  height: 100%;
+}
+
+.run-files-code-viewer .cm-scroller {
+  overflow: auto;
+}
+
 .run-files-viewer-readonly pre,
 .run-files-viewer-readonly [data-streamdown="code-block"] {
   margin: 0;

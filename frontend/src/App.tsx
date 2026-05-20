@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -120,6 +120,8 @@ import {
   workspacePathFromHref,
   type WorkspacePathTarget,
 } from "./workspaceLinks";
+
+const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 
 type SessionMode =
   | "api_key"
@@ -2286,107 +2288,10 @@ function humanFileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** Map a filename to a syntax-highlighter language hint. Streamdown
- *  pipes through Prism so common short identifiers work out of the box. */
-function syntaxLangForPath(path: string): string {
-  const lower = path.toLowerCase();
-  const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
-  const name = lower.slice(lower.lastIndexOf("/") + 1);
-  // Special-cased filenames first.
-  if (name === "dockerfile" || name.startsWith("dockerfile.")) return "dockerfile";
-  if (name === "makefile") return "makefile";
-  if (name === ".gitignore" || name.endsWith(".gitignore")) return "ini";
-  if (name.endsWith(".env") || name === ".env") return "ini";
-  // Then by extension. Limited to common cases — Prism falls back to plain
-  // text on unknown lang, which is fine.
-  return (
-    {
-      ts: "ts",
-      tsx: "tsx",
-      js: "js",
-      jsx: "jsx",
-      mjs: "js",
-      cjs: "js",
-      py: "python",
-      rb: "ruby",
-      go: "go",
-      rs: "rust",
-      java: "java",
-      kt: "kotlin",
-      cs: "csharp",
-      cpp: "cpp",
-      cc: "cpp",
-      c: "c",
-      h: "c",
-      hpp: "cpp",
-      sh: "bash",
-      bash: "bash",
-      zsh: "bash",
-      fish: "bash",
-      yml: "yaml",
-      yaml: "yaml",
-      json: "json",
-      jsonc: "json",
-      md: "markdown",
-      mdx: "markdown",
-      sql: "sql",
-      html: "html",
-      htm: "html",
-      xml: "xml",
-      svg: "xml",
-      css: "css",
-      scss: "scss",
-      sass: "sass",
-      less: "less",
-      tf: "hcl",
-      hcl: "hcl",
-      toml: "toml",
-      lua: "lua",
-      php: "php",
-      swift: "swift",
-      dart: "dart",
-      ex: "elixir",
-      exs: "elixir",
-      erl: "erlang",
-      hs: "haskell",
-      r: "r",
-      scala: "scala",
-      vue: "html",
-      svelte: "html",
-      proto: "protobuf",
-      graphql: "graphql",
-      gql: "graphql",
-    }[ext] ?? "text"
-  );
-}
-
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
 function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
-}
-
-function textOffsetForLine(text: string, line: number): number {
-  if (line <= 1) return 0;
-  let offset = 0;
-  for (let current = 1; current < line; current++) {
-    const next = text.indexOf("\n", offset);
-    if (next === -1) return text.length;
-    offset = next + 1;
-  }
-  return offset;
-}
-
-function scrollElementToLine(el: HTMLElement, line: number) {
-  const styles = window.getComputedStyle(el);
-  const parsedLineHeight = Number.parseFloat(styles.lineHeight);
-  const parsedFontSize = Number.parseFloat(styles.fontSize);
-  const lineHeight = Number.isFinite(parsedLineHeight)
-    ? parsedLineHeight
-    : (Number.isFinite(parsedFontSize) ? parsedFontSize * 1.55 : 16);
-  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-  const targetTop = paddingTop + Math.max(0, line - 1) * lineHeight;
-  el.scrollTop = Math.max(0, targetTop - el.clientHeight * 0.3);
 }
 // RunComposerMode + PERMISSION_MODE_INFO have moved to ./ChatComposer.tsx
 // alongside the shared composer component. They are re-imported above so
@@ -4773,9 +4678,6 @@ function ChatPane({
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
-  const fileViewerContentRef = useRef<HTMLDivElement | null>(null);
-  const fileViewerEditorRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileLineScrollKeyRef = useRef<string | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
   // Edit-mode bookkeeping for the file viewer.
   const [fileDraft, setFileDraft] = useState<string | null>(null);
@@ -5607,35 +5509,6 @@ function ChatPane({
   }, [selectedFile, session.id]);
 
   useEffect(() => {
-    if (!selectedFileLine || !selectedFile || selectedFile.binary || fileContentLoading) return;
-    const mode = fileDraft == null ? "read" : "edit";
-    const scrollKey = `${selectedFile.path}:${selectedFileLine}:${mode}:${selectedFile.text.length}`;
-    if (fileLineScrollKeyRef.current === scrollKey) return;
-    fileLineScrollKeyRef.current = scrollKey;
-
-    const frame = window.requestAnimationFrame(() => {
-      if (fileDraft == null) {
-        const content = fileViewerContentRef.current;
-        if (content) scrollElementToLine(content, selectedFileLine);
-        return;
-      }
-
-      const editor = fileViewerEditorRef.current;
-      if (!editor) return;
-      const offset = textOffsetForLine(fileDraft, selectedFileLine);
-      editor.focus();
-      editor.setSelectionRange(offset, offset);
-      scrollElementToLine(editor, selectedFileLine);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [
-    fileContentLoading,
-    fileDraft,
-    selectedFile,
-    selectedFileLine,
-  ]);
-
-  useEffect(() => {
     if (session.status !== "Active") {
       setMcpServers(null);
       setMcpError(null);
@@ -5703,7 +5576,6 @@ function ChatPane({
       setFilesPath(next);
       setSelectedFile(null);
       setSelectedFileLine(null);
-      fileLineScrollKeyRef.current = null;
       setFileDraft(null);
       setFileSaveError(null);
       return;
@@ -5711,7 +5583,6 @@ function ChatPane({
     // Trigger content fetch by setting a placeholder.
     setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
     setSelectedFileLine(null);
-    fileLineScrollKeyRef.current = null;
     setFileDraft(null);
     setFileSaveError(null);
   }
@@ -5725,7 +5596,6 @@ function ChatPane({
     setFilesPath(parentFilesPath(normalized.path));
     setSelectedFile({ path: normalized.path, size: 0, truncated: false, text: "", binary: false });
     setSelectedFileLine(normalized.line);
-    fileLineScrollKeyRef.current = null;
     setFileDraft(null);
     setFileSaveError(null);
   }
@@ -7026,19 +6896,28 @@ function ChatPane({
                     )}
                     {/* Editable when not truncated. Truncated reads aren't
                         safe to overwrite — would silently destroy the
-                        unread tail. Read-only highlighted view when the
+                        unread tail. Read-only CodeMirror view when the
                         user hasn't started editing yet (fileDraft==null);
-                        switches to the textarea on first focus. */}
+                        switches to editable CodeMirror on first focus. */}
                     {selectedFile.truncated ? (
-                      <div className="run-files-viewer-content" ref={fileViewerContentRef}>
-                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
-                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
-                        </Streamdown>
+                      <div className="run-files-viewer-content run-files-viewer-codemirror">
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable={false}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={selectedFile.text}
+                          />
+                        </Suspense>
                       </div>
                     ) : fileDraft == null ? (
                       <div
-                        className="run-files-viewer-content run-files-viewer-readonly"
-                        ref={fileViewerContentRef}
+                        className="run-files-viewer-content run-files-viewer-codemirror run-files-viewer-readonly"
                         onClick={() => setFileDraft(selectedFile.text)}
                         role="button"
                         tabIndex={0}
@@ -7050,19 +6929,37 @@ function ChatPane({
                         }}
                         title="Click to edit"
                       >
-                        <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
-                          {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
-                        </Streamdown>
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable={false}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={selectedFile.text}
+                          />
+                        </Suspense>
                       </div>
                     ) : (
-                      <textarea
-                        className="run-files-viewer-content run-files-viewer-editor"
-                        ref={fileViewerEditorRef}
-                        value={fileDraft}
-                        onChange={(e) => setFileDraft(e.target.value)}
-                        spellCheck={false}
-                        autoFocus
-                      />
+                      <div className="run-files-viewer-content run-files-viewer-codemirror">
+                        <Suspense fallback={(
+                          <div className="run-files-status">
+                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                            <span>Loading…</span>
+                          </div>
+                        )}>
+                          <FileCodeViewer
+                            editable
+                            onChange={setFileDraft}
+                            path={selectedFile.path}
+                            targetLine={selectedFileLine}
+                            value={fileDraft}
+                          />
+                        </Suspense>
+                      </div>
                     )}
                   </>
                 )}
