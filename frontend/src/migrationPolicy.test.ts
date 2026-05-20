@@ -132,6 +132,12 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
+test("files tab is gated until the session container is available", () => {
+  assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
+  assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
+  assert.match(appSource, /disabled=\{!filesAvailable\}/);
+});
+
 test("fresh chat sessions focus the composer instead of the rename field", () => {
   assert.equal(appSource.includes("setAutoRenameSessionId(created.id)"), false);
   assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
