@@ -86,6 +86,10 @@ test("background shell task projects as its own transcript artifact", () => {
           status: "running",
           tool_use_id: "toolu-monitor",
           summary: "Watching logs",
+          command: "tail -f app.log",
+          cwd: "/workspace/app",
+          process_id: "proc-abc",
+          output: "booting\n",
         },
       }),
       ev("3", "item.started", {
@@ -108,8 +112,58 @@ test("background shell task projects as its own transcript artifact", () => {
     assert.equal(task.taskStatus, "running");
     assert.equal(task.taskSummary, "Watching logs");
     assert.equal(task.taskToolUseId, "toolu-monitor");
+    assert.equal(task.taskCommand, "tail -f app.log");
+    assert.equal(task.taskCwd, "/workspace/app");
+    assert.equal(task.taskProcessId, "proc-abc");
+    assert.equal(task.taskOutput, "booting\n");
   }
   assert.equal(projection.backgroundTasks.length, 1);
+});
+
+test("background shell task projection hides the matching foreground command item", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "item.started", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "turn-1:item:item-unified-exec",
+        provider_item_id: "item-unified-exec",
+        payload: {
+          kind: "command_execution",
+          title: "npm run dev",
+          command: "npm run dev",
+        },
+      }),
+      ev("2", "shell_task.started", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "turn-1:shell_task:proc-123",
+        task_id: "proc-123",
+        provider_item_id: "item-unified-exec",
+        payload: {
+          kind: "shell_task",
+          task_id: "proc-123",
+          status: "running",
+          command: "npm run dev",
+          process_id: "proc-123",
+          output: "Listening on 5173",
+        },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind),
+    ["background_task"],
+  );
+  assert.equal(projection.activeToolName, null);
+  const task = projection.entries[0];
+  assert.equal(task?.kind, "background_task");
+  if (task?.kind === "background_task") {
+    assert.equal(task.taskCommand, "npm run dev");
+    assert.equal(task.taskProcessId, "proc-123");
+    assert.equal(task.taskOutput, "Listening on 5173");
+  }
 });
 
 test("projects canonical user and assistant events into chat messages", () => {

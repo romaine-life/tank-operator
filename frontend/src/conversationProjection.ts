@@ -64,6 +64,13 @@ export interface ConversationBackgroundTaskEntry extends ConversationEntryBase {
   taskDescription?: string;
   taskError?: unknown;
   taskToolUseId?: string;
+  taskCommand?: string;
+  taskCwd?: string;
+  taskProcessId?: string;
+  taskOutput?: string;
+  taskExitCode?: number;
+  taskDurationMs?: number;
+  taskRawItem?: unknown;
   lastToolName?: string;
   startedAt?: string;
   updatedAt?: string;
@@ -114,6 +121,7 @@ export interface ConversationProjection {
 export function projectConversationState(
   state: ConversationReducerState,
 ): ConversationProjection {
+  const backgroundProviderItemIds = backgroundTaskProviderItemIds(state);
   const entries = orderProjectedEntries([
     ...state.messages.flatMap((message, index) => {
       const text = message.text.trim();
@@ -139,6 +147,9 @@ export function projectConversationState(
       ];
     }),
     ...state.items.flatMap((item, index) => {
+      if (item.providerItemId && backgroundProviderItemIds.has(item.providerItemId)) {
+        return [];
+      }
       const entry = projectItem(item);
       return entry
         ? [
@@ -298,6 +309,13 @@ function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBa
     taskDescription: task.description,
     taskError: task.error,
     taskToolUseId: task.toolUseId,
+    taskCommand: task.command,
+    taskCwd: task.cwd,
+    taskProcessId: task.processId,
+    taskOutput: task.output,
+    taskExitCode: task.exitCode,
+    taskDurationMs: task.durationMs,
+    taskRawItem: task.rawItem,
     lastToolName: task.lastToolName,
     turnId: task.turnId,
     providerItemId: task.providerItemId,
@@ -350,15 +368,45 @@ function isToolLikeItem(item: ConversationItem): boolean {
 }
 
 function activeToolItem(state: ConversationReducerState): ConversationItem | null {
+  const backgroundProviderItemIds = backgroundTaskProviderItemIds(state);
   const active = state.activeItemId
     ? state.items.find((item) => item.id === state.activeItemId)
     : undefined;
-  if (active && isToolLikeItem(active) && isRunningItem(active)) return active;
+  if (
+    active &&
+    isToolLikeItem(active) &&
+    isRunningItem(active) &&
+    !isBackgroundProviderItem(active, backgroundProviderItemIds)
+  ) {
+    return active;
+  }
   for (let index = state.items.length - 1; index >= 0; index -= 1) {
     const item = state.items[index];
-    if (isToolLikeItem(item) && isRunningItem(item)) return item;
+    if (
+      isToolLikeItem(item) &&
+      isRunningItem(item) &&
+      !isBackgroundProviderItem(item, backgroundProviderItemIds)
+    ) {
+      return item;
+    }
   }
   return null;
+}
+
+function backgroundTaskProviderItemIds(state: ConversationReducerState): Set<string> {
+  const ids = new Set<string>();
+  for (const task of state.backgroundTasks) {
+    if (task.providerItemId) ids.add(task.providerItemId);
+    if (task.toolUseId) ids.add(task.toolUseId);
+  }
+  return ids;
+}
+
+function isBackgroundProviderItem(
+  item: ConversationItem,
+  backgroundProviderItemIds: Set<string>,
+): boolean {
+  return Boolean(item.providerItemId && backgroundProviderItemIds.has(item.providerItemId));
 }
 
 function isRunningItem(item: ConversationItem): boolean {
