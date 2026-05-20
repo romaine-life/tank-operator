@@ -83,6 +83,56 @@ func TestTranslator_HappyPath_TextOnlyResponse(t *testing.T) {
 	}
 }
 
+func TestTranslator_HermesRunStream_MessageDeltaAndCompletedOutput(t *testing.T) {
+	tr := newTranslator()
+	events := []RunEvent{
+		{Type: "message.delta", Data: rawJSON(`{"event":"message.delta","run_id":"run_1","delta":"hermes "}`)},
+		{Type: "message.delta", Data: rawJSON(`{"event":"message.delta","run_id":"run_1","delta":"smoke ok"}`)},
+		{Type: "run.completed", Data: rawJSON(`{"event":"run.completed","run_id":"run_1","output":"hermes smoke ok"}`)},
+	}
+	out := translateAll(t, tr, events)
+
+	if got := tr.Terminal(); got != "completed" {
+		t.Fatalf("Terminal() = %q, want completed", got)
+	}
+	if len(out) != 2 {
+		t.Fatalf("emitted %d events, want assistant item.completed + turn.completed\n%s", len(out), dump(out))
+	}
+	itemDone := eventOfType(out, string(conversation.EventItemCompleted))
+	if itemDone == nil {
+		t.Fatalf("missing item.completed for Hermes message.delta output")
+	}
+	payload, _ := itemDone["payload"].(map[string]any)
+	if got, _ := payload["text"].(string); got != "hermes smoke ok" {
+		t.Errorf("payload.text = %q, want hermes smoke ok", got)
+	}
+	if got, _ := itemDone["source"].(string); got != string(conversation.SourceHermes) {
+		t.Errorf("source = %q, want hermes", got)
+	}
+	if e := eventOfType(out, string(conversation.EventTurnCompleted)); e == nil {
+		t.Fatalf("missing turn.completed")
+	}
+}
+
+func TestTranslator_HermesRunCompletedOutputOnly(t *testing.T) {
+	tr := newTranslator()
+	out := translateAll(t, tr, []RunEvent{
+		{Type: "run.completed", Data: rawJSON(`{"event":"run.completed","run_id":"run_1","output":"final text"}`)},
+	})
+
+	if len(out) != 2 {
+		t.Fatalf("emitted %d events, want assistant item.completed + turn.completed\n%s", len(out), dump(out))
+	}
+	itemDone := eventOfType(out, string(conversation.EventItemCompleted))
+	if itemDone == nil {
+		t.Fatalf("missing item.completed")
+	}
+	payload, _ := itemDone["payload"].(map[string]any)
+	if got, _ := payload["text"].(string); got != "final text" {
+		t.Errorf("payload.text = %q, want final text", got)
+	}
+}
+
 func TestTranslator_TurnStartedOnlyOnce(t *testing.T) {
 	tr := newTranslator()
 	out := translateAll(t, tr, []RunEvent{
@@ -294,6 +344,28 @@ func TestParseSSE_HandlesMultilineDataAndCommentsAndEventNames(t *testing.T) {
 	}
 	if delta.ItemID != "msg_1" || delta.Delta != "hello" {
 		t.Errorf("multi-line decode = %+v, want item_id=msg_1 delta=hello", delta)
+	}
+}
+
+func TestParseSSE_UsesEventFieldFromBareDataFrames(t *testing.T) {
+	body := strings.Join([]string{
+		"data: {\"event\":\"message.delta\",\"run_id\":\"run_1\",\"delta\":\"hello\"}",
+		"",
+		"data: {\"event\":\"run.completed\",\"run_id\":\"run_1\",\"output\":\"hello\"}",
+		"",
+	}, "\n")
+	var got []RunEvent
+	if err := parseSSE(strings.NewReader(body), func(e RunEvent) error {
+		got = append(got, e)
+		return nil
+	}); err != nil {
+		t.Fatalf("parseSSE: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d events, want 2", len(got))
+	}
+	if got[0].Type != "message.delta" || got[1].Type != "run.completed" {
+		t.Errorf("event types mismatch: %q %q", got[0].Type, got[1].Type)
 	}
 }
 
