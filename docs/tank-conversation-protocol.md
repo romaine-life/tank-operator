@@ -283,9 +283,9 @@ foreground turn has completed, they render as their own transcript artifact,
 and they are listed in the session shell-task ledger. A background task is
 owned by the turn that spawned it (`turn_id`, `timeline_id`, `task_id`), but
 its lifecycle does not transition the conversation run state. This mirrors
-the product contract in Claude Code: background shell work is visible and
-session-owned, while Stop terminates the active foreground turn rather than
-pretending every descendant process is chat prose.
+the product contract in Claude Code and Codex: background shell work is
+visible and session-owned, while Stop terminates the active foreground turn
+rather than pretending every descendant process is chat prose.
 
 Per-token typewriter deltas are intentionally not on the Tank event
 surface: the `item.delta` event type and the `live-only` visibility were
@@ -320,10 +320,12 @@ Codex SDK adapter:
 | JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
-| `item.updated` | ignored (no Tank event) | Adapter still observes these frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. |
+| `item.updated` | ignored (no Tank event) | Adapter still observes ordinary frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. Codex unified-exec background terminal updates are the exception and map to `shell_task.updated`. |
 | `userMessage` item echo | ignored (no Tank event) | Tank owns submitted user input through the backend-published `user_message.created` event. Provider echoes of that input must not enter the durable item stream or render as tool calls. |
 | `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
+| `commandExecution` with `source=unifiedExecStartup` or `source=unifiedExecInteraction` | `shell_task.started`, `shell_task.updated`, `shell_task.exited` | Codex App Server background terminals are session-owned processes. `processId` is the preferred `task_id`; `thread/backgroundTerminals/clean` is the explicit action that stops them. |
 | `turn.completed` | `turn.completed` | Include usage. |
+| `turn.completed` with provider status `interrupted` | `turn.interrupted` | Codex App Server documents `turn/interrupt` as cancelling the active turn without terminating background terminals. |
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |
 
@@ -488,13 +490,15 @@ increments on `tank_runner_interrupt_outcome_total` within bounded
 time, and a corresponding durable terminal event:
 
 - `terminated_via_sdk` — interrupt arrived during an in-flight turn.
-  `sdkQuery.interrupt()` is signaled immediately, then `turn.interrupted`
-  is published with bounded retry without waiting for the provider to
-  acknowledge the interrupt. Ordering is intentionally inverted from the
-  pre-#532 shape, which gated the SDK call on the publish and so let a
-  transient publish failure silently let the model keep running. Late
-  foreground SDK frames after Tank has emitted the terminal are ignored;
-  background task lifecycle frames remain visible via `shell_task.*`.
+  The runner signals the provider immediately, then publishes
+  `turn.interrupted` with bounded retry without waiting for provider
+  acknowledgement. Claude first asks the SDK to background in-flight
+  foreground Bash/subagent tasks, but a short grace deadline prevents
+  that control call from holding Stop hostage. Codex App Server receives
+  `turn/interrupt` and, per its protocol, does not terminate background
+  terminals. Late foreground SDK frames after Tank has emitted the
+  terminal are ignored; background task lifecycle frames remain visible
+  via `shell_task.*`.
 - `terminated_pre_sdk` — interrupt arrived before the matching
   `submit_turn` had been dispatched on this runner. The control plane
   and data plane don't synchronize past JetStream-level delivery (by

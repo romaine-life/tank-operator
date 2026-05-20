@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
-import { itemEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 import { itemOutcomeTotal } from "../metrics.js";
 
 export interface CodexAdapterTurn {
@@ -54,6 +54,20 @@ export class CodexTankEventAdapter {
         }),
       ];
     }
+    if (event.type === "turn.interrupted") {
+      this.itemTextByID.clear();
+      return [
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "codex",
+          type: "turn.interrupted",
+          reason: "client_interrupt",
+          providerEventID: providerID,
+        }),
+      ];
+    }
     if (event.type === "turn.failed" || event.type === "error") {
       this.itemTextByID.clear();
       return [
@@ -90,6 +104,9 @@ export class CodexTankEventAdapter {
           typeof itemRecord.id === "string" && itemRecord.id
             ? itemRecord.id
             : `${turn.turnID}:item:${providerID ?? event.type}`;
+        if (isCodexBackgroundShellItem(itemRecord)) {
+          return this.codexBackgroundShellEvents(turn, event, itemRecord, providerItemID);
+        }
         this.rememberItemText(providerItemID, codexItemText(itemRecord));
       }
       return [];
@@ -103,6 +120,9 @@ export class CodexTankEventAdapter {
     if (isCodexUserMessageEchoItem(itemRecord)) return [];
     const providerItemID =
       typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
+    if (isCodexBackgroundShellItem(itemRecord)) {
+      return this.codexBackgroundShellEvents(turn, event, itemRecord, providerItemID);
+    }
     const outcome = codexItemOutcome(itemRecord);
     const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
     const type =
@@ -164,6 +184,45 @@ export class CodexTankEventAdapter {
   private rememberItemText(providerItemID: string, text: string | undefined): void {
     if (text !== undefined) this.itemTextByID.set(providerItemID, text);
   }
+
+  private codexBackgroundShellEvents(
+    turn: CodexAdapterTurn,
+    event: CodexEvent,
+    item: Record<string, unknown>,
+    providerItemID: string,
+  ): TankConversationEvent[] {
+    const taskID = codexBackgroundTaskID(item, providerItemID);
+    const status = codexBackgroundTaskStatus(event.type, item);
+    const type =
+      event.type === "item.started"
+        ? "shell_task.started"
+        : isTerminalShellTaskStatus(status)
+          ? "shell_task.exited"
+          : "shell_task.updated";
+    return [
+      shellTaskEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        source: "codex",
+        type,
+        taskID,
+        status,
+        providerItemID,
+        payload: {
+          status,
+          provider_item_id: providerItemID,
+          source: item.source,
+          command: item.command,
+          cwd: item.cwd,
+          process_id: item.process_id ?? item.processId,
+          output: codexItemText(item),
+          exit_code: itemExitCode(item),
+          duration_ms: item.duration_ms ?? item.durationMs,
+          raw_item: item,
+        },
+      }),
+    ];
+  }
 }
 
 type ItemOutcome =
@@ -213,6 +272,32 @@ function isCodexUserMessageEchoItem(item: Record<string, unknown>): boolean {
   // Codex app-server may also echo the submitted user input as a provider
   // item; forwarding that item would make the frontend render it as a tool.
   return item.type === "userMessage" || item.type === "user_message";
+}
+
+function isCodexBackgroundShellItem(item: Record<string, unknown>): boolean {
+  if (item.type !== "command_execution") return false;
+  const source = String(item.source ?? "").toLowerCase();
+  return source === "unifiedexecstartup" || source === "unifiedexecinteraction";
+}
+
+function codexBackgroundTaskID(item: Record<string, unknown>, providerItemID: string): string {
+  for (const key of ["process_id", "processId", "id"]) {
+    const value = item[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return providerItemID;
+}
+
+function codexBackgroundTaskStatus(eventType: string, item: Record<string, unknown>): string {
+  const status = typeof item.status === "string" && item.status ? item.status : "";
+  if (status) return status;
+  return eventType === "item.started" ? "running" : "updated";
+}
+
+function isTerminalShellTaskStatus(status: string): boolean {
+  return ["completed", "failed", "stopped", "cancelled", "canceled", "exited", "declined"].includes(
+    status.toLowerCase(),
+  );
 }
 
 export function canonicalEventsForCodexEvent(

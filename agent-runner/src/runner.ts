@@ -65,6 +65,7 @@ import {
   optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
   pendingWakeupsGauge,
+  providerControlTotal,
   providerErrorTotal,
   recordTurnStart,
   recordTurnTerminal,
@@ -400,6 +401,16 @@ const TERMINAL_PUBLISH_ATTEMPTS = parsePositiveEnvInt(
 const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
   process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS,
   500,
+);
+
+// Before interrupting a Claude turn, ask the SDK to background any
+// in-flight foreground Bash/subagent work. This mirrors Claude Code's Ctrl+B
+// boundary: the active agent turn stops, but long-running shell work remains
+// a visible session-level task. The deadline keeps Stop from waiting on the
+// provider control plane.
+const STOP_BACKGROUND_GRACE_MS = parsePositiveEnvInt(
+  process.env.SESSION_STOP_BACKGROUND_GRACE_MS,
+  250,
 );
 
 function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
@@ -1043,19 +1054,7 @@ export class Runner {
     }
     turn.interrupted = true;
     if (reason === "client_interrupt") {
-      try {
-        const interruptPromise = this.sdkQuery?.interrupt();
-        void interruptPromise?.catch((err) => {
-          providerErrorTotal.labels("interrupt").inc();
-          console.error("sdkQuery.interrupt() failed after Stop terminal was emitted:", err);
-        });
-      } catch (err) {
-        // Count and continue. The durable terminal below is still the
-        // right thing to publish — better to mark the turn ended than
-        // to leak it because the SDK control-plane call threw.
-        providerErrorTotal.labels("interrupt").inc();
-        console.error("sdkQuery.interrupt() failed; continuing to emit durable terminal:", err);
-      }
+      this.signalStopToSdk();
     }
     const published = await this.publishTerminalWithRetry(
       turnEvent({
@@ -1105,6 +1104,71 @@ export class Runner {
       record,
       new Error("turn.interrupted publish failed after retry"),
     );
+  }
+
+  private signalStopToSdk(): void {
+    const sdkQuery = this.sdkQuery;
+    if (!sdkQuery) {
+      providerControlTotal.labels("interrupt", "missing_query").inc();
+      return;
+    }
+
+    let interruptSent = false;
+    const sendInterrupt = (outcome: string) => {
+      if (interruptSent) return;
+      interruptSent = true;
+      providerControlTotal.labels("interrupt", outcome).inc();
+      try {
+        const interruptPromise = sdkQuery.interrupt();
+        void interruptPromise.catch((err) => {
+          providerErrorTotal.labels("interrupt").inc();
+          console.error("sdkQuery.interrupt() failed after Stop terminal was emitted:", err);
+        });
+      } catch (err) {
+        providerErrorTotal.labels("interrupt").inc();
+        console.error("sdkQuery.interrupt() failed; continuing with durable Stop terminal:", err);
+      }
+    };
+
+    const backgroundTasks = (sdkQuery as Query & {
+      backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+    }).backgroundTasks;
+    if (typeof backgroundTasks !== "function") {
+      providerControlTotal.labels("background_tasks", "unsupported").inc();
+      sendInterrupt("without_background_api");
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      providerControlTotal.labels("background_tasks", "timeout").inc();
+      sendInterrupt("background_timeout");
+    }, STOP_BACKGROUND_GRACE_MS);
+    if (typeof (timer as { unref?: () => void }).unref === "function") {
+      (timer as { unref: () => void }).unref();
+    }
+
+    try {
+      const backgroundPromise = backgroundTasks.call(sdkQuery);
+      void backgroundPromise.then((backgrounded) => {
+        clearTimeout(timer);
+        providerControlTotal
+          .labels("background_tasks", backgrounded ? "backgrounded" : "none")
+          .inc();
+        sendInterrupt(backgrounded ? "after_background" : "no_foreground_tasks");
+      }).catch((err) => {
+        clearTimeout(timer);
+        providerControlTotal.labels("background_tasks", "failed").inc();
+        providerErrorTotal.labels("background_tasks").inc();
+        console.error("sdkQuery.backgroundTasks() failed before Stop interrupt:", err);
+        sendInterrupt("background_failed");
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      providerControlTotal.labels("background_tasks", "failed").inc();
+      providerErrorTotal.labels("background_tasks").inc();
+      console.error("sdkQuery.backgroundTasks() failed before Stop interrupt:", err);
+      sendInterrupt("background_failed");
+    }
   }
 
   private async publishTerminalWithRetry(event: TankConversationEvent): Promise<boolean> {

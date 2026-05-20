@@ -180,6 +180,58 @@ test("maps Codex tool items to Tank tool items with command payload", () => {
   });
 });
 
+test("maps Codex unified exec command executions to shell task lifecycle", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const started = mappedEvent(adapter, {
+    type: "item.started",
+    item: {
+      id: "item_unified_exec_start",
+      type: "command_execution",
+      command: "npm run dev",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+    },
+  });
+  assert.equal(started.type, "shell_task.started");
+  assert.equal(started.task_id, "proc-123");
+  assert.equal(started.provider_item_id, "item_unified_exec_start");
+  assert.equal(started.payload?.command, "npm run dev");
+  assert.equal(started.payload?.source, "unifiedExecStartup");
+
+  const updated = mappedEvent(adapter, {
+    type: "item.updated",
+    item: {
+      id: "item_unified_exec_start",
+      type: "command_execution",
+      command: "npm run dev",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+      aggregated_output: "Listening on 5173",
+    },
+  });
+  assert.equal(updated.type, "shell_task.updated");
+  assert.equal(updated.timeline_id, started.timeline_id);
+  assert.equal(updated.payload?.output, "Listening on 5173");
+
+  const exited = mappedEvent(adapter, {
+    type: "item.completed",
+    item: {
+      id: "item_unified_exec_start",
+      type: "command_execution",
+      command: "npm run dev",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "completed",
+      exit_code: 0,
+    },
+  });
+  assert.equal(exited.type, "shell_task.exited");
+  assert.equal(exited.timeline_id, started.timeline_id);
+  assert.equal(exited.payload?.exit_code, 0);
+});
+
 test("maps Codex nonzero exit codes to completed result_failed outcomes", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",
@@ -269,6 +321,10 @@ test("maps Codex terminal events to Tank turn lifecycle", () => {
   const completed = mappedEvent(adapter, { type: "turn.completed", usage: { input_tokens: 10 } });
   assert.equal(completed.type, "turn.completed");
   assert.deepEqual(completed.payload?.usage, { input_tokens: 10 });
+
+  const interrupted = mappedEvent(adapter, { type: "turn.interrupted" });
+  assert.equal(interrupted.type, "turn.interrupted");
+  assert.equal(interrupted.payload?.reason, "client_interrupt");
 
   const failed = mappedEvent(adapter, { type: "error", message: "quota exceeded" });
   assert.equal(failed.type, "turn.failed");

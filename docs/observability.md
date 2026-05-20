@@ -55,7 +55,9 @@ All metric names are prefixed `tank_`. The full namespace:
   `mode` label is "claude" or "codex", bound at module import.
   `tank_runner_item_outcome_total{outcome,reason}` counts bounded item
   classifications emitted by runner adapters: `ok`, `result_failed`, and
-  `execution_failed`.
+  `execution_failed`. `tank_runner_provider_control_total{action,outcome}`
+  counts bounded provider control calls, including Claude foreground-task
+  backgrounding before interrupt and the interrupt signal itself.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
