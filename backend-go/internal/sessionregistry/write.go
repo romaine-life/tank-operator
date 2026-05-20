@@ -61,6 +61,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	if updatedAt.IsZero() {
 		updatedAt = now
 	}
+	status := strings.TrimSpace(record.Status)
+	readyAt := parseTimestamp(record.ReadyAt)
 	// Determine the effective visible value (default true if unset).
 	visible := record.Visible
 
@@ -81,11 +83,13 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			email, session_scope, session_id,
 			mode, pod_name, name, visible,
 			requested_at, created_at, updated_at,
+			status, ready_at,
 			repos
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, COALESCE($9, now()), $10,
-			$11
+			COALESCE(NULLIF($11, ''), 'Pending'), $12,
+			$13
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -93,6 +97,11 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			name         = EXCLUDED.name,
 			visible      = EXCLUDED.visible,
 			requested_at = COALESCE(EXCLUDED.requested_at, sessions.requested_at),
+			status       = CASE
+				WHEN NULLIF($11, '') IS NULL THEN sessions.status
+				ELSE EXCLUDED.status
+			END,
+			ready_at     = COALESCE(EXCLUDED.ready_at, sessions.ready_at),
 			updated_at   = EXCLUDED.updated_at,
 			row_version  = nextval('sessions_row_version_seq')
 	`
@@ -107,6 +116,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		nullableTimestamp(requestedAt),
 		nullableTimestamp(createdAt),
 		updatedAt,
+		status,
+		nullableTimestamp(readyAt),
 		repos,
 	)
 	return err

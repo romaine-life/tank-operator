@@ -70,6 +70,51 @@ func TestManagerFindPodReturnsNotFoundWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestManagerGetByOwnerReadsNoPodSessionsFromRegistry(t *testing.T) {
+	const readyAt = "2026-05-20T01:00:00Z"
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{
+			{
+				ID:        "108",
+				Email:     "nelson@romaine.life",
+				Mode:      sessionmodel.HermesGUIMode,
+				Visible:   true,
+				Status:    "Active",
+				ReadyAt:   readyAt,
+				CreatedAt: "2026-05-20T00:59:59Z",
+			},
+			{
+				ID:      "109",
+				Email:   "nelson@romaine.life",
+				Mode:    sessionmodel.CodexGUIMode,
+				Visible: true,
+				Status:  "Active",
+			},
+		},
+	}
+	mgr := &Manager{
+		client:    fake.NewSimpleClientset(),
+		namespace: sessionmodel.SessionsNamespace,
+		registry:  registry,
+	}
+
+	got, err := mgr.GetByOwner(context.Background(), "nelson@romaine.life", "108")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != sessionmodel.HermesGUIMode || got.Status != "Active" || got.PodName != nil {
+		t.Fatalf("no-pod session = %#v, want active hermes_gui without pod", got)
+	}
+	if got.ReadyAt == nil || *got.ReadyAt != readyAt {
+		t.Fatalf("ready_at = %#v, want %q", got.ReadyAt, readyAt)
+	}
+
+	_, err = mgr.GetByOwner(context.Background(), "nelson@romaine.life", "109")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("pod-backed registry-only GetByOwner err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) {
 	const slotNamespace = "tank-operator-slot-1-sessions"
 
@@ -144,3 +189,61 @@ func TestManagerCreateThreadsReposIntoRepoCloner(t *testing.T) {
 		t.Fatalf("TANK_SELECTED_REPOS = %q, want %q", got, want)
 	}
 }
+
+type managerTestRegistry struct {
+	records []sessionmodel.SessionRecord
+	nextID  string
+}
+
+func (r *managerTestRegistry) List(_ context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
+	out := make([]sessionmodel.SessionRecord, 0, len(r.records))
+	for _, record := range r.records {
+		if strings.EqualFold(record.Email, owner) {
+			out = append(out, record)
+		}
+	}
+	return out, nil
+}
+
+func (r *managerTestRegistry) Get(_ context.Context, owner, sessionID string) (sessionmodel.SessionRecord, bool, error) {
+	for _, record := range r.records {
+		if strings.EqualFold(record.Email, owner) && record.ID == sessionID {
+			return record, true, nil
+		}
+	}
+	return sessionmodel.SessionRecord{}, false, nil
+}
+
+func (r *managerTestRegistry) NextSessionID(context.Context) (string, error) {
+	if r.nextID == "" {
+		return "1", nil
+	}
+	return r.nextID, nil
+}
+
+func (r *managerTestRegistry) Upsert(_ context.Context, record sessionmodel.SessionRecord) error {
+	for i, existing := range r.records {
+		if strings.EqualFold(existing.Email, record.Email) && existing.ID == record.ID {
+			r.records[i] = record
+			return nil
+		}
+	}
+	r.records = append(r.records, record)
+	return nil
+}
+
+func (r *managerTestRegistry) SetName(context.Context, string, string, *string) error { return nil }
+
+func (r *managerTestRegistry) SetTestState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (r *managerTestRegistry) MarkDeleted(context.Context, string, string) error { return nil }
