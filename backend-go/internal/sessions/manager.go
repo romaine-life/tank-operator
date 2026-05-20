@@ -511,6 +511,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		Mode:        mode,
 		RequestedAt: &requestedAt,
 		CreatedAt:   &now,
+		ReadyAt:     &now,
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
@@ -626,6 +627,18 @@ func (m *Manager) patchStateAnnotation(
 // GetByOwner retrieves a session and validates ownership.
 func (m *Manager) GetByOwner(ctx context.Context, owner, sessionID string) (Info, error) {
 	info, err := m.reader().Get(ctx, owner, sessionID)
+	if errors.Is(err, ErrNotFound) {
+		registered, regErr := m.GetRegisteredByOwner(ctx, owner, sessionID)
+		if regErr == nil {
+			if sessionmodel.IsNoPodMode(registered.Mode) {
+				return registered, nil
+			}
+			return Info{}, err
+		}
+		if !errors.Is(regErr, ErrNotFound) {
+			return Info{}, regErr
+		}
+	}
 	return info, err
 }
 

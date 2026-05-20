@@ -268,7 +268,12 @@ func parseSSE(body io.Reader, handler func(RunEvent) error) error {
 		if dataBuf.Len() == 0 && curEvent == "" {
 			return nil
 		}
-		evt := RunEvent{Type: curEvent, Data: json.RawMessage(append([]byte(nil), bytes.TrimRight(dataBuf.Bytes(), "\n")...))}
+		data := json.RawMessage(append([]byte(nil), bytes.TrimRight(dataBuf.Bytes(), "\n")...))
+		eventType := curEvent
+		if eventType == "" {
+			eventType = eventTypeFromData(data)
+		}
+		evt := RunEvent{Type: eventType, Data: data}
 		curEvent = ""
 		dataBuf.Reset()
 		return handler(evt)
@@ -307,6 +312,19 @@ func parseSSE(body io.Reader, handler func(RunEvent) error) error {
 	// Flush a trailing event with no blank-line terminator (some servers
 	// close the connection without it).
 	return dispatch()
+}
+
+func eventTypeFromData(data json.RawMessage) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var env struct {
+		Event string `json:"event"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return ""
+	}
+	return env.Event
 }
 
 // ─────────────────────────────────────────────────────────────────────────
