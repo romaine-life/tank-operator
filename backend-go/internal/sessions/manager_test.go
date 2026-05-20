@@ -115,6 +115,54 @@ func TestManagerGetByOwnerReadsNoPodSessionsFromRegistry(t *testing.T) {
 	}
 }
 
+func TestManagerActiveSkillStateClearsOppositeAnnotation(t *testing.T) {
+	tests := []struct {
+		name        string
+		apply       func(context.Context, *Manager) (Info, error)
+		wantTest    bool
+		wantRollout bool
+	}{
+		{
+			name: "test active clears rollout",
+			apply: func(ctx context.Context, mgr *Manager) (Info, error) {
+				return mgr.SetTestState(ctx, "nelson@romaine.life", "8", true, nil, nil)
+			},
+			wantTest:    true,
+			wantRollout: false,
+		},
+		{
+			name: "rollout active clears test",
+			apply: func(ctx context.Context, mgr *Manager) (Info, error) {
+				return mgr.SetRolloutState(ctx, "nelson@romaine.life", "8", true)
+			},
+			wantTest:    false,
+			wantRollout: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := sessionPod("8", "nelson@romaine.life", corev1.PodRunning, true)
+			client := fake.NewSimpleClientset(pod)
+			mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace}
+
+			info, err := tc.apply(context.Background(), mgr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSkillStateActive(t, "info test_state", info.TestState, tc.wantTest)
+			assertSkillStateActive(t, "info rollout_state", info.RolloutState, tc.wantRollout)
+
+			updated, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSkillStateActive(t, "pod test annotation", annotationObject(updated.Annotations, testStateAnnotation), tc.wantTest)
+			assertSkillStateActive(t, "pod rollout annotation", annotationObject(updated.Annotations, rolloutStateAnnotation), tc.wantRollout)
+		})
+	}
+}
+
 func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) {
 	const slotNamespace = "tank-operator-slot-1-sessions"
 
@@ -215,6 +263,13 @@ func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
 	}
 	if strings.Join(emitter.ids, ",") != "2,3,1" {
 		t.Fatalf("published ids = %v, want [2 3 1]", emitter.ids)
+	}
+}
+
+func assertSkillStateActive(t *testing.T, label string, state map[string]any, want bool) {
+	t.Helper()
+	if got := state["active"]; got != want {
+		t.Fatalf("%s active = %#v, want %v (state=%#v)", label, got, want, state)
 	}
 }
 

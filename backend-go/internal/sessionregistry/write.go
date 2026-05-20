@@ -150,23 +150,36 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 // downward-API volume; this column is the snapshot-facing replica so
 // Reader.List doesn't need a pod read. Bumps row_version.
 func (s *Store) SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error {
-	return s.setJSONBColumn(ctx, "test_state", email, sessionID, state)
+	clearColumn := ""
+	if skillStateActive(state) {
+		clearColumn = "rollout_state"
+	}
+	return s.setJSONBColumn(ctx, "test_state", clearColumn, email, sessionID, state)
 }
 
 // SetRolloutState replaces the row's rollout_state jsonb. Same shape
 // and rationale as SetTestState.
 func (s *Store) SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error {
-	return s.setJSONBColumn(ctx, "rollout_state", email, sessionID, state)
+	clearColumn := ""
+	if skillStateActive(state) {
+		clearColumn = "test_state"
+	}
+	return s.setJSONBColumn(ctx, "rollout_state", clearColumn, email, sessionID, state)
+}
+
+func skillStateActive(state map[string]any) bool {
+	active, _ := state["active"].(bool)
+	return active
 }
 
 // SetCloneState replaces the row's clone_state jsonb. Written by the
 // repo-cloner init container via the internal service-principal API so
 // partial clone progress/failures are visible in the durable session row.
 func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error {
-	return s.setJSONBColumn(ctx, "clone_state", email, sessionID, state)
+	return s.setJSONBColumn(ctx, "clone_state", "", email, sessionID, state)
 }
 
-func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID string, state map[string]any) error {
+func (s *Store) setJSONBColumn(ctx context.Context, column, clearColumn, email, sessionID string, state map[string]any) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
 		return nil
@@ -180,15 +193,21 @@ func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID str
 		payload = raw
 	}
 	// Column is parameterized via constant strings only; no SQL
-	// injection risk because the caller supplies a literal column
-	// name from the known state-column methods above.
+	// injection risk because the callers supply literal column names
+	// from the known state-column methods above.
+	assignments := []string{fmt.Sprintf("%s = $4", column)}
+	if clearColumn != "" {
+		assignments = append(assignments, fmt.Sprintf("%s = NULL", clearColumn))
+	}
+	assignments = append(assignments,
+		"updated_at = now()",
+		"row_version = nextval('sessions_row_version_seq')",
+	)
 	q := fmt.Sprintf(`
 		UPDATE sessions
-		SET %s        = $4,
-			updated_at  = now(),
-			row_version = nextval('sessions_row_version_seq')
+		SET %s
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
-	`, column)
+	`, strings.Join(assignments, ",\n\t\t\t"))
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, payload)
 	return err
 }
