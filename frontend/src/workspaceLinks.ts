@@ -1,5 +1,16 @@
 const WORKSPACE_PATH_RE = /(?:\/workspace|workspace)\/[^\s<>"'`]+/g;
 const TRAILING_PATH_PUNCTUATION_RE = /[.,;:!?]+$/;
+const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
+  "/api/",
+  "/assets/",
+  "/_",
+  "/manifest.webmanifest",
+];
+
+export interface WorkspacePathTarget {
+  path: string;
+  line: number | null;
+}
 
 function splitTrailingPathPunctuation(path: string): { href: string; trailing: string } {
   let href = path;
@@ -26,6 +37,72 @@ function escapeMarkdownLinkText(text: string): string {
 
 function markdownLinkDestination(href: string): string {
   return `<${encodeURI(href).replace(/>/g, "%3E")}>`;
+}
+
+function splitLineSuffix(path: string): { path: string; line: number | null } {
+  const match = path.match(/:(\d+)$/);
+  if (!match) return { path, line: null };
+  const line = Number(match[1]);
+  if (!Number.isSafeInteger(line) || line < 1) return { path, line: null };
+  return { path: path.slice(0, -match[0].length), line };
+}
+
+export function normalizeWorkspacePathTarget(rawPath: string): WorkspacePathTarget | null {
+  let path = rawPath.trim();
+  if (!path) return null;
+  path = path.split(/[?#]/, 1)[0] ?? "";
+  try {
+    path = decodeURI(path);
+  } catch {
+    // Keep the raw path if it is not valid percent-encoded text.
+  }
+  path = path.replace(/\\/g, "/");
+  const lineTarget = splitLineSuffix(path);
+  path = lineTarget.path;
+  if (path === "/workspace" || path === "workspace") return null;
+  path = path.replace(/^\/workspace\/?/, "");
+  path = path.replace(/^workspace\/+/, "");
+  path = path.replace(/^\/+/, "");
+  path = path.replace(/^\.\//, "");
+  if (!path || path === ".") return null;
+  if (path.split("/").some((seg) => seg === "..")) return null;
+  return { path, line: lineTarget.line };
+}
+
+export function normalizeWorkspacePath(rawPath: string): string | null {
+  return normalizeWorkspacePathTarget(rawPath)?.path ?? null;
+}
+
+export function workspacePathFromHref(href: string | undefined): WorkspacePathTarget | null {
+  if (!href) return null;
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.startsWith("#")) return null;
+
+  if (trimmed.startsWith("file://")) {
+    try {
+      const url = new URL(trimmed);
+      return normalizeWorkspacePathTarget(url.pathname);
+    } catch {
+      return null;
+    }
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
+    return null;
+  }
+
+  if (trimmed.startsWith("/")) {
+    if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+      return null;
+    }
+    return normalizeWorkspacePathTarget(trimmed);
+  }
+
+  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
+    return normalizeWorkspacePathTarget(trimmed);
+  }
+
+  return null;
 }
 
 function canLinkWorkspacePath(chunk: string, index: number): boolean {

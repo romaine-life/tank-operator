@@ -114,7 +114,12 @@ import {
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
-import { linkWorkspacePathsInMarkdown } from "./workspaceLinks";
+import {
+  linkWorkspacePathsInMarkdown,
+  normalizeWorkspacePathTarget,
+  workspacePathFromHref,
+  type WorkspacePathTarget,
+} from "./workspaceLinks";
 
 type SessionMode =
   | "api_key"
@@ -2275,65 +2280,6 @@ function parentFilesPath(path: string): string {
   return idx <= 0 ? "" : path.slice(0, idx);
 }
 
-const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
-  "/api/",
-  "/assets/",
-  "/_",
-  "/manifest.webmanifest",
-];
-
-function normalizeWorkspacePath(rawPath: string): string | null {
-  let path = rawPath.trim();
-  if (!path) return null;
-  path = path.split(/[?#]/, 1)[0] ?? "";
-  try {
-    path = decodeURI(path);
-  } catch {
-    // Keep the raw path if it is not valid percent-encoded text.
-  }
-  path = path.replace(/\\/g, "/");
-  if (path === "/workspace" || path === "workspace") return "";
-  path = path.replace(/^\/workspace\/?/, "");
-  path = path.replace(/^workspace\/+/, "");
-  path = path.replace(/^\/+/, "");
-  path = path.replace(/^\.\//, "");
-  if (!path || path === ".") return null;
-  if (path.split("/").some((seg) => seg === "..")) return null;
-  return path;
-}
-
-function workspacePathFromHref(href: string | undefined): string | null {
-  if (!href) return null;
-  const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#")) return null;
-
-  if (trimmed.startsWith("file://")) {
-    try {
-      const url = new URL(trimmed);
-      return normalizeWorkspacePath(url.pathname);
-    } catch {
-      return null;
-    }
-  }
-
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
-    return null;
-  }
-
-  if (trimmed.startsWith("/")) {
-    if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
-      return null;
-    }
-    return normalizeWorkspacePath(trimmed);
-  }
-
-  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
-    return normalizeWorkspacePath(trimmed);
-  }
-
-  return null;
-}
-
 function humanFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
@@ -2418,6 +2364,29 @@ const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]);
 function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
+}
+
+function textOffsetForLine(text: string, line: number): number {
+  if (line <= 1) return 0;
+  let offset = 0;
+  for (let current = 1; current < line; current++) {
+    const next = text.indexOf("\n", offset);
+    if (next === -1) return text.length;
+    offset = next + 1;
+  }
+  return offset;
+}
+
+function scrollElementToLine(el: HTMLElement, line: number) {
+  const styles = window.getComputedStyle(el);
+  const parsedLineHeight = Number.parseFloat(styles.lineHeight);
+  const parsedFontSize = Number.parseFloat(styles.fontSize);
+  const lineHeight = Number.isFinite(parsedLineHeight)
+    ? parsedLineHeight
+    : (Number.isFinite(parsedFontSize) ? parsedFontSize * 1.55 : 16);
+  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+  const targetTop = paddingTop + Math.max(0, line - 1) * lineHeight;
+  el.scrollTop = Math.max(0, targetTop - el.clientHeight * 0.3);
 }
 // RunComposerMode + PERMISSION_MODE_INFO have moved to ./ChatComposer.tsx
 // alongside the shared composer component. They are re-imported above so
@@ -3433,19 +3402,19 @@ function RunMarkdownInlineCode({ children, className, node: _node, ...props }: R
 
 function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { openWorkspacePath } = useContext(RunContext);
-  const workspacePath = typeof props.href === "string"
+  const workspaceTarget = typeof props.href === "string"
     ? workspacePathFromHref(props.href)
     : null;
   return (
     <a
       {...props}
-      rel={workspacePath ? undefined : "noreferrer"}
-      target={workspacePath ? undefined : "_blank"}
+      rel={workspaceTarget ? undefined : "noreferrer"}
+      target={workspaceTarget ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
-        if (e.defaultPrevented || !workspacePath) return;
+        if (e.defaultPrevented || !workspaceTarget) return;
         e.preventDefault();
-        openWorkspacePath(workspacePath);
+        openWorkspacePath(workspaceTarget);
       }}
     />
   );
@@ -3477,7 +3446,7 @@ interface InputReplyPayload {
 }
 
 const RunContext = createContext<{
-  openWorkspacePath: (path: string) => void;
+  openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
 }>({
@@ -4803,6 +4772,10 @@ function ChatPane({
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
+  const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
+  const fileViewerContentRef = useRef<HTMLDivElement | null>(null);
+  const fileViewerEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileLineScrollKeyRef = useRef<string | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
   // Edit-mode bookkeeping for the file viewer.
   const [fileDraft, setFileDraft] = useState<string | null>(null);
@@ -5634,6 +5607,35 @@ function ChatPane({
   }, [selectedFile, session.id]);
 
   useEffect(() => {
+    if (!selectedFileLine || !selectedFile || selectedFile.binary || fileContentLoading) return;
+    const mode = fileDraft == null ? "read" : "edit";
+    const scrollKey = `${selectedFile.path}:${selectedFileLine}:${mode}:${selectedFile.text.length}`;
+    if (fileLineScrollKeyRef.current === scrollKey) return;
+    fileLineScrollKeyRef.current = scrollKey;
+
+    const frame = window.requestAnimationFrame(() => {
+      if (fileDraft == null) {
+        const content = fileViewerContentRef.current;
+        if (content) scrollElementToLine(content, selectedFileLine);
+        return;
+      }
+
+      const editor = fileViewerEditorRef.current;
+      if (!editor) return;
+      const offset = textOffsetForLine(fileDraft, selectedFileLine);
+      editor.focus();
+      editor.setSelectionRange(offset, offset);
+      scrollElementToLine(editor, selectedFileLine);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    fileContentLoading,
+    fileDraft,
+    selectedFile,
+    selectedFileLine,
+  ]);
+
+  useEffect(() => {
     if (session.status !== "Active") {
       setMcpServers(null);
       setMcpError(null);
@@ -5700,22 +5702,30 @@ function ChatPane({
     if (type === "dir") {
       setFilesPath(next);
       setSelectedFile(null);
+      setSelectedFileLine(null);
+      fileLineScrollKeyRef.current = null;
       setFileDraft(null);
       setFileSaveError(null);
       return;
     }
     // Trigger content fetch by setting a placeholder.
     setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFileLine(null);
+    fileLineScrollKeyRef.current = null;
     setFileDraft(null);
     setFileSaveError(null);
   }
 
-  function openWorkspacePath(path: string) {
-    const normalized = normalizeWorkspacePath(path);
+  function openWorkspacePath(target: WorkspacePathTarget | string) {
+    const normalized = typeof target === "string"
+      ? normalizeWorkspacePathTarget(target)
+      : target;
     if (!normalized) return;
     setActiveTab("files");
-    setFilesPath(parentFilesPath(normalized));
-    setSelectedFile({ path: normalized, size: 0, truncated: false, text: "", binary: false });
+    setFilesPath(parentFilesPath(normalized.path));
+    setSelectedFile({ path: normalized.path, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFileLine(normalized.line);
+    fileLineScrollKeyRef.current = null;
     setFileDraft(null);
     setFileSaveError(null);
   }
@@ -6833,6 +6843,7 @@ function ChatPane({
                 onClick={() => {
                   setFilesPath("");
                   setSelectedFile(null);
+                  setSelectedFileLine(null);
                 }}
               >
                 /workspace
@@ -6851,6 +6862,7 @@ function ChatPane({
                         onClick={() => {
                           setFilesPath(target);
                           setSelectedFile(null);
+                          setSelectedFileLine(null);
                         }}
                       >
                         {seg}
@@ -6868,6 +6880,7 @@ function ChatPane({
                     onClick={() => {
                       setFilesPath(parentFilesPath(filesPath));
                       setSelectedFile(null);
+                      setSelectedFileLine(null);
                     }}
                   >
                     <ArrowUpFromLineIcon size={14} className="run-files-row-icon" aria-hidden="true" />
@@ -6974,6 +6987,7 @@ function ChatPane({
                     <div className="run-files-viewer-header">
                       <span className="run-files-viewer-path">
                         {selectedFile.path}
+                        {selectedFileLine ? `:${selectedFileLine}` : ""}
                       </span>
                       <div className="run-files-viewer-actions">
                         {fileDraft != null && fileDraft !== selectedFile.text && (
@@ -7016,7 +7030,7 @@ function ChatPane({
                         user hasn't started editing yet (fileDraft==null);
                         switches to the textarea on first focus. */}
                     {selectedFile.truncated ? (
-                      <div className="run-files-viewer-content">
+                      <div className="run-files-viewer-content" ref={fileViewerContentRef}>
                         <Streamdown linkSafety={{ enabled: false }} shikiTheme={STREAMDOWN_DARK_THEME}>
                           {`\`\`\`${syntaxLangForPath(selectedFile.path)}\n${selectedFile.text}\n\`\`\``}
                         </Streamdown>
@@ -7024,6 +7038,7 @@ function ChatPane({
                     ) : fileDraft == null ? (
                       <div
                         className="run-files-viewer-content run-files-viewer-readonly"
+                        ref={fileViewerContentRef}
                         onClick={() => setFileDraft(selectedFile.text)}
                         role="button"
                         tabIndex={0}
@@ -7042,6 +7057,7 @@ function ChatPane({
                     ) : (
                       <textarea
                         className="run-files-viewer-content run-files-viewer-editor"
+                        ref={fileViewerEditorRef}
                         value={fileDraft}
                         onChange={(e) => setFileDraft(e.target.value)}
                         spellCheck={false}
