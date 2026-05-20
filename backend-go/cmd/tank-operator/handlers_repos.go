@@ -29,6 +29,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -135,6 +136,24 @@ const recentRepoLimit = 8
 // "recent" anymore.
 const recentRepoLookbackDays = 30
 
+const fetchRecentRepoSlugsQuery = `
+	WITH recent AS (
+		SELECT unnest(repos) AS slug, created_at
+		FROM sessions
+		WHERE email = $1
+		  AND session_scope = $2
+		  AND created_at > now() - ($3::int * interval '1 day')
+	)
+	SELECT slug
+	FROM (
+		SELECT slug, MAX(created_at) AS last_used
+		FROM recent
+		GROUP BY slug
+	) ranked
+	ORDER BY last_used DESC
+	LIMIT $4
+`
+
 // handleGitHubRecentRepos returns the caller's recently-selected repo
 // slugs, deduped, in most-recent-first order. The picker uses this to
 // surface the "Recent" section before the stage 2 enumeration call
@@ -155,7 +174,7 @@ func (s *appServer) handleGitHubRecentRepos(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, map[string]any{"repos": []string{}})
 		return
 	}
-	slugs, err := fetchRecentRepoSlugs(r.Context(), s.pgPool, user.Email, s.sessionScope, recentRepoLimit, recentRepoLookbackDays)
+	slugs, err := fetchRecentRepoSlugs(r.Context(), s.pgPool, repoLookupOwnerEmail(user), s.sessionScope, recentRepoLimit, recentRepoLookbackDays)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "recent repos: "+err.Error())
 		return
@@ -176,24 +195,7 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 	if owner == "" {
 		return []string{}, nil
 	}
-	const q = `
-		WITH recent AS (
-			SELECT unnest(repos) AS slug, created_at
-			FROM sessions
-			WHERE email = $1
-			  AND session_scope = $2
-			  AND created_at > now() - ($3 || ' days')::interval
-		)
-		SELECT slug
-		FROM (
-			SELECT slug, MAX(created_at) AS last_used
-			FROM recent
-			GROUP BY slug
-		) ranked
-		ORDER BY last_used DESC
-		LIMIT $4
-	`
-	rows, err := pool.Query(ctx, q, owner, scope, lookbackDays, limit)
+	rows, err := pool.Query(ctx, fetchRecentRepoSlugsQuery, owner, scope, lookbackDays, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +209,10 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 		out = append(out, slug)
 	}
 	return out, rows.Err()
+}
+
+func repoLookupOwnerEmail(user auth.User) string {
+	return user.OwnerEmail()
 }
 
 // handleGitHubRepos returns the full set of repos visible to the
@@ -239,7 +245,7 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	// SPA's fetch budget is the only ceiling we want callers to hit.
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	repos, err := s.mcpGitHub.ListRepos(ctx, user.Email)
+	repos, err := s.mcpGitHub.ListRepos(ctx, repoLookupOwnerEmail(user))
 	if err != nil {
 		githubRepoListRequestsTotal.WithLabelValues("error").Inc()
 		slog.Warn("mcp-github list_installation_repos failed", "email", user.Email, "error", err)

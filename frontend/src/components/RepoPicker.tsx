@@ -10,6 +10,8 @@
 //
 // UX shape:
 //   - The selected repos render as removable chips above the trigger.
+//   - A short row of recent repos stays visible on the splash page so
+//     common choices are one click without opening the dialog.
 //   - "+ Add repo" opens a small dropdown panel below the chip row.
 //   - The panel has a text input ("owner/name") with an explicit Add
 //     button, plus a "Recent" section of clickable suggestions
@@ -26,7 +28,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { isValidRepoSlug } from "../repos";
+import { isValidRepoSlug, recentRepoPreviewSlugs } from "../repos";
 
 /** allRepos surfaces the user's full GitHub App installation, sourced
  *  from /api/github/repos (stage 2). The picker filters this list by
@@ -112,6 +114,11 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
+  const recentPreview = useMemo(
+    () => recentRepoPreviewSlugs(recent, selected),
+    [recent, selected],
+  );
+
   // Close on Escape or outside-click — matches the profile menu shape
   // used elsewhere in App.tsx (data-menu attribute on the root).
   useEffect(() => {
@@ -167,6 +174,26 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
             </li>
           ))}
         </ul>
+      )}
+      {recentPreview.length > 0 && (
+        <div className="home-repos-preview" aria-label="Recent repositories">
+          <div className="home-repos-recent-label">Recent</div>
+          <ul className="home-repos-recent-list" role="list">
+            {recentPreview.map((slug) => (
+              <li key={`preview:${slug}`} className="home-repos-recent-item">
+                <button
+                  type="button"
+                  className="home-repos-recent-chip"
+                  onClick={() => onAdd(slug)}
+                  disabled={busy}
+                  title={slug}
+                >
+                  {slug}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <button
         type="button"

@@ -5,9 +5,11 @@ import {
   MAX_REPOS_PER_SESSION,
   REPO_SLUG_PATTERN,
   REPO_SUPPORTED_MODES,
+  RECENT_REPO_PREVIEW_LIMIT,
   addRepoSlug,
   isValidRepoSlug,
   modeSupportsRepos,
+  recentRepoPreviewSlugs,
   removeRepoSlug,
 } from "./repos";
 
@@ -67,6 +69,10 @@ test("MAX_REPOS_PER_SESSION matches backend cap", () => {
   assert.equal(MAX_REPOS_PER_SESSION, 5);
 });
 
+test("RECENT_REPO_PREVIEW_LIMIT keeps the splash recent list short", () => {
+  assert.equal(RECENT_REPO_PREVIEW_LIMIT, 4);
+});
+
 test("addRepoSlug rejects empty input", () => {
   const result = addRepoSlug([], "   ");
   assert.equal(result.ok, false);
@@ -121,4 +127,30 @@ test("removeRepoSlug is case-sensitive (mirrors UI)", () => {
   // should remove "Foo/Bar", not a hypothetical "foo/bar".
   const next = removeRepoSlug(["Foo/Bar"], "foo/bar");
   assert.deepEqual(next, ["Foo/Bar"]);
+});
+
+test("recentRepoPreviewSlugs caps and filters recent repos", () => {
+  const recent = [
+    "nelsong6/tank-operator",
+    "  bad slug  ",
+    "NelsonG6/Tank-Operator",
+    "nelsong6/infra-bootstrap",
+    "nelsong6/mcp-tank-operator",
+    "openai/codex",
+    "example/fifth",
+  ];
+  const selected = ["nelsong6/infra-bootstrap"];
+
+  assert.deepEqual(recentRepoPreviewSlugs(recent, selected), [
+    "nelsong6/tank-operator",
+    "nelsong6/mcp-tank-operator",
+    "openai/codex",
+    "example/fifth",
+  ]);
+});
+
+test("recentRepoPreviewSlugs hides suggestions once the session repo cap is reached", () => {
+  const selected = ["a/1", "b/2", "c/3", "d/4", "e/5"];
+
+  assert.deepEqual(recentRepoPreviewSlugs(["f/6"], selected), []);
 });
