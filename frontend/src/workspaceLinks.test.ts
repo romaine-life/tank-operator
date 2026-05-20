@@ -55,6 +55,12 @@ test("parses workspace markdown hrefs with line numbers", () => {
   assert.equal(workspacePathFromHref("https://example.test/workspace/src/App.tsx:42"), null);
 });
 
+test("does not treat arbitrary absolute paths as workspace hrefs", () => {
+  assert.equal(workspacePathFromHref("/home/node/.codex/skills/test/SKILL.md"), null);
+  assert.equal(workspacePathFromHref("/src/App.tsx"), null);
+  assert.equal(workspacePathFromHref("file:///home/node/.codex/skills/test/SKILL.md"), null);
+});
+
 test("does not rewrite inline or fenced code paths", () => {
   const markdown = [
     "Use `/workspace/screenshots/1.png` literally.",

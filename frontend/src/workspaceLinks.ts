@@ -47,6 +47,14 @@ function splitLineSuffix(path: string): { path: string; line: number | null } {
   return { path: path.slice(0, -match[0].length), line };
 }
 
+function isWorkspaceHrefPath(path: string): boolean {
+  return path === "/workspace" ||
+    path.startsWith("/workspace/") ||
+    path === "workspace" ||
+    path.startsWith("workspace/") ||
+    path.startsWith("./");
+}
+
 export function normalizeWorkspacePathTarget(rawPath: string): WorkspacePathTarget | null {
   let path = rawPath.trim();
   if (!path) return null;
@@ -81,7 +89,9 @@ export function workspacePathFromHref(href: string | undefined): WorkspacePathTa
   if (trimmed.startsWith("file://")) {
     try {
       const url = new URL(trimmed);
-      return normalizeWorkspacePathTarget(url.pathname);
+      return isWorkspaceHrefPath(url.pathname)
+        ? normalizeWorkspacePathTarget(url.pathname)
+        : null;
     } catch {
       return null;
     }
@@ -93,6 +103,9 @@ export function workspacePathFromHref(href: string | undefined): WorkspacePathTa
 
   if (trimmed.startsWith("/")) {
     if (INTERNAL_ABSOLUTE_HREF_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) {
+      return null;
+    }
+    if (!isWorkspaceHrefPath(trimmed)) {
       return null;
     }
     return normalizeWorkspacePathTarget(trimmed);
