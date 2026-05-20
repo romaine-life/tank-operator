@@ -610,6 +610,8 @@ interface InterruptTestHarness {
   events: TankConversationEvent[];
   bus: string[];
   sdkInterrupts: number;
+  sdkBackgroundTasks: number;
+  sdkControlCalls: string[];
   heartbeats: number;
   setSinkFailureCount: (n: number) => void;
 }
@@ -621,6 +623,8 @@ function makeInterruptHarness(runnerCfg = runnerConfig()): {
   const events: TankConversationEvent[] = [];
   const bus: string[] = [];
   let sdkInterrupts = 0;
+  let sdkBackgroundTasks = 0;
+  const sdkControlCalls: string[] = [];
   let heartbeats = 0;
   let sinkFailuresLeft = 0;
   const harness: InterruptTestHarness = {
@@ -629,6 +633,10 @@ function makeInterruptHarness(runnerCfg = runnerConfig()): {
     get sdkInterrupts() {
       return sdkInterrupts;
     },
+    get sdkBackgroundTasks() {
+      return sdkBackgroundTasks;
+    },
+    sdkControlCalls,
     get heartbeats() {
       return heartbeats;
     },
@@ -674,14 +682,20 @@ function makeInterruptHarness(runnerCfg = runnerConfig()): {
     },
   };
   internals.sdkQuery = {
+    async backgroundTasks() {
+      sdkBackgroundTasks += 1;
+      sdkControlCalls.push("backgroundTasks");
+      return true;
+    },
     async interrupt() {
       sdkInterrupts += 1;
+      sdkControlCalls.push("interrupt");
     },
-  };
+  } as never;
   return { runner, harness };
 }
 
-test("acceptInterrupt during in-flight turn: sdkQuery.interrupt() called first, turn.interrupted published", async () => {
+test("acceptInterrupt during in-flight turn: foreground tasks are backgrounded before SDK interrupt, terminal publishes immediately", async () => {
   const { runner, harness } = makeInterruptHarness();
   const r = runner as unknown as {
     activeTurn: unknown;
@@ -704,6 +718,12 @@ test("acceptInterrupt during in-flight turn: sdkQuery.interrupt() called first, 
     client_nonce: "abc-123",
   });
 
+  assert.deepEqual(
+    harness.sdkControlCalls,
+    ["backgroundTasks", "interrupt"],
+    "Stop should ask Claude to background foreground shell work before interrupting the active turn",
+  );
+  assert.equal(harness.sdkBackgroundTasks, 1, "foreground Bash/subagent backgrounding must be attempted");
   assert.equal(harness.sdkInterrupts, 1, "SDK interrupt must be called");
   assert.equal(harness.events.length, 1, "exactly one durable terminal must be published");
   assert.equal(harness.events[0]!.type, "turn.interrupted");

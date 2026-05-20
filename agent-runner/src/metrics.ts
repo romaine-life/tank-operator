@@ -38,6 +38,13 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+export const providerControlTotal = new Counter({
+  name: "tank_runner_provider_control_total",
+  help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",
+  labelNames: ["action", "outcome"],
+  registers: [registry],
+});
+
 export const itemOutcomeTotal = new Counter({
   name: "tank_runner_item_outcome_total",
   help: "Provider item outcomes emitted into the Tank conversation ledger.",

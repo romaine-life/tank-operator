@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import type { CodexEvent } from "./sessionEvents.js";
+import { providerControlTotal, providerErrorTotal } from "./metrics.js";
 
 type JsonRecord = Record<string, unknown>;
 const require = createRequire(import.meta.url);
@@ -47,18 +48,37 @@ type QueuedEvent =
   | { kind: "event"; event: CodexEvent }
   | { kind: "error"; error: Error };
 
+function abortError(message = "turn interrupted"): Error {
+  const err = new Error(message);
+  err.name = "AbortError";
+  return err;
+}
+
 class AsyncEventQueue {
   private readonly items: QueuedEvent[] = [];
   private readonly waiters: Array<(item: QueuedEvent | null) => void> = [];
   private closed = false;
 
   push(item: QueuedEvent): void {
+    if (this.closed) return;
     const waiter = this.waiters.shift();
     if (waiter) {
       waiter(item);
       return;
     }
     this.items.push(item);
+  }
+
+  fail(error: Error): void {
+    if (this.closed) return;
+    this.items.length = 0;
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter({ kind: "error", error });
+    } else {
+      this.items.push({ kind: "error", error });
+    }
+    this.close();
   }
 
   close(): void {
@@ -81,6 +101,12 @@ export class CodexAppServerTransport {
   private readonly pending = new Map<number, PendingRequest>();
   private activeQueue: AsyncEventQueue | null = null;
   private activeProviderTurnID: string | null = null;
+  private activeTurnControl: {
+    threadID: string;
+    abortRequested: boolean;
+    interruptSent: boolean;
+  } | null = null;
+  private readonly itemsByID = new Map<string, JsonRecord>();
 
   constructor(private readonly opts: AppServerTransportOptions) {}
 
@@ -126,22 +152,37 @@ export class CodexAppServerTransport {
     threadOptions: ThreadOptions,
     signal?: AbortSignal,
   ): AsyncGenerator<CodexEvent> {
+    if (signal?.aborted) throw abortError();
     await this.start();
+    if (signal?.aborted) throw abortError();
     const threadID = await this.ensureThread(threadOptions);
+    if (signal?.aborted) throw abortError();
     const queue = new AsyncEventQueue();
     this.activeQueue = queue;
     this.activeProviderTurnID = null;
+    const turnControl = {
+      threadID,
+      abortRequested: false,
+      interruptSent: false,
+    };
+    this.activeTurnControl = turnControl;
+    this.itemsByID.clear();
+    let terminalSeen = false;
+    let abortRequested = false;
     const onAbort = () => {
+      if (terminalSeen) return;
+      abortRequested = true;
+      turnControl.abortRequested = true;
       if (this.activeProviderTurnID) {
-        void this.request("turn/interrupt", {
-          threadId: threadID,
-          turnId: this.activeProviderTurnID,
-        }).catch(() => {});
+        this.interruptProviderTurn(turnControl, this.activeProviderTurnID);
       }
-      queue.close();
+      queue.fail(abortError());
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
+      if (signal?.aborted) {
+        onAbort();
+      }
       const turnStart = this.request("turn/start", {
         threadId: threadID,
         input: [{ type: "text", text: input, text_elements: [] }],
@@ -149,20 +190,47 @@ export class CodexAppServerTransport {
         approvalPolicy: "never",
         sandboxPolicy: { type: "dangerFullAccess" },
       });
+      void turnStart.then((result) => {
+        const turnID = turnIDFromTurnStartResponse(result);
+        if (turnID && this.activeQueue === queue && !this.activeProviderTurnID) {
+          this.activeProviderTurnID = turnID;
+        }
+        if (abortRequested && turnID) {
+          this.interruptProviderTurn(turnControl, turnID);
+        }
+      }).catch((err) => {
+        queue.push({ kind: "error", error: err instanceof Error ? err : new Error(String(err)) });
+      }).finally(() => {
+        if (this.activeTurnControl === turnControl && (!turnControl.abortRequested || turnControl.interruptSent)) {
+          this.activeTurnControl = null;
+        }
+      });
       for (;;) {
         const item = await queue.next();
         if (!item) break;
         if (item.kind === "error") throw item.error;
         yield item.event;
-        if (item.event.type === "turn.completed" || item.event.type === "turn.failed") break;
+        if (
+          item.event.type === "turn.completed" ||
+          item.event.type === "turn.failed" ||
+          item.event.type === "turn.interrupted"
+        ) {
+          terminalSeen = true;
+          break;
+        }
       }
+      if (abortRequested && !terminalSeen) throw abortError();
       await turnStart.catch((err) => {
         throw err instanceof Error ? err : new Error(String(err));
       });
     } finally {
       signal?.removeEventListener("abort", onAbort);
       if (this.activeQueue === queue) this.activeQueue = null;
-      this.activeProviderTurnID = null;
+      if (this.activeTurnControl === turnControl && (!turnControl.abortRequested || turnControl.interruptSent)) {
+        this.activeTurnControl = null;
+        this.activeProviderTurnID = null;
+      }
+      this.itemsByID.clear();
       queue.close();
     }
   }
@@ -235,32 +303,80 @@ export class CodexAppServerTransport {
   }
 
   private handleNotification(method: string, params?: JsonRecord): void {
-    const queue = this.activeQueue;
-    if (!queue) return;
     if (method === "turn/started") {
       const turn = params?.turn;
       const turnID =
         turn && typeof turn === "object" && typeof (turn as JsonRecord).id === "string"
           ? (turn as JsonRecord).id as string
           : undefined;
-      if (turnID) this.activeProviderTurnID = turnID;
-      queue.push({ kind: "event", event: { type: "turn.started", id: turnID } });
+      if (turnID) {
+        this.activeProviderTurnID = turnID;
+        const control = this.activeTurnControl;
+        if (control?.abortRequested) this.interruptProviderTurn(control, turnID);
+      }
+      const queue = this.activeQueue;
+      if (queue) queue.push({ kind: "event", event: { type: "turn.started", id: turnID } });
       return;
     }
+    const queue = this.activeQueue;
+    if (!queue) return;
     if (method === "turn/completed") {
-      queue.push({ kind: "event", event: { type: "turn.completed", usage: null } });
-      return;
-    }
-    if (method === "item/started" || method === "item/completed") {
-      const item = params?.item;
-      if (!item || typeof item !== "object") return;
+      const turn = params?.turn;
+      const status =
+        turn && typeof turn === "object" && typeof (turn as JsonRecord).status === "string"
+          ? (turn as JsonRecord).status
+          : "";
       queue.push({
         kind: "event",
         event: {
-          type: method === "item/started" ? "item.started" : "item.completed",
-          item: appServerItemToCodexItem(item as JsonRecord),
+          type:
+            status === "interrupted"
+              ? "turn.interrupted"
+              : status === "failed"
+                ? "turn.failed"
+                : "turn.completed",
+          usage: null,
         },
       });
+      return;
+    }
+    if (method === "item/started" || method === "item/completed" || method === "item/updated") {
+      const item = params?.item;
+      if (!item || typeof item !== "object") return;
+      const codexItem = appServerItemToCodexItem(item as JsonRecord);
+      const itemID = typeof codexItem.id === "string" ? codexItem.id : "";
+      if (itemID) this.itemsByID.set(itemID, codexItem);
+      queue.push({
+        kind: "event",
+        event: {
+          type:
+            method === "item/started"
+              ? "item.started"
+              : method === "item/completed"
+                ? "item.completed"
+                : "item.updated",
+          item: codexItem,
+        },
+      });
+      return;
+    }
+    if (method === "item/commandExecution/outputDelta") {
+      const itemID = typeof params?.itemId === "string" ? params.itemId : "";
+      if (!itemID) return;
+      const existing = this.itemsByID.get(itemID) ?? {
+        id: itemID,
+        type: "command_execution",
+        aggregated_output: "",
+        status: "in_progress",
+      };
+      const delta = typeof params?.delta === "string" ? params.delta : "";
+      const next = {
+        ...existing,
+        aggregated_output: `${String(existing.aggregated_output ?? "")}${delta}`,
+        status: existing.status ?? "in_progress",
+      };
+      this.itemsByID.set(itemID, next);
+      queue.push({ kind: "event", event: { type: "item.updated", item: next } });
       return;
     }
     if (method === "error") {
@@ -303,9 +419,45 @@ export class CodexAppServerTransport {
     }
     this.respond(id, {});
   }
+
+  private interruptProviderTurn(
+    control: { threadID: string; interruptSent: boolean },
+    turnID: string,
+  ): void {
+    if (!turnID || control.interruptSent) return;
+    control.interruptSent = true;
+    try {
+      void this.request("turn/interrupt", {
+        threadId: control.threadID,
+        turnId: turnID,
+      }).then(() => {
+        providerControlTotal.labels("interrupt", "sent").inc();
+      }).catch((err) => {
+        providerControlTotal.labels("interrupt", "failed").inc();
+        providerErrorTotal.labels("interrupt").inc();
+        console.error("codex app-server turn/interrupt failed after Stop terminal was emitted:", err);
+      });
+    } catch (err) {
+      providerControlTotal.labels("interrupt", "failed").inc();
+      providerErrorTotal.labels("interrupt").inc();
+      console.error("codex app-server turn/interrupt failed; continuing with durable Stop terminal:", err);
+    }
+    if (this.activeTurnControl === control) {
+      this.activeTurnControl = null;
+      this.activeProviderTurnID = null;
+    }
+  }
 }
 
-function appServerItemToCodexItem(item: JsonRecord): JsonRecord {
+function turnIDFromTurnStartResponse(result: unknown): string {
+  if (!result || typeof result !== "object") return "";
+  const turn = (result as JsonRecord).turn;
+  if (!turn || typeof turn !== "object") return "";
+  const id = (turn as JsonRecord).id;
+  return typeof id === "string" ? id : "";
+}
+
+export function appServerItemToCodexItem(item: JsonRecord): JsonRecord {
   const type = item.type;
   if (type === "agentMessage") {
     return { id: item.id, type: "agent_message", text: item.text };
@@ -320,9 +472,13 @@ function appServerItemToCodexItem(item: JsonRecord): JsonRecord {
       id: item.id,
       type: "command_execution",
       command: item.command,
+      cwd: item.cwd,
+      process_id: item.processId,
+      source: item.source,
       aggregated_output: item.aggregatedOutput ?? "",
       exit_code: item.exitCode ?? undefined,
       status: codexStatus(item.status),
+      duration_ms: item.durationMs,
     };
   }
   if (type === "fileChange") {
