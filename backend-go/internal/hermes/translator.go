@@ -28,15 +28,17 @@ type Translator struct {
 	cfg TranslatorConfig
 
 	// State carried across multiple SSE events within one run.
-	startedEmitted bool
-	itemTexts      map[string]*strings.Builder // accumulated text per output_item.id
-	itemStarted    map[string]bool             // emitted item.started for output_item.id
-	terminalKind   string                      // "completed" / "failed" / "interrupted" / ""
+	startedEmitted          bool
+	itemTexts               map[string]*strings.Builder // accumulated text per output_item.id
+	itemStarted             map[string]bool             // emitted item.started for output_item.id
+	simpleMessageText       strings.Builder             // accumulated Hermes message.delta text
+	assistantMessageEmitted bool
+	terminalKind            string // "completed" / "failed" / "interrupted" / ""
 
 	// Metrics surface for the bridge / observability layer.
-	UnhandledCount    int
-	UnhandledTypes    map[string]int
-	TranslatorErrors  []error
+	UnhandledCount   int
+	UnhandledTypes   map[string]int
+	TranslatorErrors []error
 }
 
 // TranslatorConfig is the immutable per-turn binding the Translator works
@@ -96,6 +98,8 @@ func (t *Translator) translate(evt RunEvent) ([]map[string]any, error) {
 		return t.handleRunStarted(evt), nil
 	case "response.output_text.delta":
 		return t.handleTextDelta(evt)
+	case "message.delta":
+		return t.handleMessageDelta(evt)
 	case "response.output_item.added":
 		return t.handleItemAdded(evt)
 	case "response.output_item.done":
@@ -140,7 +144,8 @@ func (t *Translator) handleRunStarted(evt RunEvent) []map[string]any {
 }
 
 // outputTextDelta is the documented Responses-API SSE shape:
-//   { "item_id": "...", "delta": "...", ... }
+//
+//	{ "item_id": "...", "delta": "...", ... }
 type outputTextDelta struct {
 	ItemID string `json:"item_id"`
 	Delta  string `json:"delta"`
@@ -166,6 +171,30 @@ func (t *Translator) handleTextDelta(evt RunEvent) ([]map[string]any, error) {
 	// streams the same way (see codex.ts's "item.updated" branch). When
 	// a live partial-token channel lands, restore both Tank's item.delta
 	// event type and visibility=live-only together.
+	return nil, nil
+}
+
+type simpleMessageDelta struct {
+	Delta string `json:"delta"`
+	Text  string `json:"text"`
+}
+
+func (t *Translator) handleMessageDelta(evt RunEvent) ([]map[string]any, error) {
+	var d simpleMessageDelta
+	if err := json.Unmarshal(evt.Data, &d); err != nil {
+		return nil, fmt.Errorf("message.delta unmarshal: %w", err)
+	}
+	chunk := d.Delta
+	if chunk == "" {
+		chunk = d.Text
+	}
+	if chunk == "" {
+		return nil, nil
+	}
+	t.simpleMessageText.WriteString(chunk)
+	// Hermes' /v1/runs stream currently exposes simple text deltas without
+	// a Responses output_item lifecycle. Tank has no durable per-token event,
+	// so the bridge emits the assistant message when run.completed arrives.
 	return nil, nil
 }
 
@@ -287,6 +316,7 @@ func (t *Translator) handleItemDone(evt RunEvent) ([]map[string]any, error) {
 		if text == "" && len(item.Content) > 0 {
 			text = extractMessageText(item.Content)
 		}
+		t.assistantMessageEmitted = true
 		return []map[string]any{t.buildItem(itemArgs{
 			Type:           conversation.EventItemCompleted,
 			Actor:          conversation.ActorAssistant,
@@ -336,6 +366,10 @@ func (t *Translator) handleItemDone(evt RunEvent) ([]map[string]any, error) {
 	}
 }
 
+type terminalPayload struct {
+	Output string `json:"output"`
+}
+
 func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventType) []map[string]any {
 	switch eventType {
 	case conversation.EventTurnCompleted:
@@ -349,7 +383,7 @@ func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventTy
 	if eventType == conversation.EventTurnFailed {
 		payload["reason"] = "provider_failure"
 	}
-	event := map[string]any{
+	event := t.stamp(map[string]any{
 		"event_id":   t.cfg.TurnID + ":" + string(eventType),
 		"session_id": t.cfg.SessionID,
 		"turn_id":    t.cfg.TurnID,
@@ -359,11 +393,18 @@ func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventTy
 		"created_at": t.nowRFC3339(),
 		"producer":   t.producer(),
 		"visibility": string(conversation.VisibilityDurable),
-	}
+	})
 	if len(payload) > 0 {
 		event["payload"] = payload
 	}
-	return []map[string]any{t.stamp(event)}
+	events := []map[string]any{}
+	if eventType == conversation.EventTurnCompleted {
+		if assistant := t.emitSimpleAssistantMessage(evt); assistant != nil {
+			events = append(events, assistant)
+		}
+	}
+	events = append(events, event)
+	return events
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -405,6 +446,37 @@ func (t *Translator) buildItem(args itemArgs) map[string]any {
 		"payload":          args.Payload,
 	}
 	return t.stamp(event)
+}
+
+func (t *Translator) emitSimpleAssistantMessage(evt RunEvent) map[string]any {
+	if t.assistantMessageEmitted {
+		return nil
+	}
+	text := t.terminalOutput(evt)
+	if text == "" {
+		text = t.simpleMessageText.String()
+	}
+	if text == "" {
+		return nil
+	}
+	t.assistantMessageEmitted = true
+	return t.buildItem(itemArgs{
+		Type:           conversation.EventItemCompleted,
+		Actor:          conversation.ActorAssistant,
+		ProviderItemID: "message",
+		Payload:        map[string]any{"kind": "message", "text": text},
+	})
+}
+
+func (t *Translator) terminalOutput(evt RunEvent) string {
+	if len(evt.Data) == 0 {
+		return ""
+	}
+	var p terminalPayload
+	if err := json.Unmarshal(evt.Data, &p); err != nil {
+		return ""
+	}
+	return p.Output
 }
 
 func (t *Translator) stamp(event map[string]any) map[string]any {
@@ -458,4 +530,3 @@ func extractMessageText(raw json.RawMessage) string {
 	}
 	return ""
 }
-
