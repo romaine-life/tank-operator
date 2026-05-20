@@ -146,6 +146,68 @@ test("Tool lifecycle replays to a completed tool item", () => {
   assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
 });
 
+test("Codex userMessage provider echo items are ignored on frontend replay", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      source: "tank",
+      client_nonce: "run-codex",
+      payload: { text: "hello" },
+    }),
+    ev("2", "item.started", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "turn-1:item:item-user-echo",
+      provider_item_id: "item-user-echo",
+      payload: {
+        kind: "userMessage",
+        title: "userMessage",
+        text: "hello",
+        raw_item: {
+          id: "item-user-echo",
+          type: "userMessage",
+          text: "hello",
+        },
+      },
+    }),
+    ev("3", "item.completed", {
+      actor: "tool",
+      source: "codex",
+      timeline_id: "turn-1:item:item-user-echo",
+      provider_item_id: "item-user-echo",
+      payload: {
+        kind: "userMessage",
+        title: "userMessage",
+        text: "hello",
+        outcome: { kind: "ok" },
+        raw_item: {
+          id: "item-user-echo",
+          type: "userMessage",
+          text: "hello",
+        },
+      },
+    }),
+    ev("4", "item.completed", {
+      actor: "assistant",
+      source: "codex",
+      timeline_id: "turn-1:item:item-agent-message",
+      provider_item_id: "item-agent-message",
+      payload: {
+        kind: "agent_message",
+        title: "agent_message",
+        text: "hi",
+        outcome: { kind: "ok" },
+      },
+    }),
+  ]);
+
+  assert.equal(state.messages.length, 1);
+  assert.deepEqual(
+    state.items.map((item) => [item.id, item.kind, item.text]),
+    [["turn-1:item:item-agent-message", "agent_message", "hi"]],
+  );
+});
+
 test("Late item.started does not regress a completed tool back to running", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started"),
