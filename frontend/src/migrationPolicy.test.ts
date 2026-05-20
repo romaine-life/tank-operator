@@ -142,8 +142,16 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
   assert.equal(appSource.includes("reduceTimelineBootstrap"), true);
+  assert.equal(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget"), true);
+  assert.equal(appSource.includes('requestScrollToLatest("auto", source)'), true);
   assert.match(appSource, /useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
   assert.match(appSource, /if \(timelineBootstrap\.status !== "idle"\) return;/);
+});
+
+test("chat submit explicitly lands at the latest message", () => {
+  const startRunMatch = appSource.match(/function startRun\([\s\S]*?\n  \}/);
+  assert.ok(startRunMatch, "startRun should be present");
+  assert.equal(startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'), true);
 });
 
 test("chat back-pagination keeps an explicit access path", () => {
