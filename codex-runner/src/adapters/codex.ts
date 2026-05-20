@@ -85,6 +85,7 @@ export class CodexTankEventAdapter {
       const item = event.item;
       if (item && typeof item === "object") {
         const itemRecord = item as Record<string, unknown>;
+        if (isCodexUserMessageEchoItem(itemRecord)) return [];
         const providerItemID =
           typeof itemRecord.id === "string" && itemRecord.id
             ? itemRecord.id
@@ -99,6 +100,7 @@ export class CodexTankEventAdapter {
     const item = event.item;
     if (!item || typeof item !== "object") return [];
     const itemRecord = item as Record<string, unknown>;
+    if (isCodexUserMessageEchoItem(itemRecord)) return [];
     const providerItemID =
       typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
     const outcome = codexItemOutcome(itemRecord);
@@ -204,6 +206,13 @@ function numericExitCode(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isInteger(value)) return value;
   if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value);
   return undefined;
+}
+
+function isCodexUserMessageEchoItem(item: Record<string, unknown>): boolean {
+  // Tank owns the durable user-message boundary via user_message.created.
+  // Codex app-server may also echo the submitted user input as a provider
+  // item; forwarding that item would make the frontend render it as a tool.
+  return item.type === "userMessage" || item.type === "user_message";
 }
 
 export function canonicalEventsForCodexEvent(
