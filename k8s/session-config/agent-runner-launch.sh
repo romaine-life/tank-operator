@@ -71,6 +71,12 @@ git config --global user.email "tank-operator-claude@romaine.life"
 
 configure_claude
 
+# Materialize Tank-provided policy docs into /workspace so first-turn
+# directives can reference stable paths independent of cloned repos.
+if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then
+  sh /opt/tank/session-config/install-tank-docs.sh || true
+fi
+
 # Optional: install tank-flavored skills into the agent's home dir.
 # Same script the per-turn path uses; idempotent.
 if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
