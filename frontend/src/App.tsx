@@ -3018,11 +3018,14 @@ type EntryGroup =
 
 function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
-    const head = g.entries[0]?.id ?? "tools";
-    const tail = g.entries[g.entries.length - 1]?.id ?? head;
-    return `tools-${head}-${tail}`;
+    return toolGroupStateKey(g.entries);
   }
   return g.entry.id;
+}
+
+function toolGroupStateKey(entries: TranscriptEntry[]): string {
+  const head = entries[0]?.id ?? "tools";
+  return `tools-${head}`;
 }
 
 function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
@@ -4172,18 +4175,15 @@ function ToolDefaultBody({
 
 function RunToolItem({
   entry,
-  autoExpand,
   showTimestamps,
+  expanded,
+  onExpandedChange,
 }: {
   entry: TranscriptEntry;
-  autoExpand: boolean;
   showTimestamps: boolean;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
-  const forceExpanded = autoExpand || isPendingAskUserQuestionTool(entry);
-  const [expanded, setExpanded] = useState(forceExpanded || isAskUserQuestionTool(entry));
-  useEffect(() => {
-    if (forceExpanded) setExpanded(true);
-  }, [forceExpanded]);
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
@@ -4208,7 +4208,7 @@ function RunToolItem({
           type="button"
           className="run-transcript-tool-header"
           data-slot="tool-item-header"
-          onClick={() => setExpanded((e) => !e)}
+          onClick={() => onExpandedChange(!expanded)}
           aria-expanded={expanded}
         >
           <span
@@ -4270,18 +4270,29 @@ function RunToolGroup({
   entries,
   autoExpand,
   showTimestamps,
+  open,
+  onOpenChange,
+  toolExpansionOverrides,
+  onToolExpandedChange,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
   showTimestamps: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  toolExpansionOverrides: Record<string, boolean>;
+  onToolExpandedChange: (entryId: string, expanded: boolean) => void;
 }) {
+  if (entries.length === 0) return null;
   if (entries.length === 1) {
+    const entry = entries[0];
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
         <RunToolItem
-          entry={entries[0]}
-          autoExpand={autoExpand}
+          entry={entry}
           showTimestamps={showTimestamps}
+          expanded={toolItemExpanded(entry, autoExpand, toolExpansionOverrides)}
+          onExpandedChange={(expanded) => onToolExpandedChange(entry.id, expanded)}
         />
       </div>
     );
@@ -4290,11 +4301,6 @@ function RunToolGroup({
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
   const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
-  const forceOpen = autoExpand || pendingAskUserCount > 0;
-  const [open, setOpen] = useState(forceOpen);
-  useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
@@ -4320,7 +4326,7 @@ function RunToolGroup({
       <button
         type="button"
         className="run-transcript-tools-header"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!open)}
         aria-expanded={open}
       >
         <span
@@ -4363,13 +4369,38 @@ function RunToolGroup({
             <RunToolItem
               key={e.id}
               entry={e}
-              autoExpand={autoExpand}
               showTimestamps={showTimestamps}
+              expanded={toolItemExpanded(e, autoExpand, toolExpansionOverrides)}
+              onExpandedChange={(expanded) => onToolExpandedChange(e.id, expanded)}
             />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
+  return autoExpand || isAskUserQuestionTool(entry);
+}
+
+function toolItemExpanded(
+  entry: TranscriptEntry,
+  autoExpand: boolean,
+  overrides: Record<string, boolean>,
+): boolean {
+  return overrides[entry.id] ?? toolItemDefaultExpanded(entry, autoExpand);
+}
+
+function toolGroupDefaultOpen(
+  entries: TranscriptEntry[],
+  autoExpand: boolean,
+  toolExpansionOverrides: Record<string, boolean>,
+): boolean {
+  return (
+    autoExpand ||
+    entries.some(isPendingAskUserQuestionTool) ||
+    entries.some((entry) => toolExpansionOverrides[entry.id] === true)
   );
 }
 
@@ -4431,6 +4462,10 @@ function RunMessages({
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
+  // Keep disclosure choices above virtualized row components so streaming
+  // events and offscreen remounts do not reset expanded tool details.
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
   // Highlighted entry is the bubble that should pulse after a deep-link
   // scroll. We clear it on a timer so re-renders during streaming don't
   // re-trigger the animation on entries the user is just reading.
@@ -4512,21 +4547,38 @@ function RunMessages({
     });
   }, [entries.length, groups, scrollToOldestSignal, sessionId]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
-  // Tool groups have no single id, so we composite the first/last child
-  // ids — same group instance stays the same key as it grows during a
-  // streaming turn.
+  // Tool groups have no single id, so the first child id identifies the
+  // group while later tool entries append during a streaming turn.
   const computeKey = useCallback(
     (_index: number, g: EntryGroup) => entryGroupKey(g),
     [],
   );
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
+        const groupKey = toolGroupStateKey(g.entries);
         return (
           <RunToolGroup
             entries={g.entries}
             autoExpand={autoExpandTools}
             showTimestamps={showTimestamps}
+            open={
+              toolGroupOpenOverrides[groupKey] ??
+              toolGroupDefaultOpen(g.entries, autoExpandTools, toolExpansionOverrides)
+            }
+            onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
+            toolExpansionOverrides={toolExpansionOverrides}
+            onToolExpandedChange={setToolExpanded}
           />
         );
       }
@@ -4556,9 +4608,13 @@ function RunMessages({
       onFork,
       onQuote,
       sessionId,
+      setToolExpanded,
+      setToolGroupOpen,
       showDuration,
       showThinking,
       showTimestamps,
+      toolExpansionOverrides,
+      toolGroupOpenOverrides,
     ],
   );
   const handleStartReached = useCallback(() => {

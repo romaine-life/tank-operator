@@ -75,7 +75,8 @@ test("ToolAskUserBody reads the answered state from the durable event payload", 
 test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("isPendingAskUserQuestionTool"), true);
   assert.equal(appSource.includes("pendingAskUserCount"), true);
-  assert.match(appSource, /if \(forceOpen\) setOpen\(true\);/);
+  assert.match(appSource, /entries\.some\(isPendingAskUserQuestionTool\)/);
+  assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
 test("AskUserQuestion placeholder 'Answer questions?' never leaks into App source", () => {
