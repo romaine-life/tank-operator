@@ -193,6 +193,13 @@ type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   taskDescription?: string;
   taskError?: unknown;
   taskToolUseId?: string;
+  taskCommand?: string;
+  taskCwd?: string;
+  taskProcessId?: string;
+  taskOutput?: string;
+  taskExitCode?: number;
+  taskDurationMs?: number;
+  taskRawItem?: unknown;
   lastToolName?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
@@ -2170,7 +2177,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "files" | "settings" | "help";
+type RunTab = "chat" | "shell_tasks" | "files" | "settings" | "help";
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -2667,6 +2674,12 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           taskSummary: entry.taskSummary,
           taskDescription: entry.taskDescription,
           taskError: entry.taskError,
+          taskCommand: entry.taskCommand,
+          taskCwd: entry.taskCwd,
+          taskProcessId: entry.taskProcessId,
+          taskOutput: entry.taskOutput,
+          taskExitCode: entry.taskExitCode,
+          taskDurationMs: entry.taskDurationMs,
           startedAt: entry.startedAt,
           updatedAt: entry.updatedAt,
           completedAt: entry.completedAt,
@@ -3638,23 +3651,47 @@ function backgroundTaskStatusLabel(status: ConversationBackgroundTaskStatus | un
   }
 }
 
+function backgroundTaskTitle(entry: TranscriptEntry): string {
+  return (
+    entry.taskCommand ??
+    entry.taskSummary ??
+    entry.taskDescription ??
+    entry.lastToolName ??
+    "Shell task"
+  );
+}
+
+function backgroundTaskSubtitle(entry: TranscriptEntry): string {
+  const process = entry.taskProcessId ?? entry.taskId;
+  const parts = [
+    process ? `process ${process}` : "",
+    entry.taskCwd ? entry.taskCwd : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 function RunBackgroundTaskBlock({
   entry,
   showTimestamps,
+  onOpenTask,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
+  onOpenTask?: (entry: TranscriptEntry) => void;
 }) {
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
-  const summary = entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task";
+  const summary = backgroundTaskTitle(entry);
   const detail = entry.taskDescription && entry.taskDescription !== summary ? entry.taskDescription : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
-    <div
+    <button
+      type="button"
       className="run-background-task"
       data-state={entry.taskStatus ?? "unknown"}
       data-running={running ? "true" : undefined}
+      onClick={() => onOpenTask?.(entry)}
+      title="Open shell tasks"
     >
       <div className="run-background-task-icon" title="Background shell task">
         {running ? (
@@ -3678,83 +3715,161 @@ function RunBackgroundTaskBlock({
         {(detail || entry.taskId || errorText) && (
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
-            {entry.taskId && <span>task {entry.taskId}</span>}
+            {(entry.taskProcessId ?? entry.taskId) && (
+              <span>{entry.taskProcessId ? `process ${entry.taskProcessId}` : `task ${entry.taskId}`}</span>
+            )}
             {errorText && <span className="run-background-task-error">{errorText}</span>}
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
 function ShellTaskLedger({
   entries,
-  open,
-  onOpenChange,
+  active,
+  onOpen,
 }: {
   entries: TranscriptEntry[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  active: boolean;
+  onOpen: () => void;
 }) {
   if (entries.length === 0) return null;
   const activeCount = entries.filter(isBackgroundTaskRunning).length;
   return (
-    <span className="run-shell-tasks">
-      <button
-        type="button"
-        className="run-tab run-shell-tasks-trigger"
-        onClick={() => onOpenChange(!open)}
-        aria-expanded={open}
-        title="Background shell tasks"
+    <button
+      type="button"
+      className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
+      onClick={onOpen}
+      aria-pressed={active}
+      title="Shell tasks"
+    >
+      <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Shell tasks</span>
+      <span
+        className="run-shell-tasks-count"
+        data-active={activeCount > 0 ? "true" : undefined}
+        aria-label={`${activeCount} running shell tasks`}
       >
-        <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
-        <span>Shell tasks</span>
-        <span
-          className="run-shell-tasks-count"
-          data-active={activeCount > 0 ? "true" : undefined}
-          aria-label={`${activeCount} active background shell tasks`}
-        >
-          {activeCount > 0 ? activeCount : entries.length}
-        </span>
-      </button>
-      {open && (
-        <div className="run-shell-tasks-popover" role="dialog" aria-label="Background shell tasks">
-          <div className="run-shell-tasks-head">
-            <span>Background shell tasks</span>
-            <button
-              type="button"
-              className="run-shell-tasks-close"
-              onClick={() => onOpenChange(false)}
-              aria-label="Close background shell tasks"
-            >
-              <XIcon size={13} aria-hidden="true" />
-            </button>
-          </div>
-          <div className="run-shell-tasks-list">
-            {entries.map((entry) => (
-              <div
-                key={entry.id}
-                className="run-shell-task-row"
-                data-state={entry.taskStatus ?? "unknown"}
-              >
-                <span className="run-shell-task-row-dot" aria-hidden="true" />
-                <span className="run-shell-task-row-main">
-                  <span className="run-shell-task-row-title">
-                    {entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task"}
-                  </span>
-                  <span className="run-shell-task-row-sub">
-                    {entry.taskId ? `task ${entry.taskId}` : "background shell"}
-                  </span>
-                </span>
-                <span className="run-shell-task-row-status">
-                  {backgroundTaskStatusLabel(entry.taskStatus)}
-                </span>
-              </div>
-            ))}
-          </div>
+        {activeCount}
+      </span>
+    </button>
+  );
+}
+
+function ShellTaskMeta({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | undefined;
+}) {
+  if (value === undefined || value === "") return null;
+  return (
+    <div className="run-shell-task-meta-item">
+      <span className="run-shell-task-meta-label">{label}</span>
+      <span className="run-shell-task-meta-value">{value}</span>
+    </div>
+  );
+}
+
+function ShellTasksScreen({
+  entries,
+  selectedId,
+  onSelect,
+}: {
+  entries: TranscriptEntry[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const runningEntries = entries.filter(isBackgroundTaskRunning);
+  const selected =
+    runningEntries.find((entry) => entry.id === selectedId) ??
+    runningEntries[0] ??
+    null;
+  return (
+    <div className="run-shell-tasks-page">
+      <div className="run-shell-tasks-list">
+        <div className="run-shell-tasks-list-head">
+          <span>Running</span>
+          <span>{runningEntries.length}</span>
         </div>
-      )}
-    </span>
+        {runningEntries.length === 0 ? (
+          <div className="run-shell-tasks-empty">No running shell tasks.</div>
+        ) : (
+          runningEntries.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className={`run-shell-task-row${selected?.id === entry.id ? " run-shell-task-row-active" : ""}`}
+              data-state={entry.taskStatus ?? "unknown"}
+              onClick={() => onSelect(entry.id)}
+            >
+              <span className="run-shell-task-row-dot" aria-hidden="true" />
+              <span className="run-shell-task-row-main">
+                <span className="run-shell-task-row-title">{backgroundTaskTitle(entry)}</span>
+                <span className="run-shell-task-row-sub">{backgroundTaskSubtitle(entry) || "shell task"}</span>
+              </span>
+              <span className="run-shell-task-row-status">
+                {backgroundTaskStatusLabel(entry.taskStatus)}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+      <div className="run-shell-task-detail-pane">
+        {!selected ? (
+          <div className="run-shell-task-detail-empty">
+            <SquareTerminalIcon size={28} aria-hidden="true" />
+            <span>No running shell tasks</span>
+          </div>
+        ) : (
+          <>
+            <div className="run-shell-task-detail-head">
+              <div className="run-shell-task-detail-title">
+                <SquareTerminalIcon size={16} aria-hidden="true" />
+                <span>{backgroundTaskTitle(selected)}</span>
+              </div>
+              <span className="run-shell-task-detail-status" data-state={selected.taskStatus ?? "unknown"}>
+                {backgroundTaskStatusLabel(selected.taskStatus)}
+              </span>
+            </div>
+            <div className="run-shell-task-meta">
+              <ShellTaskMeta label="Task" value={selected.taskId} />
+              <ShellTaskMeta label="Process" value={selected.taskProcessId} />
+              <ShellTaskMeta label="Cwd" value={selected.taskCwd} />
+              <ShellTaskMeta label="Started" value={formatToolFullTime(selected.startedAt)} />
+              <ShellTaskMeta
+                label="Duration"
+                value={selected.taskDurationMs == null ? undefined : formatTurnDuration(selected.taskDurationMs)}
+              />
+              <ShellTaskMeta label="Exit" value={selected.taskExitCode} />
+            </div>
+            {selected.taskCommand && (
+              <div className="run-shell-task-section">
+                <div className="run-shell-task-section-label">Command</div>
+                <pre className="run-shell-task-code">{selected.taskCommand}</pre>
+              </div>
+            )}
+            <div className="run-shell-task-section run-shell-task-section-output">
+              <div className="run-shell-task-section-label">Output</div>
+              <pre className="run-shell-task-output">
+                {selected.taskOutput?.trim() ? selected.taskOutput : "No output yet."}
+              </pre>
+            </div>
+            {selected.taskError != null && (
+              <div className="run-shell-task-section">
+                <div className="run-shell-task-section-label">Error</div>
+                <pre className="run-shell-task-output run-shell-task-output-error">
+                  {shortJson(selected.taskError)}
+                </pre>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -4430,6 +4545,7 @@ function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  onOpenBackgroundTask,
   scrollParent,
   onStartReached,
   onAtBottomChange,
@@ -4457,6 +4573,7 @@ function RunMessages({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
   onAtBottomChange?: (atBottom: boolean) => void;
@@ -4610,7 +4727,13 @@ function RunMessages({
         return <RunMetaBlock entry={g.entry} />;
       }
       if (g.kind === "background_task") {
-        return <RunBackgroundTaskBlock entry={g.entry} showTimestamps={showTimestamps} />;
+        return (
+          <RunBackgroundTaskBlock
+            entry={g.entry}
+            showTimestamps={showTimestamps}
+            onOpenTask={onOpenBackgroundTask}
+          />
+        );
       }
       return (
         <RunMessageBubble
@@ -4630,6 +4753,7 @@ function RunMessages({
       avatar,
       highlightedEntryId,
       onFork,
+      onOpenBackgroundTask,
       onQuote,
       sessionId,
       setToolExpanded,
@@ -4953,7 +5077,7 @@ function ChatPane({
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
-  const [shellTasksOpen, setShellTasksOpen] = useState(false);
+  const [selectedShellTaskId, setSelectedShellTaskId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
@@ -7055,6 +7179,14 @@ function ChatPane({
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
   );
+  const runningBackgroundTaskEntries = useMemo(
+    () => backgroundTaskEntries.filter(isBackgroundTaskRunning),
+    [backgroundTaskEntries],
+  );
+  const openShellTasksPage = useCallback((entry?: TranscriptEntry) => {
+    if (entry?.id) setSelectedShellTaskId(entry.id);
+    setActiveTab("shell_tasks");
+  }, []);
   const supportsFileAttachments = FILE_ATTACHMENT_MODES.has(session.mode);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
@@ -7103,6 +7235,20 @@ function ChatPane({
       focusComposerTextarea();
     });
   }, [activeTab, focusComposerTextarea, visible]);
+
+  useEffect(() => {
+    if (activeTab !== "shell_tasks") return;
+    if (runningBackgroundTaskEntries.length === 0) {
+      if (selectedShellTaskId !== null) setSelectedShellTaskId(null);
+      return;
+    }
+    if (
+      !selectedShellTaskId ||
+      !runningBackgroundTaskEntries.some((entry) => entry.id === selectedShellTaskId)
+    ) {
+      setSelectedShellTaskId(runningBackgroundTaskEntries[0]?.id ?? null);
+    }
+  }, [activeTab, runningBackgroundTaskEntries, selectedShellTaskId]);
 
   // `/` is a "return to prompt" shortcut when focus is anywhere except the
   // composer textarea. Once the textarea is focused, `/` keeps its normal
@@ -7309,8 +7455,11 @@ function ChatPane({
           )}
           <ShellTaskLedger
             entries={backgroundTaskEntries}
-            open={shellTasksOpen}
-            onOpenChange={setShellTasksOpen}
+            active={activeTab === "shell_tasks"}
+            onOpen={() => {
+              if (activeTab === "shell_tasks") setActiveTab("chat");
+              else openShellTasksPage();
+            }}
           />
           <button
             type="button"
@@ -7610,6 +7759,12 @@ function ChatPane({
               </div>
             </div>
           </div>
+        ) : activeTab === "shell_tasks" ? (
+          <ShellTasksScreen
+            entries={backgroundTaskEntries}
+            selectedId={selectedShellTaskId}
+            onSelect={setSelectedShellTaskId}
+          />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
             runPrefs={runPrefs}
@@ -7727,6 +7882,7 @@ function ChatPane({
                   permissionMode: composerMode,
                 })
               }
+              onOpenBackgroundTask={openShellTasksPage}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();

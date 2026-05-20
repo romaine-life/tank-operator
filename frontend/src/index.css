@@ -2558,11 +2558,6 @@ button:disabled {
   height: 1rem;
 }
 
-.run-shell-tasks {
-  position: relative;
-  display: inline-flex;
-}
-
 .run-shell-tasks-trigger {
   position: relative;
 }
@@ -2588,53 +2583,43 @@ button:disabled {
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
 }
 
-.run-shell-tasks-popover {
-  position: absolute;
-  top: calc(100% + 0.4rem);
-  right: 0;
-  z-index: 30;
-  width: min(24rem, calc(100vw - 2rem));
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: rgba(15, 17, 21, 0.98);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-  padding: var(--space-2);
-}
-
-.run-shell-tasks-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-1) var(--space-2);
-  color: var(--text-primary);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.run-shell-tasks-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.run-shell-tasks-close:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
+.run-shell-tasks-page {
+  display: grid;
+  grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: 0;
+  height: 100%;
 }
 
 .run-shell-tasks-list {
   display: grid;
-  gap: var(--space-1);
-  max-height: 18rem;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-2);
   overflow: auto;
+  border-right: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+}
+
+.run-shell-tasks-list-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.run-shell-tasks-empty,
+.run-shell-task-detail-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 12rem;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
 }
 
 .run-shell-task-row {
@@ -2644,7 +2629,18 @@ button:disabled {
   gap: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  font-family: var(--font-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-shell-task-row:hover,
+.run-shell-task-row-active {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: rgba(96, 165, 250, 0.08);
 }
 
 .run-shell-task-row-dot {
@@ -2693,6 +2689,126 @@ button:disabled {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+}
+
+.run-shell-task-detail-pane {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  overflow: auto;
+}
+
+.run-shell-task-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.run-shell-task-detail-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.run-shell-task-detail-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-shell-task-detail-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: rgba(96, 165, 250, 0.14);
+  color: #bfdbfe;
+  padding: 0.25rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.run-shell-task-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: var(--space-2);
+}
+
+.run-shell-task-meta-item {
+  min-width: 0;
+  display: grid;
+  gap: 0.15rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+  padding: var(--space-2);
+}
+
+.run-shell-task-meta-label,
+.run-shell-task-section-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+}
+
+.run-shell-task-meta-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.run-shell-task-section {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.run-shell-task-code,
+.run-shell-task-output {
+  min-width: 0;
+  max-height: 24rem;
+  margin: 0;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text-body);
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-shell-task-output {
+  min-height: 12rem;
+}
+
+.run-shell-task-output-error {
+  color: #fecaca;
+}
+
+@media (max-width: 760px) {
+  .run-shell-tasks-page {
+    grid-template-columns: 1fr;
+  }
+
+  .run-shell-tasks-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-right: 0;
+  }
 }
 
 /* Icon-only variant (gear) — same shape, no label. */
@@ -4585,11 +4701,20 @@ textarea.run-files-viewer-editor:focus {
   grid-template-columns: 2rem minmax(0, 1fr);
   gap: var(--space-2);
   align-items: flex-start;
+  width: 100%;
   padding: 0.65rem 0.85rem;
   border-radius: var(--radius-md);
   border: 1px solid rgba(96, 165, 250, 0.22);
   background: rgba(96, 165, 250, 0.07);
+  color: inherit;
   font-family: var(--font-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-background-task:hover {
+  border-color: rgba(96, 165, 250, 0.36);
+  background: rgba(96, 165, 250, 0.1);
 }
 
 .run-background-task[data-state="completed"] {

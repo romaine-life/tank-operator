@@ -180,7 +180,7 @@ test("maps Codex tool items to Tank tool items with command payload", () => {
   });
 });
 
-test("maps Codex unified exec command executions to shell task lifecycle", () => {
+test("keeps completed Codex unified exec startup commands as foreground tool items", () => {
   const adapter = new CodexTankEventAdapter(cfg());
   const started = mappedEvent(adapter, {
     type: "item.started",
@@ -193,13 +193,12 @@ test("maps Codex unified exec command executions to shell task lifecycle", () =>
       status: "in_progress",
     },
   });
-  assert.equal(started.type, "shell_task.started");
-  assert.equal(started.task_id, "proc-123");
+  assert.equal(started.type, "item.started");
+  assert.equal(started.actor, "tool");
   assert.equal(started.provider_item_id, "item_unified_exec_start");
   assert.equal(started.payload?.command, "npm run dev");
-  assert.equal(started.payload?.source, "unifiedExecStartup");
 
-  const updated = mappedEvent(adapter, {
+  const updated = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
     type: "item.updated",
     item: {
       id: "item_unified_exec_start",
@@ -211,9 +210,7 @@ test("maps Codex unified exec command executions to shell task lifecycle", () =>
       aggregated_output: "Listening on 5173",
     },
   });
-  assert.equal(updated.type, "shell_task.updated");
-  assert.equal(updated.timeline_id, started.timeline_id);
-  assert.equal(updated.payload?.output, "Listening on 5173");
+  assert.deepEqual(updated, []);
 
   const exited = mappedEvent(adapter, {
     type: "item.completed",
@@ -227,9 +224,91 @@ test("maps Codex unified exec command executions to shell task lifecycle", () =>
       exit_code: 0,
     },
   });
-  assert.equal(exited.type, "shell_task.exited");
+  assert.equal(exited.type, "item.completed");
   assert.equal(exited.timeline_id, started.timeline_id);
+  assert.equal(exited.payload?.text, "Listening on 5173");
   assert.equal(exited.payload?.exit_code, 0);
+});
+
+test("promotes unfinished Codex unified exec startup commands to shell tasks at turn boundary", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const started = mappedEvent(adapter, {
+    type: "item.started",
+    item: {
+      id: "item_unified_exec_bg",
+      type: "command_execution",
+      command: "npm run dev",
+      cwd: "/workspace/app",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+    },
+  });
+  assert.equal(started.type, "item.started");
+
+  const updated = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "item.updated",
+    item: {
+      id: "item_unified_exec_bg",
+      type: "command_execution",
+      command: "npm run dev",
+      cwd: "/workspace/app",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+      aggregated_output: "Listening on 5173",
+    },
+  });
+  assert.deepEqual(updated, []);
+
+  const completedTurn = adapter.canonicalEventsForCodexEvent(acceptedTurn(), {
+    type: "turn.completed",
+    usage: { input_tokens: 10 },
+  });
+  assert.equal(completedTurn.length, 2);
+  const promoted = completedTurn[0]!;
+  assert.equal(promoted.type, "shell_task.started");
+  assert.equal(promoted.task_id, "proc-123");
+  assert.equal(promoted.provider_item_id, "item_unified_exec_bg");
+  assert.equal(promoted.payload?.status, "running");
+  assert.equal(promoted.payload?.command, "npm run dev");
+  assert.equal(promoted.payload?.cwd, "/workspace/app");
+  assert.equal(promoted.payload?.output, "Listening on 5173");
+  assert.equal(completedTurn[1]?.type, "turn.completed");
+
+  const exited = mappedEvent(adapter, {
+    type: "item.completed",
+    item: {
+      id: "item_unified_exec_bg",
+      type: "command_execution",
+      command: "npm run dev",
+      process_id: "proc-123",
+      source: "unifiedExecStartup",
+      status: "completed",
+      exit_code: 0,
+    },
+  });
+  assert.equal(exited.type, "shell_task.exited");
+  assert.equal(exited.timeline_id, promoted.timeline_id);
+  assert.equal(exited.payload?.exit_code, 0);
+});
+
+test("maps Codex unified exec interaction events to shell task lifecycle", () => {
+  const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "item.started",
+    item: {
+      id: "item_unified_exec_interaction",
+      type: "command_execution",
+      command: "wait proc-123",
+      process_id: "proc-123",
+      source: "unifiedExecInteraction",
+      status: "in_progress",
+    },
+  });
+
+  assert.equal(event.type, "shell_task.started");
+  assert.equal(event.task_id, "proc-123");
+  assert.equal(event.payload?.command, "wait proc-123");
 });
 
 test("maps Codex nonzero exit codes to completed result_failed outcomes", () => {

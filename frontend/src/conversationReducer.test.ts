@@ -191,6 +191,10 @@ test("Background shell task lifecycle replays independent of active tool state",
         status: "running",
         tool_use_id: "toolu-monitor",
         summary: "Watching logs",
+        command: "tail -f app.log",
+        cwd: "/workspace/app",
+        process_id: "proc-abc",
+        output: "booting\n",
       },
     }),
     ev("3", "turn.completed", { source: "claude" }),
@@ -206,6 +210,9 @@ test("Background shell task lifecycle replays independent of active tool state",
         task_id: "task-abc",
         status: "completed",
         summary: "Log watch finished",
+        output: "booting\nready\n",
+        exit_code: 0,
+        duration_ms: 10_000,
       },
     }),
   ]);
@@ -217,6 +224,12 @@ test("Background shell task lifecycle replays independent of active tool state",
   assert.equal(state.backgroundTasks[0]?.taskId, "task-abc");
   assert.equal(state.backgroundTasks[0]?.toolUseId, "toolu-monitor");
   assert.equal(state.backgroundTasks[0]?.summary, "Log watch finished");
+  assert.equal(state.backgroundTasks[0]?.command, "tail -f app.log");
+  assert.equal(state.backgroundTasks[0]?.cwd, "/workspace/app");
+  assert.equal(state.backgroundTasks[0]?.processId, "proc-abc");
+  assert.equal(state.backgroundTasks[0]?.output, "booting\nready\n");
+  assert.equal(state.backgroundTasks[0]?.exitCode, 0);
+  assert.equal(state.backgroundTasks[0]?.durationMs, 10_000);
   assert.equal(state.backgroundTasks[0]?.startedAt, "2026-05-12T00:00:10.000Z");
   assert.equal(state.backgroundTasks[0]?.completedAt, "2026-05-12T00:00:20.000Z");
 });
