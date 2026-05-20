@@ -39,8 +39,8 @@ func repoSelectionBucket(count int) string {
 // handleCreateSession creates a new session pod. Accepts the optional
 // `repos[]` selection from the splash picker; the slugs are validated
 // at this boundary (validateRepoSlugs / sessionModeSupportsRepos),
-// persisted on the registry row by manager.Create, and — starting in
-// stage 3 — auto-cloned into /workspace by the repo-cloner init
+// persisted on the registry row by manager.Create, and auto-cloned
+// into /workspace by the repo-cloner init
 // container at pod boot.
 func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)

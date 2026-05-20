@@ -148,6 +148,46 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 	}
 }
 
+func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:            "claude-image",
+			CodexSessionImage:       "codex-image",
+			PiSessionImage:          "pi-image",
+			TankOperatorInternalURL: "http://tank-operator.test",
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+		Repos: []string{"nelsong6/tank-operator"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(pod.Spec.InitContainers), 1; got != want {
+		t.Fatalf("init container count = %d, want %d", got, want)
+	}
+	cloner := pod.Spec.InitContainers[0]
+	if got, want := cloner.Name, "repo-cloner"; got != want {
+		t.Fatalf("init container name = %q, want %q", got, want)
+	}
+	env := map[string]string{}
+	for _, item := range cloner.Env {
+		env[item.Name] = item.Value
+	}
+	if got, want := env["TANK_REPOS_JSON"], "[\"nelsong6/tank-operator\"]"; got != want {
+		t.Fatalf("TANK_REPOS_JSON = %q, want %q", got, want)
+	}
+}
+
 func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
 	registry := &managerTestRegistry{
 		records: []sessionmodel.SessionRecord{
@@ -235,6 +275,10 @@ func (r *managerTestRegistry) SetTestState(context.Context, string, string, map[
 }
 
 func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
 	return nil
 }
 

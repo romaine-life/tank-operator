@@ -125,12 +125,8 @@ var schemaMigrations = []string{
 	// per-repo init-container outcome the cloner writes back before
 	// the agent starts — keyed by slug, value is
 	// {status: pending|cloning|cloned|failed, error?: string,
-	//  started_at?, finished_at?}. Both columns are no-ops on the
-	// pod path until stage 3 ships the init container; the schema
-	// lands now so stage 1's row plumbing (Info, SSE wire payload,
-	// recent-repos query) reads against a stable column set and the
-	// stage 3 PR is purely additive on the runtime side. Existing
-	// rows back-fill to '{}'/NULL respectively, matching the
+	//  started_at?, finished_at?, path?}. Existing rows back-fill to
+	// '{}'/NULL respectively, matching the
 	// "0 repos selected" shape that has always been valid.
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS repos text[] NOT NULL DEFAULT '{}'`,
