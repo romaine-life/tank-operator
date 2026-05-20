@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const chatScrollTelemetrySource = readFileSync(
+  new URL("./chatScrollTelemetry.ts", import.meta.url),
+  "utf8",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -105,4 +109,18 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.match(appSource, /\.\.\.\(initialSkillName \? \{ skill_name: initialSkillName \} : \{\}\)/);
   assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
   assert.equal(appSource.includes("Available once your session starts"), false);
+});
+
+test("mounted chat reactivation resets local timeline state before bootstrap", () => {
+  assert.equal(appSource.includes("visible-reactivation"), true);
+  assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
+  assert.match(appSource, /if \(!visible\) return;\s+if \(historyAttempted\) return;/);
+  assert.equal(appSource.includes("pendingVisibleTailBootstrapRef"), true);
+});
+
+test("chat scroll diagnostics are debug gated", () => {
+  assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
+  assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
+  assert.equal(appSource.includes("logChatScrollGroups"), true);
+  assert.equal(appSource.includes("logChatScrollEntries"), true);
 });
