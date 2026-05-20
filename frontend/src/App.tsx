@@ -107,6 +107,7 @@ import {
   logSessionListSseOpen,
   logSessionListStreamSignal,
 } from "./sessionListTelemetry";
+import { isChatScrollDebugEnabled, logChatScrollEvent } from "./chatScrollTelemetry";
 import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
@@ -188,6 +189,11 @@ type SdkHistoryRefreshResult = {
   replayed: boolean;
   terminal?: SdkTerminalResult;
 };
+type SdkHistoryRefreshSource =
+  | "history"
+  | "visible-reactivation"
+  | "resync"
+  | "terminal-refresh";
 type SkillStateName = "test" | "rollout";
 type HomeTab = "chat" | "settings" | "help";
 
@@ -2192,6 +2198,14 @@ function normalizeToolState(status: string | undefined): string {
   return normalized;
 }
 
+function isAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return entry.toolName === "AskUserQuestion";
+}
+
+function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return isAskUserQuestionTool(entry) && normalizeToolState(entry.toolStatus) === "running";
+}
+
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
@@ -3004,11 +3018,14 @@ type EntryGroup =
 
 function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
-    const head = g.entries[0]?.id ?? "tools";
-    const tail = g.entries[g.entries.length - 1]?.id ?? head;
-    return `tools-${head}-${tail}`;
+    return toolGroupStateKey(g.entries);
   }
   return g.entry.id;
+}
+
+function toolGroupStateKey(entries: TranscriptEntry[]): string {
+  const head = entries[0]?.id ?? "tools";
+  return `tools-${head}`;
 }
 
 function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
@@ -3032,6 +3049,69 @@ function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
   }
   flush();
   return groups;
+}
+
+function chatScrollGroupSnapshot(
+  groups: EntryGroup[],
+  entryCount: number,
+): Record<string, unknown> {
+  let messages = 0;
+  let reasoning = 0;
+  let meta = 0;
+  let toolGroups = 0;
+  let toolEntries = 0;
+  for (const group of groups) {
+    if (group.kind === "tools") {
+      toolGroups += 1;
+      toolEntries += group.entries.length;
+    } else if (group.kind === "message") {
+      messages += 1;
+    } else if (group.kind === "reasoning") {
+      reasoning += 1;
+    } else {
+      meta += 1;
+    }
+  }
+  return {
+    entries: entryCount,
+    groups: groups.length,
+    messages,
+    reasoning,
+    meta,
+    toolGroups,
+    toolEntries,
+    firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
+    lastGroupKey: groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
+  };
+}
+
+function chatScrollEntrySnapshot(entries: TranscriptEntry[]): Record<string, unknown> {
+  return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length);
+}
+
+function logChatScrollGroups(
+  event: string,
+  groups: EntryGroup[],
+  entryCount: number,
+  detail: Record<string, unknown> = {},
+): void {
+  if (!isChatScrollDebugEnabled()) return;
+  logChatScrollEvent(event, {
+    ...detail,
+    ...chatScrollGroupSnapshot(groups, entryCount),
+  });
+}
+
+function logChatScrollEntries(
+  event: string,
+  entries: TranscriptEntry[],
+  detail: Record<string, unknown> = {},
+): void {
+  if (!isChatScrollDebugEnabled()) return;
+  logChatScrollEvent(event, {
+    ...detail,
+    ...chatScrollEntrySnapshot(entries),
+  });
 }
 
 function tryParseJson(s: string | undefined): unknown {
@@ -4095,14 +4175,15 @@ function ToolDefaultBody({
 
 function RunToolItem({
   entry,
-  autoExpand,
   showTimestamps,
+  expanded,
+  onExpandedChange,
 }: {
   entry: TranscriptEntry;
-  autoExpand: boolean;
   showTimestamps: boolean;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
@@ -4127,7 +4208,7 @@ function RunToolItem({
           type="button"
           className="run-transcript-tool-header"
           data-slot="tool-item-header"
-          onClick={() => setExpanded((e) => !e)}
+          onClick={() => onExpandedChange(!expanded)}
           aria-expanded={expanded}
         >
           <span
@@ -4189,32 +4270,46 @@ function RunToolGroup({
   entries,
   autoExpand,
   showTimestamps,
+  open,
+  onOpenChange,
+  toolExpansionOverrides,
+  onToolExpandedChange,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
   showTimestamps: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  toolExpansionOverrides: Record<string, boolean>;
+  onToolExpandedChange: (entryId: string, expanded: boolean) => void;
 }) {
+  if (entries.length === 0) return null;
   if (entries.length === 1) {
+    const entry = entries[0];
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
         <RunToolItem
-          entry={entries[0]}
-          autoExpand={autoExpand}
+          entry={entry}
           showTimestamps={showTimestamps}
+          expanded={toolItemExpanded(entry, autoExpand, toolExpansionOverrides)}
+          onExpandedChange={(expanded) => onToolExpandedChange(entry.id, expanded)}
         />
       </div>
     );
   }
-  const [open, setOpen] = useState(autoExpand);
   const runningCount = entries.filter(
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
+  const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
     summaryParts.push(`${runningCount} running`);
+  }
+  if (pendingAskUserCount > 0) {
+    summaryParts.push("needs input");
   }
   if (errorCount > 0) {
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
@@ -4231,7 +4326,7 @@ function RunToolGroup({
       <button
         type="button"
         className="run-transcript-tools-header"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!open)}
         aria-expanded={open}
       >
         <span
@@ -4274,13 +4369,38 @@ function RunToolGroup({
             <RunToolItem
               key={e.id}
               entry={e}
-              autoExpand={autoExpand}
               showTimestamps={showTimestamps}
+              expanded={toolItemExpanded(e, autoExpand, toolExpansionOverrides)}
+              onExpandedChange={(expanded) => onToolExpandedChange(e.id, expanded)}
             />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
+  return autoExpand || isAskUserQuestionTool(entry);
+}
+
+function toolItemExpanded(
+  entry: TranscriptEntry,
+  autoExpand: boolean,
+  overrides: Record<string, boolean>,
+): boolean {
+  return overrides[entry.id] ?? toolItemDefaultExpanded(entry, autoExpand);
+}
+
+function toolGroupDefaultOpen(
+  entries: TranscriptEntry[],
+  autoExpand: boolean,
+  toolExpansionOverrides: Record<string, boolean>,
+): boolean {
+  return (
+    autoExpand ||
+    entries.some(isPendingAskUserQuestionTool) ||
+    entries.some((entry) => toolExpansionOverrides[entry.id] === true)
   );
 }
 
@@ -4342,6 +4462,10 @@ function RunMessages({
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
+  // Keep disclosure choices above virtualized row components so streaming
+  // events and offscreen remounts do not reset expanded tool details.
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
   // Highlighted entry is the bubble that should pulse after a deep-link
   // scroll. We clear it on a timer so re-renders during streaming don't
   // re-trigger the animation on entries the user is just reading.
@@ -4381,44 +4505,80 @@ function RunMessages({
     if (!previousFirst) return;
     const nextIndex = currentKeys.indexOf(previousFirst);
     if (nextIndex <= 0) return;
+    logChatScrollGroups("prepend-preserve-scroll", groups, entries.length, {
+      sessionId,
+      previousFirst,
+      nextIndex,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: nextIndex,
       align: "start",
       behavior: "auto",
     });
-  }, [groups]);
+  }, [entries.length, groups, sessionId]);
+  useEffect(() => {
+    logChatScrollGroups("virtuoso-window", groups, entries.length, {
+      sessionId,
+      initialTopMostItemIndex: Math.max(groups.length - 1, 0),
+    });
+  }, [entries.length, groups, sessionId]);
   useEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
+    logChatScrollGroups("scroll-to-latest", groups, entries.length, {
+      sessionId,
+      signal: scrollToLatestSignal,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
       align: "end",
       behavior: "smooth",
     });
-  }, [groups.length, scrollToLatestSignal]);
+  }, [entries.length, groups, scrollToLatestSignal, sessionId]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
+    logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
+      sessionId,
+      signal: scrollToOldestSignal,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: 0,
       align: "start",
       behavior: "smooth",
     });
-  }, [groups.length, scrollToOldestSignal]);
+  }, [entries.length, groups, scrollToOldestSignal, sessionId]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
-  // Tool groups have no single id, so we composite the first/last child
-  // ids — same group instance stays the same key as it grows during a
-  // streaming turn.
+  // Tool groups have no single id, so the first child id identifies the
+  // group while later tool entries append during a streaming turn.
   const computeKey = useCallback(
     (_index: number, g: EntryGroup) => entryGroupKey(g),
     [],
   );
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
+        const groupKey = toolGroupStateKey(g.entries);
         return (
           <RunToolGroup
             entries={g.entries}
             autoExpand={autoExpandTools}
             showTimestamps={showTimestamps}
+            open={
+              toolGroupOpenOverrides[groupKey] ??
+              toolGroupDefaultOpen(g.entries, autoExpandTools, toolExpansionOverrides)
+            }
+            onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
+            toolExpansionOverrides={toolExpansionOverrides}
+            onToolExpandedChange={setToolExpanded}
           />
         );
       }
@@ -4448,10 +4608,30 @@ function RunMessages({
       onFork,
       onQuote,
       sessionId,
+      setToolExpanded,
+      setToolGroupOpen,
       showDuration,
       showThinking,
       showTimestamps,
+      toolExpansionOverrides,
+      toolGroupOpenOverrides,
     ],
+  );
+  const handleStartReached = useCallback(() => {
+    logChatScrollGroups("start-reached", groups, entries.length, {
+      sessionId,
+    });
+    onStartReached?.();
+  }, [entries.length, groups, onStartReached, sessionId]);
+  const handleAtBottomChange = useCallback(
+    (atBottom: boolean) => {
+      logChatScrollGroups("at-bottom-change", groups, entries.length, {
+        sessionId,
+        atBottom,
+      });
+      onAtBottomChange?.(atBottom);
+    },
+    [entries.length, groups, onAtBottomChange, sessionId],
   );
   // followOutput="smooth" keeps the user stuck to the live tail when they
   // ARE at the bottom; releases when they scroll up. Returning false from
@@ -4470,8 +4650,8 @@ function RunMessages({
       computeItemKey={computeKey}
       itemContent={renderItem}
       followOutput="smooth"
-      startReached={onStartReached}
-      atBottomStateChange={onAtBottomChange}
+      startReached={handleStartReached}
+      atBottomStateChange={handleAtBottomChange}
       // Render two extra screens worth above and below the viewport so
       // tool-group expansion and markdown reflow don't expose unrendered
       // gaps mid-scroll.
@@ -4864,7 +5044,10 @@ function ChatPane({
   }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
-  const historyRefreshRef = useRef<Promise<boolean> | null>(null);
+  const historyRefreshRef = useRef<Promise<unknown> | null>(null);
+  const sdkWindowEpochRef = useRef(0);
+  const wasVisibleRef = useRef(visible);
+  const pendingVisibleTailBootstrapRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -5040,6 +5223,33 @@ function ChatPane({
       sdkRealtimeEntriesRef.current = [];
     }
     syncSdkRenderedEntries();
+  }
+  function resetSdkTimelineBootstrapState(reason: string): void {
+    sdkWindowEpochRef.current += 1;
+    historyRefreshRef.current = null;
+    sdkServerEntriesRef.current = [];
+    sdkRealtimeEntriesRef.current = [];
+    sdkServerEventsRef.current = [];
+    sdkRealtimeEventsRef.current = [];
+    sdkConversationStateRef.current = initialConversationState;
+    sdkTimelineCursorRef.current = null;
+    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkFoundOldestRef.current = false;
+    sdkFoundNewestRef.current = false;
+    sdkAtBottomRef.current = true;
+    setSdkFoundOldest(false);
+    setSdkFoundNewest(false);
+    setSdkLoadingOlder(false);
+    setScrollToLatestSignal(0);
+    setScrollToOldestSignal(0);
+    setUserScrolledUp(false);
+    setSdkPendingTailCount(0);
+    setEntries([]);
+    logChatScrollEvent("tail-bootstrap-reset", {
+      sessionId: session.id,
+      reason,
+      epoch: sdkWindowEpochRef.current,
+    });
   }
   function canClearSdkRealtime(
     serverEvents: TankConversationEvent[],
@@ -5221,6 +5431,64 @@ function ChatPane({
     };
   }, []);
 
+  // Mounted chat panes are hidden, not unmounted, when the user switches
+  // sessions. On reactivation the product contract is still a durable
+  // navigation: tail by default, explicit ?message= window when present.
+  // Reset before paint so a stale in-memory scroll/window is never shown as
+  // the active timeline authority.
+  useLayoutEffect(() => {
+    const wasVisible = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (!visible) {
+      pendingVisibleTailBootstrapRef.current = false;
+      setHistoryBootstrapped(false);
+      return;
+    }
+    if (wasVisible) return;
+    if (session.status !== "Active") return;
+    const hasExplicitTarget = Boolean(pendingScrollMessageId?.trim());
+    resetSdkTimelineBootstrapState(
+      hasExplicitTarget ? "visible-message-target" : "visible-reactivation",
+    );
+    pendingVisibleTailBootstrapRef.current = true;
+    setHistoryAttempted(true);
+    setHistoryBootstrapped(false);
+  }, [pendingScrollMessageId, session.id, session.status, visible]);
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active") return;
+    if (!pendingVisibleTailBootstrapRef.current) return;
+    if (historyRefreshRef.current) return;
+    pendingVisibleTailBootstrapRef.current = false;
+    const refreshSessionId = session.id;
+    const refreshEpoch = sdkWindowEpochRef.current;
+    const run = currentRunRef.current;
+    const refresh = refreshSdkRunHistoryResult(
+      false,
+      true,
+      run?.id,
+      "visible-reactivation",
+    )
+      .then((result) => {
+        if (run && result.terminal) {
+          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
+        }
+        return result.replayed;
+      })
+      .finally(() => {
+        if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
+        if (historyRefreshRef.current === refresh) {
+          historyRefreshRef.current = null;
+        }
+        setHistoryBootstrapped(true);
+      });
+    historyRefreshRef.current = refresh;
+  // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
+  // intentionally should not resubscribe this activation fetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, session.status, visible]);
+
   useEffect(() => {
     visibleRef.current = visible;
     if (!visible && sdkReadStateTimerRef.current !== null) {
@@ -5281,9 +5549,11 @@ function ChatPane({
     if (session.status !== "Active") return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
+    const refreshEpoch = sdkWindowEpochRef.current;
     const refresh = refreshSdkRunHistory(showHint)
       .finally(() => {
         if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
         if (historyRefreshRef.current === refresh) {
           historyRefreshRef.current = null;
         }
@@ -5295,8 +5565,12 @@ function ChatPane({
   // History replay hits the canonical event log written by the pod-side
   // runner, then renders through the same reducer/projection path used for
   // live SDK frames.
-  function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
-    return refreshSdkRunHistoryResult(showHint, clearRealtime).then(
+  function refreshSdkRunHistory(
+    showHint: boolean,
+    clearRealtime = false,
+    source: SdkHistoryRefreshSource = "history",
+  ): Promise<boolean> {
+    return refreshSdkRunHistoryResult(showHint, clearRealtime, undefined, source).then(
       (result) => result.replayed,
     );
   }
@@ -5318,24 +5592,45 @@ function ChatPane({
     showHint: boolean,
     clearRealtime = false,
     clientNonce?: string,
+    source: SdkHistoryRefreshSource = "history",
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
+    const refreshEpoch = sdkWindowEpochRef.current;
+    const startedAt = performance.now();
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
+      let anchor = "newest";
       if (targetTimelineId) {
         params.set("timeline_id", targetTimelineId);
         params.set("num_before", "100");
         params.set("num_after", "100");
+        anchor = "timeline_id";
       } else {
         params.set("anchor", "newest");
         params.set("limit", "200");
       }
+      logChatScrollEvent("timeline-request", {
+        sessionId: refreshSessionId,
+        source,
+        anchor,
+        clearRealtime,
+        epoch: refreshEpoch,
+      });
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
       );
-      if (!res.ok) return { replayed: false };
+      if (!res.ok) {
+        logChatScrollEvent("timeline-error", {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          status: res.status,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return { replayed: false };
+      }
       const body = (await res.json()) as {
         session_id?: string;
         events?: unknown[];
@@ -5347,6 +5642,16 @@ function ChatPane({
         read_state?: { last_read_order_key?: unknown } | null;
       };
       if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+      if (sdkWindowEpochRef.current !== refreshEpoch) {
+        logChatScrollEvent("timeline-stale", {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          epoch: refreshEpoch,
+          currentEpoch: sdkWindowEpochRef.current,
+        });
+        return { replayed: false };
+      }
       const lastReadOrderKey = body.read_state?.last_read_order_key;
       if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
         sdkLastReadSentRef.current = advanceTimelineCursor(
@@ -5386,6 +5691,26 @@ function ChatPane({
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
+      if (isChatScrollDebugEnabled()) {
+        const projection = projectConversationState(
+          reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
+        );
+        const projectedEntries = conversationEntriesToTranscript(projection.entries);
+        logChatScrollEntries("timeline-loaded", projectedEntries, {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          eventCount: Array.isArray(body.events) ? body.events.length : 0,
+          canonicalEventCount: canonicalEvents.length,
+          foundOldest,
+          foundNewest,
+          hasPrevCursor: Boolean(prevAfter),
+          hasNextCursor: Boolean(nextAfter),
+          clearRealtime,
+          terminalStatus: terminal?.status ?? "",
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+      }
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
       replaceSdkServerEvents(
         canonicalEvents,
@@ -5411,6 +5736,10 @@ function ChatPane({
     if (!oldest) return;
     if (sdkFoundOldestRef.current) return;
     if (sdkLoadingOlder) return;
+    logChatScrollEvent("older-request", {
+      sessionId: refreshSessionId,
+      beforeOrderKey: oldest,
+    });
     setSdkLoadingOlder(true);
     try {
       const params = new URLSearchParams({
@@ -5442,6 +5771,20 @@ function ChatPane({
           ...sdkServerEventsRef.current,
         ]);
         syncSdkRenderedEntries();
+        if (isChatScrollDebugEnabled()) {
+          const projection = projectConversationState(
+            reduceConversationEvents(sdkServerEventsRef.current),
+          );
+          logChatScrollEntries(
+            "older-loaded",
+            conversationEntriesToTranscript(projection.entries),
+            {
+              sessionId: refreshSessionId,
+              eventCount: olderEvents.length,
+              beforeOrderKey: oldest,
+            },
+          );
+        }
       }
       const prevAfter =
         typeof body.prev_order_key === "string" ? body.prev_order_key : "";
@@ -5560,6 +5903,7 @@ function ChatPane({
   }
 
   useEffect(() => {
+    if (!visible) return;
     if (historyAttempted) return;
     if (entries.length > 0) {
       setHistoryAttempted(true);
@@ -5572,7 +5916,7 @@ function ChatPane({
   // refreshRunHistory is intentionally omitted; it closes over current
   // session state and should only run for the gates above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, historyAttempted, entries.length]);
+  }, [session.id, session.status, historyAttempted, entries.length, visible]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -5843,6 +6187,9 @@ function ChatPane({
   // history sync to run again. The replay paths repopulate from backend.
   useEffect(() => {
     sessionIdRef.current = session.id;
+    sdkWindowEpochRef.current += 1;
+    wasVisibleRef.current = visible;
+    pendingVisibleTailBootstrapRef.current = false;
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
     sdkServerEventsRef.current = [];
@@ -6501,7 +6848,7 @@ function ChatPane({
     setRunning(false);
     setSdkConnectionState("idle");
     if (options.refreshHistory ?? false) {
-      void refreshSdkRunHistory(false, options.clearRealtime ?? false);
+      void refreshSdkRunHistory(false, options.clearRealtime ?? false, "terminal-refresh");
     }
   }
 
@@ -6536,7 +6883,7 @@ function ChatPane({
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
-      void refreshSdkRunHistoryResult(false, true).finally(() => {
+      void refreshSdkRunHistoryResult(false, true, undefined, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
         sdkEventSourceRef.current = openSdkEventStream();
