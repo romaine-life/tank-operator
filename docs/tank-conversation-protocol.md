@@ -302,6 +302,7 @@ Codex SDK adapter:
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | ignored (no Tank event) | Adapter still observes these frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. |
+| `userMessage` item echo | ignored (no Tank event) | Tank owns submitted user input through the backend-published `user_message.created` event. Provider echoes of that input must not enter the durable item stream or render as tool calls. |
 | `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
 | `turn.completed` | `turn.completed` | Include usage. |
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
@@ -345,6 +346,13 @@ The frontend must attach the live SSE stream only after the initial `/timeline`
 read has established a cursor. Browser-local scroll position is not a supported
 timeline anchor; reopening or switching sessions uses `anchor=newest` unless the
 URL carries an explicit `message`/`timeline_id` target.
+
+This also applies when the React chat pane stayed mounted while hidden. Mounted
+component state may preserve local controls, but it is not a transcript anchor:
+when the pane becomes visible again, the SPA resets its local timeline window
+and performs the same durable bootstrap (`anchor=newest`, or the explicit
+message target if the URL carries one) before reopening the per-session SSE
+stream.
 
 Read state write:
 

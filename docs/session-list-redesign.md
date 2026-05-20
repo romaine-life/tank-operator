@@ -101,9 +101,10 @@ sidebar cares about. It folds three input streams into row updates:
 
 The `sessions` row absorbs every field the sidebar renders today:
 `status`, `ready_at`, `terminating_at`, `activity_summary jsonb`,
-`unread_count`. There is no `session_lifecycle_events` read on the
-sidebar path. The K8s pod is the SessionController's input, not the
-SPA's input.
+`unread_count`, and `sidebar_position`. `row_version` is only the
+update cursor; it is not a render-order key. There is no
+`session_lifecycle_events` read on the sidebar path. The K8s pod is
+the SessionController's input, not the SPA's input.
 
 Deletion is terminal at the row: once `visible=false` is written, the
 controller emits exactly one "session deleted" notification on the
@@ -162,7 +163,9 @@ which is why every server-side wonk has produced a user-visible bug.
 1. **Cache rows by id**, replaced wholesale on every server update.
    No event-type switch. No placeholder synthesis. If an update
    arrives for an unknown id, it's a new row — add it. If a delete
-   arrives, remove it.
+   arrives, remove it. The list renders by the row's durable
+   `sidebar_position`, so row updates for test, rollout, status, or
+   activity state cannot reorder sessions.
 2. **Tombstone set**: every id that has been deleted (by local user
    action OR by server notification) is added to the tombstone set.
    Subsequent server updates for tombstoned ids are dropped at the
@@ -208,9 +211,12 @@ the existing "Quality timeframe" section.
 Database:
 - Add columns to `sessions`: `status text NOT NULL DEFAULT 'Pending'`,
   `ready_at timestamptz`, `terminating_at timestamptz`,
-  `activity_summary jsonb`, `row_version bigint NOT NULL DEFAULT 0`.
+  `activity_summary jsonb`, `sidebar_position bigint NOT NULL`,
+  `row_version bigint NOT NULL DEFAULT 0`.
   `row_version` is the per-row monotonic update counter that replaces
   the lifecycle ledger's `order_key` for the row-update wire.
+  `sidebar_position` is the durable render-order key and does not
+  change when row_version advances for state updates.
 
 Code:
 - New package `backend-go/internal/sessioncontroller/`. A single
@@ -410,7 +416,8 @@ standard:
 
 - **Durable data model explicit**: `sessions` row carries every
   sidebar-visible field; `session_scope`, `email`, `session_id`,
-  `visible`, `row_version` define the partition and order.
+  `visible`, `sidebar_position`, and `row_version` define the
+  partition, render order, and update cursor.
 - **Runtime behavior survives**: pod-informer restart, SessionController
   restart, browser reconnect, SSE drop, NATS reconnect — none produce
   user-visible state corruption. Tests assert each of these.

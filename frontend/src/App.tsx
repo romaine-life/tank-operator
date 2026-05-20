@@ -107,6 +107,7 @@ import {
   logSessionListSseOpen,
   logSessionListStreamSignal,
 } from "./sessionListTelemetry";
+import { isChatScrollDebugEnabled, logChatScrollEvent } from "./chatScrollTelemetry";
 import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
@@ -195,6 +196,11 @@ type SdkHistoryRefreshResult = {
   replayed: boolean;
   terminal?: SdkTerminalResult;
 };
+type SdkHistoryRefreshSource =
+  | "history"
+  | "visible-reactivation"
+  | "resync"
+  | "terminal-refresh";
 type SkillStateName = "test" | "rollout";
 type HomeTab = "chat" | "settings" | "help";
 
@@ -258,6 +264,7 @@ interface Session {
   // clone_state is the per-repo init-container outcome (stage 3).
   // Optional until stage 3 ships and the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  sidebar_position?: number;
 }
 
 interface TestState {
@@ -372,18 +379,6 @@ const MODE_HINTS: Record<SessionMode, string> = {
   pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
 };
-
-const MODE_ORDER: SessionMode[] = [
-  "claude_gui",
-  "codex_gui",
-  "hermes_gui",
-  "api_key",
-  "config",
-  "codex_exec_gui",
-  "codex_config",
-  "pi_cli",
-  "pi_config",
-];
 
 const DEMO_BASE_SESSIONS: Session[] = [
   {
@@ -659,7 +654,6 @@ const DEMO_LANDING_LINES = [
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
-const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 
 function normalizeSessionMode(value: string | null): string | null {
   return value;
@@ -754,32 +748,7 @@ function normalizeSession(session: Session): Session {
   return next;
 }
 
-function sessionOrderStorageKey(user: SessionUser): string {
-  return `${SESSION_ORDER_KEY_PREFIX}.${user.sub}`;
-}
-
-function readSessionOrder(key: string): string[] {
-  try {
-    const stored = localStorage.getItem(key);
-    const parsed: unknown = stored ? JSON.parse(stored) : [];
-    if (Array.isArray(parsed)) {
-      return parsed.filter((id): id is string => typeof id === "string");
-    }
-  } catch {
-    // Ordering persistence is best-effort; server order is still usable.
-  }
-  return [];
-}
-
-function writeSessionOrder(key: string, order: string[]): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(order));
-  } catch {
-    // Ordering persistence is best-effort.
-  }
-}
-
-function orderSessions(sessions: Session[], order: string[]): Session[] {
+function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
   if (sessions.length < 2 || order.length === 0) return sessions;
   const rank = new Map(order.map((id, index) => [id, index]));
   return [...sessions].sort((a, b) => {
@@ -1129,6 +1098,30 @@ function isSessionShortcutEditableTarget(_target: EventTarget | null): boolean {
   return false;
 }
 
+function isTextEntryShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  if (editable && editable.getAttribute("contenteditable") !== "false") return true;
+  const field = target.closest("input, textarea, select");
+  if (!field) return false;
+  if (field instanceof HTMLInputElement) {
+    const type = field.type.toLowerCase();
+    return ![
+      "button",
+      "checkbox",
+      "color",
+      "file",
+      "hidden",
+      "image",
+      "radio",
+      "range",
+      "reset",
+      "submit",
+    ].includes(type);
+  }
+  return true;
+}
+
 function shortcutSessionId(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   const sessionEl = target.closest("[data-session-id]") as HTMLElement | null;
@@ -1473,14 +1466,6 @@ function DemoLanding() {
     setSelectedProvider(provider);
   }
 
-  function setPreviewMode(mode: SessionMode) {
-    if (isDefaultSessionMode(mode)) {
-      setSelectedProvider(MODE_MENU_ICONS[mode]);
-      setDemoInteraction(sessionInteractionForSession({ ...DEMO_BASE_SESSIONS[0], mode }) ?? "cli");
-    }
-    createPreviewSession(mode);
-  }
-
   function createPreviewSession(mode: SessionMode = selectedMode) {
     const nextOrdinal = demoSessionOrdinal + 1;
     const next = isDefaultSessionMode(mode)
@@ -1635,14 +1620,14 @@ function DemoLanding() {
                 <div>
                   <h2 id="demo-home-title" className="home-title">What do you want to build?</h2>
                   <p className="home-sub">
-                    Type below to start a session — or pick a runtime and launcher first.
+                    Type below to start a session with the selected runtime.
                   </p>
                 </div>
                 <span className="home-count">{demoSessions.length} preview session{demoSessions.length === 1 ? "" : "s"}</span>
               </section>
 
               <div className="home-grid">
-                <section className="home-panel home-panel-start" aria-labelledby="demo-home-start-title">
+                <section className="home-panel" aria-labelledby="demo-home-start-title">
                   <div className="home-panel-head">
                     <h3 id="demo-home-start-title">Configuration</h3>
                     <span className="home-panel-meta">{MODE_LABELS[selectedMode]}</span>
@@ -1740,75 +1725,29 @@ function DemoLanding() {
                       )}
                     </>
                   )}
-                  <button
-                    className="home-primary-action"
-                    onClick={() => createPreviewSession()}
-                  >
-                    <span className="home-action-icons">
-                      <ProviderIcon provider={selectedProvider} className="home-provider-icon" />
-                      <InteractionIcon interaction={demoInteraction} className="home-interaction-icon" />
-                    </span>
-                    <span>
-                      <span className="home-action-title">{MODE_LABELS[selectedMode]}</span>
-                      <span className="home-action-sub">{MODE_HINTS[selectedMode]}</span>
-                    </span>
-                  </button>
+                </section>
+
+                <section className="home-panel home-panel-actions" aria-labelledby="demo-home-actions-title">
+                  <div className="home-panel-head">
+                    <h3 id="demo-home-actions-title">Setup</h3>
+                  </div>
                   <div className="home-quick-actions">
                     <button className="home-quick-action" onClick={() => createPreviewSession("api_key")}>
                       <IconKey className="home-quick-icon" />
-                      <span>API key</span>
+                      <span className="home-quick-main">
+                        <span className="home-quick-title">API key</span>
+                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
+                      </span>
                     </button>
                     {configMode && (
                       <button className="home-quick-action" onClick={() => createPreviewSession(configMode)}>
                         <IconWrench className="home-quick-icon" />
-                        <span>{MODE_LABELS[configMode]}</span>
+                        <span className="home-quick-main">
+                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
+                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                        </span>
                       </button>
                     )}
-                  </div>
-                </section>
-
-                <section className="home-panel" aria-labelledby="demo-home-modes-title">
-                  <div className="home-panel-head">
-                    <h3 id="demo-home-modes-title">Launchers</h3>
-                  </div>
-                  <div className="home-mode-list" role="list">
-                    {MODE_ORDER.map((m) => (
-                      <button
-                        key={m}
-                        className="home-mode"
-                        onClick={() => setPreviewMode(m)}
-                        role="listitem"
-                      >
-                        <ProviderIcon provider={MODE_MENU_ICONS[m]} className="home-mode-icon" />
-                        <span>
-                          <span className="home-mode-title">{MODE_LABELS[m]}</span>
-                          <span className="home-mode-sub">{MODE_HINTS[m]}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="home-panel" aria-labelledby="demo-home-sessions-title">
-                  <div className="home-panel-head">
-                    <h3 id="demo-home-sessions-title">Sessions</h3>
-                    <span className="home-panel-meta">{demoSessions.length} available</span>
-                  </div>
-                  <div className="home-session-list">
-                    {demoSessions.slice(0, 6).map((s) => (
-                      <button
-                        key={s.id}
-                        className="home-session"
-                        onClick={() => setActiveDemoSession(s.id)}
-                      >
-                        <span className={sessionStatusDotClass(s)} />
-                        <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
-                        <span className="home-session-main">
-                          <span className="home-session-title">{sessionDisplayName(s)}</span>
-                          <span className="home-session-sub">{MODE_LABELS[s.mode]}</span>
-                        </span>
-                      </button>
-                    ))}
                   </div>
                 </section>
               </div>
@@ -2197,6 +2136,14 @@ function normalizeToolState(status: string | undefined): string {
     return "failed";
   }
   return normalized;
+}
+
+function isAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return entry.toolName === "AskUserQuestion";
+}
+
+function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return isAskUserQuestionTool(entry) && normalizeToolState(entry.toolStatus) === "running";
 }
 
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
@@ -2878,11 +2825,14 @@ type EntryGroup =
 
 function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
-    const head = g.entries[0]?.id ?? "tools";
-    const tail = g.entries[g.entries.length - 1]?.id ?? head;
-    return `tools-${head}-${tail}`;
+    return toolGroupStateKey(g.entries);
   }
   return g.entry.id;
+}
+
+function toolGroupStateKey(entries: TranscriptEntry[]): string {
+  const head = entries[0]?.id ?? "tools";
+  return `tools-${head}`;
 }
 
 function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
@@ -2906,6 +2856,69 @@ function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
   }
   flush();
   return groups;
+}
+
+function chatScrollGroupSnapshot(
+  groups: EntryGroup[],
+  entryCount: number,
+): Record<string, unknown> {
+  let messages = 0;
+  let reasoning = 0;
+  let meta = 0;
+  let toolGroups = 0;
+  let toolEntries = 0;
+  for (const group of groups) {
+    if (group.kind === "tools") {
+      toolGroups += 1;
+      toolEntries += group.entries.length;
+    } else if (group.kind === "message") {
+      messages += 1;
+    } else if (group.kind === "reasoning") {
+      reasoning += 1;
+    } else {
+      meta += 1;
+    }
+  }
+  return {
+    entries: entryCount,
+    groups: groups.length,
+    messages,
+    reasoning,
+    meta,
+    toolGroups,
+    toolEntries,
+    firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
+    lastGroupKey: groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
+  };
+}
+
+function chatScrollEntrySnapshot(entries: TranscriptEntry[]): Record<string, unknown> {
+  return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length);
+}
+
+function logChatScrollGroups(
+  event: string,
+  groups: EntryGroup[],
+  entryCount: number,
+  detail: Record<string, unknown> = {},
+): void {
+  if (!isChatScrollDebugEnabled()) return;
+  logChatScrollEvent(event, {
+    ...detail,
+    ...chatScrollGroupSnapshot(groups, entryCount),
+  });
+}
+
+function logChatScrollEntries(
+  event: string,
+  entries: TranscriptEntry[],
+  detail: Record<string, unknown> = {},
+): void {
+  if (!isChatScrollDebugEnabled()) return;
+  logChatScrollEvent(event, {
+    ...detail,
+    ...chatScrollEntrySnapshot(entries),
+  });
 }
 
 function tryParseJson(s: string | undefined): unknown {
@@ -3969,14 +3982,15 @@ function ToolDefaultBody({
 
 function RunToolItem({
   entry,
-  autoExpand,
   showTimestamps,
+  expanded,
+  onExpandedChange,
 }: {
   entry: TranscriptEntry;
-  autoExpand: boolean;
   showTimestamps: boolean;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(autoExpand || entry.toolName === "AskUserQuestion");
   const cfg = getToolVisualConfig(entry);
   const state = normalizeToolState(entry.toolStatus);
   const running = state === "running";
@@ -4001,7 +4015,7 @@ function RunToolItem({
           type="button"
           className="run-transcript-tool-header"
           data-slot="tool-item-header"
-          onClick={() => setExpanded((e) => !e)}
+          onClick={() => onExpandedChange(!expanded)}
           aria-expanded={expanded}
         >
           <span
@@ -4063,32 +4077,46 @@ function RunToolGroup({
   entries,
   autoExpand,
   showTimestamps,
+  open,
+  onOpenChange,
+  toolExpansionOverrides,
+  onToolExpandedChange,
 }: {
   entries: TranscriptEntry[];
   autoExpand: boolean;
   showTimestamps: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  toolExpansionOverrides: Record<string, boolean>;
+  onToolExpandedChange: (entryId: string, expanded: boolean) => void;
 }) {
+  if (entries.length === 0) return null;
   if (entries.length === 1) {
+    const entry = entries[0];
     return (
       <div className="run-transcript-tool-single" data-slot="tool-group-single">
         <RunToolItem
-          entry={entries[0]}
-          autoExpand={autoExpand}
+          entry={entry}
           showTimestamps={showTimestamps}
+          expanded={toolItemExpanded(entry, autoExpand, toolExpansionOverrides)}
+          onExpandedChange={(expanded) => onToolExpandedChange(entry.id, expanded)}
         />
       </div>
     );
   }
-  const [open, setOpen] = useState(autoExpand);
   const runningCount = entries.filter(
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
+  const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
     summaryParts.push(`${runningCount} running`);
+  }
+  if (pendingAskUserCount > 0) {
+    summaryParts.push("needs input");
   }
   if (errorCount > 0) {
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
@@ -4105,7 +4133,7 @@ function RunToolGroup({
       <button
         type="button"
         className="run-transcript-tools-header"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => onOpenChange(!open)}
         aria-expanded={open}
       >
         <span
@@ -4148,13 +4176,38 @@ function RunToolGroup({
             <RunToolItem
               key={e.id}
               entry={e}
-              autoExpand={autoExpand}
               showTimestamps={showTimestamps}
+              expanded={toolItemExpanded(e, autoExpand, toolExpansionOverrides)}
+              onExpandedChange={(expanded) => onToolExpandedChange(e.id, expanded)}
             />
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
+  return autoExpand || isAskUserQuestionTool(entry);
+}
+
+function toolItemExpanded(
+  entry: TranscriptEntry,
+  autoExpand: boolean,
+  overrides: Record<string, boolean>,
+): boolean {
+  return overrides[entry.id] ?? toolItemDefaultExpanded(entry, autoExpand);
+}
+
+function toolGroupDefaultOpen(
+  entries: TranscriptEntry[],
+  autoExpand: boolean,
+  toolExpansionOverrides: Record<string, boolean>,
+): boolean {
+  return (
+    autoExpand ||
+    entries.some(isPendingAskUserQuestionTool) ||
+    entries.some((entry) => toolExpansionOverrides[entry.id] === true)
   );
 }
 
@@ -4216,6 +4269,10 @@ function RunMessages({
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
+  // Keep disclosure choices above virtualized row components so streaming
+  // events and offscreen remounts do not reset expanded tool details.
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
   // Highlighted entry is the bubble that should pulse after a deep-link
   // scroll. We clear it on a timer so re-renders during streaming don't
   // re-trigger the animation on entries the user is just reading.
@@ -4255,44 +4312,80 @@ function RunMessages({
     if (!previousFirst) return;
     const nextIndex = currentKeys.indexOf(previousFirst);
     if (nextIndex <= 0) return;
+    logChatScrollGroups("prepend-preserve-scroll", groups, entries.length, {
+      sessionId,
+      previousFirst,
+      nextIndex,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: nextIndex,
       align: "start",
       behavior: "auto",
     });
-  }, [groups]);
+  }, [entries.length, groups, sessionId]);
+  useEffect(() => {
+    logChatScrollGroups("virtuoso-window", groups, entries.length, {
+      sessionId,
+      initialTopMostItemIndex: Math.max(groups.length - 1, 0),
+    });
+  }, [entries.length, groups, sessionId]);
   useEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
+    logChatScrollGroups("scroll-to-latest", groups, entries.length, {
+      sessionId,
+      signal: scrollToLatestSignal,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
       align: "end",
       behavior: "smooth",
     });
-  }, [groups.length, scrollToLatestSignal]);
+  }, [entries.length, groups, scrollToLatestSignal, sessionId]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
+    logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
+      sessionId,
+      signal: scrollToOldestSignal,
+    });
     virtuosoRef.current?.scrollToIndex({
       index: 0,
       align: "start",
       behavior: "smooth",
     });
-  }, [groups.length, scrollToOldestSignal]);
+  }, [entries.length, groups, scrollToOldestSignal, sessionId]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
-  // Tool groups have no single id, so we composite the first/last child
-  // ids — same group instance stays the same key as it grows during a
-  // streaming turn.
+  // Tool groups have no single id, so the first child id identifies the
+  // group while later tool entries append during a streaming turn.
   const computeKey = useCallback(
     (_index: number, g: EntryGroup) => entryGroupKey(g),
     [],
   );
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
+        const groupKey = toolGroupStateKey(g.entries);
         return (
           <RunToolGroup
             entries={g.entries}
             autoExpand={autoExpandTools}
             showTimestamps={showTimestamps}
+            open={
+              toolGroupOpenOverrides[groupKey] ??
+              toolGroupDefaultOpen(g.entries, autoExpandTools, toolExpansionOverrides)
+            }
+            onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
+            toolExpansionOverrides={toolExpansionOverrides}
+            onToolExpandedChange={setToolExpanded}
           />
         );
       }
@@ -4322,10 +4415,30 @@ function RunMessages({
       onFork,
       onQuote,
       sessionId,
+      setToolExpanded,
+      setToolGroupOpen,
       showDuration,
       showThinking,
       showTimestamps,
+      toolExpansionOverrides,
+      toolGroupOpenOverrides,
     ],
+  );
+  const handleStartReached = useCallback(() => {
+    logChatScrollGroups("start-reached", groups, entries.length, {
+      sessionId,
+    });
+    onStartReached?.();
+  }, [entries.length, groups, onStartReached, sessionId]);
+  const handleAtBottomChange = useCallback(
+    (atBottom: boolean) => {
+      logChatScrollGroups("at-bottom-change", groups, entries.length, {
+        sessionId,
+        atBottom,
+      });
+      onAtBottomChange?.(atBottom);
+    },
+    [entries.length, groups, onAtBottomChange, sessionId],
   );
   // followOutput="smooth" keeps the user stuck to the live tail when they
   // ARE at the bottom; releases when they scroll up. Returning false from
@@ -4344,8 +4457,8 @@ function RunMessages({
       computeItemKey={computeKey}
       itemContent={renderItem}
       followOutput="smooth"
-      startReached={onStartReached}
-      atBottomStateChange={onAtBottomChange}
+      startReached={handleStartReached}
+      atBottomStateChange={handleAtBottomChange}
       // Render two extra screens worth above and below the viewport so
       // tool-group expansion and markdown reflow don't expose unrendered
       // gaps mid-scroll.
@@ -4739,7 +4852,10 @@ function ChatPane({
   }, []);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
-  const historyRefreshRef = useRef<Promise<boolean> | null>(null);
+  const historyRefreshRef = useRef<Promise<unknown> | null>(null);
+  const sdkWindowEpochRef = useRef(0);
+  const wasVisibleRef = useRef(visible);
+  const pendingVisibleTailBootstrapRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -4915,6 +5031,33 @@ function ChatPane({
       sdkRealtimeEntriesRef.current = [];
     }
     syncSdkRenderedEntries();
+  }
+  function resetSdkTimelineBootstrapState(reason: string): void {
+    sdkWindowEpochRef.current += 1;
+    historyRefreshRef.current = null;
+    sdkServerEntriesRef.current = [];
+    sdkRealtimeEntriesRef.current = [];
+    sdkServerEventsRef.current = [];
+    sdkRealtimeEventsRef.current = [];
+    sdkConversationStateRef.current = initialConversationState;
+    sdkTimelineCursorRef.current = null;
+    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkFoundOldestRef.current = false;
+    sdkFoundNewestRef.current = false;
+    sdkAtBottomRef.current = true;
+    setSdkFoundOldest(false);
+    setSdkFoundNewest(false);
+    setSdkLoadingOlder(false);
+    setScrollToLatestSignal(0);
+    setScrollToOldestSignal(0);
+    setUserScrolledUp(false);
+    setSdkPendingTailCount(0);
+    setEntries([]);
+    logChatScrollEvent("tail-bootstrap-reset", {
+      sessionId: session.id,
+      reason,
+      epoch: sdkWindowEpochRef.current,
+    });
   }
   function canClearSdkRealtime(
     serverEvents: TankConversationEvent[],
@@ -5096,6 +5239,64 @@ function ChatPane({
     };
   }, []);
 
+  // Mounted chat panes are hidden, not unmounted, when the user switches
+  // sessions. On reactivation the product contract is still a durable
+  // navigation: tail by default, explicit ?message= window when present.
+  // Reset before paint so a stale in-memory scroll/window is never shown as
+  // the active timeline authority.
+  useLayoutEffect(() => {
+    const wasVisible = wasVisibleRef.current;
+    wasVisibleRef.current = visible;
+    if (!visible) {
+      pendingVisibleTailBootstrapRef.current = false;
+      setHistoryBootstrapped(false);
+      return;
+    }
+    if (wasVisible) return;
+    if (session.status !== "Active") return;
+    const hasExplicitTarget = Boolean(pendingScrollMessageId?.trim());
+    resetSdkTimelineBootstrapState(
+      hasExplicitTarget ? "visible-message-target" : "visible-reactivation",
+    );
+    pendingVisibleTailBootstrapRef.current = true;
+    setHistoryAttempted(true);
+    setHistoryBootstrapped(false);
+  }, [pendingScrollMessageId, session.id, session.status, visible]);
+
+  useEffect(() => {
+    if (!visible || session.status !== "Active") return;
+    if (!pendingVisibleTailBootstrapRef.current) return;
+    if (historyRefreshRef.current) return;
+    pendingVisibleTailBootstrapRef.current = false;
+    const refreshSessionId = session.id;
+    const refreshEpoch = sdkWindowEpochRef.current;
+    const run = currentRunRef.current;
+    const refresh = refreshSdkRunHistoryResult(
+      false,
+      true,
+      run?.id,
+      "visible-reactivation",
+    )
+      .then((result) => {
+        if (run && result.terminal) {
+          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
+        }
+        return result.replayed;
+      })
+      .finally(() => {
+        if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
+        if (historyRefreshRef.current === refresh) {
+          historyRefreshRef.current = null;
+        }
+        setHistoryBootstrapped(true);
+      });
+    historyRefreshRef.current = refresh;
+  // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
+  // intentionally should not resubscribe this activation fetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, session.status, visible]);
+
   useEffect(() => {
     visibleRef.current = visible;
     if (!visible && sdkReadStateTimerRef.current !== null) {
@@ -5156,9 +5357,11 @@ function ChatPane({
     if (session.status !== "Active") return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
+    const refreshEpoch = sdkWindowEpochRef.current;
     const refresh = refreshSdkRunHistory(showHint)
       .finally(() => {
         if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
         if (historyRefreshRef.current === refresh) {
           historyRefreshRef.current = null;
         }
@@ -5170,8 +5373,12 @@ function ChatPane({
   // History replay hits the canonical event log written by the pod-side
   // runner, then renders through the same reducer/projection path used for
   // live SDK frames.
-  function refreshSdkRunHistory(showHint: boolean, clearRealtime = false): Promise<boolean> {
-    return refreshSdkRunHistoryResult(showHint, clearRealtime).then(
+  function refreshSdkRunHistory(
+    showHint: boolean,
+    clearRealtime = false,
+    source: SdkHistoryRefreshSource = "history",
+  ): Promise<boolean> {
+    return refreshSdkRunHistoryResult(showHint, clearRealtime, undefined, source).then(
       (result) => result.replayed,
     );
   }
@@ -5193,24 +5400,45 @@ function ChatPane({
     showHint: boolean,
     clearRealtime = false,
     clientNonce?: string,
+    source: SdkHistoryRefreshSource = "history",
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
     const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
+    const refreshEpoch = sdkWindowEpochRef.current;
+    const startedAt = performance.now();
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
+      let anchor = "newest";
       if (targetTimelineId) {
         params.set("timeline_id", targetTimelineId);
         params.set("num_before", "100");
         params.set("num_after", "100");
+        anchor = "timeline_id";
       } else {
         params.set("anchor", "newest");
         params.set("limit", "200");
       }
+      logChatScrollEvent("timeline-request", {
+        sessionId: refreshSessionId,
+        source,
+        anchor,
+        clearRealtime,
+        epoch: refreshEpoch,
+      });
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
       );
-      if (!res.ok) return { replayed: false };
+      if (!res.ok) {
+        logChatScrollEvent("timeline-error", {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          status: res.status,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+        return { replayed: false };
+      }
       const body = (await res.json()) as {
         session_id?: string;
         events?: unknown[];
@@ -5222,6 +5450,16 @@ function ChatPane({
         read_state?: { last_read_order_key?: unknown } | null;
       };
       if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
+      if (sdkWindowEpochRef.current !== refreshEpoch) {
+        logChatScrollEvent("timeline-stale", {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          epoch: refreshEpoch,
+          currentEpoch: sdkWindowEpochRef.current,
+        });
+        return { replayed: false };
+      }
       const lastReadOrderKey = body.read_state?.last_read_order_key;
       if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
         sdkLastReadSentRef.current = advanceTimelineCursor(
@@ -5261,6 +5499,26 @@ function ChatPane({
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
+      if (isChatScrollDebugEnabled()) {
+        const projection = projectConversationState(
+          reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
+        );
+        const projectedEntries = conversationEntriesToTranscript(projection.entries);
+        logChatScrollEntries("timeline-loaded", projectedEntries, {
+          sessionId: refreshSessionId,
+          source,
+          anchor,
+          eventCount: Array.isArray(body.events) ? body.events.length : 0,
+          canonicalEventCount: canonicalEvents.length,
+          foundOldest,
+          foundNewest,
+          hasPrevCursor: Boolean(prevAfter),
+          hasNextCursor: Boolean(nextAfter),
+          clearRealtime,
+          terminalStatus: terminal?.status ?? "",
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+      }
       if (canonicalEvents.length === 0) return { replayed: false, terminal };
       replaceSdkServerEvents(
         canonicalEvents,
@@ -5286,6 +5544,10 @@ function ChatPane({
     if (!oldest) return;
     if (sdkFoundOldestRef.current) return;
     if (sdkLoadingOlder) return;
+    logChatScrollEvent("older-request", {
+      sessionId: refreshSessionId,
+      beforeOrderKey: oldest,
+    });
     setSdkLoadingOlder(true);
     try {
       const params = new URLSearchParams({
@@ -5317,6 +5579,20 @@ function ChatPane({
           ...sdkServerEventsRef.current,
         ]);
         syncSdkRenderedEntries();
+        if (isChatScrollDebugEnabled()) {
+          const projection = projectConversationState(
+            reduceConversationEvents(sdkServerEventsRef.current),
+          );
+          logChatScrollEntries(
+            "older-loaded",
+            conversationEntriesToTranscript(projection.entries),
+            {
+              sessionId: refreshSessionId,
+              eventCount: olderEvents.length,
+              beforeOrderKey: oldest,
+            },
+          );
+        }
       }
       const prevAfter =
         typeof body.prev_order_key === "string" ? body.prev_order_key : "";
@@ -5435,6 +5711,7 @@ function ChatPane({
   }
 
   useEffect(() => {
+    if (!visible) return;
     if (historyAttempted) return;
     if (entries.length > 0) {
       setHistoryAttempted(true);
@@ -5447,7 +5724,7 @@ function ChatPane({
   // refreshRunHistory is intentionally omitted; it closes over current
   // session state and should only run for the gates above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, historyAttempted, entries.length]);
+  }, [session.id, session.status, historyAttempted, entries.length, visible]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -5723,6 +6000,9 @@ function ChatPane({
   // history sync to run again. The replay paths repopulate from backend.
   useEffect(() => {
     sessionIdRef.current = session.id;
+    sdkWindowEpochRef.current += 1;
+    wasVisibleRef.current = visible;
+    pendingVisibleTailBootstrapRef.current = false;
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
     sdkServerEventsRef.current = [];
@@ -6381,7 +6661,7 @@ function ChatPane({
     setRunning(false);
     setSdkConnectionState("idle");
     if (options.refreshHistory ?? false) {
-      void refreshSdkRunHistory(false, options.clearRealtime ?? false);
+      void refreshSdkRunHistory(false, options.clearRealtime ?? false, "terminal-refresh");
     }
   }
 
@@ -6416,7 +6696,7 @@ function ChatPane({
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
-      void refreshSdkRunHistoryResult(false, true).finally(() => {
+      void refreshSdkRunHistoryResult(false, true, undefined, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
         sdkEventSourceRef.current = openSdkEventStream();
@@ -7788,6 +8068,8 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeComposerWrapRef = useRef<HTMLElement | null>(null);
+  const pendingHomeComposerFocusRef = useRef(false);
   // Files picked / dropped / pasted onto the home composer before the
   // session pod exists. They are uploaded to `/api/sessions/{id}/files/upload`
   // after the pod becomes Ready, then their absolute paths are appended to
@@ -7819,6 +8101,16 @@ export function App() {
       if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
       return prev.filter((a) => a.id !== id);
     });
+  }, []);
+  const focusHomeComposerTextarea = useCallback((): boolean => {
+    const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+      | HTMLTextAreaElement
+      | null;
+    if (!textarea || textarea.disabled) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
   useEffect(() => {
@@ -7995,9 +8287,9 @@ export function App() {
   // /api/sessions and hydrates BOTH the sessions list and the
   // sessionActivities map from the response. The activity block lives on
   // each Session row (server-side join against the latest
-  // session.activity_changed lifecycle event); the prior activity-poll
+  // sessions.activity_summary row column; the prior activity-poll
   // endpoint is gone (tank-operator#83). Steady-state updates after the
-  // initial snapshot flow through the typed SSE stream; refresh() is
+  // initial snapshot flow through the row-update SSE stream; refresh() is
   // only used for first-load and post-resync reseeding.
   // rowToSession projects one SessionStore row back into the
   // SPA's Session shape for React-state consumption. The wire row's
@@ -8016,11 +8308,8 @@ export function App() {
       name: row.name ?? null,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
-      // repos is always an array on the wire (see backend
-      // sessioncontroller.MarshalRowUpdate). The fallback here is
-      // for older snapshots that pre-date the column — they'll
-      // get an empty array and render with no chips.
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
     };
@@ -8032,6 +8321,11 @@ export function App() {
   // copy with snapshot-only defaults (visible=true; session_scope
   // unused at render).
   function infoJSONToSessionRow(raw: any): SessionRow {
+    const sidebarPosition = Number(raw.sidebar_position);
+    const rowVersion = Number(raw.row_version);
+    if (!Number.isFinite(sidebarPosition) || !Number.isFinite(rowVersion)) {
+      throw new Error("session snapshot missing row order cursor");
+    }
     return {
       id: String(raw.id ?? ""),
       owner: String(raw.owner ?? ""),
@@ -8049,7 +8343,8 @@ export function App() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
-      row_version: typeof raw.row_version === "number" ? raw.row_version : 0,
+      sidebar_position: sidebarPosition,
+      row_version: rowVersion,
     };
   }
 
@@ -8079,16 +8374,17 @@ export function App() {
         sessionCount: listed.length,
         source: "initial",
       });
+      const sessionsFromStore = sessionStoreRef.current.list().map(rowToSession);
       setSessions((prev) => {
         const previousById = new Map(prev.map((session) => [session.id, session]));
-        const merged = listed.map((session) =>
+        return sessionsFromStore.map((session) =>
           mergeMutualSessionSkillState(session, previousById.get(session.id)),
         );
-        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
       const nextActivities: Record<string, SessionActivitySummary> = {};
-      for (const session of listed) {
-        if (session.activity) nextActivities[session.id] = session.activity;
+      for (const row of sessionStoreRef.current.list()) {
+        const activity = sessionStoreRef.current.activityForRender(row.id);
+        if (activity) nextActivities[row.id] = activity;
       }
       setSessionActivities(nextActivities);
       // Synchronously mirror into the ref so the SSE handler reading
@@ -8109,7 +8405,7 @@ export function App() {
         listed
           .map((session): [string, string | null] => [
             session.id,
-            session.activity?.last_order_key ?? null,
+            sessionStoreRef.current.activityForRender(session.id)?.last_order_key ?? null,
           ])
           .filter((entry): entry is [string, string] => entry[1] !== null),
       );
@@ -8254,14 +8550,12 @@ export function App() {
         }
 
         // Derive sessions[] + activities from the store. The
-        // ordering pass mirrors what refresh() does on snapshot.
+        // store's durable sidebar_position sort mirrors what
+        // refresh() does on snapshot.
         const rows = store.list();
         const sessionsFromStore: Session[] = rows.map(rowToSession);
-        const ordered = user
-          ? orderSessions(sessionsFromStore, readSessionOrder(sessionOrderStorageKey(user)))
-          : sessionsFromStore;
-        setSessions(ordered);
-        sessionsRef.current = ordered;
+        setSessions(sessionsFromStore);
+        sessionsRef.current = sessionsFromStore;
 
         const nextActivities: Record<string, SessionActivitySummary> = {};
         for (const id of rows.map((r) => r.id)) {
@@ -8415,6 +8709,53 @@ export function App() {
   }, [sessions]);
 
   useEffect(() => {
+    if (active !== null) {
+      pendingHomeComposerFocusRef.current = false;
+      return;
+    }
+    if (homeActiveTab !== "chat" || !pendingHomeComposerFocusRef.current) return;
+    pendingHomeComposerFocusRef.current = false;
+    requestAnimationFrame(() => {
+      focusHomeComposerTextarea();
+    });
+  }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  useEffect(() => {
+    if (active !== null) return;
+    const focusHomeComposer = (event: KeyboardEvent) => {
+      if (
+        event.key !== "/" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      if (textarea && event.target === textarea) return;
+      if (isTextEntryShortcutTarget(event.target)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      pendingHomeComposerFocusRef.current = true;
+      if (homeActiveTab !== "chat") {
+        setHomeActiveTab("chat");
+        return;
+      }
+      pendingHomeComposerFocusRef.current = false;
+      requestAnimationFrame(() => {
+        focusHomeComposerTextarea();
+      });
+    };
+    window.addEventListener("keydown", focusHomeComposer, { capture: true });
+    return () => window.removeEventListener("keydown", focusHomeComposer, { capture: true });
+  }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = shiftArrowSessionDirection(event);
       if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
@@ -8433,7 +8774,15 @@ export function App() {
     const renameHighlightedSession = (event: KeyboardEvent) => {
       if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const targetId = shortcutSessionId(event.target) ?? active;
-      if (!targetId || closingIds.has(targetId)) return;
+      if (!targetId) {
+        if (active == null) {
+          event.preventDefault();
+          event.stopPropagation();
+          setHomeEditingTitle(true);
+        }
+        return;
+      }
+      if (closingIds.has(targetId)) return;
       const session = sessions.find((s) => s.id === targetId);
       if (!session) return;
       event.preventDefault();
@@ -8486,6 +8835,22 @@ export function App() {
     setDragOverSessionId(id);
   }
 
+  async function persistSessionOrder(sessionIds: string[]): Promise<void> {
+    try {
+      const res = await authedFetch("/api/sessions/order", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_ids: sessionIds }),
+      });
+      if (!res.ok) {
+        throw new Error(`session order update failed: ${res.status}`);
+      }
+    } catch (e) {
+      setError(String(e));
+      void refresh();
+    }
+  }
+
   function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
     event.preventDefault();
     const movedId = event.dataTransfer.getData("text/plain") || draggingSessionId;
@@ -8493,13 +8858,14 @@ export function App() {
     setDragOverSessionId(null);
     if (!movedId || movedId === id || !user) return;
 
-    setSessions((prev) => {
-      const currentOrder = prev.map((session) => session.id);
-      const next = moveSessionId(currentOrder, movedId, id);
-      if (next === currentOrder) return prev;
-      writeSessionOrder(sessionOrderStorageKey(user), next);
-      return orderSessions(prev, next);
-    });
+    const currentOrder = sessions.map((session) => session.id);
+    const next = moveSessionId(currentOrder, movedId, id);
+    if (next === currentOrder) return;
+    sessionStoreRef.current.applyLocalOrder(next);
+    const ordered = orderSessionsByIds(sessions, next);
+    setSessions(ordered);
+    sessionsRef.current = ordered;
+    void persistSessionOrder(next);
   }
 
   function dragSessionEnd() {
@@ -8541,9 +8907,9 @@ export function App() {
     setError(null);
     // Only forward the chip selection for modes that support it. The
     // mode-flip effect above keeps selectedRepos empty for
-    // unsupported modes, so this is a belt-and-braces guard — a
-    // mode-override createSession() call (the Launchers section)
-    // could otherwise send repos for a CLI session and get a 400.
+    // unsupported modes, so this is a belt-and-braces guard: a
+    // mode-override createSession() call could otherwise send repos for a
+    // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const requestedName = homeSessionName.trim();
     try {
@@ -8584,8 +8950,7 @@ export function App() {
       // rename UI behind the same delay.
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
-        const merged = [created, ...prev];
-        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+        return [created, ...prev];
       });
       activate(created.id);
       if (requestedNameApplied) {
@@ -9217,6 +9582,7 @@ export function App() {
               </button>
             </>)}
             composerVisible={homeActiveTab === "chat"}
+            composerWrapRef={homeComposerWrapRef}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
               if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
@@ -9270,14 +9636,14 @@ export function App() {
                   <div>
                     <h2 id="home-title" className="home-title">What do you want to build?</h2>
                     <p className="home-sub">
-                      Type below to start a session — or pick a runtime and launcher first.
+                      Type below to start a session with the selected runtime.
                     </p>
                   </div>
                   <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
                 </section>
 
                 <div className="home-grid">
-                <section className="home-panel home-panel-start" aria-labelledby="home-start-title">
+                <section className="home-panel" aria-labelledby="home-start-title">
                   <div className="home-panel-head">
                     <h3 id="home-start-title">Configuration</h3>
                     <span className="home-panel-meta">{MODE_LABELS[defaultSessionMode]}</span>
@@ -9381,6 +9747,38 @@ export function App() {
                       )}
                     </>
                   )}
+                </section>
+
+                <section className="home-panel home-panel-actions" aria-labelledby="home-actions-title">
+                  <div className="home-panel-head">
+                    <h3 id="home-actions-title">Setup</h3>
+                  </div>
+                  <div className="home-quick-actions">
+                    <button
+                      className="home-quick-action"
+                      onClick={() => createSession("api_key")}
+                      disabled={busy}
+                    >
+                      <IconKey className="home-quick-icon" />
+                      <span className="home-quick-main">
+                        <span className="home-quick-title">API key</span>
+                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
+                      </span>
+                    </button>
+                    {configMode && (
+                      <button
+                        className="home-quick-action"
+                        onClick={() => createSession(configMode)}
+                        disabled={busy}
+                      >
+                        <IconWrench className="home-quick-icon" />
+                        <span className="home-quick-main">
+                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
+                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                        </span>
+                      </button>
+                    )}
+                  </div>
                   {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                     <RepoPicker
                       selected={selectedRepos}
@@ -9419,107 +9817,6 @@ export function App() {
                       }}
                     />
                   )}
-                  <button
-                    className="home-primary-action"
-                    onClick={() => createSession(defaultSessionMode)}
-                    disabled={busy}
-                  >
-                    <span className="home-action-icons">
-                      <ProviderIcon provider={selectedProvider} className="home-provider-icon" />
-                      <InteractionIcon interaction={defaultInteraction} className="home-interaction-icon" />
-                    </span>
-                    <span>
-                      <span className="home-action-title">{MODE_LABELS[defaultSessionMode]}</span>
-                      <span className="home-action-sub">{MODE_HINTS[defaultSessionMode]}</span>
-                    </span>
-                  </button>
-                  <div className="home-quick-actions">
-                    <button
-                      className="home-quick-action"
-                      onClick={() => createSession("api_key")}
-                      disabled={busy}
-                    >
-                      <IconKey className="home-quick-icon" />
-                      <span>API key</span>
-                    </button>
-                    {configMode && (
-                      <button
-                        className="home-quick-action"
-                        onClick={() => createSession(configMode)}
-                        disabled={busy}
-                      >
-                        <IconWrench className="home-quick-icon" />
-                        <span>{MODE_LABELS[configMode]}</span>
-                      </button>
-                    )}
-                  </div>
-                </section>
-
-                <section className="home-panel" aria-labelledby="home-modes-title">
-                  <div className="home-panel-head">
-                    <h3 id="home-modes-title">Launchers</h3>
-                  </div>
-                  <div className="home-mode-list" role="list">
-                    {MODE_ORDER.map((m) => (
-                      <button
-                        key={m}
-                        className="home-mode"
-                        onClick={() => createSession(m)}
-                        disabled={busy}
-                        role="listitem"
-                      >
-                        <ProviderIcon provider={MODE_MENU_ICONS[m]} className="home-mode-icon" />
-                        <span>
-                          <span className="home-mode-title">{MODE_LABELS[m]}</span>
-                          <span className="home-mode-sub">{MODE_HINTS[m]}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="home-panel" aria-labelledby="home-sessions-title">
-                  <div className="home-panel-head">
-                    <h3 id="home-sessions-title">Sessions</h3>
-                    <span className="home-panel-meta">{sessions.filter((s) => !closingIds.has(s.id)).length} available</span>
-                  </div>
-                  <div className="home-session-list">
-                    {sessions.length === 0 ? (
-                      <div className="home-empty">No sessions</div>
-                    ) : (
-                      sessions.slice(0, 6).map((s) => (
-                        <button
-                          key={s.id}
-                          data-session-id={s.id}
-                          className="home-session"
-                          onClick={() => activate(s.id)}
-                          disabled={closingIds.has(s.id)}
-                          title={
-                            s.repos.length > 0
-                              ? `Repos: ${s.repos.join(", ")}`
-                              : undefined
-                          }
-                        >
-                          <span className={sessionStatusDotClass(s, sessionActivities[s.id])} />
-                          <ProviderIcon provider={MODE_MENU_ICONS[s.mode]} className="home-session-icon" />
-                          <span className="home-session-main">
-                            <span className="home-session-title">{sessionDisplayName(s)}</span>
-                            <span className="home-session-sub">
-                              {MODE_LABELS[s.mode]}
-                              {s.repos.length > 0 && (
-                                <span className="home-session-repos">
-                                  {" · "}
-                                  {s.repos.length === 1
-                                    ? s.repos[0]
-                                    : `${s.repos.length} repos`}
-                                </span>
-                              )}
-                            </span>
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
                 </section>
               </div>
                 </div>

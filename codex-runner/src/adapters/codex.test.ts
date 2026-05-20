@@ -57,6 +57,50 @@ test("emits no Tank event for Codex item.updated frames (live-only retired)", ()
   assert.deepEqual(events, []);
 });
 
+test("suppresses Codex userMessage provider echoes from the durable Tank transcript", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  for (const event of [
+    {
+      type: "item.started",
+      item: {
+        id: "item_user_echo_started",
+        type: "userMessage",
+        text: "hello",
+      },
+    },
+    {
+      type: "item.updated",
+      item: {
+        id: "item_user_echo_updated",
+        type: "userMessage",
+        text: "hello again",
+      },
+    },
+    {
+      type: "item.completed",
+      item: {
+        id: "item_user_echo_completed",
+        type: "userMessage",
+        text: "hello",
+      },
+    },
+    {
+      type: "item.completed",
+      item: {
+        id: "item_user_echo_snake",
+        type: "user_message",
+        text: "hello",
+      },
+    },
+  ] satisfies CodexEvent[]) {
+    assert.deepEqual(
+      adapter.canonicalEventsForCodexEvent(acceptedTurn(), event),
+      [],
+      `${event.type} ${String(event.item?.type)} must not produce a Tank event`,
+    );
+  }
+});
+
 test("preserves completed Codex text as durable Tank item text", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",

@@ -28,17 +28,14 @@ func NewPostgresStore(pool *pgxpool.Pool, scope string) *Store {
 }
 
 // List returns every session record for an owner in this scope (visible
-// and invisible), ordered oldest-first by created_at. Callers that only
+// and invisible), ordered by durable sidebar position. Callers that only
 // want visible rows must filter on SessionRecord.Visible.
 //
-// Returning invisible rows is load-bearing for Reader.List: it needs to
-// know which session IDs have a registry row at all (regardless of
-// visibility) so its pod-fallback loop doesn't append phantom rows for
-// pods whose registry row is visible=false. Pre-tank-operator#525 this
-// query filtered `AND visible = true` and the Reader could not
-// distinguish "no registry row" from "registry row marked deleted",
-// which let Terminating pods (and any pod whose K8s delete failed)
-// reappear in the sidebar via the pod-fallback path.
+// Returning invisible rows is load-bearing for the row-update catch-up
+// path: a client that disconnects during delete needs to receive the
+// visible=false row and tombstone the id when it reconnects. Reader.List
+// filters invisible rows for the snapshot, but debug and catch-up paths
+// consume the full owner-scoped row set.
 func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
 	normalized := strings.ToLower(strings.TrimSpace(owner))
 	if normalized == "" {
@@ -57,10 +54,11 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			sidebar_position,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2
-		ORDER BY created_at ASC
+		ORDER BY sidebar_position DESC, created_at DESC, session_id DESC
 	`
 	rows, err := s.pool.Query(ctx, q, normalized, s.scope)
 	if err != nil {
@@ -77,14 +75,14 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos                                                       []string
-			rowVersion                                                  int64
+			sidebarPosition, rowVersion                                 int64
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState,
+			&repos, &cloneState, &sidebarPosition,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -111,6 +109,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			RolloutState:    unmarshalJSONB(rolloutState),
 			Repos:           repos,
 			CloneState:      unmarshalJSONB(cloneState),
+			SidebarPosition: sidebarPosition,
 			RowVersion:      rowVersion,
 		})
 	}

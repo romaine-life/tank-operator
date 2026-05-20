@@ -1802,7 +1802,7 @@ button:disabled {
 }
 
 .home-inner {
-  width: min(100%, 62rem);
+  width: min(100%, 68rem);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -1847,7 +1847,7 @@ button:disabled {
 
 .home-grid {
   display: grid;
-  grid-template-columns: minmax(18rem, 1fr) minmax(22rem, 1.35fr);
+  grid-template-columns: minmax(28rem, 1.45fr) minmax(16rem, 0.55fr);
   gap: var(--space-4);
   align-items: start;
 }
@@ -1859,8 +1859,8 @@ button:disabled {
   min-width: 0;
 }
 
-.home-panel-start {
-  grid-row: span 2;
+.home-panel-actions {
+  align-self: start;
 }
 
 .home-panel-head {
@@ -1984,9 +1984,6 @@ button:disabled {
   line-height: 1.25;
 }
 
-.home-primary-action,
-.home-mode,
-.home-session,
 .home-quick-action {
   border-radius: var(--radius-lg);
   background: transparent;
@@ -1997,78 +1994,26 @@ button:disabled {
     color var(--motion-fast) ease;
 }
 
-.home-primary-action:hover:not(:disabled),
-.home-mode:hover:not(:disabled),
-.home-session:hover:not(:disabled),
 .home-quick-action:hover:not(:disabled) {
   background: var(--bg-hover-soft);
   color: var(--text-primary);
 }
 
-.home-primary-action {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  min-height: 6rem;
-}
-
-.home-action-icons {
-  display: inline-grid;
-  grid-template-columns: 1fr;
-  grid-template-rows: 1fr;
-  place-items: center;
-  width: 2.75rem;
-  height: 2.75rem;
-  border-radius: var(--radius-lg);
-  background: var(--bg-sidebar-control);
-  flex-shrink: 0;
-}
-
-.home-provider-icon {
-  width: 1.6rem;
-  height: 1.6rem;
-  grid-area: 1 / 1;
-}
-
-.home-interaction-icon {
-  width: 0.85rem;
-  height: 0.85rem;
-  grid-area: 1 / 1;
-  align-self: end;
-  justify-self: end;
-  padding: 0.1rem;
-  border-radius: 999px;
-  background: var(--bg-base);
-  color: var(--text-muted);
-}
-
-.home-action-title,
-.home-action-sub,
-.home-mode-title,
-.home-mode-sub,
-.home-session-title,
-.home-session-sub {
+.home-quick-main,
+.home-quick-title,
+.home-quick-sub {
   display: block;
   min-width: 0;
+}
+
+.home-quick-main {
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.home-action-title {
-  color: var(--text-primary);
-  font-size: var(--text-lg);
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.home-action-sub,
-.home-mode-sub,
-.home-session-sub {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  line-height: 1.35;
+.home-quick-title {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .home-quick-actions {
@@ -2077,68 +2022,34 @@ button:disabled {
   gap: var(--space-1);
 }
 
+.home-panel-actions .home-quick-actions {
+  grid-template-columns: 1fr;
+}
+
 .home-quick-action {
-  min-height: 2.75rem;
-  display: inline-flex;
-  align-items: center;
+  width: 100%;
+  min-height: 3.4rem;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   color: var(--text-secondary);
-  font-size: var(--text-sm);
 }
 
 .home-quick-icon {
   width: 1rem;
   height: 1rem;
   flex-shrink: 0;
+  margin-top: 0.15rem;
 }
 
-.home-mode-list,
-.home-session-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.home-mode,
-.home-session {
-  width: 100%;
-  min-height: 3.4rem;
-  display: grid;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-}
-
-.home-mode {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.home-session {
-  grid-template-columns: auto auto minmax(0, 1fr);
-}
-
-.home-mode-icon,
-.home-session-icon {
-  width: 1rem;
-  height: 1rem;
-  flex-shrink: 0;
-}
-
-.home-mode-title,
-.home-session-title {
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 500;
-}
-
-.home-empty {
-  min-height: 3.4rem;
-  display: flex;
-  align-items: center;
-  padding: var(--space-2) var(--space-3);
-  color: var(--text-faint);
-  font-size: var(--text-sm);
+.home-quick-sub {
+  margin-top: 0.1rem;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 /* Pre-session, the composer wrap is the same `.run-composer-wrap` the
@@ -2341,18 +2252,9 @@ button:disabled {
   color: var(--text-faint);
 }
 
-.home-session-repos {
-  font-family: var(--font-mono, monospace);
-  color: var(--text-body);
-}
-
 @media (max-width: 900px) {
   .home-grid {
     grid-template-columns: 1fr;
-  }
-
-  .home-panel-start {
-    grid-row: auto;
   }
 }
 
