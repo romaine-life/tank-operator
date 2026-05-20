@@ -126,6 +126,7 @@ type SessionMode =
   | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
+  | "hermes_gui"
   | "pi_cli"
   | "pi_config";
 type DefaultSessionMode = Extract<
@@ -135,9 +136,10 @@ type DefaultSessionMode = Extract<
   | "codex_cli"
   | "codex_gui"
   | "codex_exec_gui"
+  | "hermes_gui"
   | "pi_cli"
 >;
-type Provider = "anthropic" | "codex" | "pi";
+type Provider = "anthropic" | "codex" | "hermes" | "pi";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -271,6 +273,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
+  hermes_gui: "Hermes",
   pi_cli: "Pi CLI",
   pi_config: "Pi config",
 };
@@ -287,6 +290,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
+  hermes_gui: "hermes",
   pi_cli: "pi-cli",
   pi_config: "pi-cfg",
 };
@@ -298,6 +302,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  hermes_gui: "hermes",
   pi_cli: "pi",
 };
 
@@ -311,6 +316,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
+  hermes_gui: "hermes",
   pi_cli: "pi",
   pi_config: "pi",
 };
@@ -321,6 +327,7 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
+  hermes: { gui: "hermes_gui", cli: null },
   pi: { gui: null, cli: "pi_cli" },
 };
 
@@ -331,10 +338,17 @@ const INTERACTION_LABELS: Record<SessionInteraction, string> = {
 
 const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 
-const PROVIDER_CONFIG_MODES: Record<Provider, SessionMode> = {
+const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
   anthropic: "config",
   codex: "codex_config",
   pi: "pi_config",
+};
+
+const PROVIDER_LABELS: Record<Provider, string> = {
+  anthropic: "Claude",
+  codex: "Codex",
+  hermes: "Hermes",
+  pi: "Pi",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -347,6 +361,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  hermes_gui: "Shared Hermes memory + MCP tools",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
 };
@@ -455,11 +470,25 @@ const DEMO_PI_LINES = [
   "> Summarize this repo and run the checks.",
 ];
 
+const DEMO_HERMES_LINES = [
+  "Hermes",
+  "",
+  "  shared memory: enabled",
+  "  transport: app-server bridge",
+  "  tools: MCP, shell",
+  "",
+  "Ask Hermes to inspect cluster state, tools, or project context.",
+  "",
+  "> Summarize the current task.",
+];
+
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
   const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
+    : session.mode === "hermes_gui"
+      ? DEMO_HERMES_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
       : DEMO_CLAUDE_LINES;
@@ -467,7 +496,7 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "pi_cli") {
+    } else if (session.mode === "pi_cli" || session.mode === "hermes_gui") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -578,6 +607,8 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
   const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
     ? "Codex"
+    : mode === "hermes_gui"
+      ? "Hermes"
     : mode === "pi_cli"
       ? "Pi"
       : "Claude Code";
@@ -599,7 +630,7 @@ const DEMO_LANDING_LINES = [
   "$ tank-operator preview",
   "Welcome. This is the real app shell with demo sessions.",
   "",
-  "Click the provider icon to switch between Claude, Codex, and Pi.",
+  "Click the provider icon to switch between Claude, Codex, Hermes, and Pi.",
   "Click + to add a local preview session.",
   "The key and wrench buttons are present but disabled in preview mode.",
   "",
@@ -622,6 +653,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "codex_cli" ||
     value === "codex_gui" ||
     value === "codex_exec_gui" ||
+    value === "hermes_gui" ||
     value === "pi_cli"
   );
 }
@@ -756,22 +788,29 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
+const FILE_ATTACHMENT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex", "pi"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "hermes", "pi"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
-  return (
-    PROVIDER_INTERACTION_MODES[provider][interaction] ??
-    PROVIDER_INTERACTION_MODES[provider].cli!
-  );
+  const modes = PROVIDER_INTERACTION_MODES[provider];
+  return modes[interaction] ?? modes.gui ?? modes.cli ?? "claude_gui";
+}
+
+function availableInteractionFor(
+  provider: Provider,
+  preferred: SessionInteraction,
+): SessionInteraction {
+  if (PROVIDER_INTERACTION_MODES[provider][preferred] != null) return preferred;
+  return PROVIDER_INTERACTION_MODES[provider].gui != null ? "gui" : "cli";
 }
 
 function sessionStatusDotClass(
@@ -1410,10 +1449,7 @@ function DemoLanding() {
   }, [demoSessions, activeDemoSession]);
 
   function setDemoProvider(provider: Provider) {
-    const interaction =
-      PROVIDER_INTERACTION_MODES[provider][demoInteraction] == null
-        ? "cli"
-        : demoInteraction;
+    const interaction = availableInteractionFor(provider, demoInteraction);
     setDemoInteraction(interaction);
     setSelectedProvider(provider);
   }
@@ -1597,7 +1633,7 @@ function DemoLanding() {
                           title={MODE_LABELS[mode]}
                         >
                           <ProviderIcon provider={provider} className="home-choice-icon" />
-                          <span>{provider === "anthropic" ? "Claude" : provider === "codex" ? "Codex" : "Pi"}</span>
+                          <span>{PROVIDER_LABELS[provider]}</span>
                         </button>
                       );
                     })}
@@ -1691,13 +1727,15 @@ function DemoLanding() {
                         <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
                       </span>
                     </button>
-                    <button className="home-quick-action" onClick={() => createPreviewSession(configMode)}>
-                      <IconWrench className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
-                        <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
-                      </span>
-                    </button>
+                    {configMode && (
+                      <button className="home-quick-action" onClick={() => createPreviewSession(configMode)}>
+                        <IconWrench className="home-quick-icon" />
+                        <span className="home-quick-main">
+                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
+                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </section>
               </div>
@@ -1828,6 +1866,12 @@ function skillActionText(name: string): string {
 
 function skillTrigger(providerIsClaude: boolean, name: string): string {
   return `${providerIsClaude ? "/" : "$"}${name}`;
+}
+
+function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: string): string {
+  const trigger = skillTrigger(MODE_MENU_ICONS[mode] === "anthropic", name);
+  const trimmed = text.trim();
+  return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
 }
 
 function stripSkillTrigger(name: string, text: string): string {
@@ -5685,6 +5729,7 @@ function ChatPane({
   }
 
   function handleAttachmentFiles(files: FileList | null) {
+    if (!supportsFileAttachments) return;
     if (!files) return;
     for (const f of Array.from(files)) {
       // Be permissive on file type — Claude's Read tool handles many.
@@ -6287,7 +6332,9 @@ function ChatPane({
       prompt: trimmed,
       skillName,
       followUp,
-      model: selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId,
+      model: isClaude || isCodex
+        ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId)
+        : "",
       effort: isClaude || isCodex ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
@@ -6459,6 +6506,7 @@ function ChatPane({
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
   const ready = session.status === "Active";
+  const supportsFileAttachments = FILE_ATTACHMENT_MODES.has(session.mode);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
@@ -6589,6 +6637,7 @@ function ChatPane({
       composerWrapStyle={chatFontScaleStyle}
       composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
       onComposerWrapDragOver={(e) => {
+        if (!supportsFileAttachments) return;
         e.preventDefault();
         if (!dragActive) setDragActive(true);
       }}
@@ -6596,11 +6645,13 @@ function ChatPane({
         if (e.currentTarget === e.target) setDragActive(false);
       }}
       onComposerWrapDrop={(e) => {
+        if (!supportsFileAttachments) return;
         e.preventDefault();
         setDragActive(false);
         handleAttachmentFiles(e.dataTransfer?.files ?? null);
       }}
       onComposerWrapPaste={(e) => {
+        if (!supportsFileAttachments) return;
         const items = e.clipboardData?.items;
         if (!items) return;
         const fs: File[] = [];
@@ -7016,9 +7067,11 @@ function ChatPane({
                   sourceSession: session,
                   forkedEntry,
                   model:
-                    selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
-                      ? ""
-                      : selectedModelId,
+                    isClaude || isCodex
+                      ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
+                          ? ""
+                          : selectedModelId)
+                      : "",
                   // Fork inherits the source pane's effort pick so the
                   // forked pod boots with the same reasoning depth the
                   // user had been working at.
@@ -7359,7 +7412,13 @@ function ChatPane({
                   type="button"
                   className="run-composer-icon-btn"
                   aria-label="Attach files"
+                  title={
+                    supportsFileAttachments
+                      ? "Attach files"
+                      : "File attachments require a session workspace"
+                  }
                   onClick={() => fileInputRef.current?.click()}
+                  disabled={!supportsFileAttachments}
                 >
                   <ImageIcon className="run-composer-icon" aria-hidden="true" />
                 </button>
@@ -7747,6 +7806,7 @@ export function App() {
   // session's run pane (which uses its own per-session composerMode state).
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
+  const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
   // Files picked / dropped / pasted onto the home composer before the
@@ -7782,6 +7842,16 @@ export function App() {
     });
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
+  useEffect(() => {
+    if (FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
+    setHomeDragActive(false);
+    setHomeAttachments((prev) => {
+      for (const att of prev) {
+        if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+      }
+      return [];
+    });
+  }, [defaultSessionMode]);
   // Splash-page repo picker state. Stage 1 of the auto-clone feature:
   //
   //   - selectedRepos: the chips the user has staged for the
@@ -8458,10 +8528,30 @@ export function App() {
     setDragOverSessionId(null);
   }
 
+  async function markCreatedSessionTestState(id: string): Promise<void> {
+    const state: TestState = { active: true };
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? { ...s, test_state: state, rollout_state: null } : s)),
+    );
+    const res = await authedFetch(`/api/sessions/${id}/test-state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+    });
+    if (!res.ok) {
+      throw new Error(`test state update failed: ${res.status}`);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    setSessions((prev) =>
+      prev.map((s) => (s.id === id ? mergeMutualSessionSkillState(updated, s) : s)),
+    );
+  }
+
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
     initialPermissionMode: RunComposerMode = "default",
+    initialSkillName?: SkillStateName,
   ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
@@ -8533,17 +8623,24 @@ export function App() {
       // for the pod to become ready and submit it as the first turn. Only
       // chat modes have a turn endpoint; non-chat modes ignore the prompt
       // because the home composer would not have surfaced a sensible target.
-      const seedPrompt = initialPrompt?.trim();
-      const pendingHomeAttachments = homeAttachments;
-      if ((seedPrompt || pendingHomeAttachments.length > 0) && CHAT_MODES.has(mode)) {
+      const seedPrompt = initialPrompt?.trim() ?? "";
+      const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? homeAttachments : [];
+      if ((seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) && CHAT_MODES.has(mode)) {
         const model =
-          selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId;
+          selectedProvider === "anthropic" || selectedProvider === "codex"
+            ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
+            : "";
         const effort =
           selectedProvider === "anthropic" || selectedProvider === "codex"
             ? selectedHomeEffortId
             : "";
         try {
           await waitForSessionReady(created.id);
+          if (initialSkillName === "test") {
+            void markCreatedSessionTestState(created.id).catch((e) => {
+              setError(String(e));
+            });
+          }
           // Upload home-buffered attachments to the new session pod before
           // submitting the seed turn — same endpoint and shape the in-chat
           // composer's uploadAttachment() uses, so the agent runner sees an
@@ -8574,19 +8671,23 @@ export function App() {
           });
           const composedPrompt =
             uploadedPaths.length > 0
-              ? `${seedPrompt ?? ""}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
+              ? `${seedPrompt}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
                   .map((p) => `- ${p.absPath}`)
                   .join("\n")}`
-              : (seedPrompt ?? "");
+              : seedPrompt;
+          const turnPrompt = initialSkillName
+            ? composeSkillPrompt(mode, initialSkillName, composedPrompt)
+            : composedPrompt;
           const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               client_nonce: newForkTurnId(),
-              prompt: composedPrompt,
+              prompt: turnPrompt,
               model,
               ...(effort ? { effort } : {}),
               permission_mode: initialPermissionMode,
+              ...(initialSkillName ? { skill_name: initialSkillName } : {}),
               follow_up: false,
             }),
           });
@@ -8713,10 +8814,7 @@ export function App() {
   }
 
   function setDefaultProvider(provider: Provider) {
-    const interaction =
-      PROVIDER_INTERACTION_MODES[provider][defaultInteraction] == null
-        ? "cli"
-        : defaultInteraction;
+    const interaction = availableInteractionFor(provider, defaultInteraction);
     const mode = defaultModeFor(provider, interaction);
     if (interaction !== defaultInteraction) {
       setDefaultInteraction(interaction);
@@ -8728,9 +8826,10 @@ export function App() {
 
   function selectDefaultInteraction(interaction: SessionInteraction) {
     const provider = MODE_MENU_ICONS[defaultSessionMode];
-    const mode = defaultModeFor(provider, interaction);
-    setDefaultInteraction(interaction);
-    writeDefaultInteraction(interaction);
+    const nextInteraction = availableInteractionFor(provider, interaction);
+    const mode = defaultModeFor(provider, nextInteraction);
+    setDefaultInteraction(nextInteraction);
+    writeDefaultInteraction(nextInteraction);
     setDefaultSessionMode(mode);
     writeDefaultSessionMode(mode);
   }
@@ -9141,7 +9240,7 @@ export function App() {
             composerVisible={homeActiveTab === "chat"}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
-              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
               e.preventDefault();
               if (!homeDragActive) setHomeDragActive(true);
             }}
@@ -9149,13 +9248,13 @@ export function App() {
               if (e.currentTarget === e.target) setHomeDragActive(false);
             }}
             onComposerWrapDrop={(e) => {
-              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
               e.preventDefault();
               setHomeDragActive(false);
               addHomeAttachments(e.dataTransfer?.files ?? null);
             }}
             onComposerWrapPaste={(e) => {
-              if (!CHAT_MODES.has(defaultSessionMode)) return;
+              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
               const items = e.clipboardData?.items;
               if (!items) return;
               const fs: File[] = [];
@@ -9218,7 +9317,7 @@ export function App() {
                           title={MODE_LABELS[mode]}
                         >
                           <ProviderIcon provider={provider} className="home-choice-icon" />
-                          <span>{provider === "anthropic" ? "Claude" : provider === "codex" ? "Codex" : "Pi"}</span>
+                          <span>{PROVIDER_LABELS[provider]}</span>
                         </button>
                       );
                     })}
@@ -9359,17 +9458,19 @@ export function App() {
                         <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
                       </span>
                     </button>
-                    <button
-                      className="home-quick-action"
-                      onClick={() => createSession(configMode)}
-                      disabled={busy}
-                    >
-                      <IconWrench className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
-                        <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
-                      </span>
-                    </button>
+                    {configMode && (
+                      <button
+                        className="home-quick-action"
+                        onClick={() => createSession(configMode)}
+                        disabled={busy}
+                      >
+                        <IconWrench className="home-quick-icon" />
+                        <span className="home-quick-main">
+                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
+                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </section>
               </div>
@@ -9444,6 +9545,7 @@ export function App() {
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 disabled={busy}
+                onTextChange={setHomeComposerText}
                 toolButtons={
                     <>
                       <button
@@ -9451,12 +9553,12 @@ export function App() {
                         className="run-composer-icon-btn"
                         aria-label="Attach files"
                         title={
-                          CHAT_MODES.has(defaultSessionMode)
+                          FILE_ATTACHMENT_MODES.has(defaultSessionMode)
                             ? "Attach files for the first turn"
-                            : "Attachments only apply to chat modes"
+                            : "File attachments require a session workspace"
                         }
                         onClick={() => homeFileInputRef.current?.click()}
-                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
+                        disabled={busy || !FILE_ATTACHMENT_MODES.has(defaultSessionMode)}
                       >
                         <ImageIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
@@ -9474,9 +9576,23 @@ export function App() {
                       <button
                         type="button"
                         className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                        disabled
+                        onClick={() => {
+                          void createSession(
+                            defaultSessionMode,
+                            homeComposerText.trim() || undefined,
+                            homeComposerMode,
+                            "test",
+                          );
+                        }}
+                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
                         aria-label="Start test skill"
-                        title="Available once your session starts"
+                        title={
+                          CHAT_MODES.has(defaultSessionMode)
+                            ? selectedProvider === "anthropic"
+                              ? "Start with /test"
+                              : "Start with $test"
+                            : "Choose a GUI chat runtime to start with test"
+                        }
                       >
                         <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
