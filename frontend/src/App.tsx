@@ -218,6 +218,14 @@ type SdkHistoryRefreshSource =
   | "visible-reactivation"
   | "resync"
   | "terminal-refresh";
+type ScrollToLatestBehavior = "auto" | "smooth";
+type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual";
+type ScrollToLatestRequest = {
+  signal: number;
+  behavior: ScrollToLatestBehavior;
+  reason: ScrollToLatestReason;
+  enabled: boolean;
+};
 type SkillStateName = "test" | "rollout";
 type HomeTab = "chat" | "settings" | "help";
 
@@ -4571,6 +4579,9 @@ function RunMessages({
   onStartReached,
   onAtBottomChange,
   scrollToLatestSignal,
+  scrollToLatestBehavior = "smooth",
+  scrollToLatestReason = "manual",
+  onScrollToLatestConsumed,
   scrollToOldestSignal,
 }: {
   entries: TranscriptEntry[];
@@ -4595,6 +4606,9 @@ function RunMessages({
   onStartReached?: () => void;
   onAtBottomChange?: (atBottom: boolean) => void;
   scrollToLatestSignal?: number;
+  scrollToLatestBehavior?: ScrollToLatestBehavior;
+  scrollToLatestReason?: ScrollToLatestReason;
+  onScrollToLatestConsumed?: () => void;
   scrollToOldestSignal?: number;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
@@ -4611,6 +4625,7 @@ function RunMessages({
   // Track which message id we've already handled so we don't re-scroll
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
+  const consumedScrollToLatestSignalRef = useRef(0);
   useEffect(() => {
     const target = pendingScrollMessageId;
     if (!target) return;
@@ -4660,18 +4675,31 @@ function RunMessages({
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
     });
   }, [entries.length, groups, sessionId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
+    if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
+    consumedScrollToLatestSignalRef.current = scrollToLatestSignal;
     logChatScrollGroups("scroll-to-latest", groups, entries.length, {
       sessionId,
       signal: scrollToLatestSignal,
+      behavior: scrollToLatestBehavior,
+      reason: scrollToLatestReason,
     });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
       align: "end",
-      behavior: "smooth",
+      behavior: scrollToLatestBehavior,
     });
-  }, [entries.length, groups, scrollToLatestSignal, sessionId]);
+    onScrollToLatestConsumed?.();
+  }, [
+    entries.length,
+    groups,
+    onScrollToLatestConsumed,
+    scrollToLatestBehavior,
+    scrollToLatestReason,
+    scrollToLatestSignal,
+    sessionId,
+  ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
@@ -5257,6 +5285,7 @@ function ChatPane({
   const wasVisibleRef = useRef(visible);
   const timelineBootstrapSourceRef = useRef<SdkHistoryRefreshSource>("history");
   const timelineBootstrapClearRealtimeRef = useRef(false);
+  const timelineBootstrapScrollToLatestRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -5274,7 +5303,13 @@ function ChatPane({
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
   const [sdkOlderError, setSdkOlderError] = useState<string | null>(null);
-  const [scrollToLatestSignal, setScrollToLatestSignal] = useState(0);
+  const [scrollToLatestRequest, setScrollToLatestRequest] =
+    useState<ScrollToLatestRequest>({
+      signal: 0,
+      behavior: "smooth",
+      reason: "manual",
+      enabled: false,
+    });
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
   // Streaming-while-back-reading bookkeeping. While the user is reading
   // older context (atBottom=false), incoming SSE events get appended to
@@ -5434,17 +5469,36 @@ function ChatPane({
     }
     syncSdkRenderedEntries();
   }
+  function requestScrollToLatest(
+    behavior: ScrollToLatestBehavior = "smooth",
+    reason: ScrollToLatestReason = "manual",
+  ): void {
+    setScrollToLatestRequest((prev) => ({
+      signal: prev.signal + 1,
+      behavior,
+      reason,
+      enabled: true,
+    }));
+  }
+  function clearScrollToLatestRequest(): void {
+    setScrollToLatestRequest((prev) =>
+      prev.enabled ? { ...prev, enabled: false } : prev,
+    );
+  }
   function resetSdkTimelineBootstrapState(
     reason: string,
     options: {
       source?: SdkHistoryRefreshSource;
       clearRealtime?: boolean;
+      scrollToLatestOnReady?: boolean;
     } = {},
   ): void {
     sdkWindowEpochRef.current += 1;
     const epoch = sdkWindowEpochRef.current;
     timelineBootstrapSourceRef.current = options.source ?? "history";
     timelineBootstrapClearRealtimeRef.current = options.clearRealtime ?? false;
+    timelineBootstrapScrollToLatestRef.current =
+      options.scrollToLatestOnReady === true;
     historyRefreshRef.current = null;
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
@@ -5461,7 +5515,7 @@ function ChatPane({
     setSdkFoundOldest(false);
     setSdkFoundNewest(false);
     setSdkLoadingOlder(false);
-    setScrollToLatestSignal(0);
+    clearScrollToLatestRequest();
     setScrollToOldestSignal(0);
     setUserScrolledUp(false);
     setSdkPendingTailCount(0);
@@ -5479,6 +5533,7 @@ function ChatPane({
       epoch,
       source: timelineBootstrapSourceRef.current,
       clearRealtime: timelineBootstrapClearRealtimeRef.current,
+      scrollToLatestOnReady: timelineBootstrapScrollToLatestRef.current,
     });
   }
   function canClearSdkRealtime(
@@ -5680,6 +5735,7 @@ function ChatPane({
       {
         source: "visible-reactivation",
         clearRealtime: true,
+        scrollToLatestOnReady: !hasExplicitTarget,
       },
     );
   }, [pendingScrollMessageId, session.id, session.status, visible]);
@@ -5795,12 +5851,18 @@ function ChatPane({
         params.set("anchor", "newest");
         params.set("limit", "200");
       }
+      const scrollToLatestOnReady =
+        timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
+        timelineBootstrapScrollToLatestRef.current = false;
+      }
       logChatScrollEvent("timeline-request", {
         sessionId: refreshSessionId,
         source,
         anchor,
         clearRealtime,
         epoch: refreshEpoch,
+        scrollToLatestOnReady,
       });
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
@@ -5900,11 +5962,18 @@ function ChatPane({
           durationMs: Math.round(performance.now() - startedAt),
         });
       }
-      if (canonicalEvents.length === 0) return { replayed: false, terminal };
+      if (canonicalEvents.length === 0) {
+        if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
+        return { replayed: false, terminal };
+      }
       replaceSdkServerEvents(
         canonicalEvents,
         clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
       );
+      if (scrollToLatestOnReady) {
+        timelineBootstrapScrollToLatestRef.current = false;
+        requestScrollToLatest("auto", source);
+      }
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -6457,6 +6526,7 @@ function ChatPane({
     resetSdkTimelineBootstrapState("session-change", {
       source: "history",
       clearRealtime: false,
+      scrollToLatestOnReady: !Boolean(pendingScrollMessageId?.trim()),
     });
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
@@ -7023,6 +7093,7 @@ function ChatPane({
         } as TranscriptEntry;
       appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
+    if (visible) requestScrollToLatest("auto", "submit");
     setRunStatus("running");
     setRunning(true);
     setActiveTool(null);
@@ -7344,6 +7415,8 @@ function ChatPane({
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
+    timelineBootstrapScrollToLatestRef.current = !Boolean(pendingScrollMessageId?.trim());
+    clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
       sessionId: session.id,
@@ -7872,7 +7945,12 @@ function ChatPane({
                 void loadSdkOlderEvents();
               }}
               onAtBottomChange={handleSdkAtBottomChange}
-              scrollToLatestSignal={scrollToLatestSignal}
+              scrollToLatestSignal={
+                scrollToLatestRequest.enabled ? scrollToLatestRequest.signal : 0
+              }
+              scrollToLatestBehavior={scrollToLatestRequest.behavior}
+              scrollToLatestReason={scrollToLatestRequest.reason}
+              onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
             />
           </>
@@ -7964,7 +8042,7 @@ function ChatPane({
             const reachNewest = async () => {
               await jumpSdkToLatest();
               setSdkPendingTailCount(0);
-              setScrollToLatestSignal((value) => value + 1);
+              requestScrollToLatest("smooth", "manual");
             };
             void reachNewest();
           }}
