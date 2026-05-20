@@ -218,10 +218,10 @@ func recordServiceRoleRequest(route, result string) {
 // sessionReposSelectedTotal counts every session-create call by the
 // coarse repo-count bucket (none | one | many). Bounded cardinality
 // (3 series) keeps Prometheus happy while still surfacing the
-// operational shape that matters before stage 3 ships:
+// operational shape that matters for the repo-cloner path:
 //
 //   - Is the splash picker being used at all? (none vs. one+many ratio)
-//   - Is the many-repo path getting real exercise? (predicts stage 3
+//   - Is the many-repo path getting real exercise? (predicts
 //     init-container parallelism / latency budget)
 //
 // The exact slug list is durable on sessions.repos, so any deeper

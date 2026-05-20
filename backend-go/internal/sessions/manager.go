@@ -35,6 +35,7 @@ type SessionRegistry interface {
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -260,9 +261,9 @@ type CreateOptions struct {
 	RequestedAt string
 	// Repos is the durable "owner/name" slug selection from the splash
 	// page. Empty slice (or nil) means "no auto-clone." The slugs are
-	// validated at the handler boundary; manager.Create only stores
-	// them on the registry row. Stage 3 wires the init container; this
-	// stage just persists.
+	// validated at the handler boundary; manager.Create stores them on
+	// the registry row and threads them into the pod manifest so the
+	// repo-cloner init container can clone them into /workspace.
 	Repos []string
 }
 
@@ -330,6 +331,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
+	manifestOpts.Repos = repos
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -590,6 +592,21 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 			}
 			return m.registry.SetRolloutState(c, owner, sessionID, state)
 		})
+}
+
+// SetCloneState replaces the row's clone_state column with the
+// repo-cloner init container's latest per-repo outcome map. Unlike
+// test/rollout state, clone_state is sidebar-only product state; no
+// running container needs it as a pod annotation, and the writer is an
+// init container that runs before the pod reaches Ready.
+func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, state map[string]any) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.SetCloneState(ctx, owner, sessionID, state); err != nil {
+			return Info{}, fmt.Errorf("set clone state: %w", err)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
 }
 
 func (m *Manager) patchStateAnnotation(

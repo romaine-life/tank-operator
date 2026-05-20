@@ -1,12 +1,10 @@
 // RepoPicker is the splash-page chip-and-picker for selecting repos
 // to auto-clone into a new session's /workspace.
 //
-// Stage 1 of the auto-clone feature (per docs/quality-timeframes.md
-// "Acceptable chunking: a sequence of PRs where each PR leaves the
-// system in a coherent state"). This PR ships the durable selection,
-// the recent-repos surface, and the chip+picker UI. Stage 2 will add
-// an "All repos" enumeration sourced from mcp-github; stage 3 ships
-// the init container that actually clones.
+// The backend persists the selected owner/name slugs on sessions.repos,
+// exposes them through the recent-repos surface, offers an All repos
+// enumeration sourced from mcp-github, and clones the selection through
+// the repo-cloner init container when the session pod starts.
 //
 // UX shape:
 //   - The selected repos render as removable chips above the trigger.

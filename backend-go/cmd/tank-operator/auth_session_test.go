@@ -153,6 +153,9 @@ func (r *testSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map
 func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *testSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
+	return nil
+}
 func (r *testSessionRegistry) MarkDeleted(_ context.Context, _, _ string) error { return nil }
 
 func TestAuthorizeSessionRead_AdminCanReadAnyOwner(t *testing.T) {

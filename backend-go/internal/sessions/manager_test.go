@@ -102,3 +102,45 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 		t.Fatalf("tracking id = %q, want namespace segment %q", trackingID, slotNamespace)
 	}
 }
+
+func TestManagerCreateThreadsReposIntoRepoCloner(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      "claude-image",
+			CodexSessionImage: "codex-image",
+			PiSessionImage:    "pi-image",
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+		Repos: []string{"nelsong6/tank-operator"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(pod.Spec.InitContainers), 1; got != want {
+		t.Fatalf("init container count = %d, want %d", got, want)
+	}
+	cloner := pod.Spec.InitContainers[0]
+	if got, want := cloner.Name, "repo-cloner"; got != want {
+		t.Fatalf("init container name = %q, want %q", got, want)
+	}
+	var reposEnv string
+	for _, env := range cloner.Env {
+		if env.Name == "TANK_SELECTED_REPOS" {
+			reposEnv = env.Value
+			break
+		}
+	}
+	if got, want := reposEnv, `["nelsong6/tank-operator"]`; got != want {
+		t.Fatalf("TANK_SELECTED_REPOS = %q, want %q", got, want)
+	}
+}

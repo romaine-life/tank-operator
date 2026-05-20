@@ -128,9 +128,8 @@ type SessionRecord struct {
 	RolloutState    map[string]any // jsonb column
 
 	// Repos is the list of "owner/name" slugs selected at session
-	// creation. Empty slice is the steady-state "no auto-cloning"
-	// shape (today every session); a non-empty slice is read by the
-	// stage 3 repo-cloner init container at pod boot. The slugs are
+	// creation. Empty slice means "no auto-cloning"; a non-empty slice
+	// is read by the repo-cloner init container at pod boot. The slugs are
 	// validated at the handler boundary (handlers_sessions.go) and
 	// the durable column is the source of truth for the picker chips
 	// on existing sessions; the SPA never re-derives this from
@@ -138,7 +137,7 @@ type SessionRecord struct {
 	Repos []string
 	// CloneState is the per-repo init-container outcome, keyed by
 	// slug, value {status, error?, started_at?, finished_at?}. nil
-	// until stage 3's init container writes back the first state.
+	// until the repo-cloner writes back the first state.
 	// Surfaces in the sidebar tooltip so a partial clone is visible
 	// rather than inferred from logs.
 	CloneState map[string]any
@@ -194,6 +193,11 @@ type ManifestOptions struct {
 	NATSAuthSecret string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
+	// Repos is the validated owner/name slug list selected at
+	// session-create time. Workspace-backed GUI pods receive it via the
+	// repo-cloner init container, which clones each slug into /workspace
+	// before the runner starts.
+	Repos []string
 	// HotSwapAgentRunner gates the test-slot hot-swap surface on SDK
 	// runner containers. When true, PodManifest attaches a writable
 	// emptyDir at /var/run/<runner>-hot, mounts it on the active runner
@@ -366,6 +370,55 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
 			"name":      "workspace",
 			"mountPath": "/workspace",
+		})
+	}
+
+	initContainers := []any{}
+	if wantSDKRunner && len(opts.Repos) > 0 {
+		reposJSON, _ := json.Marshal(opts.Repos)
+		initContainers = append(initContainers, map[string]any{
+			"name":            "repo-cloner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/session-config/repo-cloner.sh"},
+			"env": []any{
+				map[string]any{"name": "TANK_SELECTED_REPOS", "value": string(reposJSON)},
+				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+				map[string]any{
+					"name": "SESSION_ID",
+					"valueFrom": map[string]any{
+						"fieldRef": map[string]any{
+							"fieldPath": "metadata.labels['tank-operator/session-id']",
+						},
+					},
+				},
+				map[string]any{
+					"name": "POD_OWNER_EMAIL",
+					"valueFrom": map[string]any{
+						"fieldRef": map[string]any{
+							"fieldPath": "metadata.annotations['tank-operator/owner-email']",
+						},
+					},
+				},
+				map[string]any{"name": "HOME", "value": "/home/node"},
+			},
+			"volumeMounts": []any{
+				map[string]any{
+					"name":      "workspace",
+					"mountPath": "/workspace",
+				},
+				map[string]any{
+					"name":      "session-config",
+					"mountPath": SessionConfigDirMount,
+					"readOnly":  true,
+				},
+				map[string]any{
+					"name":      "auth-romaine-sa-token",
+					"mountPath": "/var/run/secrets/auth.romaine.life",
+					"readOnly":  true,
+				},
+			},
+			"resources": repoClonerResources(),
 		})
 	}
 
@@ -741,6 +794,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"containers": containers,
 		"volumes":    volumes,
 	}
+	if len(initContainers) > 0 {
+		spec["initContainers"] = initContainers
+	}
 	if len(hostAliases) > 0 {
 		spec["hostAliases"] = hostAliases
 	}
@@ -921,6 +977,18 @@ func mcpAuthProxyResources() map[string]any {
 		},
 		"limits": map[string]any{
 			"memory": "256Mi",
+		},
+	}
+}
+
+func repoClonerResources() map[string]any {
+	return map[string]any{
+		"requests": map[string]any{
+			"cpu":    "25m",
+			"memory": "128Mi",
+		},
+		"limits": map[string]any{
+			"memory": "512Mi",
 		},
 	}
 }
