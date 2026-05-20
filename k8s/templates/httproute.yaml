@@ -1,3 +1,4 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -28,3 +29,4 @@ spec:
           name: tank-operator
           port: 80
           weight: 1
+{{- end }}

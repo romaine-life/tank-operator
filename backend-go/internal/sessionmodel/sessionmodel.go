@@ -200,7 +200,7 @@ type ManifestOptions struct {
 	// container, and sets GLIMMUNG_SUPERVISOR_CHILD/HOT_ARTIFACT env vars
 	// so the launch script execs tank-supervisor (instead of node) as PID 1.
 	// Default false; the orchestrator's deployment.yaml sets this to true
-	// only when .Values.testEnv.enabled is on. Production sessions see no
+	// only when the chart runs in hot test-slot mode. Production sessions see no
 	// behavioral change. See scripts/check-session-pod-hot-swap-migration.mjs
 	// for the completion contract.
 	HotSwapAgentRunner bool

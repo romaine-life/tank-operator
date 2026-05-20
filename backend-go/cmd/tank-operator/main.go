@@ -226,7 +226,7 @@ func main() {
 			NATSStream:              envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:          envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
 			// Test-slot agent-runner hot-swap. Off by default; the chart
-			// turns this on only when .Values.testEnv.enabled is true.
+			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
@@ -624,4 +624,3 @@ func parseEmailSet(raw string) map[string]bool {
 	}
 	return m
 }
-

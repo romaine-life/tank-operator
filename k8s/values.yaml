@@ -6,12 +6,16 @@ image:
   tag: "app-8f45f672720d91cab8f7f27a62c49fefd8e1d5dddfa3ebb6245b7a671f46517a"
   pullPolicy: IfNotPresent
 
+# normal: regular chart render
+# warm: per-slot baseline resources, no long-running app/proxy pods
+# hot: per-slot live runtime resources
+renderMode: normal
+
 testEnv:
-  # First-class chart mode for Glimmung/native validation slots. Glimmung should
-  # only need to pass `--set testEnv.enabled=true`; the chart derives slot-local
-  # names from the Helm release name/namespace and keeps shared credentials
-  # pointed at their production KV keys.
-  enabled: false
+  # Stable slot identity for warm/hot Glimmung native validation slots.
+  # Required when renderMode is warm or hot because split Helm releases use
+  # different release names while rendering the same slot-local resource names.
+  slotName: ""
   recordBase: tank.dev.romaine.life
   sessionsGatewayIP: 172.179.163.96
   claudeCredentialsKvKey: claude-code-credentials

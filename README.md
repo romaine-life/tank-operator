@@ -137,7 +137,7 @@ ArgoCD auto-syncs `k8s/` when changes hit `main`. Image is built and pushed to
 ## Glimmung Test-Slot Hot Swap
 
 Tank validation slots run the orchestrator through `/app/tank-supervisor` when
-`testEnv.enabled=true`. The chart mounts `/var/run/tank-operator-hot` for
+`renderMode=hot`. The chart mounts `/var/run/tank-operator-hot` for
 backend artifacts and `/var/run/tank-operator-static-override` for frontend
 assets. Production keeps the normal `/app/tank-operator-go` command and image
 rollout path.

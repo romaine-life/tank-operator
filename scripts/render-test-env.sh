@@ -7,5 +7,6 @@ name="tank-slot-${slot}"
 helm template "$name" "$(dirname "$0")/../k8s" \
   --namespace "$name" \
   --post-renderer "$(dirname "$0")/test-env-post-render.sh" \
-  --set "testEnv.enabled=true" \
+  --set "renderMode=hot" \
+  --set "testEnv.slotName=$name" \
   --set "goShadow.enabled=true"

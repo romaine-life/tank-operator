@@ -1,3 +1,4 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 {{- /*
 Observability surface for tank-operator: ServiceMonitor / PodMonitor /
 PrometheusRule resources discovered by the kube-prometheus-stack
@@ -584,4 +585,5 @@ spec:
               request packing, not actual usage), registry throttling, network
               egress congestion from the AKS node to ACR, or an oversized image
               bump.
+{{- end }}
 {{- end }}

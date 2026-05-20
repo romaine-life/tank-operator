@@ -1,3 +1,4 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 {{- /*
 Grafana dashboard ConfigMap. The kube-prometheus-stack Grafana sidecar
 discovers dashboards by label selector across all namespaces, so this
@@ -310,4 +311,5 @@ data:
         }
       ]
     }
+{{- end }}
 {{- end }}
