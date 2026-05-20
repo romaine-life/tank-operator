@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const conversationReducerSource = readFileSync(
+  new URL("./conversationReducer.ts", import.meta.url),
+  "utf8",
+);
 const chatScrollTelemetrySource = readFileSync(
   new URL("./chatScrollTelemetry.ts", import.meta.url),
   "utf8",
@@ -133,6 +137,17 @@ test("chat live stream waits for timeline bootstrap", () => {
   );
 });
 
+test("startup transcript rows come from durable conversation events", () => {
+  assert.equal(appSource.includes("startupTranscript"), false);
+  assert.equal(appSource.includes("sessionStartupDrafts"), false);
+  assert.equal(appSource.includes("startupDraft"), false);
+  assert.equal(conversationReducerSource.includes('"session.status"'), true);
+  assert.match(
+    appSource,
+    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\)\) return;\n    if \(timelineBootstrap\.status !== "idle"\) return;/,
+  );
+});
+
 test("sidebar order is not browser-local", () => {
   assert.equal(appSource.includes("tank.sessionOrder"), false);
   assert.equal(appSource.includes("readSessionOrder"), false);
@@ -192,8 +207,16 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
   assert.equal(appSource.includes("reduceTimelineBootstrap"), true);
+  assert.equal(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget"), true);
+  assert.equal(appSource.includes('requestScrollToLatest("auto", source)'), true);
   assert.match(appSource, /useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
   assert.match(appSource, /if \(timelineBootstrap\.status !== "idle"\) return;/);
+});
+
+test("chat submit explicitly lands at the latest message", () => {
+  const startRunMatch = appSource.match(/function startRun\([\s\S]*?\n  \}/);
+  assert.ok(startRunMatch, "startRun should be present");
+  assert.equal(startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'), true);
 });
 
 test("chat back-pagination keeps an explicit access path", () => {

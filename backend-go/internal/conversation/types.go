@@ -50,6 +50,7 @@ const (
 	EventTurnCommandFailed      EventType = "turn.command_failed"
 	EventTurnInterruptRequested EventType = "turn.interrupt_requested"
 	EventTurnInterrupted        EventType = "turn.interrupted"
+	EventSessionStatus          EventType = "session.status"
 	EventItemStarted            EventType = "item.started"
 	EventItemCompleted          EventType = "item.completed"
 	EventItemFailed             EventType = "item.failed"
@@ -188,6 +189,14 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
 			return fmt.Errorf("turn.interrupt_requested must be actor=system source=tank")
 		}
+	case EventSessionStatus:
+		if err := requireFields(event, "timeline_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("session.status must be actor=system source=tank")
+		}
+		return validateSessionStatusPayload(event)
 	case EventItemStarted, EventItemCompleted, EventItemFailed:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
@@ -284,6 +293,23 @@ func requirePayload(event map[string]any) (map[string]any, error) {
 	return payload, nil
 }
 
+func validateSessionStatusPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	status := stringField(payload, "status")
+	switch status {
+	case "loading", "ready", "failed":
+	default:
+		return fmt.Errorf("payload.status must be loading, ready, or failed for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "text") == "" {
+		return fmt.Errorf("payload.text is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func validateItemOutcome(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -376,6 +402,7 @@ func validEventType(eventType EventType) bool {
 		EventTurnCommandFailed,
 		EventTurnInterruptRequested,
 		EventTurnInterrupted,
+		EventSessionStatus,
 		EventItemStarted,
 		EventItemCompleted,
 		EventItemFailed,

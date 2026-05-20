@@ -29,6 +29,7 @@ export const TANK_EVENT_TYPES = [
   "turn.command_failed",
   "turn.interrupt_requested",
   "turn.interrupted",
+  "session.status",
   "item.started",
   "item.completed",
   "item.failed",
@@ -105,6 +106,11 @@ function isValidEventByType(event) {
       return event.actor === "system" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id"]);
+    case "session.status":
+      return event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id"]) &&
+        isSessionStatusPayload(event.payload);
     case "item.started":
     case "item.completed":
     case "item.failed":
@@ -154,6 +160,15 @@ function isStringPayload(payload, key) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const value = payload[key];
   return typeof value === "string" && value.length > 0;
+}
+
+function isSessionStatusPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return (
+    (payload.status === "loading" || payload.status === "ready" || payload.status === "failed") &&
+    typeof payload.text === "string" &&
+    payload.text.length > 0
+  );
 }
 
 function isItemOutcome(outcome) {

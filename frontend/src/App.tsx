@@ -218,21 +218,17 @@ type SdkHistoryRefreshSource =
   | "visible-reactivation"
   | "resync"
   | "terminal-refresh";
+type ScrollToLatestBehavior = "auto" | "smooth";
+type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual";
+type ScrollToLatestRequest = {
+  signal: number;
+  behavior: ScrollToLatestBehavior;
+  reason: ScrollToLatestReason;
+  enabled: boolean;
+};
 type SkillStateName = "test" | "rollout";
 type InitialMessageMode = "direct" | "diagnose" | "quality_gaps" | "test";
 type HomeTab = "chat" | "settings" | "help";
-
-type SessionStartupDraft = {
-  loadingAt: string;
-  readyAt?: string;
-  failedAt?: string;
-  initialUser?: {
-    clientNonce: string;
-    text: string;
-    skillName?: SkillStateName;
-    createdAt: string;
-  };
-};
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -1982,93 +1978,6 @@ function appendSkillInvocation(
   );
 }
 
-const SESSION_STARTUP_LOADING_TEXT = "Session is loading.";
-const SESSION_STARTUP_READY_TEXT = "Session is ready.";
-const SESSION_STARTUP_FAILED_TEXT = "Session failed to load.";
-
-function startupSystemEntry(
-  sessionId: string,
-  state: "loading" | "ready" | "failed",
-  text: string,
-  time: string,
-): TranscriptEntry {
-  return {
-    id: `startup-${state}-${sessionId}`,
-    kind: "message",
-    role: "system",
-    text,
-    time,
-    localOnly: true,
-    transcriptSource: "realtime",
-  } as TranscriptEntry;
-}
-
-function startupTranscriptEntries(
-  session: Session,
-  draft?: SessionStartupDraft,
-): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  if (draft?.initialUser) {
-    const user = draft.initialUser;
-    const userEntries = user.skillName
-      ? appendSkillInvocation([], user.skillName, user.text, user.createdAt)
-      : ([
-          {
-            id: `startup-user-${session.id}`,
-            kind: "message",
-            role: "user",
-            text: user.text,
-            time: user.createdAt,
-          } as TranscriptEntry,
-        ]);
-    entries.push(
-      ...userEntries.map((entry, index) => ({
-        ...entry,
-        id: `${entry.id}-${session.id}-${index}`,
-        clientNonce: user.clientNonce,
-        localOnly: true,
-        transcriptSource: "realtime" as const,
-      })),
-    );
-  }
-
-  const loadingAt =
-    draft?.loadingAt ??
-    session.requested_at ??
-    session.created_at ??
-    nowIso();
-  if (draft || session.status !== "Active") {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "loading",
-        SESSION_STARTUP_LOADING_TEXT,
-        loadingAt,
-      ),
-    );
-  }
-  if (draft?.readyAt || (draft && session.status === "Active")) {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "ready",
-        SESSION_STARTUP_READY_TEXT,
-        draft.readyAt ?? session.ready_at ?? nowIso(),
-      ),
-    );
-  } else if (draft?.failedAt || session.status === "Failed") {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "failed",
-        SESSION_STARTUP_FAILED_TEXT,
-        draft?.failedAt ?? nowIso(),
-      ),
-    );
-  }
-  return entries;
-}
-
 function eventTimelineCursor(event: JsonObject): string | null {
   return typeof event.order_key === "string" && event.order_key ? event.order_key : null;
 }
@@ -2970,52 +2879,6 @@ function mergeSdkTranscript(
   if (server.length === 0) return dedupeAdjacentAssistantEchoes(extra);
   if (extra.length === 0) return server;
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
-}
-
-function mergeStartupTranscript(
-  startup: TranscriptEntry[],
-  entries: TranscriptEntry[],
-): TranscriptEntry[] {
-  if (startup.length === 0) return entries;
-  if (entries.length === 0) return startup;
-  const usedServerIds = new Set<string>();
-  const mergedStartup = startup.map((startupEntry) => {
-    if (!startupEntry.clientNonce) return startupEntry;
-    const replacement = entries.find((entry) => {
-      if (usedServerIds.has(entry.id)) return false;
-      if (entry.clientNonce !== startupEntry.clientNonce) return false;
-      if (entry.kind !== startupEntry.kind) return false;
-      if (entry.kind === "message" && startupEntry.kind === "message") {
-        return entry.role === startupEntry.role;
-      }
-      const startupMeta = entryMetaFingerprint(startupEntry);
-      const entryMeta = entryMetaFingerprint(entry);
-      return startupMeta !== null && startupMeta === entryMeta;
-    });
-    if (!replacement) return startupEntry;
-    usedServerIds.add(replacement.id);
-    return replacement;
-  });
-  const startupMessageFingerprints = new Set(
-    mergedStartup
-      .map(entryMessageFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  const startupMetaFingerprints = new Set(
-    mergedStartup
-      .map(entryMetaFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  const remaining = entries.filter((entry) => {
-    if (usedServerIds.has(entry.id)) return false;
-    const messageFingerprint = entryMessageFingerprint(entry);
-    if (messageFingerprint && startupMessageFingerprints.has(messageFingerprint)) {
-      return false;
-    }
-    const metaFingerprint = entryMetaFingerprint(entry);
-    return !metaFingerprint || !startupMetaFingerprints.has(metaFingerprint);
-  });
-  return [...mergedStartup, ...remaining];
 }
 
 function countTranscriptMessages(entries: TranscriptEntry[]): number {
@@ -4655,6 +4518,9 @@ function RunMessages({
   onStartReached,
   onAtBottomChange,
   scrollToLatestSignal,
+  scrollToLatestBehavior = "smooth",
+  scrollToLatestReason = "manual",
+  onScrollToLatestConsumed,
   scrollToOldestSignal,
 }: {
   entries: TranscriptEntry[];
@@ -4679,6 +4545,9 @@ function RunMessages({
   onStartReached?: () => void;
   onAtBottomChange?: (atBottom: boolean) => void;
   scrollToLatestSignal?: number;
+  scrollToLatestBehavior?: ScrollToLatestBehavior;
+  scrollToLatestReason?: ScrollToLatestReason;
+  onScrollToLatestConsumed?: () => void;
   scrollToOldestSignal?: number;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
@@ -4695,6 +4564,7 @@ function RunMessages({
   // Track which message id we've already handled so we don't re-scroll
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
+  const consumedScrollToLatestSignalRef = useRef(0);
   useEffect(() => {
     const target = pendingScrollMessageId;
     if (!target) return;
@@ -4744,18 +4614,31 @@ function RunMessages({
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
     });
   }, [entries.length, groups, sessionId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
+    if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
+    consumedScrollToLatestSignalRef.current = scrollToLatestSignal;
     logChatScrollGroups("scroll-to-latest", groups, entries.length, {
       sessionId,
       signal: scrollToLatestSignal,
+      behavior: scrollToLatestBehavior,
+      reason: scrollToLatestReason,
     });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
       align: "end",
-      behavior: "smooth",
+      behavior: scrollToLatestBehavior,
     });
-  }, [entries.length, groups, scrollToLatestSignal, sessionId]);
+    onScrollToLatestConsumed?.();
+  }, [
+    entries.length,
+    groups,
+    onScrollToLatestConsumed,
+    scrollToLatestBehavior,
+    scrollToLatestReason,
+    scrollToLatestSignal,
+    sessionId,
+  ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
@@ -5085,7 +4968,6 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
-  startupDraft,
   pendingScrollMessageId,
   onScrollConsumed,
   runPrefs,
@@ -5103,7 +4985,6 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
-  startupDraft?: SessionStartupDraft;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
   // receive null and skip the scroll logic.
@@ -5136,17 +5017,6 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
-  const [observedStartupDraft, setObservedStartupDraft] = useState<SessionStartupDraft | undefined>(
-    () =>
-      session.status !== "Active"
-        ? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        : undefined,
-  );
 
   // Parent-driven auto-rename. When App sets autoRenameSessionId to this
   // session's id after F2, the chat-pane title input opens with the
@@ -5158,55 +5028,6 @@ function ChatPane({
     setEditingTitle(true);
     onAutoRenameConsumed();
   }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
-  useEffect(() => {
-    setObservedStartupDraft(
-      session.status !== "Active"
-        ? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        : undefined,
-    );
-  }, [session.id]);
-  useEffect(() => {
-    if (startupDraft) return;
-    setObservedStartupDraft((prev) => {
-      if (session.status === "Failed") {
-        return {
-          ...(prev ?? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }),
-          failedAt: prev?.failedAt ?? nowIso(),
-        };
-      }
-      if (session.status !== "Active") {
-        return (
-          prev ?? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        );
-      }
-      if (!prev || prev.readyAt) return prev;
-      return {
-        ...prev,
-        readyAt: session.ready_at ?? nowIso(),
-      };
-    });
-  }, [
-    startupDraft,
-    session.status,
-    session.ready_at,
-    session.requested_at,
-    session.created_at,
-  ]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
@@ -5341,6 +5162,7 @@ function ChatPane({
   const wasVisibleRef = useRef(visible);
   const timelineBootstrapSourceRef = useRef<SdkHistoryRefreshSource>("history");
   const timelineBootstrapClearRealtimeRef = useRef(false);
+  const timelineBootstrapScrollToLatestRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -5358,7 +5180,13 @@ function ChatPane({
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
   const [sdkOlderError, setSdkOlderError] = useState<string | null>(null);
-  const [scrollToLatestSignal, setScrollToLatestSignal] = useState(0);
+  const [scrollToLatestRequest, setScrollToLatestRequest] =
+    useState<ScrollToLatestRequest>({
+      signal: 0,
+      behavior: "smooth",
+      reason: "manual",
+      enabled: false,
+    });
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
   // Streaming-while-back-reading bookkeeping. While the user is reading
   // older context (atBottom=false), incoming SSE events get appended to
@@ -5518,17 +5346,36 @@ function ChatPane({
     }
     syncSdkRenderedEntries();
   }
+  function requestScrollToLatest(
+    behavior: ScrollToLatestBehavior = "smooth",
+    reason: ScrollToLatestReason = "manual",
+  ): void {
+    setScrollToLatestRequest((prev) => ({
+      signal: prev.signal + 1,
+      behavior,
+      reason,
+      enabled: true,
+    }));
+  }
+  function clearScrollToLatestRequest(): void {
+    setScrollToLatestRequest((prev) =>
+      prev.enabled ? { ...prev, enabled: false } : prev,
+    );
+  }
   function resetSdkTimelineBootstrapState(
     reason: string,
     options: {
       source?: SdkHistoryRefreshSource;
       clearRealtime?: boolean;
+      scrollToLatestOnReady?: boolean;
     } = {},
   ): void {
     sdkWindowEpochRef.current += 1;
     const epoch = sdkWindowEpochRef.current;
     timelineBootstrapSourceRef.current = options.source ?? "history";
     timelineBootstrapClearRealtimeRef.current = options.clearRealtime ?? false;
+    timelineBootstrapScrollToLatestRef.current =
+      options.scrollToLatestOnReady === true;
     historyRefreshRef.current = null;
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
@@ -5545,7 +5392,7 @@ function ChatPane({
     setSdkFoundOldest(false);
     setSdkFoundNewest(false);
     setSdkLoadingOlder(false);
-    setScrollToLatestSignal(0);
+    clearScrollToLatestRequest();
     setScrollToOldestSignal(0);
     setUserScrolledUp(false);
     setSdkPendingTailCount(0);
@@ -5563,6 +5410,7 @@ function ChatPane({
       epoch,
       source: timelineBootstrapSourceRef.current,
       clearRealtime: timelineBootstrapClearRealtimeRef.current,
+      scrollToLatestOnReady: timelineBootstrapScrollToLatestRef.current,
     });
   }
   function canClearSdkRealtime(
@@ -5764,6 +5612,7 @@ function ChatPane({
       {
         source: "visible-reactivation",
         clearRealtime: true,
+        scrollToLatestOnReady: !hasExplicitTarget,
       },
     );
   }, [pendingScrollMessageId, session.id, session.status, visible]);
@@ -5826,6 +5675,7 @@ function ChatPane({
       initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
+  const previousSessionStatusRef = useRef(session.status);
   // Toggled briefly when entries are restored from backend history so we can
   // show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
@@ -5879,12 +5729,18 @@ function ChatPane({
         params.set("anchor", "newest");
         params.set("limit", "200");
       }
+      const scrollToLatestOnReady =
+        timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
+        timelineBootstrapScrollToLatestRef.current = false;
+      }
       logChatScrollEvent("timeline-request", {
         sessionId: refreshSessionId,
         source,
         anchor,
         clearRealtime,
         epoch: refreshEpoch,
+        scrollToLatestOnReady,
       });
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
@@ -5984,11 +5840,18 @@ function ChatPane({
           durationMs: Math.round(performance.now() - startedAt),
         });
       }
-      if (canonicalEvents.length === 0) return { replayed: false, terminal };
+      if (canonicalEvents.length === 0) {
+        if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
+        return { replayed: false, terminal };
+      }
       replaceSdkServerEvents(
         canonicalEvents,
         clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
       );
+      if (scrollToLatestOnReady) {
+        timelineBootstrapScrollToLatestRef.current = false;
+        requestScrollToLatest("auto", source);
+      }
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -6201,7 +6064,7 @@ function ChatPane({
   }
 
   useEffect(() => {
-    if (!visible || session.status !== "Active") return;
+    if (!visible || !CHAT_MODES.has(session.mode)) return;
     if (timelineBootstrap.status !== "idle") return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
@@ -6261,7 +6124,22 @@ function ChatPane({
   // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
   // should not resubscribe an in-flight bootstrap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
+  }, [session.id, session.mode, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
+
+  useEffect(() => {
+    const previous = previousSessionStatusRef.current;
+    previousSessionStatusRef.current = session.status;
+    if (previous === session.status) return;
+    if (!visible || !historyBootstrapped) return;
+    if (session.status !== "Active" && session.status !== "Failed") return;
+    resetSdkTimelineBootstrapState("session-status-transition", {
+      source: "history",
+      clearRealtime: false,
+    });
+  // resetSdkTimelineBootstrapState closes over current refs and must run with
+  // the latest session id/status when this effect fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyBootstrapped, session.status, visible]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -6541,6 +6419,7 @@ function ChatPane({
     resetSdkTimelineBootstrapState("session-change", {
       source: "history",
       clearRealtime: false,
+      scrollToLatestOnReady: !Boolean(pendingScrollMessageId?.trim()),
     });
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
@@ -7107,6 +6986,7 @@ function ChatPane({
         } as TranscriptEntry;
       appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
+    if (visible) requestScrollToLatest("auto", "submit");
     setRunStatus("running");
     setRunning(true);
     setActiveTool(null);
@@ -7254,29 +7134,7 @@ function ChatPane({
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
   const ready = session.status === "Active";
-  // Startup drafts are optimistic scaffolding for the create/boot window. Once
-  // the durable timeline has bootstrapped for an active session, the ledger is
-  // the UI's source of truth; keeping the local draft would leave stale
-  // "loading/ready" bubbles in front of completed turns.
-  const startupDraftSettled = ready && historyBootstrapped;
-  const effectiveStartupDraft = startupDraftSettled
-    ? undefined
-    : startupDraft ?? observedStartupDraft;
-  const startupEntries = useMemo(
-    () => startupTranscriptEntries(session, effectiveStartupDraft),
-    [
-      session.id,
-      session.status,
-      session.requested_at,
-      session.created_at,
-      session.ready_at,
-      effectiveStartupDraft,
-    ],
-  );
-  const renderedEntries = useMemo(
-    () => mergeStartupTranscript(startupEntries, entries),
-    [startupEntries, entries],
-  );
+  const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
@@ -7428,6 +7286,8 @@ function ChatPane({
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
+    timelineBootstrapScrollToLatestRef.current = !Boolean(pendingScrollMessageId?.trim());
+    clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
       sessionId: session.id,
@@ -7956,7 +7816,12 @@ function ChatPane({
                 void loadSdkOlderEvents();
               }}
               onAtBottomChange={handleSdkAtBottomChange}
-              scrollToLatestSignal={scrollToLatestSignal}
+              scrollToLatestSignal={
+                scrollToLatestRequest.enabled ? scrollToLatestRequest.signal : 0
+              }
+              scrollToLatestBehavior={scrollToLatestRequest.behavior}
+              scrollToLatestReason={scrollToLatestRequest.reason}
+              onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
             />
           </>
@@ -8048,7 +7913,7 @@ function ChatPane({
             const reachNewest = async () => {
               await jumpSdkToLatest();
               setSdkPendingTailCount(0);
-              setScrollToLatestSignal((value) => value + 1);
+              requestScrollToLatest("smooth", "manual");
             };
             void reachNewest();
           }}
@@ -8778,7 +8643,6 @@ export function App() {
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
     null,
   );
-  const [sessionStartupDrafts, setSessionStartupDrafts] = useState<Record<string, SessionStartupDraft>>({});
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
@@ -9312,37 +9176,6 @@ export function App() {
   }, [sessions, active, closingIds]);
 
   useEffect(() => {
-    setSessionStartupDrafts((prev) => {
-      const byId = new Map(sessions.map((s) => [s.id, s]));
-      let changed = false;
-      const next: Record<string, SessionStartupDraft> = {};
-      for (const [id, draft] of Object.entries(prev)) {
-        const session = byId.get(id);
-        if (!session || closingIds.has(id)) {
-          changed = true;
-          continue;
-        }
-        if (!draft.readyAt && (session.status === "Active" || session.ready_at)) {
-          next[id] = {
-            ...draft,
-            readyAt: session.ready_at ?? nowIso(),
-          };
-          changed = true;
-        } else if (!draft.failedAt && session.status === "Failed") {
-          next[id] = {
-            ...draft,
-            failedAt: nowIso(),
-          };
-          changed = true;
-        } else {
-          next[id] = draft;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [sessions, closingIds]);
-
-  useEffect(() => {
     const target = initialSessionId.current;
     if (!target) return;
     if (!sessions.some((s) => s.id === target)) return;
@@ -9562,7 +9395,6 @@ export function App() {
       (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
-    const startupAt = nowIso();
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -9588,22 +9420,6 @@ export function App() {
       }
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
-        setSessionStartupDrafts((prev) => ({
-          ...prev,
-          [created.id]: {
-            loadingAt: startupAt,
-            ...(seedClientNonce && (seedPrompt || requestedInitialSkillName)
-              ? {
-                  initialUser: {
-                    clientNonce: seedClientNonce,
-                    text: seedPrompt,
-                    ...(requestedInitialSkillName ? { skillName: requestedInitialSkillName } : {}),
-                    createdAt: startupAt,
-                  },
-                }
-              : {}),
-          },
-        }));
       }
       // Insert the freshly-created session into the local list and open the
       // chat pane immediately, without waiting on /api/sessions to re-list or
@@ -10683,7 +10499,6 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
-                      startupDraft={sessionStartupDrafts[s.id]}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
                           ? pendingScrollMessageId

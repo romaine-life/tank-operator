@@ -185,6 +185,205 @@ var schemaMigrations = []string{
 		WHERE payload ? 'timeline_id'`,
 	`CREATE INDEX IF NOT EXISTS session_events_created_at
 		ON session_events (created_at)`,
+	`CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
+		p_email text,
+		p_scope text,
+		p_session_id text,
+		p_status_key text,
+		p_text text,
+		p_session_status text,
+		p_occurred_at timestamptz,
+		p_reason text DEFAULT NULL
+	) RETURNS void
+	LANGUAGE plpgsql
+	AS $$
+	DECLARE
+		v_storage_key text;
+		v_event_id text;
+		v_event_time timestamptz;
+		v_event_iso text;
+		v_order_key text;
+		v_status_sequence text;
+		v_doc jsonb;
+	BEGIN
+		IF trim(coalesce(p_session_id, '')) = ''
+			OR trim(coalesce(p_status_key, '')) = ''
+			OR trim(coalesce(p_text, '')) = '' THEN
+			RETURN;
+		END IF;
+
+		v_event_time := coalesce(p_occurred_at, now());
+		v_storage_key := CASE
+			WHEN trim(coalesce(p_scope, '')) = '' OR trim(p_scope) = 'default' THEN trim(p_session_id)
+			ELSE trim(p_scope) || ':' || trim(p_session_id)
+		END;
+		v_event_id := 'session:' || trim(p_session_id) || ':status:' || trim(p_status_key);
+		v_event_iso := to_char(v_event_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+		v_status_sequence := CASE trim(p_status_key)
+			WHEN 'loading' THEN '00000000'
+			WHEN 'ready' THEN '00000001'
+			WHEN 'failed' THEN '00000002'
+			ELSE '00000099'
+		END;
+		v_order_key := lpad((floor(extract(epoch FROM v_event_time) * 1000)::bigint)::text, 13, '0')
+			|| '-' || v_status_sequence || '-' || v_event_id;
+
+		v_doc := jsonb_build_object(
+			'event_id', v_event_id,
+			'uuid', v_event_id,
+			'id', v_event_id,
+			'order_key', v_order_key,
+			'conversation_id', trim(p_session_id),
+			'session_id', trim(p_session_id),
+			'tank_session_id', v_storage_key,
+			'timeline_id', v_event_id,
+			'email', trim(coalesce(p_email, '')),
+			'actor', 'system',
+			'source', 'tank',
+			'type', 'session.status',
+			'created_at', v_event_iso,
+			'written_at', v_event_iso,
+			'producer', jsonb_build_object('name', 'tank-operator'),
+			'visibility', 'durable',
+			'payload', jsonb_strip_nulls(jsonb_build_object(
+				'status', trim(p_status_key),
+				'text', trim(p_text),
+				'session_status', nullif(trim(coalesce(p_session_status, '')), ''),
+				'reason', nullif(trim(coalesce(p_reason, '')), '')
+			))
+		);
+
+		IF trim(coalesce(p_email, '')) = '' THEN
+			v_doc := v_doc - 'email';
+		END IF;
+
+		DELETE FROM session_events AS se
+		WHERE se.tank_session_id = v_storage_key
+		  AND se.event_id = v_event_id
+		  AND se.order_key <> v_order_key;
+
+		INSERT INTO session_events (
+			tank_session_id, order_key, event_id, turn_id, event_type, payload
+		) VALUES (
+			v_storage_key, v_order_key, v_event_id, NULL, 'session.status', v_doc
+		)
+		ON CONFLICT (tank_session_id, order_key) DO UPDATE
+		SET event_id = EXCLUDED.event_id,
+			turn_id = EXCLUDED.turn_id,
+			event_type = EXCLUDED.event_type,
+			payload = EXCLUDED.payload;
+	END
+	$$`,
+	`CREATE OR REPLACE FUNCTION tank_sessions_status_events_after_write()
+	RETURNS trigger
+	LANGUAGE plpgsql
+	AS $$
+	BEGIN
+		IF TG_OP = 'INSERT' THEN
+			PERFORM tank_upsert_session_status_event(
+				NEW.email,
+				NEW.session_scope,
+				NEW.session_id,
+				'loading',
+				'Session is loading.',
+				NEW.status,
+				coalesce(NEW.requested_at, NEW.created_at),
+				NULL
+			);
+			IF NEW.status = 'Active' THEN
+				PERFORM tank_upsert_session_status_event(
+					NEW.email,
+					NEW.session_scope,
+					NEW.session_id,
+					'ready',
+					'Session is ready.',
+					NEW.status,
+					coalesce(NEW.ready_at, NEW.created_at, NEW.requested_at),
+					NULL
+				);
+			ELSIF NEW.status = 'Failed' THEN
+				PERFORM tank_upsert_session_status_event(
+					NEW.email,
+					NEW.session_scope,
+					NEW.session_id,
+					'failed',
+					'Session failed to start.',
+					NEW.status,
+					coalesce(NEW.terminating_at, NEW.updated_at, NEW.created_at, NEW.requested_at),
+					NULL
+				);
+			END IF;
+		ELSIF NEW.status IS DISTINCT FROM OLD.status
+			OR NEW.ready_at IS DISTINCT FROM OLD.ready_at
+			OR NEW.terminating_at IS DISTINCT FROM OLD.terminating_at THEN
+			IF NEW.status = 'Active' THEN
+				PERFORM tank_upsert_session_status_event(
+					NEW.email,
+					NEW.session_scope,
+					NEW.session_id,
+					'ready',
+					'Session is ready.',
+					NEW.status,
+					coalesce(NEW.ready_at, NEW.created_at, NEW.requested_at),
+					NULL
+				);
+			ELSIF NEW.status = 'Failed' THEN
+				PERFORM tank_upsert_session_status_event(
+					NEW.email,
+					NEW.session_scope,
+					NEW.session_id,
+					'failed',
+					'Session failed to start.',
+					NEW.status,
+					coalesce(NEW.terminating_at, NEW.updated_at, NEW.created_at, NEW.requested_at),
+					NULL
+				);
+			END IF;
+		END IF;
+		RETURN NEW;
+	END
+	$$`,
+	`DROP TRIGGER IF EXISTS tank_sessions_status_events_after_write ON sessions`,
+	`CREATE TRIGGER tank_sessions_status_events_after_write
+		AFTER INSERT OR UPDATE OF status, ready_at, terminating_at
+		ON sessions
+		FOR EACH ROW
+		EXECUTE FUNCTION tank_sessions_status_events_after_write()`,
+	`SELECT tank_upsert_session_status_event(
+		email,
+		session_scope,
+		session_id,
+		'loading',
+		'Session is loading.',
+		status,
+		coalesce(requested_at, created_at),
+		NULL
+	)
+	FROM sessions`,
+	`SELECT tank_upsert_session_status_event(
+		email,
+		session_scope,
+		session_id,
+		'ready',
+		'Session is ready.',
+		status,
+		coalesce(ready_at, created_at, requested_at),
+		NULL
+	)
+	FROM sessions
+	WHERE status = 'Active' OR ready_at IS NOT NULL`,
+	`SELECT tank_upsert_session_status_event(
+		email,
+		session_scope,
+		session_id,
+		'failed',
+		'Session failed to start.',
+		status,
+		coalesce(terminating_at, updated_at, created_at, requested_at),
+		NULL
+	)
+	FROM sessions
+	WHERE status = 'Failed'`,
 
 	// Normalize historical item outcomes after #561 split item-scoped
 	// failures from session failure. Tool results that completed with a bad

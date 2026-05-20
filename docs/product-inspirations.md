@@ -33,6 +33,11 @@ state is separate from work state.
 - User-visible run state comes from durable turn events, not local optimism.
   A control such as Stop is only complete when the durable terminal event
   arrives.
+- Session startup status shown in the chat transcript is stored as durable
+  `session.status` entries in `session_events`. The `sessions` row drives
+  sidebar/session state, but transcript rows are rendered only from the
+  conversation ledger; browser-local startup drafts are not a transcript
+  source.
 - Provider-specific event streams are adapter inputs. The frontend renders the
   Tank conversation protocol, not raw provider wire formats.
 - Transcript deep links resolve through the durable conversation ledger. A

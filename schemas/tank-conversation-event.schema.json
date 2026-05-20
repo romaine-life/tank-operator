@@ -111,6 +111,7 @@
         "turn.command_failed",
         "turn.interrupt_requested",
         "turn.interrupted",
+        "session.status",
         "item.started",
         "item.completed",
         "item.failed",
@@ -227,6 +228,20 @@
       "required": ["status"],
       "properties": {
         "status": { "$ref": "#/$defs/nonEmptyString" }
+      }
+    },
+    "sessionStatusPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["status", "text"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["loading", "ready", "failed"]
+        },
+        "text": { "$ref": "#/$defs/nonEmptyString" },
+        "reason": { "type": "string" },
+        "session_status": { "type": "string" }
       }
     },
     "itemPayload": {
@@ -362,6 +377,20 @@
         "properties": {
           "actor": { "const": "system" },
           "source": { "const": "tank" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "type": { "const": "session.status" } },
+        "required": ["type"]
+      },
+      "then": {
+        "required": ["timeline_id", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": { "$ref": "#/$defs/sessionStatusPayload" }
         }
       }
     },
