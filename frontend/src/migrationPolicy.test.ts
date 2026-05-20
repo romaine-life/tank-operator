@@ -127,9 +127,19 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);
-  assert.match(appSource, /\.\.\.\(initialSkillName \? \{ skill_name: initialSkillName \} : \{\}\)/);
+  assert.match(appSource, /\.\.\.\(requestedInitialSkillName \? \{ skill_name: requestedInitialSkillName \} : \{\}\)/);
   assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
   assert.equal(appSource.includes("Available once your session starts"), false);
+});
+
+test("home splash initial-message modes rewrite the first turn deliberately", () => {
+  assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
+  assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
+  assert.equal(appSource.includes("Initial message type: diagnose issue without writing code."), true);
+  assert.equal(appSource.includes("docs/quality-timeframes.md"), true);
+  assert.equal(appSource.includes("docs/migration-policy.md"), true);
+  assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
+  assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
 });
 
 test("fresh chat sessions focus the composer instead of the rename field", () => {
