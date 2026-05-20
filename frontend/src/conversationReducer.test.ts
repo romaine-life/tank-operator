@@ -146,6 +146,52 @@ test("Tool lifecycle replays to a completed tool item", () => {
   assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
 });
 
+test("Background shell task lifecycle replays independent of active tool state", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.started", { source: "claude" }),
+    ev("2", "shell_task.started", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "turn-1:shell_task:task-abc",
+      task_id: "task-abc",
+      provider_item_id: "toolu-monitor",
+      created_at: "2026-05-12T00:00:10.000Z",
+      payload: {
+        kind: "shell_task",
+        task_id: "task-abc",
+        status: "running",
+        tool_use_id: "toolu-monitor",
+        summary: "Watching logs",
+      },
+    }),
+    ev("3", "turn.completed", { source: "claude" }),
+    ev("4", "shell_task.exited", {
+      actor: "tool",
+      source: "claude",
+      timeline_id: "turn-1:shell_task:task-abc",
+      task_id: "task-abc",
+      provider_item_id: "toolu-monitor",
+      created_at: "2026-05-12T00:00:20.000Z",
+      payload: {
+        kind: "shell_task",
+        task_id: "task-abc",
+        status: "completed",
+        summary: "Log watch finished",
+      },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "ready");
+  assert.equal(state.items.length, 0);
+  assert.equal(state.backgroundTasks.length, 1);
+  assert.equal(state.backgroundTasks[0]?.status, "completed");
+  assert.equal(state.backgroundTasks[0]?.taskId, "task-abc");
+  assert.equal(state.backgroundTasks[0]?.toolUseId, "toolu-monitor");
+  assert.equal(state.backgroundTasks[0]?.summary, "Log watch finished");
+  assert.equal(state.backgroundTasks[0]?.startedAt, "2026-05-12T00:00:10.000Z");
+  assert.equal(state.backgroundTasks[0]?.completedAt, "2026-05-12T00:00:20.000Z");
+});
+
 test("Codex userMessage provider echo items are ignored on frontend replay", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

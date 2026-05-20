@@ -6,6 +6,7 @@ import type {
 export function turnIDForClientNonce(clientNonce: string): string;
 export function userTimelineID(turnID: string): string;
 export function itemTimelineID(turnID: string, providerItemID: string): string;
+export function shellTaskTimelineID(turnID: string, taskID: string): string;
 
 export interface UserSubmissionArgs {
   sessionID: string;
@@ -57,6 +58,21 @@ export interface ItemEventArgs {
 }
 
 export function itemEvent(args: ItemEventArgs): TankConversationEvent;
+
+export interface ShellTaskEventArgs {
+  sessionID: string;
+  turnID: string;
+  source: "claude" | "codex";
+  type: "shell_task.started" | "shell_task.updated" | "shell_task.exited";
+  taskID: string;
+  status: string;
+  providerItemID?: string;
+  parentID?: string;
+  providerEventID?: string;
+  payload?: Record<string, unknown>;
+}
+
+export function shellTaskEvent(args: ShellTaskEventArgs): TankConversationEvent;
 
 export function stampTankEvent(event: TankConversationEvent): TankConversationEvent & {
   uuid: string;

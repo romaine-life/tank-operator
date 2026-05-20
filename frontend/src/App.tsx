@@ -76,6 +76,7 @@ import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
   reduceConversationEvents,
+  type ConversationBackgroundTaskStatus,
   type ConversationReducerState,
 } from "./conversationReducer";
 import {
@@ -159,7 +160,8 @@ type AskUserQuestionAnswer = {
   notes?: string;
   preview?: string;
 };
-type TranscriptEntry = Omit<SandboxTranscriptEntry, "role"> & {
+type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
+  kind: SandboxTranscriptEntry["kind"] | "background_task";
   role?: "user" | "assistant" | "system";
   toolKind?: ToolKind;
   toolServer?: string;
@@ -172,6 +174,7 @@ type TranscriptEntry = Omit<SandboxTranscriptEntry, "role"> & {
   clientNonce?: string;
   providerItemId?: string;
   startedAt?: string;
+  updatedAt?: string;
   completedAt?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
@@ -184,6 +187,13 @@ type TranscriptEntry = Omit<SandboxTranscriptEntry, "role"> & {
   // ToolAskUserBody reads this for the answered state so the UI matches
   // the durable ledger and not local React optimism.
   askUserAnswers?: Record<string, AskUserQuestionAnswer>;
+  taskId?: string;
+  taskStatus?: ConversationBackgroundTaskStatus;
+  taskSummary?: string;
+  taskDescription?: string;
+  taskError?: unknown;
+  taskToolUseId?: string;
+  lastToolName?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
@@ -2739,6 +2749,20 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           reasoning: entry.reasoning,
         };
       }
+      if (entry.kind === "background_task") {
+        return {
+          kind: entry.kind,
+          id: entry.id,
+          taskId: entry.taskId,
+          taskStatus: entry.taskStatus,
+          taskSummary: entry.taskSummary,
+          taskDescription: entry.taskDescription,
+          taskError: entry.taskError,
+          startedAt: entry.startedAt,
+          updatedAt: entry.updatedAt,
+          completedAt: entry.completedAt,
+        };
+      }
       return {
         kind: entry.kind,
         meta: entry.meta,
@@ -2969,7 +2993,7 @@ function conversationEntriesToTranscript(
 // avatar / tool styling continues to apply.
 
 type EntryGroup =
-  | { kind: "message" | "reasoning" | "meta"; entry: TranscriptEntry }
+  | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] };
 
 function entryGroupKey(g: EntryGroup): string {
@@ -3001,6 +3025,7 @@ function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
     flush();
     if (e.kind === "message") groups.push({ kind: "message", entry: e });
     else if (e.kind === "reasoning") groups.push({ kind: "reasoning", entry: e });
+    else if (e.kind === "background_task") groups.push({ kind: "background_task", entry: e });
     else groups.push({ kind: "meta", entry: e });
   }
   flush();
@@ -3014,6 +3039,7 @@ function chatScrollGroupSnapshot(
   let messages = 0;
   let reasoning = 0;
   let meta = 0;
+  let backgroundTasks = 0;
   let toolGroups = 0;
   let toolEntries = 0;
   for (const group of groups) {
@@ -3024,6 +3050,8 @@ function chatScrollGroupSnapshot(
       messages += 1;
     } else if (group.kind === "reasoning") {
       reasoning += 1;
+    } else if (group.kind === "background_task") {
+      backgroundTasks += 1;
     } else {
       meta += 1;
     }
@@ -3034,6 +3062,7 @@ function chatScrollGroupSnapshot(
     messages,
     reasoning,
     meta,
+    backgroundTasks,
     toolGroups,
     toolEntries,
     firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
@@ -3720,6 +3749,149 @@ function RunMetaBlock({ entry }: { entry: TranscriptEntry }) {
         )}
       </div>
     </div>
+  );
+}
+
+function isBackgroundTaskRunning(entry: TranscriptEntry): boolean {
+  return entry.taskStatus === "running" || entry.taskStatus === "unknown";
+}
+
+function isBackgroundTaskEntry(entry: TranscriptEntry): boolean {
+  return entry.kind === "background_task";
+}
+
+function backgroundTaskStatusLabel(status: ConversationBackgroundTaskStatus | undefined): string {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "stopped";
+    case "running":
+      return "running";
+    default:
+      return "active";
+  }
+}
+
+function RunBackgroundTaskBlock({
+  entry,
+  showTimestamps,
+}: {
+  entry: TranscriptEntry;
+  showTimestamps: boolean;
+}) {
+  const running = isBackgroundTaskRunning(entry);
+  const label = backgroundTaskStatusLabel(entry.taskStatus);
+  const summary = entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task";
+  const detail = entry.taskDescription && entry.taskDescription !== summary ? entry.taskDescription : "";
+  const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
+  return (
+    <div
+      className="run-background-task"
+      data-state={entry.taskStatus ?? "unknown"}
+      data-running={running ? "true" : undefined}
+    >
+      <div className="run-background-task-icon" title="Background shell task">
+        {running ? (
+          <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+        ) : (
+          <SquareTerminalIcon size={14} aria-hidden="true" />
+        )}
+      </div>
+      <div className="run-background-task-body">
+        <div className="run-background-task-top">
+          <span className="run-background-task-title">{summary}</span>
+          <span className="run-background-task-status">{label}</span>
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={entry.startedAt ?? entry.time}
+              completedAt={entry.completedAt}
+              running={running}
+            />
+          )}
+        </div>
+        {(detail || entry.taskId || errorText) && (
+          <div className="run-background-task-detail">
+            {detail && <span>{detail}</span>}
+            {entry.taskId && <span>task {entry.taskId}</span>}
+            {errorText && <span className="run-background-task-error">{errorText}</span>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ShellTaskLedger({
+  entries,
+  open,
+  onOpenChange,
+}: {
+  entries: TranscriptEntry[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (entries.length === 0) return null;
+  const activeCount = entries.filter(isBackgroundTaskRunning).length;
+  return (
+    <span className="run-shell-tasks">
+      <button
+        type="button"
+        className="run-tab run-shell-tasks-trigger"
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+        title="Background shell tasks"
+      >
+        <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
+        <span>Shell tasks</span>
+        <span
+          className="run-shell-tasks-count"
+          data-active={activeCount > 0 ? "true" : undefined}
+          aria-label={`${activeCount} active background shell tasks`}
+        >
+          {activeCount > 0 ? activeCount : entries.length}
+        </span>
+      </button>
+      {open && (
+        <div className="run-shell-tasks-popover" role="dialog" aria-label="Background shell tasks">
+          <div className="run-shell-tasks-head">
+            <span>Background shell tasks</span>
+            <button
+              type="button"
+              className="run-shell-tasks-close"
+              onClick={() => onOpenChange(false)}
+              aria-label="Close background shell tasks"
+            >
+              <XIcon size={13} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="run-shell-tasks-list">
+            {entries.map((entry) => (
+              <div
+                key={entry.id}
+                className="run-shell-task-row"
+                data-state={entry.taskStatus ?? "unknown"}
+              >
+                <span className="run-shell-task-row-dot" aria-hidden="true" />
+                <span className="run-shell-task-row-main">
+                  <span className="run-shell-task-row-title">
+                    {entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task"}
+                  </span>
+                  <span className="run-shell-task-row-sub">
+                    {entry.taskId ? `task ${entry.taskId}` : "background shell"}
+                  </span>
+                </span>
+                <span className="run-shell-task-row-status">
+                  {backgroundTaskStatusLabel(entry.taskStatus)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -4554,6 +4726,9 @@ function RunMessages({
       if (g.kind === "meta") {
         return <RunMetaBlock entry={g.entry} />;
       }
+      if (g.kind === "background_task") {
+        return <RunBackgroundTaskBlock entry={g.entry} showTimestamps={showTimestamps} />;
+      }
       return (
         <RunMessageBubble
           entry={g.entry}
@@ -4957,6 +5132,7 @@ function ChatPane({
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [shellTasksOpen, setShellTasksOpen] = useState(false);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
@@ -7010,6 +7186,10 @@ function ChatPane({
     () => mergeStartupTranscript(startupEntries, entries),
     [startupEntries, entries],
   );
+  const backgroundTaskEntries = useMemo(
+    () => renderedEntries.filter(isBackgroundTaskEntry),
+    [renderedEntries],
+  );
   const supportsFileAttachments = FILE_ATTACHMENT_MODES.has(session.mode);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
@@ -7260,6 +7440,11 @@ function ChatPane({
               <span>Back</span>
             </button>
           )}
+          <ShellTaskLedger
+            entries={backgroundTaskEntries}
+            open={shellTasksOpen}
+            onOpenChange={setShellTasksOpen}
+          />
           <button
             type="button"
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}

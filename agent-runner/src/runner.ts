@@ -29,8 +29,11 @@ import { randomUUID } from "node:crypto";
 
 import {
   canonicalEventsForClaudeMessage,
+  claudeTaskIdentifiers,
+  isClaudeTaskLifecycleMessage,
   startsClaudeTurn,
   type ClaudeProviderEvent,
+  type ClaudeTurnContext,
 } from "./adapters/claude.js";
 import type { Config } from "./config.js";
 import { SessionEventSink, type StampedTankEvent } from "./sessionEvents.js";
@@ -122,16 +125,11 @@ export async function dispatch(
 
 // logUnhandledSdkMessage emits a structured JSON log line for SDK messages
 // whose `type` is not one the adapter converts into Tank conversation
-// events. canonicalEventsForClaudeMessage handles only "assistant", "user",
-// and "result"; "stream_event" is the partial-typing surface and is
-// intentionally noisy, so we skip it too. Everything else — task lifecycle
-// (system/task_started, system/task_progress, system/task_notification,
-// system/task_updated), hooks, status changes, plugin installs — currently
-// has no observable surface in tank's session_events or the UI. This log
-// is the cheapest path to learning what the SDK is reporting that we drop:
-// once a Monitor-stuck session reproduces, `kubectl logs -c agent-runner
-// | jq 'select(.msg=="sdk_message_unhandled")'` shows the SDK's verdict
-// (e.g. subtype=task_notification, status=failed) without a schema change.
+// events. canonicalEventsForClaudeMessage handles assistant/user/result
+// frames plus Claude's background task lifecycle. "stream_event" is the
+// partial-typing surface and is intentionally noisy, so we skip it too.
+// Everything else — hooks, status changes, plugin installs, future SDK
+// types — stays discoverable in kubectl logs instead of silently vanishing.
 // Fields included are the small set of identifying ones that show up
 // across SDK message variants; the full payload is still in the on-disk
 // JSONL transcript for deeper digs.
@@ -155,6 +153,7 @@ export function logUnhandledSdkMessage(message: SDKMessage): void {
     type === "assistant" ||
     type === "user" ||
     type === "result" ||
+    isClaudeTaskLifecycleMessage(m as ClaudeProviderEvent) ||
     type === "stream_event"
   ) {
     return;
@@ -420,6 +419,13 @@ export class Runner {
   private readonly pendingInterrupts: BufferedInterrupt[] = [];
   private readonly needsInputProviderItemIDs = new Set<string>();
   private readonly pendingInputReplies = new Map<string, PendingInputReply>();
+  // Claude background shell tasks report their lifecycle through system
+  // task_* frames. The start frame is turn-scoped, but progress and final
+  // notification can arrive after the foreground turn has already completed.
+  // Keep the owning turn by task_id and by originating tool_use_id so those
+  // late frames still land on the durable session transcript.
+  private readonly backgroundTaskTurns = new Map<string, ClaudeTurnContext>();
+  private readonly backgroundToolUseTurns = new Map<string, ClaudeTurnContext>();
   // resolvedInputReplies carries the answers/annotations that resolved
   // each AskUserQuestion call. The adapter reads + drains this map when
   // it builds the matching `tool.approval_resolved` event so the durable
@@ -606,23 +612,39 @@ export class Runner {
   }
 
   private async handleEvent(message: SDKMessage): Promise<void> {
-    // Claude SDK events are adapter inputs, not bus content. The adapter
-    // converts them into Tank conversation events; only those reach the
-    // durable session bus. Anything the adapter does not understand
-    // (task lifecycle, hooks, status, etc.) is logged via
-    // logUnhandledSdkMessage so the diagnostic surface exists in kubectl
-    // logs without growing the durable event schema.
-    logUnhandledSdkMessage(message);
     const providerEvent = message as ClaudeProviderEvent;
     const activeTurn = await this.ensureActiveTurn(providerEvent);
+    if (activeTurn?.terminalEmitted && !isClaudeTaskLifecycleMessage(providerEvent)) {
+      if (providerEvent.type === "result" && this.activeTurn === activeTurn) {
+        this.activeTurn = null;
+      }
+      return;
+    }
+    const adapterTurn = this.turnContextForProviderEvent(providerEvent, activeTurn);
+    if (isClaudeTaskLifecycleMessage(providerEvent) && !adapterTurn) {
+      const { taskID, toolUseID } = claudeTaskIdentifiers(providerEvent);
+      console.log(JSON.stringify({
+        msg: "sdk_task_lifecycle_unbound",
+        type: providerEvent.type,
+        subtype: providerEvent.subtype,
+        task_id: taskID,
+        tool_use_id: toolUseID,
+      }));
+    }
 
-    for (const event of canonicalEventsForClaudeMessage(
+    const canonicalEvents = canonicalEventsForClaudeMessage(
       this.cfg,
-      activeTurn,
+      adapterTurn,
       providerEvent,
       this.needsInputProviderItemIDs,
       this.resolvedInputReplies,
-    )) {
+    );
+    if (canonicalEvents.length === 0) {
+      logUnhandledSdkMessage(message);
+    }
+
+    for (const event of canonicalEvents) {
+      this.rememberClaudeTaskOwner(event, adapterTurn ?? activeTurn);
       const dispatched = await dispatch(this.sink, event);
       if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
         if (dispatched && activeTurn) {
@@ -644,6 +666,65 @@ export class Runner {
     if (wakeup) {
       this.scheduleWakeup(wakeup);
     }
+  }
+
+  private turnContextForProviderEvent(
+    event: ClaudeProviderEvent,
+    activeTurn: PendingTurn | null,
+  ): ClaudeTurnContext | null {
+    if (!isClaudeTaskLifecycleMessage(event)) {
+      return activeTurn;
+    }
+    const { taskID, toolUseID } = claudeTaskIdentifiers(event);
+    const owner =
+      (taskID ? this.backgroundTaskTurns.get(taskID) : undefined) ??
+      (toolUseID ? this.backgroundToolUseTurns.get(toolUseID) : undefined) ??
+      (activeTurn ? this.snapshotTurnContext(activeTurn) : null);
+    if (owner && taskID) this.backgroundTaskTurns.set(taskID, owner);
+    if (owner && toolUseID) this.backgroundToolUseTurns.set(toolUseID, owner);
+    return owner;
+  }
+
+  private rememberClaudeTaskOwner(
+    event: TankConversationEvent,
+    turn: ClaudeTurnContext | null,
+  ): void {
+    if (!turn) return;
+    if (event.type === "item.started" && event.actor === "tool" && event.provider_item_id) {
+      this.backgroundToolUseTurns.set(String(event.provider_item_id), this.snapshotTurnContext(turn));
+      return;
+    }
+    if (
+      event.type !== "shell_task.started" &&
+      event.type !== "shell_task.updated" &&
+      event.type !== "shell_task.exited"
+    ) {
+      return;
+    }
+    const owner = this.snapshotTurnContext(turn);
+    const taskID =
+      typeof event.task_id === "string" && event.task_id
+        ? event.task_id
+        : typeof event.payload?.task_id === "string"
+          ? event.payload.task_id
+          : "";
+    if (taskID) this.backgroundTaskTurns.set(taskID, owner);
+    const toolUseID =
+      typeof event.payload?.tool_use_id === "string"
+        ? event.payload.tool_use_id
+        : typeof event.provider_item_id === "string" && event.provider_item_id !== taskID
+          ? event.provider_item_id
+          : "";
+    if (toolUseID) this.backgroundToolUseTurns.set(toolUseID, owner);
+  }
+
+  private snapshotTurnContext(turn: ClaudeTurnContext): ClaudeTurnContext {
+    return {
+      turnID: turn.turnID,
+      clientNonce: turn.clientNonce,
+      interrupted: turn.interrupted,
+      terminalEmitted: turn.terminalEmitted,
+    };
   }
 
   private startCommandConsumer(signal: AbortSignal): () => void {
@@ -934,13 +1015,12 @@ export class Runner {
   // interrupt actually acts on the SDK and emits a durable terminal.
   // Order is deliberate and inverted from the pre-#532 shape:
   //
-  //   1. sdkQuery.interrupt() FIRST — this is the load-bearing action
-  //      that stops the CLI subprocess from producing more tool calls
-  //      and saves the user from continued token spend. We do not gate
-  //      it on the durable publish (the pre-#532 ordering did, which
-  //      meant any transient publish failure silently let the model
-  //      keep running).
-  //   2. dispatch turn.interrupted with bounded retry. On exhaustion,
+  //   1. Signal sdkQuery.interrupt() immediately. The promise is not
+  //      awaited: Stop's user-visible terminal boundary is owned by Tank,
+  //      not by the provider deciding when to acknowledge. Late foreground
+  //      SDK frames are ignored after `terminalEmitted`; background task
+  //      lifecycle frames still pass through shell_task.*.
+  //   2. Dispatch turn.interrupted with bounded retry. On exhaustion,
   //      fall back to turn.failed{publish_interrupt_failed} so the UI
   //      always resolves to a durable terminal.
   //
@@ -964,7 +1044,11 @@ export class Runner {
     turn.interrupted = true;
     if (reason === "client_interrupt") {
       try {
-        await this.sdkQuery?.interrupt();
+        const interruptPromise = this.sdkQuery?.interrupt();
+        void interruptPromise?.catch((err) => {
+          providerErrorTotal.labels("interrupt").inc();
+          console.error("sdkQuery.interrupt() failed after Stop terminal was emitted:", err);
+        });
       } catch (err) {
         // Count and continue. The durable terminal below is still the
         // right thing to publish — better to mark the turn ended than

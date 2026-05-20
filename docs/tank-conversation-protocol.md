@@ -197,6 +197,12 @@ Item lifecycle:
 - `item.completed`
 - `item.failed`
 
+Background shell task lifecycle:
+
+- `shell_task.started`
+- `shell_task.updated`
+- `shell_task.exited`
+
 Tool and approval lifecycle:
 
 - `tool.approval_requested`
@@ -271,6 +277,16 @@ matching shell and CI conventions for nonzero exit codes. It does not
 derive session/sidebar failure from item outcomes; only turn-terminal
 failures and pod failure affect session-level error state.
 
+`shell_task.*` events are session-level background shell processes spawned
+by a tool call. They are not normal tool items: they can continue after the
+foreground turn has completed, they render as their own transcript artifact,
+and they are listed in the session shell-task ledger. A background task is
+owned by the turn that spawned it (`turn_id`, `timeline_id`, `task_id`), but
+its lifecycle does not transition the conversation run state. This mirrors
+the product contract in Claude Code: background shell work is visible and
+session-owned, while Stop terminates the active foreground turn rather than
+pretending every descendant process is chat prose.
+
 Per-token typewriter deltas are intentionally not on the Tank event
 surface: the `item.delta` event type and the `live-only` visibility were
 retired together once it became clear no consumer subscribed to either.
@@ -289,10 +305,13 @@ Claude SDK adapter:
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |
 | `user` tool_result block | `item.completed` | Completes the matching tool item by `timeline_id`; `is_error=true` maps to `payload.outcome.kind="result_failed"`, not `item.failed`. |
+| `system/task_started` | `shell_task.started` | `actor=tool`; `task_id` identifies the background shell task. The runner records task ownership so later notifications still attach to the spawning turn. |
+| `system/task_progress`, `system/task_updated` | `shell_task.updated` | Progress/status snapshots for an already-owned background task. |
+| `system/task_notification` terminal status | `shell_task.exited` | Terminal background task result (`completed`, `failed`, `stopped`, etc.) without changing session run status. |
 | `result` success | `turn.completed` | Include usage when present. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |
-| `stream_event`, status, hook/task progress | ignored | Per-token deltas are not on the Tank surface; restoring requires re-adding `item.delta` + `live-only` together. |
+| `stream_event`, status, hooks, plugin changes | ignored | Per-token deltas are not on the Tank surface; restoring requires re-adding `item.delta` + `live-only` together. |
 
 Codex SDK adapter:
 
@@ -469,12 +488,13 @@ increments on `tank_runner_interrupt_outcome_total` within bounded
 time, and a corresponding durable terminal event:
 
 - `terminated_via_sdk` — interrupt arrived during an in-flight turn.
-  `sdkQuery.interrupt()` is awaited FIRST (the load-bearing action that
-  stops the CLI from generating more tool calls), then `turn.interrupted`
-  is published with bounded retry. Ordering is intentionally inverted
-  from the pre-#532 shape, which gated the SDK call on the publish and
-  so let a transient publish failure silently let the model keep
-  running.
+  `sdkQuery.interrupt()` is signaled immediately, then `turn.interrupted`
+  is published with bounded retry without waiting for the provider to
+  acknowledge the interrupt. Ordering is intentionally inverted from the
+  pre-#532 shape, which gated the SDK call on the publish and so let a
+  transient publish failure silently let the model keep running. Late
+  foreground SDK frames after Tank has emitted the terminal are ignored;
+  background task lifecycle frames remain visible via `shell_task.*`.
 - `terminated_pre_sdk` — interrupt arrived before the matching
   `submit_turn` had been dispatched on this runner. The control plane
   and data plane don't synchronize past JetStream-level delivery (by

@@ -1,4 +1,6 @@
 import type {
+  ConversationBackgroundTask,
+  ConversationBackgroundTaskStatus,
   ConversationItem,
   ConversationReducerState,
   ConversationRunStatus,
@@ -8,6 +10,7 @@ import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 export type ConversationViewEntry =
   | ConversationMessageEntry
   | ConversationToolEntry
+  | ConversationBackgroundTaskEntry
   | ConversationReasoningEntry
   | ConversationMetaEntry;
 
@@ -53,6 +56,20 @@ export interface ConversationToolEntry extends ConversationEntryBase {
   askUserAnswers?: Record<string, AskUserQuestionAnswer>;
 }
 
+export interface ConversationBackgroundTaskEntry extends ConversationEntryBase {
+  kind: "background_task";
+  taskId: string;
+  taskStatus: ConversationBackgroundTaskStatus;
+  taskSummary?: string;
+  taskDescription?: string;
+  taskError?: unknown;
+  taskToolUseId?: string;
+  lastToolName?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 export interface ConversationReasoningEntry extends ConversationEntryBase {
   kind: "reasoning";
   reasoning: { text: string };
@@ -79,6 +96,7 @@ interface ConversationEntryBase {
 
 export interface ConversationProjection {
   entries: ConversationViewEntry[];
+  backgroundTasks: ConversationBackgroundTaskEntry[];
   runStatus: ConversationRunStatus;
   activeTurnId: string | null;
   activeClientNonce: string | null;
@@ -132,15 +150,23 @@ export function projectConversationState(
           ]
         : [];
     }),
+    ...state.backgroundTasks.map((task, index) => {
+      const entry = projectBackgroundTask(task);
+      return {
+        index: state.messages.length + state.items.length + index,
+        orderKey: task.orderKey,
+        entry,
+      };
+    }),
     ...state.interruptRequests.map((request, index) => ({
-      index: state.messages.length + state.items.length + index,
+      index: state.messages.length + state.items.length + state.backgroundTasks.length + index,
       orderKey: request.orderKey,
       entry: {
         id: request.id,
         kind: "meta" as const,
         meta: {
           title: "Stop requested",
-          detail: "Waiting for the runner to wind down.",
+          detail: "Terminating the active turn.",
           severity: "info" as const,
         },
         turnId: request.turnId,
@@ -153,8 +179,16 @@ export function projectConversationState(
   ]);
 
   const activeItem = activeToolItem(state);
+  const backgroundTasks = orderProjectedEntries(
+    state.backgroundTasks.map((task, index) => ({
+      index,
+      orderKey: task.orderKey,
+      entry: projectBackgroundTask(task),
+    })),
+  ).filter((entry): entry is ConversationBackgroundTaskEntry => entry.kind === "background_task");
   return {
     entries,
+    backgroundTasks,
     runStatus: state.runStatus,
     activeTurnId: state.activeTurnId,
     activeClientNonce: activeClientNonceForTurn(state, state.activeTurnId),
@@ -251,6 +285,28 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
     time: item.createdAt ?? "",
     sourceEventId: item.sourceEventId,
     orderKey: item.orderKey,
+  };
+}
+
+function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBackgroundTaskEntry {
+  return {
+    id: task.id,
+    kind: "background_task",
+    taskId: task.taskId,
+    taskStatus: task.status,
+    taskSummary: task.summary,
+    taskDescription: task.description,
+    taskError: task.error,
+    taskToolUseId: task.toolUseId,
+    lastToolName: task.lastToolName,
+    turnId: task.turnId,
+    providerItemId: task.providerItemId,
+    time: task.startedAt ?? task.createdAt ?? task.updatedAt ?? "",
+    startedAt: task.startedAt ?? task.createdAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt,
+    sourceEventId: task.sourceEventId,
+    orderKey: task.orderKey,
   };
 }
 
