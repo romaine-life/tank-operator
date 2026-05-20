@@ -346,6 +346,13 @@ read has established a cursor. Browser-local scroll position is not a supported
 timeline anchor; reopening or switching sessions uses `anchor=newest` unless the
 URL carries an explicit `message`/`timeline_id` target.
 
+This also applies when the React chat pane stayed mounted while hidden. Mounted
+component state may preserve local controls, but it is not a transcript anchor:
+when the pane becomes visible again, the SPA resets its local timeline window
+and performs the same durable bootstrap (`anchor=newest`, or the explicit
+message target if the URL carries one) before reopening the per-session SSE
+stream.
+
 Read state write:
 
 `PUT /api/sessions/{session_id}/read-state`
