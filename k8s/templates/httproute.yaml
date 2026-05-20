@@ -14,7 +14,8 @@ spec:
       namespace: {{ .Values.ingress.gatewayNamespace }}
     - group: gateway.networking.x-k8s.io
       kind: XListenerSet
-      name: tank-operator
+      name: {{ include "tank-operator.routeListenerSetName" . }}
+      namespace: {{ include "tank-operator.routeListenerSetNamespace" . }}
   rules:
     - matches:
         - path:

@@ -61,6 +61,14 @@ claude-code-credentials
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-tls" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.ingress.tlsSecret }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.routeListenerSetName" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ .Values.testEnv.wildcardListenerSetName }}{{- else -}}tank-operator{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.routeListenerSetNamespace" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ .Values.testEnv.wildcardListenerSetNamespace }}{{- else -}}{{ include "tank-operator.orchestratorNamespace" . }}{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.orchestratorServiceAccount" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ include "tank-operator.slotName" . }}{{- else -}}{{ .Values.orchestrator.serviceAccount }}{{- end -}}
 {{- end -}}
