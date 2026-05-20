@@ -72,6 +72,13 @@ export interface ConversationBackgroundTask {
   summary?: string;
   description?: string;
   lastToolName?: string;
+  command?: string;
+  cwd?: string;
+  processId?: string;
+  output?: string;
+  exitCode?: number;
+  durationMs?: number;
+  rawItem?: unknown;
   error?: unknown;
   orderKey?: string;
   sourceEventId?: string;
@@ -190,6 +197,8 @@ export function conversationReducer(
         failed: false,
         lastError: null,
       };
+    case "session.status":
+      return applySessionStatusMessage(next, event);
     case "item.started":
       return upsertItem(next, event, "started");
     case "item.completed":
@@ -311,6 +320,26 @@ function applyUserMessage(
   };
 }
 
+function applySessionStatusMessage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const text = stringPayload(event, "text") ?? "";
+  if (!event.timeline_id || !text) return state;
+  const message: ConversationMessage = {
+    id: event.timeline_id,
+    role: "system",
+    text,
+    orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
+  };
+  return {
+    ...state,
+    messages: [...state.messages, message],
+  };
+}
+
 function upsertItem(
   state: ConversationReducerState,
   event: TankConversationEvent,
@@ -380,6 +409,7 @@ function upsertBackgroundTask(
   const nextStatus =
     existing && existingTerminal && status === "running" ? existing.status : status;
   const toolUseId = stringPayload(event, "tool_use_id");
+  const command = stringPayload(event, "command");
   const task: ConversationBackgroundTask = {
     id: event.timeline_id,
     taskId,
@@ -387,9 +417,25 @@ function upsertBackgroundTask(
     providerItemId: event.provider_item_id ?? existing?.providerItemId,
     toolUseId: toolUseId ?? existing?.toolUseId,
     status: nextStatus,
-    summary: stringPayload(event, "summary") ?? existing?.summary,
+    summary: stringPayload(event, "summary") ?? command ?? existing?.summary,
     description: stringPayload(event, "description") ?? existing?.description,
     lastToolName: stringPayload(event, "last_tool_name") ?? existing?.lastToolName,
+    command: command ?? existing?.command,
+    cwd: stringPayload(event, "cwd") ?? existing?.cwd,
+    processId:
+      stringPayload(event, "process_id") ??
+      stringPayload(event, "processId") ??
+      existing?.processId,
+    output: stringPayload(event, "output") ?? existing?.output,
+    exitCode:
+      numericPayload(event, "exit_code") ??
+      numericPayload(event, "exitCode") ??
+      existing?.exitCode,
+    durationMs:
+      numericPayload(event, "duration_ms") ??
+      numericPayload(event, "durationMs") ??
+      existing?.durationMs,
+    rawItem: event.payload?.raw_item ?? existing?.rawItem,
     error: event.payload?.error ?? existing?.error,
     orderKey: existing?.orderKey ?? event.order_key,
     sourceEventId: event.event_id,
@@ -477,6 +523,13 @@ function defaultItemKind(event: TankConversationEvent): string {
 function stringPayload(event: TankConversationEvent, key: string): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function numericPayload(event: TankConversationEvent, key: string): number | undefined {
+  const value = event.payload?.[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  return undefined;
 }
 
 function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {

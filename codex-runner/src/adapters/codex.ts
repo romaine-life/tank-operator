@@ -32,6 +32,8 @@ function codexItemText(item: Record<string, unknown>): string | undefined {
 
 export class CodexTankEventAdapter {
   private readonly itemTextByID = new Map<string, string>();
+  private readonly pendingUnifiedExecStarts = new Map<string, Record<string, unknown>>();
+  private readonly promotedUnifiedExecStarts = new Set<string>();
 
   constructor(private readonly cfg: Config) {}
 
@@ -41,8 +43,10 @@ export class CodexTankEventAdapter {
   ): TankConversationEvent[] {
     const providerID = codexProviderEventID(event);
     if (event.type === "turn.completed") {
+      const shellEvents = this.promotePendingUnifiedExecStarts(turn);
       this.itemTextByID.clear();
       return [
+        ...shellEvents,
         turnEvent({
           sessionID: this.cfg.sessionId,
           turnID: turn.turnID,
@@ -55,8 +59,10 @@ export class CodexTankEventAdapter {
       ];
     }
     if (event.type === "turn.interrupted") {
+      const shellEvents = this.promotePendingUnifiedExecStarts(turn);
       this.itemTextByID.clear();
       return [
+        ...shellEvents,
         turnEvent({
           sessionID: this.cfg.sessionId,
           turnID: turn.turnID,
@@ -69,8 +75,10 @@ export class CodexTankEventAdapter {
       ];
     }
     if (event.type === "turn.failed" || event.type === "error") {
+      const shellEvents = this.promotePendingUnifiedExecStarts(turn);
       this.itemTextByID.clear();
       return [
+        ...shellEvents,
         turnEvent({
           sessionID: this.cfg.sessionId,
           turnID: turn.turnID,
@@ -104,8 +112,16 @@ export class CodexTankEventAdapter {
           typeof itemRecord.id === "string" && itemRecord.id
             ? itemRecord.id
             : `${turn.turnID}:item:${providerID ?? event.type}`;
-        if (isCodexBackgroundShellItem(itemRecord)) {
+        if (isCodexBackgroundShellInteraction(itemRecord) || this.promotedUnifiedExecStarts.has(providerItemID)) {
           return this.codexBackgroundShellEvents(turn, event, itemRecord, providerItemID);
+        }
+        if (isCodexUnifiedExecStartupItem(itemRecord)) {
+          const status = codexBackgroundTaskStatus(event.type, itemRecord);
+          if (isTerminalShellTaskStatus(status)) {
+            this.pendingUnifiedExecStarts.delete(providerItemID);
+          } else {
+            this.rememberPendingUnifiedExecStart(providerItemID, itemRecord);
+          }
         }
         this.rememberItemText(providerItemID, codexItemText(itemRecord));
       }
@@ -120,8 +136,16 @@ export class CodexTankEventAdapter {
     if (isCodexUserMessageEchoItem(itemRecord)) return [];
     const providerItemID =
       typeof itemRecord.id === "string" && itemRecord.id ? itemRecord.id : `${turn.turnID}:item:${providerID ?? event.type}`;
-    if (isCodexBackgroundShellItem(itemRecord)) {
+    if (isCodexBackgroundShellInteraction(itemRecord) || this.promotedUnifiedExecStarts.has(providerItemID)) {
       return this.codexBackgroundShellEvents(turn, event, itemRecord, providerItemID);
+    }
+    if (isCodexUnifiedExecStartupItem(itemRecord)) {
+      if (event.type === "item.started") {
+        this.rememberPendingUnifiedExecStart(providerItemID, itemRecord);
+      }
+      if (event.type === "item.completed") {
+        this.pendingUnifiedExecStarts.delete(providerItemID);
+      }
     }
     const outcome = codexItemOutcome(itemRecord);
     const actor = itemRecord.type === "agent_message" || itemRecord.type === "reasoning" ? "assistant" : "tool";
@@ -185,16 +209,37 @@ export class CodexTankEventAdapter {
     if (text !== undefined) this.itemTextByID.set(providerItemID, text);
   }
 
+  private rememberPendingUnifiedExecStart(providerItemID: string, item: Record<string, unknown>): void {
+    const existing = this.pendingUnifiedExecStarts.get(providerItemID) ?? {};
+    this.pendingUnifiedExecStarts.set(providerItemID, { ...existing, ...item });
+  }
+
+  private promotePendingUnifiedExecStarts(turn: CodexAdapterTurn): TankConversationEvent[] {
+    const events: TankConversationEvent[] = [];
+    for (const [providerItemID, item] of this.pendingUnifiedExecStarts) {
+      this.pendingUnifiedExecStarts.delete(providerItemID);
+      this.promotedUnifiedExecStarts.add(providerItemID);
+      events.push(
+        ...this.codexBackgroundShellEvents(turn, "shell_task.started", item, providerItemID, {
+          status: "running",
+        }),
+      );
+    }
+    return events;
+  }
+
   private codexBackgroundShellEvents(
     turn: CodexAdapterTurn,
-    event: CodexEvent,
+    event: CodexEvent | "shell_task.started",
     item: Record<string, unknown>,
     providerItemID: string,
+    opts: { status?: string } = {},
   ): TankConversationEvent[] {
     const taskID = codexBackgroundTaskID(item, providerItemID);
-    const status = codexBackgroundTaskStatus(event.type, item);
+    const eventType = typeof event === "string" ? event : event.type;
+    const status = opts.status ?? codexBackgroundTaskStatus(eventType, item);
     const type =
-      event.type === "item.started"
+      eventType === "item.started" || eventType === "shell_task.started"
         ? "shell_task.started"
         : isTerminalShellTaskStatus(status)
           ? "shell_task.exited"
@@ -274,10 +319,16 @@ function isCodexUserMessageEchoItem(item: Record<string, unknown>): boolean {
   return item.type === "userMessage" || item.type === "user_message";
 }
 
-function isCodexBackgroundShellItem(item: Record<string, unknown>): boolean {
+function isCodexUnifiedExecStartupItem(item: Record<string, unknown>): boolean {
   if (item.type !== "command_execution") return false;
   const source = String(item.source ?? "").toLowerCase();
-  return source === "unifiedexecstartup" || source === "unifiedexecinteraction";
+  return source === "unifiedexecstartup";
+}
+
+function isCodexBackgroundShellInteraction(item: Record<string, unknown>): boolean {
+  if (item.type !== "command_execution") return false;
+  const source = String(item.source ?? "").toLowerCase();
+  return source === "unifiedexecinteraction";
 }
 
 function codexBackgroundTaskID(item: Record<string, unknown>, providerItemID: string): string {

@@ -199,6 +199,13 @@ type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   taskDescription?: string;
   taskError?: unknown;
   taskToolUseId?: string;
+  taskCommand?: string;
+  taskCwd?: string;
+  taskProcessId?: string;
+  taskOutput?: string;
+  taskExitCode?: number;
+  taskDurationMs?: number;
+  taskRawItem?: unknown;
   lastToolName?: string;
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
@@ -224,20 +231,16 @@ type SdkHistoryRefreshSource =
   | "visible-reactivation"
   | "resync"
   | "terminal-refresh";
+type ScrollToLatestBehavior = "auto" | "smooth";
+type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual";
+type ScrollToLatestRequest = {
+  signal: number;
+  behavior: ScrollToLatestBehavior;
+  reason: ScrollToLatestReason;
+  enabled: boolean;
+};
 type SkillStateName = "test" | "rollout";
 type HomeTab = "chat" | "settings" | "help";
-
-type SessionStartupDraft = {
-  loadingAt: string;
-  readyAt?: string;
-  failedAt?: string;
-  initialUser?: {
-    clientNonce: string;
-    text: string;
-    skillName?: SkillStateName;
-    createdAt: string;
-  };
-};
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -1950,93 +1953,6 @@ function appendSkillInvocation(
   );
 }
 
-const SESSION_STARTUP_LOADING_TEXT = "Session is loading.";
-const SESSION_STARTUP_READY_TEXT = "Session is ready.";
-const SESSION_STARTUP_FAILED_TEXT = "Session failed to load.";
-
-function startupSystemEntry(
-  sessionId: string,
-  state: "loading" | "ready" | "failed",
-  text: string,
-  time: string,
-): TranscriptEntry {
-  return {
-    id: `startup-${state}-${sessionId}`,
-    kind: "message",
-    role: "system",
-    text,
-    time,
-    localOnly: true,
-    transcriptSource: "realtime",
-  } as TranscriptEntry;
-}
-
-function startupTranscriptEntries(
-  session: Session,
-  draft?: SessionStartupDraft,
-): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  if (draft?.initialUser) {
-    const user = draft.initialUser;
-    const userEntries = user.skillName
-      ? appendSkillInvocation([], user.skillName, user.text, user.createdAt)
-      : ([
-          {
-            id: `startup-user-${session.id}`,
-            kind: "message",
-            role: "user",
-            text: user.text,
-            time: user.createdAt,
-          } as TranscriptEntry,
-        ]);
-    entries.push(
-      ...userEntries.map((entry, index) => ({
-        ...entry,
-        id: `${entry.id}-${session.id}-${index}`,
-        clientNonce: user.clientNonce,
-        localOnly: true,
-        transcriptSource: "realtime" as const,
-      })),
-    );
-  }
-
-  const loadingAt =
-    draft?.loadingAt ??
-    session.requested_at ??
-    session.created_at ??
-    nowIso();
-  if (draft || session.status !== "Active") {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "loading",
-        SESSION_STARTUP_LOADING_TEXT,
-        loadingAt,
-      ),
-    );
-  }
-  if (draft?.readyAt || (draft && session.status === "Active")) {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "ready",
-        SESSION_STARTUP_READY_TEXT,
-        draft.readyAt ?? session.ready_at ?? nowIso(),
-      ),
-    );
-  } else if (draft?.failedAt || session.status === "Failed") {
-    entries.push(
-      startupSystemEntry(
-        session.id,
-        "failed",
-        SESSION_STARTUP_FAILED_TEXT,
-        draft?.failedAt ?? nowIso(),
-      ),
-    );
-  }
-  return entries;
-}
-
 function eventTimelineCursor(event: JsonObject): string | null {
   return typeof event.order_key === "string" && event.order_key ? event.order_key : null;
 }
@@ -2266,7 +2182,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "files" | "settings" | "help";
+type RunTab = "chat" | "shell_tasks" | "files" | "settings" | "help";
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -2763,6 +2679,12 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           taskSummary: entry.taskSummary,
           taskDescription: entry.taskDescription,
           taskError: entry.taskError,
+          taskCommand: entry.taskCommand,
+          taskCwd: entry.taskCwd,
+          taskProcessId: entry.taskProcessId,
+          taskOutput: entry.taskOutput,
+          taskExitCode: entry.taskExitCode,
+          taskDurationMs: entry.taskDurationMs,
           startedAt: entry.startedAt,
           updatedAt: entry.updatedAt,
           completedAt: entry.completedAt,
@@ -2891,52 +2813,6 @@ function mergeSdkTranscript(
   if (server.length === 0) return dedupeAdjacentAssistantEchoes(extra);
   if (extra.length === 0) return server;
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
-}
-
-function mergeStartupTranscript(
-  startup: TranscriptEntry[],
-  entries: TranscriptEntry[],
-): TranscriptEntry[] {
-  if (startup.length === 0) return entries;
-  if (entries.length === 0) return startup;
-  const usedServerIds = new Set<string>();
-  const mergedStartup = startup.map((startupEntry) => {
-    if (!startupEntry.clientNonce) return startupEntry;
-    const replacement = entries.find((entry) => {
-      if (usedServerIds.has(entry.id)) return false;
-      if (entry.clientNonce !== startupEntry.clientNonce) return false;
-      if (entry.kind !== startupEntry.kind) return false;
-      if (entry.kind === "message" && startupEntry.kind === "message") {
-        return entry.role === startupEntry.role;
-      }
-      const startupMeta = entryMetaFingerprint(startupEntry);
-      const entryMeta = entryMetaFingerprint(entry);
-      return startupMeta !== null && startupMeta === entryMeta;
-    });
-    if (!replacement) return startupEntry;
-    usedServerIds.add(replacement.id);
-    return replacement;
-  });
-  const startupMessageFingerprints = new Set(
-    mergedStartup
-      .map(entryMessageFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  const startupMetaFingerprints = new Set(
-    mergedStartup
-      .map(entryMetaFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  const remaining = entries.filter((entry) => {
-    if (usedServerIds.has(entry.id)) return false;
-    const messageFingerprint = entryMessageFingerprint(entry);
-    if (messageFingerprint && startupMessageFingerprints.has(messageFingerprint)) {
-      return false;
-    }
-    const metaFingerprint = entryMetaFingerprint(entry);
-    return !metaFingerprint || !startupMetaFingerprints.has(metaFingerprint);
-  });
-  return [...mergedStartup, ...remaining];
 }
 
 function countTranscriptMessages(entries: TranscriptEntry[]): number {
@@ -3780,23 +3656,47 @@ function backgroundTaskStatusLabel(status: ConversationBackgroundTaskStatus | un
   }
 }
 
+function backgroundTaskTitle(entry: TranscriptEntry): string {
+  return (
+    entry.taskCommand ??
+    entry.taskSummary ??
+    entry.taskDescription ??
+    entry.lastToolName ??
+    "Shell task"
+  );
+}
+
+function backgroundTaskSubtitle(entry: TranscriptEntry): string {
+  const process = entry.taskProcessId ?? entry.taskId;
+  const parts = [
+    process ? `process ${process}` : "",
+    entry.taskCwd ? entry.taskCwd : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 function RunBackgroundTaskBlock({
   entry,
   showTimestamps,
+  onOpenTask,
 }: {
   entry: TranscriptEntry;
   showTimestamps: boolean;
+  onOpenTask?: (entry: TranscriptEntry) => void;
 }) {
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
-  const summary = entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task";
+  const summary = backgroundTaskTitle(entry);
   const detail = entry.taskDescription && entry.taskDescription !== summary ? entry.taskDescription : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
-    <div
+    <button
+      type="button"
       className="run-background-task"
       data-state={entry.taskStatus ?? "unknown"}
       data-running={running ? "true" : undefined}
+      onClick={() => onOpenTask?.(entry)}
+      title="Open shell tasks"
     >
       <div className="run-background-task-icon" title="Background shell task">
         {running ? (
@@ -3820,83 +3720,161 @@ function RunBackgroundTaskBlock({
         {(detail || entry.taskId || errorText) && (
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
-            {entry.taskId && <span>task {entry.taskId}</span>}
+            {(entry.taskProcessId ?? entry.taskId) && (
+              <span>{entry.taskProcessId ? `process ${entry.taskProcessId}` : `task ${entry.taskId}`}</span>
+            )}
             {errorText && <span className="run-background-task-error">{errorText}</span>}
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
 function ShellTaskLedger({
   entries,
-  open,
-  onOpenChange,
+  active,
+  onOpen,
 }: {
   entries: TranscriptEntry[];
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  active: boolean;
+  onOpen: () => void;
 }) {
   if (entries.length === 0) return null;
   const activeCount = entries.filter(isBackgroundTaskRunning).length;
   return (
-    <span className="run-shell-tasks">
-      <button
-        type="button"
-        className="run-tab run-shell-tasks-trigger"
-        onClick={() => onOpenChange(!open)}
-        aria-expanded={open}
-        title="Background shell tasks"
+    <button
+      type="button"
+      className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
+      onClick={onOpen}
+      aria-pressed={active}
+      title="Shell tasks"
+    >
+      <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Shell tasks</span>
+      <span
+        className="run-shell-tasks-count"
+        data-active={activeCount > 0 ? "true" : undefined}
+        aria-label={`${activeCount} running shell tasks`}
       >
-        <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
-        <span>Shell tasks</span>
-        <span
-          className="run-shell-tasks-count"
-          data-active={activeCount > 0 ? "true" : undefined}
-          aria-label={`${activeCount} active background shell tasks`}
-        >
-          {activeCount > 0 ? activeCount : entries.length}
-        </span>
-      </button>
-      {open && (
-        <div className="run-shell-tasks-popover" role="dialog" aria-label="Background shell tasks">
-          <div className="run-shell-tasks-head">
-            <span>Background shell tasks</span>
-            <button
-              type="button"
-              className="run-shell-tasks-close"
-              onClick={() => onOpenChange(false)}
-              aria-label="Close background shell tasks"
-            >
-              <XIcon size={13} aria-hidden="true" />
-            </button>
-          </div>
-          <div className="run-shell-tasks-list">
-            {entries.map((entry) => (
-              <div
-                key={entry.id}
-                className="run-shell-task-row"
-                data-state={entry.taskStatus ?? "unknown"}
-              >
-                <span className="run-shell-task-row-dot" aria-hidden="true" />
-                <span className="run-shell-task-row-main">
-                  <span className="run-shell-task-row-title">
-                    {entry.taskSummary ?? entry.taskDescription ?? entry.lastToolName ?? "Background shell task"}
-                  </span>
-                  <span className="run-shell-task-row-sub">
-                    {entry.taskId ? `task ${entry.taskId}` : "background shell"}
-                  </span>
-                </span>
-                <span className="run-shell-task-row-status">
-                  {backgroundTaskStatusLabel(entry.taskStatus)}
-                </span>
-              </div>
-            ))}
-          </div>
+        {activeCount}
+      </span>
+    </button>
+  );
+}
+
+function ShellTaskMeta({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | undefined;
+}) {
+  if (value === undefined || value === "") return null;
+  return (
+    <div className="run-shell-task-meta-item">
+      <span className="run-shell-task-meta-label">{label}</span>
+      <span className="run-shell-task-meta-value">{value}</span>
+    </div>
+  );
+}
+
+function ShellTasksScreen({
+  entries,
+  selectedId,
+  onSelect,
+}: {
+  entries: TranscriptEntry[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const runningEntries = entries.filter(isBackgroundTaskRunning);
+  const selected =
+    runningEntries.find((entry) => entry.id === selectedId) ??
+    runningEntries[0] ??
+    null;
+  return (
+    <div className="run-shell-tasks-page">
+      <div className="run-shell-tasks-list">
+        <div className="run-shell-tasks-list-head">
+          <span>Running</span>
+          <span>{runningEntries.length}</span>
         </div>
-      )}
-    </span>
+        {runningEntries.length === 0 ? (
+          <div className="run-shell-tasks-empty">No running shell tasks.</div>
+        ) : (
+          runningEntries.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className={`run-shell-task-row${selected?.id === entry.id ? " run-shell-task-row-active" : ""}`}
+              data-state={entry.taskStatus ?? "unknown"}
+              onClick={() => onSelect(entry.id)}
+            >
+              <span className="run-shell-task-row-dot" aria-hidden="true" />
+              <span className="run-shell-task-row-main">
+                <span className="run-shell-task-row-title">{backgroundTaskTitle(entry)}</span>
+                <span className="run-shell-task-row-sub">{backgroundTaskSubtitle(entry) || "shell task"}</span>
+              </span>
+              <span className="run-shell-task-row-status">
+                {backgroundTaskStatusLabel(entry.taskStatus)}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+      <div className="run-shell-task-detail-pane">
+        {!selected ? (
+          <div className="run-shell-task-detail-empty">
+            <SquareTerminalIcon size={28} aria-hidden="true" />
+            <span>No running shell tasks</span>
+          </div>
+        ) : (
+          <>
+            <div className="run-shell-task-detail-head">
+              <div className="run-shell-task-detail-title">
+                <SquareTerminalIcon size={16} aria-hidden="true" />
+                <span>{backgroundTaskTitle(selected)}</span>
+              </div>
+              <span className="run-shell-task-detail-status" data-state={selected.taskStatus ?? "unknown"}>
+                {backgroundTaskStatusLabel(selected.taskStatus)}
+              </span>
+            </div>
+            <div className="run-shell-task-meta">
+              <ShellTaskMeta label="Task" value={selected.taskId} />
+              <ShellTaskMeta label="Process" value={selected.taskProcessId} />
+              <ShellTaskMeta label="Cwd" value={selected.taskCwd} />
+              <ShellTaskMeta label="Started" value={formatToolFullTime(selected.startedAt)} />
+              <ShellTaskMeta
+                label="Duration"
+                value={selected.taskDurationMs == null ? undefined : formatTurnDuration(selected.taskDurationMs)}
+              />
+              <ShellTaskMeta label="Exit" value={selected.taskExitCode} />
+            </div>
+            {selected.taskCommand && (
+              <div className="run-shell-task-section">
+                <div className="run-shell-task-section-label">Command</div>
+                <pre className="run-shell-task-code">{selected.taskCommand}</pre>
+              </div>
+            )}
+            <div className="run-shell-task-section run-shell-task-section-output">
+              <div className="run-shell-task-section-label">Output</div>
+              <pre className="run-shell-task-output">
+                {selected.taskOutput?.trim() ? selected.taskOutput : "No output yet."}
+              </pre>
+            </div>
+            {selected.taskError != null && (
+              <div className="run-shell-task-section">
+                <div className="run-shell-task-section-label">Error</div>
+                <pre className="run-shell-task-output run-shell-task-output-error">
+                  {shortJson(selected.taskError)}
+                </pre>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -4572,10 +4550,14 @@ function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  onOpenBackgroundTask,
   scrollParent,
   onStartReached,
   onAtBottomChange,
   scrollToLatestSignal,
+  scrollToLatestBehavior = "smooth",
+  scrollToLatestReason = "manual",
+  onScrollToLatestConsumed,
   scrollToOldestSignal,
 }: {
   entries: TranscriptEntry[];
@@ -4596,10 +4578,14 @@ function RunMessages({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
   onAtBottomChange?: (atBottom: boolean) => void;
   scrollToLatestSignal?: number;
+  scrollToLatestBehavior?: ScrollToLatestBehavior;
+  scrollToLatestReason?: ScrollToLatestReason;
+  onScrollToLatestConsumed?: () => void;
   scrollToOldestSignal?: number;
 }) {
   const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
@@ -4616,6 +4602,7 @@ function RunMessages({
   // Track which message id we've already handled so we don't re-scroll
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
+  const consumedScrollToLatestSignalRef = useRef(0);
   useEffect(() => {
     const target = pendingScrollMessageId;
     if (!target) return;
@@ -4665,18 +4652,31 @@ function RunMessages({
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
     });
   }, [entries.length, groups, sessionId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
+    if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
+    consumedScrollToLatestSignalRef.current = scrollToLatestSignal;
     logChatScrollGroups("scroll-to-latest", groups, entries.length, {
       sessionId,
       signal: scrollToLatestSignal,
+      behavior: scrollToLatestBehavior,
+      reason: scrollToLatestReason,
     });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
       align: "end",
-      behavior: "smooth",
+      behavior: scrollToLatestBehavior,
     });
-  }, [entries.length, groups, scrollToLatestSignal, sessionId]);
+    onScrollToLatestConsumed?.();
+  }, [
+    entries.length,
+    groups,
+    onScrollToLatestConsumed,
+    scrollToLatestBehavior,
+    scrollToLatestReason,
+    scrollToLatestSignal,
+    sessionId,
+  ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
@@ -4732,7 +4732,13 @@ function RunMessages({
         return <RunMetaBlock entry={g.entry} />;
       }
       if (g.kind === "background_task") {
-        return <RunBackgroundTaskBlock entry={g.entry} showTimestamps={showTimestamps} />;
+        return (
+          <RunBackgroundTaskBlock
+            entry={g.entry}
+            showTimestamps={showTimestamps}
+            onOpenTask={onOpenBackgroundTask}
+          />
+        );
       }
       return (
         <RunMessageBubble
@@ -4752,6 +4758,7 @@ function RunMessages({
       avatar,
       highlightedEntryId,
       onFork,
+      onOpenBackgroundTask,
       onQuote,
       sessionId,
       setToolExpanded,
@@ -5006,7 +5013,6 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
-  startupDraft,
   pendingScrollMessageId,
   onScrollConsumed,
   runPrefs,
@@ -5024,7 +5030,6 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
-  startupDraft?: SessionStartupDraft;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
   // receive null and skip the scroll logic.
@@ -5057,17 +5062,6 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
-  const [observedStartupDraft, setObservedStartupDraft] = useState<SessionStartupDraft | undefined>(
-    () =>
-      session.status !== "Active"
-        ? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        : undefined,
-  );
 
   // Parent-driven auto-rename. When App sets autoRenameSessionId to this
   // session's id after F2, the chat-pane title input opens with the
@@ -5079,55 +5073,6 @@ function ChatPane({
     setEditingTitle(true);
     onAutoRenameConsumed();
   }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
-  useEffect(() => {
-    setObservedStartupDraft(
-      session.status !== "Active"
-        ? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        : undefined,
-    );
-  }, [session.id]);
-  useEffect(() => {
-    if (startupDraft) return;
-    setObservedStartupDraft((prev) => {
-      if (session.status === "Failed") {
-        return {
-          ...(prev ?? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }),
-          failedAt: prev?.failedAt ?? nowIso(),
-        };
-      }
-      if (session.status !== "Active") {
-        return (
-          prev ?? {
-            loadingAt:
-              session.requested_at ??
-              session.created_at ??
-              nowIso(),
-          }
-        );
-      }
-      if (!prev || prev.readyAt) return prev;
-      return {
-        ...prev,
-        readyAt: session.ready_at ?? nowIso(),
-      };
-    });
-  }, [
-    startupDraft,
-    session.status,
-    session.ready_at,
-    session.requested_at,
-    session.created_at,
-  ]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
@@ -5137,7 +5082,7 @@ function ChatPane({
   // after the run ends (amber/static pill) instead of vanishing.
   const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
-  const [shellTasksOpen, setShellTasksOpen] = useState(false);
+  const [selectedShellTaskId, setSelectedShellTaskId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
@@ -5268,6 +5213,7 @@ function ChatPane({
   const wasVisibleRef = useRef(visible);
   const timelineBootstrapSourceRef = useRef<SdkHistoryRefreshSource>("history");
   const timelineBootstrapClearRealtimeRef = useRef(false);
+  const timelineBootstrapScrollToLatestRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -5285,7 +5231,13 @@ function ChatPane({
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
   const [sdkOlderError, setSdkOlderError] = useState<string | null>(null);
-  const [scrollToLatestSignal, setScrollToLatestSignal] = useState(0);
+  const [scrollToLatestRequest, setScrollToLatestRequest] =
+    useState<ScrollToLatestRequest>({
+      signal: 0,
+      behavior: "smooth",
+      reason: "manual",
+      enabled: false,
+    });
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
   // Streaming-while-back-reading bookkeeping. While the user is reading
   // older context (atBottom=false), incoming SSE events get appended to
@@ -5445,17 +5397,36 @@ function ChatPane({
     }
     syncSdkRenderedEntries();
   }
+  function requestScrollToLatest(
+    behavior: ScrollToLatestBehavior = "smooth",
+    reason: ScrollToLatestReason = "manual",
+  ): void {
+    setScrollToLatestRequest((prev) => ({
+      signal: prev.signal + 1,
+      behavior,
+      reason,
+      enabled: true,
+    }));
+  }
+  function clearScrollToLatestRequest(): void {
+    setScrollToLatestRequest((prev) =>
+      prev.enabled ? { ...prev, enabled: false } : prev,
+    );
+  }
   function resetSdkTimelineBootstrapState(
     reason: string,
     options: {
       source?: SdkHistoryRefreshSource;
       clearRealtime?: boolean;
+      scrollToLatestOnReady?: boolean;
     } = {},
   ): void {
     sdkWindowEpochRef.current += 1;
     const epoch = sdkWindowEpochRef.current;
     timelineBootstrapSourceRef.current = options.source ?? "history";
     timelineBootstrapClearRealtimeRef.current = options.clearRealtime ?? false;
+    timelineBootstrapScrollToLatestRef.current =
+      options.scrollToLatestOnReady === true;
     historyRefreshRef.current = null;
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
@@ -5472,7 +5443,7 @@ function ChatPane({
     setSdkFoundOldest(false);
     setSdkFoundNewest(false);
     setSdkLoadingOlder(false);
-    setScrollToLatestSignal(0);
+    clearScrollToLatestRequest();
     setScrollToOldestSignal(0);
     setUserScrolledUp(false);
     setSdkPendingTailCount(0);
@@ -5490,6 +5461,7 @@ function ChatPane({
       epoch,
       source: timelineBootstrapSourceRef.current,
       clearRealtime: timelineBootstrapClearRealtimeRef.current,
+      scrollToLatestOnReady: timelineBootstrapScrollToLatestRef.current,
     });
   }
   function canClearSdkRealtime(
@@ -5691,6 +5663,7 @@ function ChatPane({
       {
         source: "visible-reactivation",
         clearRealtime: true,
+        scrollToLatestOnReady: !hasExplicitTarget,
       },
     );
   }, [pendingScrollMessageId, session.id, session.status, visible]);
@@ -5753,6 +5726,7 @@ function ChatPane({
       initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
+  const previousSessionStatusRef = useRef(session.status);
   // Toggled briefly when entries are restored from backend history so we can
   // show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
@@ -5806,12 +5780,18 @@ function ChatPane({
         params.set("anchor", "newest");
         params.set("limit", "200");
       }
+      const scrollToLatestOnReady =
+        timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
+        timelineBootstrapScrollToLatestRef.current = false;
+      }
       logChatScrollEvent("timeline-request", {
         sessionId: refreshSessionId,
         source,
         anchor,
         clearRealtime,
         epoch: refreshEpoch,
+        scrollToLatestOnReady,
       });
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
@@ -5911,11 +5891,18 @@ function ChatPane({
           durationMs: Math.round(performance.now() - startedAt),
         });
       }
-      if (canonicalEvents.length === 0) return { replayed: false, terminal };
+      if (canonicalEvents.length === 0) {
+        if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
+        return { replayed: false, terminal };
+      }
       replaceSdkServerEvents(
         canonicalEvents,
         clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
       );
+      if (scrollToLatestOnReady) {
+        timelineBootstrapScrollToLatestRef.current = false;
+        requestScrollToLatest("auto", source);
+      }
       if (showHint) {
         setContinueHintVisible(true);
         window.setTimeout(() => setContinueHintVisible(false), 3000);
@@ -6128,7 +6115,7 @@ function ChatPane({
   }
 
   useEffect(() => {
-    if (!visible || session.status !== "Active") return;
+    if (!visible || !CHAT_MODES.has(session.mode)) return;
     if (timelineBootstrap.status !== "idle") return;
     if (historyRefreshRef.current) return;
     const refreshSessionId = session.id;
@@ -6188,7 +6175,22 @@ function ChatPane({
   // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
   // should not resubscribe an in-flight bootstrap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
+  }, [session.id, session.mode, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
+
+  useEffect(() => {
+    const previous = previousSessionStatusRef.current;
+    previousSessionStatusRef.current = session.status;
+    if (previous === session.status) return;
+    if (!visible || !historyBootstrapped) return;
+    if (session.status !== "Active" && session.status !== "Failed") return;
+    resetSdkTimelineBootstrapState("session-status-transition", {
+      source: "history",
+      clearRealtime: false,
+    });
+  // resetSdkTimelineBootstrapState closes over current refs and must run with
+  // the latest session id/status when this effect fires.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historyBootstrapped, session.status, visible]);
 
   useEffect(() => {
     if (activeTab !== "files" || filesAvailable) return;
@@ -6474,6 +6476,7 @@ function ChatPane({
     resetSdkTimelineBootstrapState("session-change", {
       source: "history",
       clearRealtime: false,
+      scrollToLatestOnReady: !Boolean(pendingScrollMessageId?.trim()),
     });
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
@@ -7040,6 +7043,7 @@ function ChatPane({
         } as TranscriptEntry;
       appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
+    if (visible) requestScrollToLatest("auto", "submit");
     setRunStatus("running");
     setRunning(true);
     setActiveTool(null);
@@ -7186,33 +7190,19 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
-  // Startup drafts are optimistic scaffolding for the create/boot window. Once
-  // the durable timeline has bootstrapped for an active session, the ledger is
-  // the UI's source of truth; keeping the local draft would leave stale
-  // "loading/ready" bubbles in front of completed turns.
-  const startupDraftSettled = ready && historyBootstrapped;
-  const effectiveStartupDraft = startupDraftSettled
-    ? undefined
-    : startupDraft ?? observedStartupDraft;
-  const startupEntries = useMemo(
-    () => startupTranscriptEntries(session, effectiveStartupDraft),
-    [
-      session.id,
-      session.status,
-      session.requested_at,
-      session.created_at,
-      session.ready_at,
-      effectiveStartupDraft,
-    ],
-  );
-  const renderedEntries = useMemo(
-    () => mergeStartupTranscript(startupEntries, entries),
-    [startupEntries, entries],
-  );
+  const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
   );
+  const runningBackgroundTaskEntries = useMemo(
+    () => backgroundTaskEntries.filter(isBackgroundTaskRunning),
+    [backgroundTaskEntries],
+  );
+  const openShellTasksPage = useCallback((entry?: TranscriptEntry) => {
+    if (entry?.id) setSelectedShellTaskId(entry.id);
+    setActiveTab("shell_tasks");
+  }, []);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
@@ -7260,6 +7250,20 @@ function ChatPane({
       focusComposerTextarea();
     });
   }, [activeTab, focusComposerTextarea, visible]);
+
+  useEffect(() => {
+    if (activeTab !== "shell_tasks") return;
+    if (runningBackgroundTaskEntries.length === 0) {
+      if (selectedShellTaskId !== null) setSelectedShellTaskId(null);
+      return;
+    }
+    if (
+      !selectedShellTaskId ||
+      !runningBackgroundTaskEntries.some((entry) => entry.id === selectedShellTaskId)
+    ) {
+      setSelectedShellTaskId(runningBackgroundTaskEntries[0]?.id ?? null);
+    }
+  }, [activeTab, runningBackgroundTaskEntries, selectedShellTaskId]);
 
   // `/` is a "return to prompt" shortcut when focus is anywhere except the
   // composer textarea. Once the textarea is focused, `/` keeps its normal
@@ -7360,6 +7364,8 @@ function ChatPane({
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
+    timelineBootstrapScrollToLatestRef.current = !Boolean(pendingScrollMessageId?.trim());
+    clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
       sessionId: session.id,
@@ -7465,8 +7471,11 @@ function ChatPane({
           )}
           <ShellTaskLedger
             entries={backgroundTaskEntries}
-            open={shellTasksOpen}
-            onOpenChange={setShellTasksOpen}
+            active={activeTab === "shell_tasks"}
+            onOpen={() => {
+              if (activeTab === "shell_tasks") setActiveTab("chat");
+              else openShellTasksPage();
+            }}
           />
           <button
             type="button"
@@ -7767,6 +7776,12 @@ function ChatPane({
               </div>
             </div>
           </div>
+        ) : activeTab === "shell_tasks" ? (
+          <ShellTasksScreen
+            entries={backgroundTaskEntries}
+            selectedId={selectedShellTaskId}
+            onSelect={setSelectedShellTaskId}
+          />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
             runPrefs={runPrefs}
@@ -7884,12 +7899,18 @@ function ChatPane({
                   permissionMode: composerMode,
                 })
               }
+              onOpenBackgroundTask={openShellTasksPage}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();
               }}
               onAtBottomChange={handleSdkAtBottomChange}
-              scrollToLatestSignal={scrollToLatestSignal}
+              scrollToLatestSignal={
+                scrollToLatestRequest.enabled ? scrollToLatestRequest.signal : 0
+              }
+              scrollToLatestBehavior={scrollToLatestRequest.behavior}
+              scrollToLatestReason={scrollToLatestRequest.reason}
+              onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
             />
           </>
@@ -7981,7 +8002,7 @@ function ChatPane({
             const reachNewest = async () => {
               await jumpSdkToLatest();
               setSdkPendingTailCount(0);
-              setScrollToLatestSignal((value) => value + 1);
+              requestScrollToLatest("smooth", "manual");
             };
             void reachNewest();
           }}
@@ -8711,7 +8732,6 @@ export function App() {
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
     null,
   );
-  const [sessionStartupDrafts, setSessionStartupDrafts] = useState<Record<string, SessionStartupDraft>>({});
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
@@ -9245,37 +9265,6 @@ export function App() {
   }, [sessions, active, closingIds]);
 
   useEffect(() => {
-    setSessionStartupDrafts((prev) => {
-      const byId = new Map(sessions.map((s) => [s.id, s]));
-      let changed = false;
-      const next: Record<string, SessionStartupDraft> = {};
-      for (const [id, draft] of Object.entries(prev)) {
-        const session = byId.get(id);
-        if (!session || closingIds.has(id)) {
-          changed = true;
-          continue;
-        }
-        if (!draft.readyAt && (session.status === "Active" || session.ready_at)) {
-          next[id] = {
-            ...draft,
-            readyAt: session.ready_at ?? nowIso(),
-          };
-          changed = true;
-        } else if (!draft.failedAt && session.status === "Failed") {
-          next[id] = {
-            ...draft,
-            failedAt: nowIso(),
-          };
-          changed = true;
-        } else {
-          next[id] = draft;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [sessions, closingIds]);
-
-  useEffect(() => {
     const target = initialSessionId.current;
     if (!target) return;
     if (!sessions.some((s) => s.id === target)) return;
@@ -9493,7 +9482,6 @@ export function App() {
       (seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
-    const startupAt = nowIso();
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -9519,22 +9507,6 @@ export function App() {
       }
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
-        setSessionStartupDrafts((prev) => ({
-          ...prev,
-          [created.id]: {
-            loadingAt: startupAt,
-            ...(seedClientNonce && (seedPrompt || initialSkillName)
-              ? {
-                  initialUser: {
-                    clientNonce: seedClientNonce,
-                    text: seedPrompt,
-                    ...(initialSkillName ? { skillName: initialSkillName } : {}),
-                    createdAt: startupAt,
-                  },
-                }
-              : {}),
-          },
-        }));
       }
       // Insert the freshly-created session into the local list and open the
       // chat pane immediately, without waiting on /api/sessions to re-list or
@@ -10582,7 +10554,6 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
-                      startupDraft={sessionStartupDrafts[s.id]}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
                           ? pendingScrollMessageId

@@ -248,6 +248,34 @@
       }
     },
     {
+      "name": "session startup status",
+      "event": {
+        "event_id": "session:63:status:ready",
+        "uuid": "session:63:status:ready",
+        "id": "session:63:status:ready",
+        "order_key": "1768179848000-00000001-session:63:status:ready",
+        "conversation_id": "63",
+        "session_id": "63",
+        "tank_session_id": "63",
+        "timeline_id": "session:63:status:ready",
+        "email": "owner@example.com",
+        "actor": "system",
+        "source": "tank",
+        "type": "session.status",
+        "created_at": "2026-05-12T00:00:08.000Z",
+        "written_at": "2026-05-12T00:00:08.000Z",
+        "producer": {
+          "name": "tank-operator"
+        },
+        "visibility": "durable",
+        "payload": {
+          "status": "ready",
+          "text": "Session is ready.",
+          "session_status": "Active"
+        }
+      }
+    },
+    {
       "name": "item started",
       "event": {
         "event_id": "turn_contract:item.started:toolu-read:provider-message-1",

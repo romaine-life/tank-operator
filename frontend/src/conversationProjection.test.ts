@@ -20,6 +20,11 @@ function ev(
     defaults.client_nonce = "client-1";
     defaults.payload = { status: "submitted" };
   }
+  if (type === "session.status") {
+    defaults.actor = "system";
+    defaults.timeline_id = "session:63:status:ready";
+    defaults.payload = { status: "ready", text: "Session is ready." };
+  }
   return {
     event_id,
     order_key: event_id.padStart(4, "0"),
@@ -65,6 +70,35 @@ test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order
   }
 });
 
+test("session.status projects as a system transcript message", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("session:63:status:loading", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:status:loading",
+        created_at: "2026-05-20T10:00:00.000Z",
+        payload: { status: "loading", text: "Session is loading." },
+      }),
+      ev("session:63:status:ready", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:status:ready",
+        created_at: "2026-05-20T10:00:08.000Z",
+        payload: { status: "ready", text: "Session is ready." },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(projection.entries.map((entry) => entry.kind), ["message", "message"]);
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind === "message" ? entry.role : ""),
+    ["system", "system"],
+  );
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind === "message" ? entry.text : ""),
+    ["Session is loading.", "Session is ready."],
+  );
+});
+
 test("background shell task projects as its own transcript artifact", () => {
   const projection = projectConversationState(
     reduceConversationEvents([
@@ -86,6 +120,10 @@ test("background shell task projects as its own transcript artifact", () => {
           status: "running",
           tool_use_id: "toolu-monitor",
           summary: "Watching logs",
+          command: "tail -f app.log",
+          cwd: "/workspace/app",
+          process_id: "proc-abc",
+          output: "booting\n",
         },
       }),
       ev("3", "item.started", {
@@ -108,8 +146,58 @@ test("background shell task projects as its own transcript artifact", () => {
     assert.equal(task.taskStatus, "running");
     assert.equal(task.taskSummary, "Watching logs");
     assert.equal(task.taskToolUseId, "toolu-monitor");
+    assert.equal(task.taskCommand, "tail -f app.log");
+    assert.equal(task.taskCwd, "/workspace/app");
+    assert.equal(task.taskProcessId, "proc-abc");
+    assert.equal(task.taskOutput, "booting\n");
   }
   assert.equal(projection.backgroundTasks.length, 1);
+});
+
+test("background shell task projection hides the matching foreground command item", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "item.started", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "turn-1:item:item-unified-exec",
+        provider_item_id: "item-unified-exec",
+        payload: {
+          kind: "command_execution",
+          title: "npm run dev",
+          command: "npm run dev",
+        },
+      }),
+      ev("2", "shell_task.started", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "turn-1:shell_task:proc-123",
+        task_id: "proc-123",
+        provider_item_id: "item-unified-exec",
+        payload: {
+          kind: "shell_task",
+          task_id: "proc-123",
+          status: "running",
+          command: "npm run dev",
+          process_id: "proc-123",
+          output: "Listening on 5173",
+        },
+      }),
+    ]),
+  );
+
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.kind),
+    ["background_task"],
+  );
+  assert.equal(projection.activeToolName, null);
+  const task = projection.entries[0];
+  assert.equal(task?.kind, "background_task");
+  if (task?.kind === "background_task") {
+    assert.equal(task.taskCommand, "npm run dev");
+    assert.equal(task.taskProcessId, "proc-123");
+    assert.equal(task.taskOutput, "Listening on 5173");
+  }
 });
 
 test("projects canonical user and assistant events into chat messages", () => {

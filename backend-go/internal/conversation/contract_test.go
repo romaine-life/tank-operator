@@ -216,6 +216,52 @@ func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 	}
 }
 
+func TestValidateEventMapAcceptsSessionStatus(t *testing.T) {
+	event := map[string]any{
+		"event_id":    "session:63:status:ready",
+		"order_key":   "1768179848000-00000001-session:63:status:ready",
+		"session_id":  "63",
+		"timeline_id": "session:63:status:ready",
+		"actor":       "system",
+		"source":      "tank",
+		"type":        "session.status",
+		"created_at":  "2026-05-12T00:00:08.000Z",
+		"visibility":  "durable",
+		"payload": map[string]any{
+			"status": "ready",
+			"text":   "Session is ready.",
+		},
+	}
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateEventMapRejectsUnknownSessionStatus(t *testing.T) {
+	event := map[string]any{
+		"event_id":    "session:63:status:booting",
+		"order_key":   "1768179848000-00000099-session:63:status:booting",
+		"session_id":  "63",
+		"timeline_id": "session:63:status:booting",
+		"actor":       "system",
+		"source":      "tank",
+		"type":        "session.status",
+		"created_at":  "2026-05-12T00:00:08.000Z",
+		"visibility":  "durable",
+		"payload": map[string]any{
+			"status": "booting",
+			"text":   "Session is booting.",
+		},
+	}
+	err := ValidateEventMap(event)
+	if err == nil {
+		t.Fatal("ValidateEventMap succeeded, want unknown session.status rejection")
+	}
+	if !strings.Contains(err.Error(), "loading, ready, or failed") {
+		t.Fatalf("error = %q, want session.status enum rejection", err.Error())
+	}
+}
+
 func goStringConstants(t *testing.T, typeName string) []string {
 	t.Helper()
 

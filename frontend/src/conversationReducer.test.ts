@@ -22,6 +22,11 @@ function ev(
     defaults.client_nonce = "client-1";
     defaults.payload = { status: "submitted" };
   }
+  if (type === "session.status") {
+    defaults.actor = "system";
+    defaults.timeline_id = "session:63:status:ready";
+    defaults.payload = { status: "ready", text: "Session is ready." };
+  }
   return {
     event_id,
     order_key: event_id.padStart(4, "0"),
@@ -56,6 +61,30 @@ test("Codex interrupt is stopped state, not provider error", () => {
   assert.equal(state.runStatus, "stopped");
   assert.equal(state.failed, false);
   assert.equal(state.messages.length, 1);
+});
+
+test("session status events replay as durable system messages", () => {
+  const state = reduceConversationEvents([
+    ev("session:63:status:loading", "session.status", {
+      actor: "system",
+      timeline_id: "session:63:status:loading",
+      created_at: "2026-05-20T10:00:00.000Z",
+      payload: { status: "loading", text: "Session is loading." },
+    }),
+    ev("session:63:status:ready", "session.status", {
+      actor: "system",
+      timeline_id: "session:63:status:ready",
+      created_at: "2026-05-20T10:00:08.000Z",
+      payload: { status: "ready", text: "Session is ready." },
+    }),
+  ]);
+
+  assert.deepEqual(state.messages.map((message) => message.role), ["system", "system"]);
+  assert.deepEqual(state.messages.map((message) => message.text), [
+    "Session is loading.",
+    "Session is ready.",
+  ]);
+  assert.equal(state.runStatus, "ready");
 });
 
 test("Normal turn reaches ready with one user message and assistant item", () => {
@@ -162,6 +191,10 @@ test("Background shell task lifecycle replays independent of active tool state",
         status: "running",
         tool_use_id: "toolu-monitor",
         summary: "Watching logs",
+        command: "tail -f app.log",
+        cwd: "/workspace/app",
+        process_id: "proc-abc",
+        output: "booting\n",
       },
     }),
     ev("3", "turn.completed", { source: "claude" }),
@@ -177,6 +210,9 @@ test("Background shell task lifecycle replays independent of active tool state",
         task_id: "task-abc",
         status: "completed",
         summary: "Log watch finished",
+        output: "booting\nready\n",
+        exit_code: 0,
+        duration_ms: 10_000,
       },
     }),
   ]);
@@ -188,6 +224,12 @@ test("Background shell task lifecycle replays independent of active tool state",
   assert.equal(state.backgroundTasks[0]?.taskId, "task-abc");
   assert.equal(state.backgroundTasks[0]?.toolUseId, "toolu-monitor");
   assert.equal(state.backgroundTasks[0]?.summary, "Log watch finished");
+  assert.equal(state.backgroundTasks[0]?.command, "tail -f app.log");
+  assert.equal(state.backgroundTasks[0]?.cwd, "/workspace/app");
+  assert.equal(state.backgroundTasks[0]?.processId, "proc-abc");
+  assert.equal(state.backgroundTasks[0]?.output, "booting\nready\n");
+  assert.equal(state.backgroundTasks[0]?.exitCode, 0);
+  assert.equal(state.backgroundTasks[0]?.durationMs, 10_000);
   assert.equal(state.backgroundTasks[0]?.startedAt, "2026-05-12T00:00:10.000Z");
   assert.equal(state.backgroundTasks[0]?.completedAt, "2026-05-12T00:00:20.000Z");
 });
@@ -654,6 +696,12 @@ test("contract guard rejects malformed per-type events", () => {
     payload: { text: "hello", display: { kind: "plain" } },
   })), true);
 
+  assert.equal(isTankConversationEvent(ev("session:63:status:loading", "session.status", {
+    actor: "system",
+    timeline_id: "session:63:status:loading",
+    payload: { status: "loading", text: "Session is loading." },
+  })), true);
+
   assert.equal(isTankConversationEvent({
     event_id: "bad-user",
     order_key: "bad-user",
@@ -665,6 +713,19 @@ test("contract guard rejects malformed per-type events", () => {
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
     payload: { text: "hello" },
+  }), false);
+
+  assert.equal(isTankConversationEvent({
+    event_id: "bad-session-status",
+    order_key: "bad-session-status",
+    session_id: "63",
+    timeline_id: "session:63:status:loading",
+    actor: "system",
+    source: "tank",
+    type: "session.status",
+    created_at: "2026-05-12T00:00:00.000Z",
+    visibility: "durable",
+    payload: { status: "loading" },
   }), false);
 
   assert.equal(isTankConversationEvent({
