@@ -7170,7 +7170,14 @@ function ChatPane({
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
   const ready = session.status === "Active";
-  const effectiveStartupDraft = startupDraft ?? observedStartupDraft;
+  // Startup drafts are optimistic scaffolding for the create/boot window. Once
+  // the durable timeline has bootstrapped for an active session, the ledger is
+  // the UI's source of truth; keeping the local draft would leave stale
+  // "loading/ready" bubbles in front of completed turns.
+  const startupDraftSettled = ready && historyBootstrapped;
+  const effectiveStartupDraft = startupDraftSettled
+    ? undefined
+    : startupDraft ?? observedStartupDraft;
   const startupEntries = useMemo(
     () => startupTranscriptEntries(session, effectiveStartupDraft),
     [
