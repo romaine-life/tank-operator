@@ -130,8 +130,15 @@ test("fresh chat sessions focus the composer instead of the rename field", () =>
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
-  assert.match(appSource, /if \(!visible\) return;\s+if \(historyAttempted\) return;/);
-  assert.equal(appSource.includes("pendingVisibleTailBootstrapRef"), true);
+  assert.equal(appSource.includes("reduceTimelineBootstrap"), true);
+  assert.match(appSource, /useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
+  assert.match(appSource, /if \(timelineBootstrap\.status !== "idle"\) return;/);
+});
+
+test("chat back-pagination keeps an explicit access path", () => {
+  assert.equal(appSource.includes("before_order_key"), true);
+  assert.equal(appSource.includes("Load earlier messages"), true);
+  assert.equal(appSource.includes("older-missing-cursor"), true);
 });
 
 test("chat scroll diagnostics are debug gated", () => {
