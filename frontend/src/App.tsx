@@ -4838,6 +4838,8 @@ function ChatPane({
   user,
   autoRename,
   onAutoRenameConsumed,
+  autoFocusComposer,
+  onAutoFocusComposerConsumed,
   primeTurnCompleteSound,
   playTurnCompleteSound,
 }: {
@@ -4857,6 +4859,8 @@ function ChatPane({
   user: SessionUser;
   autoRename: boolean;
   onAutoRenameConsumed: () => void;
+  autoFocusComposer: boolean;
+  onAutoFocusComposerConsumed: () => void;
   // App-owned audio: the SSE consumer in App.tsx rings on the
   // always-on /api/sessions/events stream's activity_changed events.
   // ChatPane gets these props for two narrower uses: primeTurnCompleteSound
@@ -4890,10 +4894,9 @@ function ChatPane({
   );
 
   // Parent-driven auto-rename. When App sets autoRenameSessionId to this
-  // session's id (freshly created, or F2 pressed), the chat-pane title
-  // input opens with the current name pre-loaded. We ack via
-  // onAutoRenameConsumed so the signal is single-shot and re-runs cleanly
-  // on a subsequent F2.
+  // session's id after F2, the chat-pane title input opens with the
+  // current name pre-loaded. We ack via onAutoRenameConsumed so the signal
+  // is single-shot and re-runs cleanly on a subsequent F2.
   useEffect(() => {
     if (!autoRename) return;
     setEditingTitleValue(session.name ?? "");
@@ -6991,6 +6994,30 @@ function ChatPane({
   }, []);
 
   useEffect(() => {
+    if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
+    const activeElement = document.activeElement;
+    if (
+      activeElement &&
+      activeElement !== document.body &&
+      activeElement !== document.documentElement &&
+      isTextEntryShortcutTarget(activeElement)
+    ) {
+      onAutoFocusComposerConsumed();
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (focusComposerTextarea()) onAutoFocusComposerConsumed();
+    });
+  }, [
+    activeTab,
+    autoFocusComposer,
+    focusComposerTextarea,
+    onAutoFocusComposerConsumed,
+    ready,
+    visible,
+  ]);
+
+  useEffect(() => {
     if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current) return;
     pendingComposerFocusRef.current = false;
     requestAnimationFrame(() => {
@@ -8393,11 +8420,15 @@ export function App() {
     error?: string | null;
   }>({ status: "idle", repos: [] });
   // When non-null, the chat pane for this session id auto-opens its title
-  // rename input on its next render. Used to make freshly-created sessions
-  // land directly in the chat pane with the title editor focused, and to
-  // wire the F2 keyboard shortcut to the same surface. Cleared by ChatPane
-  // via onAutoRenameConsumed once it has applied the signal.
+  // rename input on its next render. Used by the F2 keyboard shortcut and
+  // cleared by ChatPane via onAutoRenameConsumed once it has applied the
+  // signal.
   const [autoRenameSessionId, setAutoRenameSessionId] = useState<string | null>(null);
+  // Freshly-created chat sessions should land in the composer once the
+  // session is ready. The title can still be renamed explicitly via F2.
+  const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
+    null,
+  );
   const [sessionStartupDrafts, setSessionStartupDrafts] = useState<Record<string, SessionStartupDraft>>({});
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
@@ -9058,6 +9089,7 @@ export function App() {
       // Rename now lives in the chat-pane header. Make sure the pane is
       // active (so the header is mounted) and ask it to enter edit mode.
       activate(session.id);
+      setAutoFocusComposerSessionId(null);
       setAutoRenameSessionId(session.id);
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
@@ -9229,7 +9261,7 @@ export function App() {
           },
         }));
       }
-      // Insert the freshly-created session into the local list and focus the
+      // Insert the freshly-created session into the local list and open the
       // chat pane immediately, without waiting on /api/sessions to re-list or
       // on the pod becoming Ready. The backend returned the full session row
       // synchronously (status: "Pending"), so the sidebar entry and the chat
@@ -9237,18 +9269,18 @@ export function App() {
       // SSE will reconcile status, runtimeLabel, etc. as they arrive. The
       // prior shape awaited a list refresh before activating, which made the
       // new pane appear "on the side" — sidebar entry showing up while the
-      // main pane stayed on whatever was already open — and also gated the
-      // rename UI behind the same delay.
+      // main pane stayed on whatever was already open.
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
         return [created, ...prev];
       });
       activate(created.id);
+      if (CHAT_MODES.has(created.mode)) {
+        setAutoFocusComposerSessionId(created.id);
+      }
       if (requestedNameApplied) {
         setHomeSessionName("");
         setHomeEditingTitle(false);
-      } else {
-        setAutoRenameSessionId(created.id);
       }
       // Belt-and-braces reconcile in the background — the lifecycle SSE
       // wake from session.created should beat this in practice. Does not
@@ -10291,6 +10323,8 @@ export function App() {
                       user={user!}
                       autoRename={autoRenameSessionId === s.id}
                       onAutoRenameConsumed={() => setAutoRenameSessionId(null)}
+                      autoFocusComposer={autoFocusComposerSessionId === s.id}
+                      onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
                     />

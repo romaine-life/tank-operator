@@ -121,6 +121,12 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
+test("fresh chat sessions focus the composer instead of the rename field", () => {
+  assert.equal(appSource.includes("setAutoRenameSessionId(created.id)"), false);
+  assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
+  assert.equal(appSource.includes("setAutoRenameSessionId(session.id)"), true);
+});
+
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
