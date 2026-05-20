@@ -148,6 +148,44 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 	}
 }
 
+func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{
+			{ID: "1", Email: "nelson@romaine.life", Visible: true, SidebarPosition: 1},
+			{ID: "2", Email: "nelson@romaine.life", Visible: true, SidebarPosition: 2},
+			{ID: "3", Email: "nelson@romaine.life", Visible: true, SidebarPosition: 3},
+		},
+	}
+	emitter := &recordingRowEmitter{}
+	mgr := &Manager{
+		client:    fake.NewSimpleClientset(),
+		namespace: sessionmodel.SessionsNamespace,
+		registry:  registry,
+		emitter:   emitter,
+	}
+
+	if err := mgr.ReorderSessions(context.Background(), "nelson@romaine.life", []string{"2", "3", "1"}); err != nil {
+		t.Fatal(err)
+	}
+	wantPositions := map[string]int64{"2": 3, "3": 2, "1": 1}
+	for _, record := range registry.records {
+		if got := record.SidebarPosition; got != wantPositions[record.ID] {
+			t.Fatalf("session %s sidebar position = %d, want %d", record.ID, got, wantPositions[record.ID])
+		}
+	}
+	if strings.Join(emitter.ids, ",") != "2,3,1" {
+		t.Fatalf("published ids = %v, want [2 3 1]", emitter.ids)
+	}
+}
+
+type recordingRowEmitter struct {
+	ids []string
+}
+
+func (r *recordingRowEmitter) PublishCurrentRow(_ context.Context, _ string, sessionID string) {
+	r.ids = append(r.ids, sessionID)
+}
+
 type managerTestRegistry struct {
 	records []sessionmodel.SessionRecord
 	nextID  string
@@ -198,6 +236,19 @@ func (r *managerTestRegistry) SetTestState(context.Context, string, string, map[
 
 func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
 	return nil
+}
+
+func (r *managerTestRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
+	positions := map[string]int64{}
+	for i, id := range orderedIDs {
+		positions[id] = int64(len(orderedIDs) - i)
+	}
+	for i, record := range r.records {
+		if pos, ok := positions[record.ID]; ok {
+			r.records[i].SidebarPosition = pos
+		}
+	}
+	return orderedIDs, nil
 }
 
 func (r *managerTestRegistry) MarkDeleted(context.Context, string, string) error { return nil }

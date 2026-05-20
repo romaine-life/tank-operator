@@ -61,6 +61,9 @@ type Info struct {
 	// cursor on snapshot bootstrap so the row-update catch-up only
 	// emits changes that landed AFTER the snapshot.
 	RowVersion int64 `json:"row_version"`
+	// SidebarPosition is the durable sort key for the sidebar. Larger
+	// values render earlier; row_version updates must not affect it.
+	SidebarPosition int64 `json:"sidebar_position"`
 	// Activity is the chat-derived sidebar indicator block. Sourced
 	// from the sessions.activity_summary column (Phase 2);
 	// nil for sessions that haven't produced any chat activity yet.
@@ -222,20 +225,21 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		repos = []string{}
 	}
 	info := Info{
-		ID:           record.ID,
-		PodName:      optionalString(record.PodName),
-		Owner:        owner,
-		Status:       status,
-		Mode:         sessionmodel.NormalizeSessionMode(record.Mode),
-		RequestedAt:  firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:    optionalString(record.CreatedAt),
-		ReadyAt:      optionalString(record.ReadyAt),
-		Name:         record.Name,
-		TestState:    record.TestState,
-		RolloutState: record.RolloutState,
-		Repos:        repos,
-		CloneState:   record.CloneState,
-		RowVersion:   record.RowVersion,
+		ID:              record.ID,
+		PodName:         optionalString(record.PodName),
+		Owner:           owner,
+		Status:          status,
+		Mode:            sessionmodel.NormalizeSessionMode(record.Mode),
+		RequestedAt:     firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:       optionalString(record.CreatedAt),
+		ReadyAt:         optionalString(record.ReadyAt),
+		Name:            record.Name,
+		TestState:       record.TestState,
+		RolloutState:    record.RolloutState,
+		Repos:           repos,
+		CloneState:      record.CloneState,
+		RowVersion:      record.RowVersion,
+		SidebarPosition: record.SidebarPosition,
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
 		info.Activity = activity

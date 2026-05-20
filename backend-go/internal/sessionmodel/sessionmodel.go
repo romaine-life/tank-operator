@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 )
 
@@ -67,6 +68,8 @@ const (
 )
 
 var (
+	ErrSessionOrderConflict = errors.New("session order conflict")
+
 	sessionModes = map[string]struct{}{
 		APIKeyMode:         {},
 		ClaudeCLIMode:      {},
@@ -143,7 +146,13 @@ type SessionRecord struct {
 	// rather than inferred from logs.
 	CloneState map[string]any
 
-	RowVersion int64
+	// SidebarPosition is the durable user-facing sort key for the
+	// session list. Larger values render earlier. It is intentionally
+	// separate from RowVersion: row_version is the live-update cursor
+	// and must be free to advance on test/rollout/activity changes
+	// without changing the sidebar order.
+	SidebarPosition int64
+	RowVersion      int64
 }
 
 // sessionConfigMounts is the canonical list of files mounted into every

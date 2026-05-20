@@ -35,6 +35,7 @@ type SessionRegistry interface {
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
 
@@ -403,6 +404,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Mode:        mode,
 		RequestedAt: &requestedAt,
 		CreatedAt:   createdAt,
+		Repos:       repos,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
@@ -512,6 +514,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		RequestedAt: &requestedAt,
 		CreatedAt:   &now,
 		ReadyAt:     &now,
+		Repos:       repos,
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
@@ -591,6 +594,23 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 			}
 			return m.registry.SetRolloutState(c, owner, sessionID, state)
 		})
+}
+
+// ReorderSessions persists the complete visible sidebar order for one
+// owner and publishes the updated rows so every connected browser tab
+// converges on the same durable order.
+func (m *Manager) ReorderSessions(ctx context.Context, owner string, orderedIDs []string) error {
+	if m.registry == nil {
+		return nil
+	}
+	publishIDs, err := m.registry.Reorder(ctx, owner, orderedIDs)
+	if err != nil {
+		return err
+	}
+	for _, id := range publishIDs {
+		m.publishRow(ctx, owner, id)
+	}
+	return nil
 }
 
 func (m *Manager) patchStateAnnotation(

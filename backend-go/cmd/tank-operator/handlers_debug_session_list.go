@@ -75,21 +75,22 @@ func (s *appServer) handleDebugSessionListState(w http.ResponseWriter, r *http.R
 // those if needed.
 func debugRowJSON(record sessionmodel.SessionRecord) map[string]any {
 	return map[string]any{
-		"id":              record.ID,
-		"mode":            record.Mode,
-		"pod_name":        record.PodName,
-		"name":            record.Name,
-		"visible":         record.Visible,
-		"status":          record.Status,
-		"requested_at":    record.RequestedAt,
-		"created_at":      record.CreatedAt,
-		"updated_at":      record.UpdatedAt,
-		"ready_at":        record.ReadyAt,
-		"terminating_at":  record.TerminatingAt,
-		"row_version":     record.RowVersion,
-		"has_activity":    len(record.ActivitySummary) > 0,
-		"has_test_state":  record.TestState != nil,
-		"has_rollout":     record.RolloutState != nil,
+		"id":               record.ID,
+		"mode":             record.Mode,
+		"pod_name":         record.PodName,
+		"name":             record.Name,
+		"visible":          record.Visible,
+		"status":           record.Status,
+		"requested_at":     record.RequestedAt,
+		"created_at":       record.CreatedAt,
+		"updated_at":       record.UpdatedAt,
+		"ready_at":         record.ReadyAt,
+		"terminating_at":   record.TerminatingAt,
+		"sidebar_position": record.SidebarPosition,
+		"row_version":      record.RowVersion,
+		"has_activity":     len(record.ActivitySummary) > 0,
+		"has_test_state":   record.TestState != nil,
+		"has_rollout":      record.RolloutState != nil,
 	}
 }
 

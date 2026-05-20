@@ -7,6 +7,7 @@ const chatScrollTelemetrySource = readFileSync(
   new URL("./chatScrollTelemetry.ts", import.meta.url),
   "utf8",
 );
+const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -101,6 +102,14 @@ test("chat live stream waits for timeline bootstrap", () => {
     appSource,
     /if \(!visible \|\| session\.status !== "Active" \|\| !historyBootstrapped\) return;/,
   );
+});
+
+test("sidebar order is not browser-local", () => {
+  assert.equal(appSource.includes("tank.sessionOrder"), false);
+  assert.equal(appSource.includes("readSessionOrder"), false);
+  assert.equal(appSource.includes("writeSessionOrder"), false);
+  assert.equal(mainSource.includes("tank.sessionOrder"), false);
+  assert.equal(appSource.includes("/api/sessions/order"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {
