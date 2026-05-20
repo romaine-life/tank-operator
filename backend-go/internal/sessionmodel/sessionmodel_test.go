@@ -156,6 +156,58 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
+func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"nelsong6/tank-operator"},
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	initContainers := spec["initContainers"].([]any)
+	if got, want := len(initContainers), 1; got != want {
+		t.Fatalf("init container count = %d, want %d", got, want)
+	}
+	cloner := initContainers[0].(map[string]any)
+	if got, want := cloner["name"], "repo-cloner"; got != want {
+		t.Fatalf("init container name = %v, want %q", got, want)
+	}
+	if got, want := cloner["image"], "codex-image"; got != want {
+		t.Fatalf("repo-cloner image = %v, want %q", got, want)
+	}
+	cmd := cloner["command"].([]any)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/repo-cloner.sh" {
+		t.Fatalf("repo-cloner command = %v, want [bash /opt/tank/repo-cloner.sh]", cmd)
+	}
+	env := containerEnv(cloner)
+	if got, want := env["TANK_REPOS_JSON"], "[\"nelsong6/tank-operator\"]"; got != want {
+		t.Fatalf("TANK_REPOS_JSON = %v, want %q", got, want)
+	}
+	if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
+		t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+	}
+	sessionIDRef := env["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
+		t.Fatalf("SESSION_ID fieldPath = %v, want %q", got, want)
+	}
+	assertVolumeMount(t, cloner, "session-config")
+	assertVolumeMount(t, cloner, "workspace")
+	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
+}
+
+func TestPodManifestWithoutSelectedReposOmitsRepoCloner(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	if _, present := spec["initContainers"]; present {
+		t.Fatalf("initContainers present without selected repos: %v", spec["initContainers"])
+	}
+}
+
 func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:            "claude-image",

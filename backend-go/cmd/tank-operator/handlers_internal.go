@@ -495,6 +495,35 @@ func (s *appServer) handleInternalSetRolloutState(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, info)
 }
 
+// handleInternalSetCloneState stores repo-cloner init-container progress on
+// the durable sessions row so clone failures are visible without reading pod
+// logs. The caller is a session pod service-principal token whose actor_email
+// owns the target session.
+func (s *appServer) handleInternalSetCloneState(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/clone-state")
+	if user == nil {
+		return
+	}
+	sessionID := r.PathValue("session_id")
+	var body struct {
+		CloneState map[string]any `json:"clone_state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if body.CloneState == nil {
+		writeError(w, http.StatusBadRequest, "clone_state is required")
+		return
+	}
+	info, err := s.mgr.SetCloneState(r.Context(), user.ActorEmail, sessionID, body.CloneState)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 // handleInternalSendMessage enqueues a follow-up turn to a chat-capable session.
 //
 // Origin attribution: when the caller is itself a tank-operator session pod
@@ -587,5 +616,3 @@ func (s *appServer) requireServicePrincipal(w http.ResponseWriter, r *http.Reque
 	}
 	return &user
 }
-
-

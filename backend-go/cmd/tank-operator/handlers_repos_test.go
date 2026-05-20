@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -154,6 +155,26 @@ func TestRepoSelectionBucket(t *testing.T) {
 		if got := repoSelectionBucket(n); got != want {
 			t.Errorf("repoSelectionBucket(%d) = %q, want %q", n, got, want)
 		}
+	}
+}
+
+func TestFetchRecentRepoSlugsQueryUsesTypedInterval(t *testing.T) {
+	if strings.Contains(fetchRecentRepoSlugsQuery, "|| ' days'") {
+		t.Fatalf("recent repo query must not coerce lookbackDays through text concatenation")
+	}
+	if !strings.Contains(fetchRecentRepoSlugsQuery, "$3::int * interval '1 day'") {
+		t.Fatalf("recent repo query must cast lookbackDays as int before interval math")
+	}
+}
+
+func TestRepoLookupOwnerEmail_ServiceUsesActorEmail(t *testing.T) {
+	user := auth.User{
+		Email:      "pod-125@service.tank.romaine.life",
+		Role:       auth.RoleService,
+		ActorEmail: "owner@example.com",
+	}
+	if got := repoLookupOwnerEmail(user); got != "owner@example.com" {
+		t.Fatalf("repoLookupOwnerEmail() = %q, want actor email", got)
 	}
 }
 

@@ -1,15 +1,15 @@
 // RepoPicker is the splash-page chip-and-picker for selecting repos
 // to auto-clone into a new session's /workspace.
 //
-// Stage 1 of the auto-clone feature (per docs/quality-timeframes.md
-// "Acceptable chunking: a sequence of PRs where each PR leaves the
-// system in a coherent state"). This PR ships the durable selection,
-// the recent-repos surface, and the chip+picker UI. Stage 2 will add
-// an "All repos" enumeration sourced from mcp-github; stage 3 ships
-// the init container that actually clones.
+// The picker owns durable repo selection, recent repo suggestions, and
+// the chip+picker UI. The "All repos" enumeration is sourced from
+// mcp-github; the session pod's repo-cloner init container consumes
+// the selected repos at startup.
 //
 // UX shape:
 //   - The selected repos render as removable chips above the trigger.
+//   - A short row of recent repos stays visible on the splash page so
+//     common choices are one click without opening the dialog.
 //   - "+ Add repo" opens a small dropdown panel below the chip row.
 //   - The panel has a text input ("owner/name") with an explicit Add
 //     button, plus a "Recent" section of clickable suggestions
@@ -26,10 +26,10 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { isValidRepoSlug } from "../repos";
+import { isValidRepoSlug, recentRepoPreviewSlugs } from "../repos";
 
 /** allRepos surfaces the user's full GitHub App installation, sourced
- *  from /api/github/repos (stage 2). The picker filters this list by
+ *  from /api/github/repos. The picker filters this list by
  *  the typed input and renders matches above the Recent section.
  *  Optional — the picker still works on Recent + manual-entry when
  *  this prop isn't provided. */
@@ -49,7 +49,7 @@ export interface RepoPickerProps {
   selected: string[];
   /** Recently-used slugs surfaced as one-click suggestions. */
   recent: string[];
-  /** Optional full-installation enumeration (stage 2). */
+  /** Optional full-installation enumeration. */
   allRepos?: AllReposState;
   /** Called once when the picker opens so the parent can lazy-load
    *  /api/github/repos. Parent owns dedupe — picker calls this
@@ -112,6 +112,11 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
+  const recentPreview = useMemo(
+    () => recentRepoPreviewSlugs(recent, selected),
+    [recent, selected],
+  );
+
   // Close on Escape or outside-click — matches the profile menu shape
   // used elsewhere in App.tsx (data-menu attribute on the root).
   useEffect(() => {
@@ -168,6 +173,26 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
           ))}
         </ul>
       )}
+      {recentPreview.length > 0 && (
+        <div className="home-repos-preview" aria-label="Recent repositories">
+          <div className="home-repos-recent-label">Recent</div>
+          <ul className="home-repos-recent-list" role="list">
+            {recentPreview.map((slug) => (
+              <li key={`preview:${slug}`} className="home-repos-recent-item">
+                <button
+                  type="button"
+                  className="home-repos-recent-chip"
+                  onClick={() => onAdd(slug)}
+                  disabled={busy}
+                  title={slug}
+                >
+                  {slug}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <button
         type="button"
         className="home-repos-trigger"
@@ -223,8 +248,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
 //   1. Recent: the slugs the user has selected on prior sessions
 //      (durable; sourced from GET /api/github/recent-repos).
 //   2. All repos: the user's full GitHub App installation, sourced
-//      from GET /api/github/repos (stage 2). Lazy-loaded on first
-//      picker open.
+//      from GET /api/github/repos. Lazy-loaded on first picker open.
 //
 // Both lists are live-filtered by the typed input (substring,
 // case-insensitive). When the input is empty we hide All-repos

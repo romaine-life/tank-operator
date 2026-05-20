@@ -45,15 +45,13 @@ type Info struct {
 	// when none were selected). Driven by the durable
 	// sessions.repos column, not local SPA state, so the splash
 	// chips and the per-session detail view both read through to
-	// the same source. Stage 3's repo-cloner init container reads
-	// this same list from the pod side.
+	// the same source. The repo-cloner init container reads this
+	// same list from the pod side.
 	Repos []string `json:"repos"`
 	// CloneState carries the per-repo init-container outcome the
 	// repo-cloner writes back to sessions.clone_state. nil until
-	// stage 3 ships the cloner; the SPA renders the tooltip /
-	// status pill from this map (keyed by slug). Omitted from the
-	// wire when nil to keep the snapshot lean for the every-row
-	// today shape.
+	// the cloner publishes its first state. Omitted from the wire when
+	// nil to keep the snapshot lean for the every-row today shape.
 	CloneState map[string]any `json:"clone_state,omitempty"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).

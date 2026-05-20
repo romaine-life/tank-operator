@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -18,6 +18,10 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { WorkspaceShell } from "./WorkspaceShell";
+import {
+  initialTimelineBootstrapState,
+  reduceTimelineBootstrap,
+} from "./chatTimelineBootstrap";
 import {
   AlertCircleIcon,
   ArrowDownIcon,
@@ -196,6 +200,8 @@ type SdkTerminalResult = {
 type SdkHistoryRefreshResult = {
   replayed: boolean;
   terminal?: SdkTerminalResult;
+  stale?: boolean;
+  error?: string;
 };
 type SdkHistoryRefreshSource =
   | "history"
@@ -272,10 +278,10 @@ interface Session {
   // session creation. Always an array on the wire (empty when none
   // picked). The splash chips for existing sessions read from here
   // — never from localStorage — so the chip list never contradicts
-  // the server's view. Stage 1 of the auto-clone feature.
+  // the server's view.
   repos: string[];
-  // clone_state is the per-repo init-container outcome (stage 3).
-  // Optional until stage 3 ships and the cloner writes back.
+  // clone_state is the per-repo repo-cloner init-container outcome.
+  // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
   sidebar_position?: number;
 }
@@ -5073,7 +5079,8 @@ function ChatPane({
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
   const sdkWindowEpochRef = useRef(0);
   const wasVisibleRef = useRef(visible);
-  const pendingVisibleTailBootstrapRef = useRef(false);
+  const timelineBootstrapSourceRef = useRef<SdkHistoryRefreshSource>("history");
+  const timelineBootstrapClearRealtimeRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
   // Windowed-transcript bookkeeping introduced when /timeline switched from
@@ -5090,6 +5097,7 @@ function ChatPane({
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
+  const [sdkOlderError, setSdkOlderError] = useState<string | null>(null);
   const [scrollToLatestSignal, setScrollToLatestSignal] = useState(0);
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
   // Streaming-while-back-reading bookkeeping. While the user is reading
@@ -5250,9 +5258,20 @@ function ChatPane({
     }
     syncSdkRenderedEntries();
   }
-  function resetSdkTimelineBootstrapState(reason: string): void {
+  function resetSdkTimelineBootstrapState(
+    reason: string,
+    options: {
+      source?: SdkHistoryRefreshSource;
+      clearRealtime?: boolean;
+    } = {},
+  ): void {
     sdkWindowEpochRef.current += 1;
+    const epoch = sdkWindowEpochRef.current;
+    timelineBootstrapSourceRef.current = options.source ?? "history";
+    timelineBootstrapClearRealtimeRef.current = options.clearRealtime ?? false;
     historyRefreshRef.current = null;
+    sdkEventSourceRef.current?.close();
+    sdkEventSourceRef.current = null;
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
     sdkServerEventsRef.current = [];
@@ -5270,11 +5289,20 @@ function ChatPane({
     setScrollToOldestSignal(0);
     setUserScrolledUp(false);
     setSdkPendingTailCount(0);
+    setSdkOlderError(null);
     setEntries([]);
+    setSdkConnectionState("idle");
+    dispatchTimelineBootstrap({
+      type: "reset",
+      sessionId: session.id,
+      epoch,
+    });
     logChatScrollEvent("tail-bootstrap-reset", {
       sessionId: session.id,
       reason,
-      epoch: sdkWindowEpochRef.current,
+      epoch,
+      source: timelineBootstrapSourceRef.current,
+      clearRealtime: timelineBootstrapClearRealtimeRef.current,
     });
   }
   function canClearSdkRealtime(
@@ -5466,8 +5494,6 @@ function ChatPane({
     const wasVisible = wasVisibleRef.current;
     wasVisibleRef.current = visible;
     if (!visible) {
-      pendingVisibleTailBootstrapRef.current = false;
-      setHistoryBootstrapped(false);
       return;
     }
     if (wasVisible) return;
@@ -5475,45 +5501,12 @@ function ChatPane({
     const hasExplicitTarget = Boolean(pendingScrollMessageId?.trim());
     resetSdkTimelineBootstrapState(
       hasExplicitTarget ? "visible-message-target" : "visible-reactivation",
+      {
+        source: "visible-reactivation",
+        clearRealtime: true,
+      },
     );
-    pendingVisibleTailBootstrapRef.current = true;
-    setHistoryAttempted(true);
-    setHistoryBootstrapped(false);
   }, [pendingScrollMessageId, session.id, session.status, visible]);
-
-  useEffect(() => {
-    if (!visible || session.status !== "Active") return;
-    if (!pendingVisibleTailBootstrapRef.current) return;
-    if (historyRefreshRef.current) return;
-    pendingVisibleTailBootstrapRef.current = false;
-    const refreshSessionId = session.id;
-    const refreshEpoch = sdkWindowEpochRef.current;
-    const run = currentRunRef.current;
-    const refresh = refreshSdkRunHistoryResult(
-      false,
-      true,
-      run?.id,
-      "visible-reactivation",
-    )
-      .then((result) => {
-        if (run && result.terminal) {
-          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
-        }
-        return result.replayed;
-      })
-      .finally(() => {
-        if (sessionIdRef.current !== refreshSessionId) return;
-        if (sdkWindowEpochRef.current !== refreshEpoch) return;
-        if (historyRefreshRef.current === refresh) {
-          historyRefreshRef.current = null;
-        }
-        setHistoryBootstrapped(true);
-      });
-    historyRefreshRef.current = refresh;
-  // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
-  // intentionally should not resubscribe this activation fetch.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, visible]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -5566,27 +5559,16 @@ function ChatPane({
 
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
-  const [historyAttempted, setHistoryAttempted] = useState(false);
-  const [historyBootstrapped, setHistoryBootstrapped] = useState(false);
+  const [timelineBootstrap, dispatchTimelineBootstrap] = useReducer(
+    reduceTimelineBootstrap,
+    session.id,
+    (initialSessionId) =>
+      initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
+  );
+  const historyBootstrapped = timelineBootstrap.status === "ready";
   // Toggled briefly when entries are restored from backend history so we can
   // show a "Continuing previous conversation" hint.
   const [continueHintVisible, setContinueHintVisible] = useState(false);
-  function refreshRunHistory(showHint: boolean) {
-    if (session.status !== "Active") return;
-    if (historyRefreshRef.current) return;
-    const refreshSessionId = session.id;
-    const refreshEpoch = sdkWindowEpochRef.current;
-    const refresh = refreshSdkRunHistory(showHint)
-      .finally(() => {
-        if (sessionIdRef.current !== refreshSessionId) return;
-        if (sdkWindowEpochRef.current !== refreshEpoch) return;
-        if (historyRefreshRef.current === refresh) {
-          historyRefreshRef.current = null;
-        }
-        setHistoryBootstrapped(true);
-      });
-    historyRefreshRef.current = refresh;
-  }
 
   // History replay hits the canonical event log written by the pod-side
   // runner, then renders through the same reducer/projection path used for
@@ -5655,7 +5637,10 @@ function ChatPane({
           status: res.status,
           durationMs: Math.round(performance.now() - startedAt),
         });
-        return { replayed: false };
+        return {
+          replayed: false,
+          error: `timeline request failed: ${res.status}`,
+        };
       }
       const body = (await res.json()) as {
         session_id?: string;
@@ -5676,7 +5661,7 @@ function ChatPane({
           epoch: refreshEpoch,
           currentEpoch: sdkWindowEpochRef.current,
         });
-        return { replayed: false };
+        return { replayed: false, stale: true };
       }
       const lastReadOrderKey = body.read_state?.last_read_order_key;
       if (typeof lastReadOrderKey === "string" && lastReadOrderKey) {
@@ -5685,7 +5670,9 @@ function ChatPane({
           lastReadOrderKey,
         );
       }
-      if (!Array.isArray(body.events)) return { replayed: false };
+      if (!Array.isArray(body.events)) {
+        return { replayed: false, error: "timeline response did not include events" };
+      }
       const canonicalEvents: TankConversationEvent[] = [];
       for (const ev of body.events) {
         if (isTankConversationEvent(ev)) {
@@ -5748,7 +5735,10 @@ function ChatPane({
       }
       return { replayed: true, terminal };
     };
-    return load().catch(() => ({ replayed: false }));
+    return load().catch((err) => ({
+      replayed: false,
+      error: `timeline request failed: ${String((err as Error).message ?? err)}`,
+    }));
   }
 
   // loadSdkOlderEvents fetches one bounded page of events strictly older
@@ -5759,14 +5749,30 @@ function ChatPane({
   async function loadSdkOlderEvents(): Promise<void> {
     const refreshSessionId = session.id;
     const oldest = sdkOldestLoadedOrderKeyRef.current;
-    if (!oldest) return;
     if (sdkFoundOldestRef.current) return;
     if (sdkLoadingOlder) return;
+    setSdkOlderError(null);
+    setSdkLoadingOlder(true);
+    if (!oldest) {
+      logChatScrollEvent("older-missing-cursor", {
+        sessionId: refreshSessionId,
+      });
+      try {
+        await jumpSdkToOldest();
+        setScrollToOldestSignal((value) => value + 1);
+      } catch (err) {
+        setSdkOlderError(
+          `Could not load earlier messages: ${String((err as Error).message ?? err)}`,
+        );
+      } finally {
+        setSdkLoadingOlder(false);
+      }
+      return;
+    }
     logChatScrollEvent("older-request", {
       sessionId: refreshSessionId,
       beforeOrderKey: oldest,
     });
-    setSdkLoadingOlder(true);
     try {
       const params = new URLSearchParams({
         before_order_key: oldest,
@@ -5775,7 +5781,10 @@ function ChatPane({
       const res = await authedFetch(
         `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        setSdkOlderError(`Could not load earlier messages: ${res.status}`);
+        return;
+      }
       const body = (await res.json()) as {
         events?: unknown[];
         prev_order_key?: string;
@@ -5822,6 +5831,7 @@ function ChatPane({
         sdkFoundOldestRef.current = true;
         setSdkFoundOldest(true);
       }
+      setSdkOlderError(null);
     } finally {
       setSdkLoadingOlder(false);
     }
@@ -5841,7 +5851,7 @@ function ChatPane({
     const res = await authedFetch(
       `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
     );
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
     const body = (await res.json()) as {
       events?: unknown[];
       next_order_key?: string;
@@ -5850,7 +5860,9 @@ function ChatPane({
       found_newest?: boolean;
     };
     if (sessionIdRef.current !== refreshSessionId) return;
-    if (!Array.isArray(body.events)) return;
+    if (!Array.isArray(body.events)) {
+      throw new Error("timeline response did not include events");
+    }
     const canonicalEvents: TankConversationEvent[] = [];
     for (const ev of body.events) {
       if (isTankConversationEvent(ev)) {
@@ -5929,20 +5941,67 @@ function ChatPane({
   }
 
   useEffect(() => {
-    if (!visible) return;
-    if (historyAttempted) return;
-    if (entries.length > 0) {
-      setHistoryAttempted(true);
-      refreshRunHistory(false);
-      return;
-    }
-    if (session.status !== "Active") return;
-    setHistoryAttempted(true);
-    refreshRunHistory(true);
-  // refreshRunHistory is intentionally omitted; it closes over current
-  // session state and should only run for the gates above.
+    if (!visible || session.status !== "Active") return;
+    if (timelineBootstrap.status !== "idle") return;
+    if (historyRefreshRef.current) return;
+    const refreshSessionId = session.id;
+    const refreshEpoch = sdkWindowEpochRef.current;
+    const source = timelineBootstrapSourceRef.current;
+    const clearRealtime = timelineBootstrapClearRealtimeRef.current;
+    const showHint = source === "history" && entries.length === 0;
+    const run = currentRunRef.current;
+    dispatchTimelineBootstrap({
+      type: "loading",
+      sessionId: refreshSessionId,
+      epoch: refreshEpoch,
+    });
+    const refresh = refreshSdkRunHistoryResult(
+      showHint,
+      clearRealtime,
+      run?.id,
+      source,
+    )
+      .then((result) => {
+        if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
+        if (result.stale) {
+          dispatchTimelineBootstrap({
+            type: "reset",
+            sessionId: refreshSessionId,
+            epoch: sdkWindowEpochRef.current,
+          });
+          return;
+        }
+        if (result.error) {
+          dispatchTimelineBootstrap({
+            type: "error",
+            sessionId: refreshSessionId,
+            epoch: refreshEpoch,
+            error: result.error,
+          });
+          return;
+        }
+        if (run && result.terminal) {
+          finalizeSdkRun(run, result.terminal, { refreshHistory: false });
+        }
+        dispatchTimelineBootstrap({
+          type: "ready",
+          sessionId: refreshSessionId,
+          epoch: refreshEpoch,
+        });
+      })
+      .finally(() => {
+        if (sessionIdRef.current !== refreshSessionId) return;
+        if (sdkWindowEpochRef.current !== refreshEpoch) return;
+        if (historyRefreshRef.current === refresh) {
+          historyRefreshRef.current = null;
+        }
+      });
+    historyRefreshRef.current = refresh;
+  // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
+  // should not resubscribe an in-flight bootstrap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.status, historyAttempted, entries.length, visible]);
+  }, [session.id, session.status, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
 
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
@@ -6216,39 +6275,24 @@ function ChatPane({
 
   // When the session id changes, reset transcript state and allow the
   // history sync to run again. The replay paths repopulate from backend.
-  useEffect(() => {
+  useLayoutEffect(() => {
     sessionIdRef.current = session.id;
-    sdkWindowEpochRef.current += 1;
     wasVisibleRef.current = visible;
-    pendingVisibleTailBootstrapRef.current = false;
-    sdkServerEntriesRef.current = [];
-    sdkRealtimeEntriesRef.current = [];
-    sdkServerEventsRef.current = [];
-    sdkRealtimeEventsRef.current = [];
-    sdkConversationStateRef.current = initialConversationState;
+    resetSdkTimelineBootstrapState("session-change", {
+      source: "history",
+      clearRealtime: false,
+    });
     sdkAssistantDurationsRef.current = new Map();
-    sdkTimelineCursorRef.current = null;
-    sdkOldestLoadedOrderKeyRef.current = null;
-    sdkFoundOldestRef.current = false;
-    sdkFoundNewestRef.current = false;
-    setSdkFoundOldest(false);
-    setSdkFoundNewest(false);
-    setSdkLoadingOlder(false);
-    setScrollToLatestSignal(0);
-    setScrollToOldestSignal(0);
-    sdkAtBottomRef.current = true;
-    setSdkPendingTailCount(0);
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
-    setEntries([]);
     setQueuedMessages([]);
-    historyRefreshRef.current = null;
-    setHistoryAttempted(false);
-    setHistoryBootstrapped(false);
     setContinueHintVisible(false);
-    setSdkConnectionState("idle");
     setRunStatus("idle");
     setRunning(false);
+  // resetSdkTimelineBootstrapState intentionally closes over current session
+  // state; this layout reset must run exactly once for each session id before
+  // passive timeline bootstrap effects can start.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -7109,6 +7153,16 @@ function ChatPane({
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
+  const retryTimelineBootstrap = () => {
+    historyRefreshRef.current = null;
+    timelineBootstrapSourceRef.current = "history";
+    timelineBootstrapClearRealtimeRef.current = false;
+    dispatchTimelineBootstrap({
+      type: "reset",
+      sessionId: session.id,
+      epoch: sdkWindowEpochRef.current,
+    });
+  };
 
   return (
     <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
@@ -7518,25 +7572,44 @@ function ChatPane({
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
+        ) : timelineBootstrap.status === "error" ? (
+          <div className="run-empty run-transcript-state" role="alert">
+            <strong>Conversation failed to load</strong>
+            <span>{timelineBootstrap.error ?? "Timeline bootstrap failed."}</span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={retryTimelineBootstrap}
+            >
+              Retry
+            </button>
+          </div>
+        ) : renderedEntries.length === 0 && timelineBootstrap.status !== "ready" ? (
+          <div className="run-shell-loading" role="status" aria-live="polite">
+            <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+            <span>Loading conversation...</span>
+          </div>
         ) : renderedEntries.length === 0 ? (
-          null
+          <div className="run-empty run-transcript-state" role="status">
+            <span>No messages yet.</span>
+          </div>
         ) : (
           <>
-            {/* Passive top-of-transcript indicator. Replaces the prior
-                explicit "Load earlier messages" button: the auto-load on
-                Virtuoso's startReached (wired below) is the affordance now,
-                matching Slack and Discord. Three states:
+            {/* Top-of-transcript pagination surface. Auto-load still fires via
+                Virtuoso's startReached, and the explicit button keeps older
+                history reachable if the virtualized edge callback misses.
+                States:
                   - sdkLoadingOlder: spinner-ish "Loading earlier messages…"
                     surfaced while the back-paginate fetch is in flight so
                     the user has feedback that the silent scroll-up triggered
                     something.
+                  - sdkOlderError: visible retry instead of a silent stop.
+                  - !sdkFoundOldest: explicit load button for long sessions.
                   - sdkFoundOldest: a "Beginning of conversation" divider so
                     the user can tell they've hit the head of the ledger
                     instead of just a scroll-stop with no explanation.
-                  - otherwise: nothing — older content sits virtualized just
-                    above the viewport and reveals itself as the user scrolls.
-                Both states are status, not actions; the SDk loading marker
-                gets role="status" so screenreaders announce it. */}
+                Loading and terminal states use status/alert roles so
+                screenreaders announce them. */}
             {sdkLoadingOlder ? (
               <div
                 className="run-transcript-load-older run-transcript-load-older-passive"
@@ -7545,6 +7618,29 @@ function ChatPane({
               >
                 Loading earlier messages…
               </div>
+            ) : sdkOlderError ? (
+              <div className="run-transcript-load-error" role="alert">
+                <span>{sdkOlderError}</span>
+                <button
+                  type="button"
+                  className="run-transcript-load-older"
+                  onClick={() => {
+                    void loadSdkOlderEvents();
+                  }}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : !sdkFoundOldest && renderedEntries.length > 0 ? (
+              <button
+                type="button"
+                className="run-transcript-load-older"
+                onClick={() => {
+                  void loadSdkOlderEvents();
+                }}
+              >
+                Load earlier messages
+              </button>
             ) : sdkFoundOldest && renderedEntries.length > 0 ? (
               <div
                 className="run-transcript-beginning"
@@ -8376,7 +8472,7 @@ export function App() {
       return [];
     });
   }, [defaultSessionMode]);
-  // Splash-page repo picker state. Stage 1 of the auto-clone feature:
+  // Splash-page repo picker state:
   //
   //   - selectedRepos: the chips the user has staged for the
   //     about-to-be-created session. Posted to /api/sessions on
@@ -8391,15 +8487,14 @@ export function App() {
   //     close.
   //   - repoInput: the manual-entry text field's controlled value.
   //
-  // Stage 2 will widen the picker with an "All repos" section sourced
-  // from /api/github/repos; until then the manual text input is the
-  // escape hatch for first-use repos.
+  // "All repos" is sourced from /api/github/repos; the manual text
+  // input remains the escape hatch when enumeration fails or lags.
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
-  // Stage 2: All-repos lazy-load state. Sourced from /api/github/repos,
+  // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
   // result. Refreshed after a successful session create so just-used
@@ -8466,9 +8561,9 @@ export function App() {
     }
   }, []);
 
-  // Stage 2: fetch the full installation repo list. Lazy-loaded on
-  // first picker open and refreshed after a successful session create
-  // so just-installed repos appear in the list next time.
+  // Fetch the full installation repo list. Lazy-loaded on first picker
+  // open and refreshed after a successful session create so just-installed
+  // repos appear in the list next time.
   //
   // The endpoint mints an on-behalf-of service JWT (auth.romaine.life
   // PR #43) and proxies to mcp-github; failures here become a

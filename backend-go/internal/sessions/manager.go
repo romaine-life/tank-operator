@@ -35,6 +35,7 @@ type SessionRegistry interface {
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
+	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
@@ -261,9 +262,9 @@ type CreateOptions struct {
 	RequestedAt string
 	// Repos is the durable "owner/name" slug selection from the splash
 	// page. Empty slice (or nil) means "no auto-clone." The slugs are
-	// validated at the handler boundary; manager.Create only stores
-	// them on the registry row. Stage 3 wires the init container; this
-	// stage just persists.
+	// validated at the handler boundary; manager.Create stores them on
+	// the registry row and threads them into the pod manifest for the
+	// repo-cloner init container.
 	Repos []string
 }
 
@@ -295,12 +296,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	// See nelsong6/tank-operator#540.
 	if sessionmodel.IsNoPodMode(mode) {
 		// No-pod modes don't have a /workspace to clone into;
-		// stage 1 lets them carry a repos[] selection so the
-		// snapshot shape stays uniform, but the handler boundary
-		// rejects repos when the mode is no-pod. The repos arg is
-		// threaded for forward-compat with any future no-pod mode
-		// that wants repo metadata visible in the SPA without
-		// pod-side cloning.
+		// the handler boundary rejects repos when the mode is
+		// no-pod. The repos arg is threaded for forward-compat with
+		// any future no-pod mode that wants repo metadata visible in
+		// the SPA without pod-side cloning.
 		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos)
 	}
 
@@ -331,6 +330,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
+	manifestOpts.Repos = repos
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -602,6 +602,20 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 			}
 			return m.registry.SetRolloutState(c, owner, sessionID, state)
 		})
+}
+
+// SetCloneState replaces the sessions.clone_state payload written by
+// the repo-cloner init container and publishes the updated row to the
+// sidebar stream. It does not patch pod annotations: clone_state is a
+// durable UI/reporting surface, not runtime input for a live container.
+func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, state map[string]any) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.SetCloneState(ctx, owner, sessionID, state); err != nil {
+			return Info{}, err
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
 }
 
 // ReorderSessions persists the complete visible sidebar order for one

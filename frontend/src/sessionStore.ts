@@ -62,13 +62,11 @@ export interface SessionRow {
   // session creation. Always present on the wire (empty array when
   // none picked); the splash chips and the per-session detail view
   // both read through this field so local SPA state never
-  // contradicts the row. Stage 1 of the auto-clone feature
-  // (handlers_repos.go on the backend).
+  // contradicts the row (handlers_repos.go on the backend).
   repos: string[];
-  // clone_state surfaces the per-repo init-container outcome from
-  // stage 3 (keyed by slug). Optional on the wire — omitted until
-  // stage 3 ships and the cloner writes back. The SPA shows a
-  // tooltip / status pill off this map; null/missing means
+  // clone_state surfaces the per-repo outcome from the repo-cloner
+  // init container (keyed by slug). Optional on the wire
+  // until the cloner writes back; null/missing means
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
   // Durable user-facing order for the sidebar. Larger values render

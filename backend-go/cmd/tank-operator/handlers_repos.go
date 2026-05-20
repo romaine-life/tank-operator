@@ -1,6 +1,5 @@
 // handlers_repos.go — server-side surface for the per-session repo
-// selection feature. Stage 1 of the auto-clone rollout
-// (docs/quality-timeframes.md: each stage ships coherent state).
+// selection and auto-clone feature.
 //
 // This file owns:
 //   - Slug validation + dedup at the handler boundary (validateRepoSlugs).
@@ -10,11 +9,8 @@
 //     caller's recently-selected repo slugs to the splash-page picker.
 //
 // The splash picker shows two sections: "Recent" (this endpoint) and
-// "All repos" (stage 2's mcp-github passthrough, not in this PR).
-// Recent works the moment the schema migration lands — no mcp-github
-// dependency — so stage 1 ships a fully functional UI for users who
-// re-use the same repos session to session, even before stage 2 makes
-// the "All repos" enumeration available.
+// "All repos" (the mcp-github passthrough). Recent has no mcp-github
+// dependency, so it remains available even when full enumeration fails.
 package main
 
 import (
@@ -29,14 +25,15 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // maxReposPerSession caps how many repos a session can auto-clone.
 // Picked to match the cost/scaling boundary called out in the
-// pre-implementation plan: stage 3's init container clones serially,
-// and 5 medium repos at --depth=50 fits comfortably under the 90s
+// pre-implementation plan: the init container clones serially, and 5
+// medium repos at --depth=50 fits comfortably under the 90s
 // pod-ready timeout (manager.go: podReadyTimeout). Bound the input at
 // the handler so a malicious or buggy SPA can't push a 1000-repo list
 // through and stall every new session.
@@ -51,14 +48,14 @@ const maxReposPerSession = 5
 //
 // Strict enough to reject path traversal (`../`), scheme-injection
 // (`https://…`), and shell metacharacters that could escape the
-// stage 3 clone script, while permissive enough to admit every real
-// GitHub repo slug. The upstream mcp-github call in stage 2 is the
-// authoritative check for "this repo exists and the caller can read
-// it" — the regex here is the defense-in-depth on input shape.
+// repo-cloner script, while permissive enough to admit every real
+// GitHub repo slug. The upstream mcp-github call is the authoritative
+// check for "this repo exists and the caller can read it" — the regex
+// here is the defense-in-depth on input shape.
 var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`)
 
 // sessionModeSupportsRepos reports whether a session mode has a
-// /workspace volume the stage 3 init container could clone into.
+// /workspace volume the repo-cloner init container can clone into.
 // Today only the SDK-runner modes (claude_gui, codex_gui,
 // codex_app_server) provision a workspace emptyDir — see
 // sessionmodel.PodManifest: `wantSDKRunner`. CLI / config / api_key
@@ -135,11 +132,28 @@ const recentRepoLimit = 8
 // "recent" anymore.
 const recentRepoLookbackDays = 30
 
+const fetchRecentRepoSlugsQuery = `
+	WITH recent AS (
+		SELECT unnest(repos) AS slug, created_at
+		FROM sessions
+		WHERE email = $1
+		  AND session_scope = $2
+		  AND created_at > now() - ($3::int * interval '1 day')
+	)
+	SELECT slug
+	FROM (
+		SELECT slug, MAX(created_at) AS last_used
+		FROM recent
+		GROUP BY slug
+	) ranked
+	ORDER BY last_used DESC
+	LIMIT $4
+`
+
 // handleGitHubRecentRepos returns the caller's recently-selected repo
 // slugs, deduped, in most-recent-first order. The picker uses this to
-// surface the "Recent" section before the stage 2 enumeration call
-// has loaded (or, when stage 2 isn't deployed yet, as the only
-// section).
+// surface the "Recent" section before the full enumeration call has
+// loaded.
 //
 // Reads the durable sessions.repos column directly — there's no
 // mcp-github hop on this path, so the endpoint works from the moment
@@ -155,7 +169,7 @@ func (s *appServer) handleGitHubRecentRepos(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusOK, map[string]any{"repos": []string{}})
 		return
 	}
-	slugs, err := fetchRecentRepoSlugs(r.Context(), s.pgPool, user.Email, s.sessionScope, recentRepoLimit, recentRepoLookbackDays)
+	slugs, err := fetchRecentRepoSlugs(r.Context(), s.pgPool, repoLookupOwnerEmail(user), s.sessionScope, recentRepoLimit, recentRepoLookbackDays)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "recent repos: "+err.Error())
 		return
@@ -176,24 +190,7 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 	if owner == "" {
 		return []string{}, nil
 	}
-	const q = `
-		WITH recent AS (
-			SELECT unnest(repos) AS slug, created_at
-			FROM sessions
-			WHERE email = $1
-			  AND session_scope = $2
-			  AND created_at > now() - ($3 || ' days')::interval
-		)
-		SELECT slug
-		FROM (
-			SELECT slug, MAX(created_at) AS last_used
-			FROM recent
-			GROUP BY slug
-		) ranked
-		ORDER BY last_used DESC
-		LIMIT $4
-	`
-	rows, err := pool.Query(ctx, q, owner, scope, lookbackDays, limit)
+	rows, err := pool.Query(ctx, fetchRecentRepoSlugsQuery, owner, scope, lookbackDays, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -209,16 +206,19 @@ func fetchRecentRepoSlugs(ctx context.Context, pool *pgxpool.Pool, owner, scope 
 	return out, rows.Err()
 }
 
+func repoLookupOwnerEmail(user auth.User) string {
+	return user.OwnerEmail()
+}
+
 // handleGitHubRepos returns the full set of repos visible to the
 // caller's GitHub App installation, by way of mcp-github.
 //
-// Stage 2 of the per-session repo-selection feature: pairs with the
-// nelsong6/auth on-behalf-of exchange (PR #43) so the orchestrator
-// can present a service JWT carrying the SPA caller's email as
-// `actor_email`, which mcp-github routes back to that user's
-// installation_id via tank-operator's existing
-// /api/internal/github/installation surface. mcp-github needs no
-// changes — the same MCP tool session pods already call.
+// The all-repos endpoint pairs with the nelsong6/auth on-behalf-of
+// exchange (PR #43) so the orchestrator can present a service JWT
+// carrying the SPA caller's email as `actor_email`, which mcp-github
+// routes back to that user's installation_id via tank-operator's
+// existing /api/internal/github/installation surface. mcp-github needs
+// no changes — the same MCP tool session pods already call.
 //
 // This endpoint is hidden behind the same authedFetch wrapper the
 // recent-repos endpoint uses. Failures from mcp-github (unconnected
@@ -239,7 +239,7 @@ func (s *appServer) handleGitHubRepos(w http.ResponseWriter, r *http.Request) {
 	// SPA's fetch budget is the only ceiling we want callers to hit.
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	repos, err := s.mcpGitHub.ListRepos(ctx, user.Email)
+	repos, err := s.mcpGitHub.ListRepos(ctx, repoLookupOwnerEmail(user))
 	if err != nil {
 		githubRepoListRequestsTotal.WithLabelValues("error").Inc()
 		slog.Warn("mcp-github list_installation_repos failed", "email", user.Email, "error", err)
