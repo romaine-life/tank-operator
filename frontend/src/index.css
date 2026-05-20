@@ -2879,6 +2879,17 @@ button:disabled {
   gap: var(--space-3);
 }
 
+.run-transcript-state {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.run-transcript-state strong {
+  color: var(--text-default);
+  font-size: var(--text-base);
+}
+
 /* Composer footer at the bottom of the chat pane. */
 .run-composer-wrap {
   flex: 0 0 auto;
@@ -4125,6 +4136,16 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-load-older:disabled {
   cursor: progress;
   color: var(--text-muted);
+}
+
+.run-transcript-load-error {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) auto var(--space-2);
+  color: var(--danger, #f87171);
+  font-size: var(--text-xs);
 }
 
 @keyframes run-status-pulse {
