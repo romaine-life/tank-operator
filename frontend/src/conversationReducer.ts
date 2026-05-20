@@ -283,6 +283,7 @@ function upsertItem(
   event: TankConversationEvent,
   status: ConversationItemStatus,
 ): ConversationReducerState {
+  if (isCodexUserMessageEchoEvent(event)) return state;
   if (!event.timeline_id || !event.turn_id) return state;
   const id = event.timeline_id;
   const existing = state.items.find((item) => item.id === id);
@@ -369,6 +370,27 @@ function completedItemStatus(event: TankConversationEvent): ConversationItemStat
 function rawPayload(event: TankConversationEvent): Record<string, unknown> | undefined {
   const raw = event.payload?.raw_item;
   return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+}
+
+function isCodexUserMessageEchoEvent(event: TankConversationEvent): boolean {
+  if (event.source !== "codex") return false;
+  if (
+    event.type !== "item.started" &&
+    event.type !== "item.completed" &&
+    event.type !== "item.failed"
+  ) {
+    return false;
+  }
+  const raw = rawPayload(event);
+  return (
+    isUserMessageEchoKind(event.payload?.kind) ||
+    isUserMessageEchoKind(event.payload?.title) ||
+    isUserMessageEchoKind(raw?.type)
+  );
+}
+
+function isUserMessageEchoKind(value: unknown): boolean {
+  return value === "userMessage" || value === "user_message";
 }
 
 function nonzeroExitCode(value: unknown): boolean {
