@@ -68,6 +68,12 @@ test("ToolAskUserBody reads the answered state from the durable event payload", 
   assert.equal(appSource.includes("entry.askUserAnswers"), true);
 });
 
+test("pending AskUserQuestion opens collapsed tool groups", () => {
+  assert.equal(appSource.includes("isPendingAskUserQuestionTool"), true);
+  assert.equal(appSource.includes("pendingAskUserCount"), true);
+  assert.match(appSource, /if \(forceOpen\) setOpen\(true\);/);
+});
+
 test("AskUserQuestion placeholder 'Answer questions?' never leaks into App source", () => {
   // The Claude Agent SDK ships this string as the AskUserQuestion
   // checkPermissions message. If it shows up in our renderer, the
