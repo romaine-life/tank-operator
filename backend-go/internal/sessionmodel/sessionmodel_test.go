@@ -156,6 +156,27 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
+func TestPodManifestMaterializesTankDocsBeforeSandboxAgent(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+		PiSessionImage:    "pi-image",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	cmd := claudeCommand(spec["containers"].([]any))
+	if len(cmd) != 3 || cmd[0] != "bash" || cmd[1] != "-lc" {
+		t.Fatalf("claude command = %v, want bash -lc script", cmd)
+	}
+	script := cmd[2].(string)
+	if !strings.Contains(script, "/opt/tank/session-config/install-tank-docs.sh") {
+		t.Fatalf("claude command does not materialize Tank docs: %s", script)
+	}
+	if !strings.Contains(script, "exec $sandbox_agent_cmd server") {
+		t.Fatalf("claude command no longer execs sandbox-agent: %s", script)
+	}
+}
+
 func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:            "claude-image",
