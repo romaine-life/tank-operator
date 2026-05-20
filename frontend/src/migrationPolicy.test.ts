@@ -92,3 +92,11 @@ test("chat live stream waits for timeline bootstrap", () => {
     /if \(!visible \|\| session\.status !== "Active" \|\| !historyBootstrapped\) return;/,
   );
 });
+
+test("home splash test action seeds the first turn as a skill invocation", () => {
+  assert.equal(appSource.includes("composeSkillPrompt"), true);
+  assert.match(appSource, /initialSkillName\?: SkillStateName/);
+  assert.match(appSource, /\.\.\.\(initialSkillName \? \{ skill_name: initialSkillName \} : \{\}\)/);
+  assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
+  assert.equal(appSource.includes("Available once your session starts"), false);
+});
