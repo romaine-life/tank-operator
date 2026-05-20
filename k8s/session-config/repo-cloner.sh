@@ -88,15 +88,19 @@ exchange_auth() {
     return 1
   fi
 
-  local response token
+  local response token status detail
   response="$(mktemp)"
-  if ! curl -fsS --max-time 20 \
+  status="$(curl -sS --max-time 20 \
     -X POST "$auth_exchange_url" \
     -H "Authorization: Bearer $(cat "$auth_token_path")" \
     -H 'Content-Type: application/json' \
-    -d '{}' > "$response"; then
+    -d '{}' \
+    -o "$response" \
+    -w '%{http_code}' || true)"
+  if [ "$status" != "200" ]; then
+    detail="$(short_error < "$response")"
     rm -f "$response"
-    log "auth.romaine exchange failed"
+    log "auth.romaine exchange failed: HTTP ${status:-000} ${detail}"
     return 1
   fi
   token="$(jq -er '.token' "$response" 2>/dev/null || true)"
