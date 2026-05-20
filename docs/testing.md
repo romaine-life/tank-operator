@@ -10,6 +10,12 @@ Slot hostnames such as `https://tank-operator-slot-N.tank.dev.romaine.life`
 are trusted auth origins through Glimmung-managed auth origins, not through a
 static auth.romaine.life allowlist.
 
+Those slot HTTPRoutes use concrete hostnames, but they attach to the shared
+`tank-operator-wildcard` listener in the `tank-operator` namespace. That
+single listener/certificate covers `tank.dev.romaine.life` and
+`*.tank.dev.romaine.life`; slots must not create their own public cert-manager
+`Certificate` or public `XListenerSet`.
+
 ## Test-Slot SPA Auth
 
 Session pods authenticate as service principals through the projected

@@ -17,6 +17,8 @@ testEnv:
   # different release names while rendering the same slot-local resource names.
   slotName: ""
   recordBase: tank.dev.romaine.life
+  wildcardListenerSetName: tank-operator-wildcard
+  wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
   claudeCredentialsKvKey: claude-code-credentials
 
@@ -75,6 +77,20 @@ ingress:
   gatewayNamespace: envoy-gateway-system
   certIssuer: letsencrypt-prod
   tlsSecret: tank-operator-tls
+
+# Shared HTTPS listener for validation slots. The synced prod release owns one
+# wildcard cert/listener for tank.dev.romaine.life; slot HTTPRoutes attach to
+# it instead of creating per-slot public certificates.
+wildcardCertificate:
+  enabled: true
+  name: tank-operator-wildcard
+  tlsSecret: tank-operator-wildcard-tls
+  hosts:
+    - tank.dev.romaine.life
+    - "*.tank.dev.romaine.life"
+  issuer: letsencrypt-prod-dns01
+  issuerKind: ClusterIssuer
+  allowedFromNamespaces: All
 
 # Sessions ingress: wildcard DNS for *.<ingress.hostname>. Off by
 # default; enabled only for slot envs that host a per-session

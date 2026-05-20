@@ -1,10 +1,8 @@
-{{- if and (eq (include "tank-operator.renderWarm" .) "true") (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
-# Per-app HTTPS listener bound to the shared `main` Gateway. Terminates TLS for the
-# tank-operator hostname using the cert-manager-managed Secret in this namespace.
+{{- if and .Values.wildcardCertificate.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
 apiVersion: gateway.networking.x-k8s.io/v1alpha1
 kind: XListenerSet
 metadata:
-  name: tank-operator
+  name: {{ .Values.wildcardCertificate.name }}
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 spec:
   parentRef:
@@ -13,14 +11,19 @@ spec:
     name: {{ .Values.ingress.gatewayName }}
     namespace: {{ .Values.ingress.gatewayNamespace }}
   listeners:
-    - name: https
+    {{- range $i, $host := .Values.wildcardCertificate.hosts }}
+    - name: {{ printf "https-%d" $i }}
       protocol: HTTPS
       port: 443
-      hostname: {{ include "tank-operator.ingressHostname" . }}
+      hostname: {{ $host | quote }}
       tls:
         mode: Terminate
         certificateRefs:
           - group: ""
             kind: Secret
-            name: {{ include "tank-operator.ingressTlsSecret" . }}
+            name: {{ $.Values.wildcardCertificate.tlsSecret }}
+      allowedRoutes:
+        namespaces:
+          from: {{ $.Values.wildcardCertificate.allowedFromNamespaces }}
+    {{- end }}
 {{- end }}
