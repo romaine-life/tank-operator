@@ -10,6 +10,12 @@ export type ConversationRunStatus =
   | "error";
 
 export type ConversationItemStatus = "started" | "completed" | "failed";
+export type ConversationBackgroundTaskStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "unknown";
 
 export interface ConversationMessage {
   id: string;
@@ -56,12 +62,32 @@ export interface ConversationInterruptRequest {
   time: string;
 }
 
+export interface ConversationBackgroundTask {
+  id: string;
+  taskId: string;
+  turnId?: string;
+  providerItemId?: string;
+  toolUseId?: string;
+  status: ConversationBackgroundTaskStatus;
+  summary?: string;
+  description?: string;
+  lastToolName?: string;
+  error?: unknown;
+  orderKey?: string;
+  sourceEventId?: string;
+  createdAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 export interface ConversationReducerState {
   seenEventIds: string[];
   seenClientNonces: string[];
   messages: ConversationMessage[];
   items: ConversationItem[];
   interruptRequests: ConversationInterruptRequest[];
+  backgroundTasks: ConversationBackgroundTask[];
   runStatus: ConversationRunStatus;
   activeTurnId: string | null;
   activeItemId: string | null;
@@ -78,6 +104,7 @@ export const initialConversationState: ConversationReducerState = {
   messages: [],
   items: [],
   interruptRequests: [],
+  backgroundTasks: [],
   runStatus: "ready",
   activeTurnId: null,
   activeItemId: null,
@@ -189,6 +216,12 @@ export function conversationReducer(
         event,
         "failed",
       );
+    case "shell_task.started":
+      return upsertBackgroundTask(next, event, "running");
+    case "shell_task.updated":
+      return upsertBackgroundTask(next, event, backgroundTaskStatus(event));
+    case "shell_task.exited":
+      return upsertBackgroundTask(next, event, backgroundTaskTerminalStatus(event));
     case "tool.approval_requested":
       return upsertItem(
         {
@@ -333,6 +366,95 @@ function upsertItem(
     activeItemId:
       resolvedStatus === "started" ? id : state.activeItemId === id ? null : state.activeItemId,
   };
+}
+
+function upsertBackgroundTask(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+  status: ConversationBackgroundTaskStatus,
+): ConversationReducerState {
+  const taskId = backgroundTaskId(event);
+  if (!taskId || !event.timeline_id || !event.turn_id) return state;
+  const existing = state.backgroundTasks.find((task) => task.id === event.timeline_id);
+  const existingTerminal = existing ? isTerminalBackgroundTaskStatus(existing.status) : false;
+  const nextStatus =
+    existing && existingTerminal && status === "running" ? existing.status : status;
+  const toolUseId = stringPayload(event, "tool_use_id");
+  const task: ConversationBackgroundTask = {
+    id: event.timeline_id,
+    taskId,
+    turnId: event.turn_id,
+    providerItemId: event.provider_item_id ?? existing?.providerItemId,
+    toolUseId: toolUseId ?? existing?.toolUseId,
+    status: nextStatus,
+    summary: stringPayload(event, "summary") ?? existing?.summary,
+    description: stringPayload(event, "description") ?? existing?.description,
+    lastToolName: stringPayload(event, "last_tool_name") ?? existing?.lastToolName,
+    error: event.payload?.error ?? existing?.error,
+    orderKey: existing?.orderKey ?? event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: existing?.createdAt ?? event.created_at,
+    startedAt:
+      event.type === "shell_task.started"
+        ? event.created_at
+        : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+    updatedAt: event.created_at || existing?.updatedAt,
+    completedAt: isTerminalBackgroundTaskStatus(nextStatus)
+      ? existing?.completedAt ?? event.created_at
+      : existing?.completedAt,
+  };
+  const backgroundTasks = existing
+    ? state.backgroundTasks.map((candidate) => (candidate.id === task.id ? task : candidate))
+    : [...state.backgroundTasks, task];
+  return {
+    ...state,
+    backgroundTasks,
+  };
+}
+
+function backgroundTaskId(event: TankConversationEvent): string | undefined {
+  if (typeof event.task_id === "string" && event.task_id) return event.task_id;
+  return stringPayload(event, "task_id");
+}
+
+function backgroundTaskStatus(event: TankConversationEvent): ConversationBackgroundTaskStatus {
+  return normalizeBackgroundTaskStatus(stringPayload(event, "status"));
+}
+
+function backgroundTaskTerminalStatus(event: TankConversationEvent): ConversationBackgroundTaskStatus {
+  const status = normalizeBackgroundTaskStatus(stringPayload(event, "status"));
+  return status === "running" || status === "unknown" ? "completed" : status;
+}
+
+function normalizeBackgroundTaskStatus(status: string | undefined): ConversationBackgroundTaskStatus {
+  switch ((status ?? "").toLowerCase()) {
+    case "running":
+    case "started":
+    case "pending":
+    case "in_progress":
+    case "in-progress":
+    case "updated":
+      return "running";
+    case "completed":
+    case "complete":
+    case "success":
+    case "succeeded":
+    case "exited":
+      return "completed";
+    case "failed":
+    case "error":
+      return "failed";
+    case "stopped":
+    case "cancelled":
+    case "canceled":
+      return "stopped";
+    default:
+      return "unknown";
+  }
+}
+
+function isTerminalBackgroundTaskStatus(status: ConversationBackgroundTaskStatus): boolean {
+  return status === "completed" || status === "failed" || status === "stopped";
 }
 
 function isTerminalItemStatus(status: ConversationItemStatus): boolean {

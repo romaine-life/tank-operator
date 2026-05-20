@@ -32,6 +32,9 @@ export const TANK_EVENT_TYPES = [
   "item.started",
   "item.completed",
   "item.failed",
+  "shell_task.started",
+  "shell_task.updated",
+  "shell_task.exited",
   "tool.approval_requested",
   "tool.approval_resolved",
 ];
@@ -108,6 +111,12 @@ function isValidEventByType(event) {
       return hasStrings(event, ["turn_id", "timeline_id"]) &&
         isStringPayload(event.payload, "kind") &&
         isItemOutcome(event.payload.outcome);
+    case "shell_task.started":
+    case "shell_task.updated":
+    case "shell_task.exited":
+      return event.actor === "tool" &&
+        hasStrings(event, ["turn_id", "timeline_id"]) &&
+        isShellTaskPayload(event.payload);
     case "tool.approval_requested":
     case "tool.approval_resolved":
       return event.actor === "tool" &&
@@ -155,6 +164,15 @@ function isItemOutcome(outcome) {
     return ["claude_tool_result_is_error", "codex_item_status_failed", "exit_code"].includes(outcome.reason);
   }
   return outcome.kind === "execution_failed" && outcome.reason === "provider_item_error";
+}
+
+function isShellTaskPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return payload.kind === "shell_task" &&
+    typeof payload.task_id === "string" &&
+    payload.task_id.length > 0 &&
+    typeof payload.status === "string" &&
+    payload.status.length > 0;
 }
 
 function isSkillName(value) {

@@ -86,6 +86,9 @@ var UnreadOutputItemTypes = []string{
 	"item.started",
 	"item.completed",
 	"item.failed",
+	"shell_task.started",
+	"shell_task.updated",
+	"shell_task.exited",
 	"tool.approval_requested",
 	"tool.approval_resolved",
 }

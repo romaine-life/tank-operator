@@ -166,8 +166,8 @@ test("shouldRingForActivityTransition: streaming -> stopping does NOT ring", () 
 });
 
 test("shouldRingForActivityTransition: stopping -> ready does NOT ring", () => {
-  // The user pressed Stop; the agent winding down and returning to ready is
-  // expected. Don't treat it as a "your turn" event.
+  // The user pressed Stop; a stop-requested turn resolving to ready is expected.
+  // Don't treat it as a "your turn" event.
   assert.equal(
     shouldRingForActivityTransition(summary("stopping"), summary("ready")),
     false,

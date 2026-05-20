@@ -53,6 +53,9 @@ const (
 	EventItemStarted            EventType = "item.started"
 	EventItemCompleted          EventType = "item.completed"
 	EventItemFailed             EventType = "item.failed"
+	EventShellTaskStarted       EventType = "shell_task.started"
+	EventShellTaskUpdated       EventType = "shell_task.updated"
+	EventShellTaskExited        EventType = "shell_task.exited"
 	EventApprovalRequested      EventType = "tool.approval_requested"
 	EventApprovalResolved       EventType = "tool.approval_resolved"
 )
@@ -73,6 +76,7 @@ type Event struct {
 	TurnID         string           `json:"turn_id,omitempty"`
 	TimelineID     string           `json:"timeline_id,omitempty"`
 	ProviderItemID string           `json:"provider_item_id,omitempty"`
+	TaskID         string           `json:"task_id,omitempty"`
 	ParentID       string           `json:"parent_id,omitempty"`
 	ClientNonce    string           `json:"client_nonce,omitempty"`
 	Actor          Actor            `json:"actor"`
@@ -192,6 +196,14 @@ func validateEventMap(event map[string]any) error {
 			return err
 		}
 		return validateItemOutcome(event)
+	case EventShellTaskStarted, EventShellTaskUpdated, EventShellTaskExited:
+		if err := requireFields(event, "turn_id", "timeline_id", "task_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorTool {
+			return fmt.Errorf("%s must be actor=tool", eventType)
+		}
+		return validateShellTaskPayload(event)
 	case EventApprovalRequested, EventApprovalResolved:
 		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
 			return err
@@ -310,6 +322,23 @@ func validateItemOutcome(event map[string]any) error {
 	}
 }
 
+func validateShellTaskPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "shell_task" {
+		return fmt.Errorf("payload.kind must be shell_task for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "task_id") == "" {
+		return fmt.Errorf("payload.task_id is required for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "status") == "" {
+		return fmt.Errorf("payload.status is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func stringField(event map[string]any, field string) string {
 	value, _ := event[field].(string)
 	return value
@@ -350,6 +379,9 @@ func validEventType(eventType EventType) bool {
 		EventItemStarted,
 		EventItemCompleted,
 		EventItemFailed,
+		EventShellTaskStarted,
+		EventShellTaskUpdated,
+		EventShellTaskExited,
 		EventApprovalRequested,
 		EventApprovalResolved:
 		return true

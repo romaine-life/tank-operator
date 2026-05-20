@@ -2558,6 +2558,143 @@ button:disabled {
   height: 1rem;
 }
 
+.run-shell-tasks {
+  position: relative;
+  display: inline-flex;
+}
+
+.run-shell-tasks-trigger {
+  position: relative;
+}
+
+.run-shell-tasks-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.28rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.run-shell-tasks-count[data-active="true"] {
+  background: rgba(96, 165, 250, 0.18);
+  color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.12);
+}
+
+.run-shell-tasks-popover {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 30;
+  width: min(24rem, calc(100vw - 2rem));
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 17, 21, 0.98);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  padding: var(--space-2);
+}
+
+.run-shell-tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.run-shell-tasks-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.run-shell-tasks-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.run-shell-tasks-list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.run-shell-task-row {
+  display: grid;
+  grid-template-columns: 0.7rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.run-shell-task-row-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.14);
+}
+
+.run-shell-task-row[data-state="completed"] .run-shell-task-row-dot {
+  background: #34d399;
+  box-shadow: none;
+}
+
+.run-shell-task-row[data-state="failed"] .run-shell-task-row-dot {
+  background: #ef4444;
+  box-shadow: none;
+}
+
+.run-shell-task-row[data-state="stopped"] .run-shell-task-row-dot {
+  background: #fbbf24;
+  box-shadow: none;
+}
+
+.run-shell-task-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.run-shell-task-row-title,
+.run-shell-task-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-shell-task-row-title {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+}
+
+.run-shell-task-row-sub,
+.run-shell-task-row-status {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
 /* Icon-only variant (gear) — same shape, no label. */
 .run-tab-icononly {
   padding: 0.45rem 0.5rem;
@@ -4455,6 +4592,89 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.run-background-task {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: flex-start;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  background: rgba(96, 165, 250, 0.07);
+  font-family: var(--font-primary);
+}
+
+.run-background-task[data-state="completed"] {
+  border-color: rgba(52, 211, 153, 0.18);
+  background: rgba(52, 211, 153, 0.045);
+}
+
+.run-background-task[data-state="failed"] {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.run-background-task[data-state="stopped"] {
+  border-color: rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.07);
+}
+
+.run-background-task-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border-radius: var(--radius-sm);
+  background: rgba(96, 165, 250, 0.13);
+  color: #93c5fd;
+}
+
+.run-background-task-body {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.run-background-task-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-background-task-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: var(--run-chat-font-sm);
+  font-weight: 500;
+}
+
+.run-background-task-status {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--run-chat-font-code-xs);
+}
+
+.run-background-task-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--run-chat-font-code-xs);
+  overflow-wrap: anywhere;
+}
+
+.run-background-task-error {
+  color: #fecaca;
 }
 
 /* Tool-call cards — cloudcli-flavored. Per-tool color stripe on the
