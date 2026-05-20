@@ -54,10 +54,12 @@ test("RunPrefs persists provider model and effort across page reloads", () => {
   assert.match(appSource, /claudeEffort:\s*string;/);
   assert.match(appSource, /codexModelId:\s*string;/);
   assert.match(appSource, /codexEffort:\s*string;/);
+  assert.match(appSource, /initialMessageMode:\s*InitialMessageMode;/);
   assert.match(appSource, /claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   assert.match(appSource, /claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   assert.match(appSource, /codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   assert.match(appSource, /codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
+  assert.match(appSource, /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/);
 });
 
 test("loadRunPrefs filters localStorage-loaded model/effort through the allowlist", () => {
@@ -82,6 +84,10 @@ test("loadRunPrefs filters localStorage-loaded model/effort through the allowlis
   assert.match(
     appSource,
     /key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/,
+  );
+  assert.match(
+    appSource,
+    /key === "initialMessageMode"[\s\S]{0,300}pickInitialMessageMode\(raw, DEFAULT_INITIAL_MESSAGE_MODE\)/,
   );
 });
 

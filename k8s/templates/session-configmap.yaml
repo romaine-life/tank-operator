@@ -13,6 +13,8 @@ data:
 {{ .Files.Get "session-config/default-claude.md" | indent 4 }}
   write-glimmung-context.sh: |
 {{ .Files.Get "session-config/write-glimmung-context.sh" | indent 4 }}
+  install-tank-docs.sh: |
+{{ .Files.Get "session-config/install-tank-docs.sh" | indent 4 }}
   install-tank-skills.sh: |
 {{ .Files.Get "session-config/install-tank-skills.sh" | indent 4 }}
   agent-runner-launch.sh: |
@@ -21,6 +23,10 @@ data:
 {{ .Files.Get "session-config/codex-runner-launch.sh" | indent 4 }}
   repo-cloner.sh: |
 {{ .Files.Get "session-config/repo-cloner.sh" | indent 4 }}
+{{- range $path, $_ := $.Files.Glob "session-config/docs/**" }}
+  docs__{{ trimPrefix "session-config/docs/" $path | replace "/" "__" }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
 {{- range $scope := list "common" "claude" "codex" }}
 {{- range $path, $_ := $.Files.Glob (printf "session-config/skills/%s/**" $scope) }}
   skills__{{ trimPrefix "session-config/skills/" $path | replace "/" "__" }}: |

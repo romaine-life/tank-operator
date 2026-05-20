@@ -12,6 +12,34 @@ const chatScrollTelemetrySource = readFileSync(
   "utf8",
 );
 const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+const sessionConfigMapSource = readFileSync(
+  new URL("../../k8s/templates/session-configmap.yaml", import.meta.url),
+  "utf8",
+);
+const installTankDocsSource = readFileSync(
+  new URL("../../k8s/session-config/install-tank-docs.sh", import.meta.url),
+  "utf8",
+);
+const agentRunnerLaunchSource = readFileSync(
+  new URL("../../k8s/session-config/agent-runner-launch.sh", import.meta.url),
+  "utf8",
+);
+const codexRunnerLaunchSource = readFileSync(
+  new URL("../../k8s/session-config/codex-runner-launch.sh", import.meta.url),
+  "utf8",
+);
+const defaultClaudeSource = readFileSync(
+  new URL("../../k8s/session-config/default-claude.md", import.meta.url),
+  "utf8",
+);
+const bundledQualityTimeframesSource = readFileSync(
+  new URL("../../k8s/session-config/docs/quality-timeframes.md", import.meta.url),
+  "utf8",
+);
+const bundledMigrationPolicySource = readFileSync(
+  new URL("../../k8s/session-config/docs/migration-policy.md", import.meta.url),
+  "utf8",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -142,9 +170,31 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);
-  assert.match(appSource, /\.\.\.\(initialSkillName \? \{ skill_name: initialSkillName \} : \{\}\)/);
+  assert.match(appSource, /\.\.\.\(requestedInitialSkillName \? \{ skill_name: requestedInitialSkillName \} : \{\}\)/);
   assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
   assert.equal(appSource.includes("Available once your session starts"), false);
+});
+
+test("home splash initial-message modes rewrite the first turn deliberately", () => {
+  assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
+  assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
+  assert.equal(appSource.includes("Initial message type: diagnose issue without writing code."), true);
+  assert.equal(appSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
+  assert.equal(appSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
+  assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
+  assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
+});
+
+test("quality gap policy docs are bundled into session config", () => {
+  assert.equal(sessionConfigMapSource.includes("install-tank-docs.sh"), true);
+  assert.equal(sessionConfigMapSource.includes('$.Files.Glob "session-config/docs/**"'), true);
+  assert.equal(sessionConfigMapSource.includes("docs__"), true);
+  assert.equal(installTankDocsSource.includes("/workspace/.tank/docs"), true);
+  assert.equal(agentRunnerLaunchSource.includes("install-tank-docs.sh"), true);
+  assert.equal(codexRunnerLaunchSource.includes("install-tank-docs.sh"), true);
+  assert.equal(defaultClaudeSource.includes("/workspace/.tank/docs/"), true);
+  assert.equal(bundledQualityTimeframesSource.includes("# Quality Timeframes"), true);
+  assert.equal(bundledMigrationPolicySource.includes("# Migration Policy"), true);
 });
 
 test("fresh chat sessions focus the composer instead of the rename field", () => {

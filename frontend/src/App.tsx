@@ -234,6 +234,7 @@ type ScrollToLatestRequest = {
   enabled: boolean;
 };
 type SkillStateName = "test" | "rollout";
+type InitialMessageMode = "direct" | "diagnose" | "quality_gaps" | "test";
 type HomeTab = "chat" | "settings" | "help";
 
 type ForkSessionRequest = {
@@ -1914,6 +1915,42 @@ function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: strin
   return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
 }
 
+function initialMessageModeDirective(mode: InitialMessageMode): string {
+  if (mode === "diagnose") {
+    return [
+      "Initial message type: diagnose issue without writing code.",
+      "Investigate, gather evidence, and report findings only.",
+      "Do not edit files or make code changes unless I explicitly ask in a later message.",
+    ].join(" ");
+  }
+  if (mode === "quality_gaps") {
+    return [
+      "Initial message type: address this issue and inspect the quality/migration gaps it exposes.",
+      "Read /workspace/.tank/docs/quality-timeframes.md and /workspace/.tank/docs/migration-policy.md before planning.",
+      "If either policy doc is missing, report that as a session setup gap before proceeding.",
+      "Make the required code changes and call out any gaps against those docs.",
+    ].join(" ");
+  }
+  if (mode === "test") {
+    return [
+      "Initial message type: make code changes and immediately run the test skill for this.",
+      "Use the test skill workflow as part of implementation and keep the test environment updated while validating.",
+    ].join(" ");
+  }
+  return "";
+}
+
+function composeInitialMessageModePrompt(mode: InitialMessageMode, text: string): string {
+  const trimmed = text.trim();
+  const directive = initialMessageModeDirective(mode);
+  if (!directive) return trimmed;
+  return trimmed ? `${directive}\n\n${trimmed}` : directive;
+}
+
+function initialMessageModeSkillName(mode: InitialMessageMode): SkillStateName | undefined {
+  return mode === "test" ? "test" : undefined;
+}
+
 function stripSkillTrigger(name: string, text: string): string {
   const trimmed = text.trim();
   const triggerPattern = new RegExp(`^[$/]${name}(?:\\s+|\\n+)?`, "i");
@@ -2483,6 +2520,7 @@ const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
 const RUN_PREF_PREFIX = "tank-run-pref-";
 const TURN_COMPLETE_SOUND_SRC = "/assets/upgrade-complete.mp3";
+const DEFAULT_INITIAL_MESSAGE_MODE: InitialMessageMode = "direct";
 
 interface RunPrefs {
   sendByCtrlEnter: boolean;
@@ -2511,6 +2549,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  initialMessageMode: InitialMessageMode;
 }
 
 const DEFAULT_RUN_PREFS: RunPrefs = {
@@ -2527,6 +2566,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -2537,6 +2577,40 @@ const TURN_COMPLETE_SOUND_VOLUME_MAX = 1;
 const TURN_COMPLETE_SOUND_VOLUME_STEP = 0.05;
 const RUN_COMPOSER_PLACEHOLDER = "Ask anything...";
 const RUN_COMPOSER_HINT_SUFFIX = " · / for slash commands";
+
+interface InitialMessageModeOption {
+  id: InitialMessageMode;
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+}
+
+const INITIAL_MESSAGE_MODE_OPTIONS: InitialMessageModeOption[] = [
+  {
+    id: "direct",
+    label: "Direct",
+    hint: "No first-turn preset",
+    icon: MessageSquareIcon,
+  },
+  {
+    id: "diagnose",
+    label: "Diagnose",
+    hint: "No code writes",
+    icon: SearchIcon,
+  },
+  {
+    id: "quality_gaps",
+    label: "Quality gaps",
+    hint: "Fix plus policy check",
+    icon: FileDiffIcon,
+  },
+  {
+    id: "test",
+    label: "Code + test",
+    hint: "Starts the test skill",
+    icon: FlaskConicalIcon,
+  },
+];
 
 function clampChatFontScale(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_RUN_PREFS.chatFontScale;
@@ -2566,6 +2640,10 @@ function pickAllowedPrefId(raw: string | null, options: { id: string }[], fallba
   return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
 }
 
+function pickInitialMessageMode(raw: string | null, fallback: InitialMessageMode): InitialMessageMode {
+  return pickAllowedPrefId(raw, INITIAL_MESSAGE_MODE_OPTIONS, fallback) as InitialMessageMode;
+}
+
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
@@ -2583,6 +2661,8 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+      } else if (key === "initialMessageMode") {
+        out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
       } else if (raw === "true" || raw === "false") {
         out[key] = raw === "true";
       }
@@ -2623,6 +2703,10 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+      }
+    } else if (key === "initialMessageMode") {
+      if (typeof raw === "string") {
+        out[key] = pickInitialMessageMode(raw, prev.initialMessageMode);
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -9444,6 +9528,7 @@ export function App() {
     initialPrompt?: string,
     initialPermissionMode: RunComposerMode = "default",
     initialSkillName?: SkillStateName,
+    initialMessageMode: InitialMessageMode = DEFAULT_INITIAL_MESSAGE_MODE,
   ) {
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
@@ -9459,10 +9544,11 @@ export function App() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const requestedName = homeSessionName.trim();
-    const seedPrompt = initialPrompt?.trim() ?? "";
+    const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
+    const seedPrompt = composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
     const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? [...homeAttachments] : [];
     const seedTurnRequested =
-      (seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) &&
+      (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
     try {
@@ -9532,7 +9618,7 @@ export function App() {
         try {
           const readySession = await waitForSessionReady(created.id);
           setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
-          if (initialSkillName === "test") {
+          if (requestedInitialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
               setError(String(e));
             });
@@ -9571,8 +9657,8 @@ export function App() {
                   .map((p) => `- ${p.absPath}`)
                   .join("\n")}`
               : seedPrompt;
-          const turnPrompt = initialSkillName
-            ? composeSkillPrompt(mode, initialSkillName, composedPrompt)
+          const turnPrompt = requestedInitialSkillName
+            ? composeSkillPrompt(mode, requestedInitialSkillName, composedPrompt)
             : composedPrompt;
           const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
             method: "POST",
@@ -9583,7 +9669,7 @@ export function App() {
               model,
               ...(effort ? { effort } : {}),
               permission_mode: initialPermissionMode,
-              ...(initialSkillName ? { skill_name: initialSkillName } : {}),
+              ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
               follow_up: false,
             }),
           });
@@ -9858,6 +9944,9 @@ export function App() {
       : selectedProvider === "codex"
         ? runPrefs.codexEffort
         : DEFAULT_CLAUDE_EFFORT_ID;
+  const selectedInitialMessageMode =
+    INITIAL_MESSAGE_MODE_OPTIONS.find((option) => option.id === runPrefs.initialMessageMode) ??
+    INITIAL_MESSAGE_MODE_OPTIONS[0];
   const homeSessionTitle = homeSessionName.trim() || "New session";
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
@@ -10239,6 +10328,32 @@ export function App() {
                       );
                     })}
                   </div>
+                  <div className="home-panel-head home-panel-subhead">
+                    <h3>Initial message</h3>
+                    <span className="home-panel-meta">{selectedInitialMessageMode.label}</span>
+                  </div>
+                  <div className="home-initial-grid" role="group" aria-label="initial message type">
+                    {INITIAL_MESSAGE_MODE_OPTIONS.map((option) => {
+                      const selected = option.id === runPrefs.initialMessageMode;
+                      const InitialIcon = option.icon;
+                      return (
+                        <button
+                          key={option.id}
+                          className={`home-model home-initial-option${selected ? " is-selected" : ""}`}
+                          onClick={() => setRunPref("initialMessageMode", option.id)}
+                          disabled={busy}
+                          aria-pressed={selected}
+                          title={option.hint}
+                        >
+                          <InitialIcon className="home-initial-icon" aria-hidden="true" />
+                          <span className="home-initial-main">
+                            <span className="home-model-title">{option.label}</span>
+                            <span className="home-model-sub">{option.hint}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                   {homeModelApplies && (
                     <>
                       <div className="home-panel-head home-panel-subhead">
@@ -10431,14 +10546,17 @@ export function App() {
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
                 onSubmit={({ text, permissionMode }) => {
                   const trimmed = text.trim();
+                  const initialMode = runPrefs.initialMessageMode;
                   const mode =
-                    trimmed || homeAttachments.length > 0
+                    trimmed || homeAttachments.length > 0 || initialMode !== "direct"
                       ? chatModeForHomePrompt(defaultSessionMode)
                       : defaultSessionMode;
                   void createSession(
                     mode,
                     trimmed || undefined,
                     permissionMode,
+                    undefined,
+                    initialMode,
                   );
                 }}
                 permissionMode={homeComposerMode}
