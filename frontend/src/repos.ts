@@ -14,6 +14,7 @@
 // load-bearing on both sides.
 
 export const MAX_REPOS_PER_SESSION = 5;
+export const RECENT_REPO_PREVIEW_LIMIT = 4;
 
 export const REPO_SLUG_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
@@ -39,6 +40,30 @@ export function isValidRepoSlug(value: string): boolean {
 
 export function modeSupportsRepos(mode: string): boolean {
   return REPO_SUPPORTED_MODES.has(mode);
+}
+
+export function recentRepoPreviewSlugs(
+  recent: string[],
+  selected: string[],
+  limit = RECENT_REPO_PREVIEW_LIMIT,
+): string[] {
+  if (limit <= 0 || selected.length >= MAX_REPOS_PER_SESSION) return [];
+
+  const selectedLower = new Set(
+    selected.map((slug) => slug.trim().toLowerCase()),
+  );
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawSlug of recent) {
+    const slug = rawSlug.trim();
+    if (!isValidRepoSlug(slug)) continue;
+    const key = slug.toLowerCase();
+    if (selectedLower.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(slug);
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 // addRepoSlug encapsulates the picker's add-to-staged logic in a pure
