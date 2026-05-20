@@ -100,15 +100,29 @@ export class SessionStore {
   private subscribers = new Set<SessionStoreSubscriber>();
   private cursor: string | null = null;
 
-  // applySnapshot replaces the row cache wholesale from a server
-  // snapshot. Clears tombstones for ids the server still considers
-  // visible — that's the recovery path for a failed optimistic
-  // delete. Tombstones for ids the server omits stay in place so a
-  // post-delete row-update for that id is still dropped.
+  // applySnapshot replaces the row cache from a server snapshot while keeping
+  // the row-version cursor monotonic. HTTP snapshots can resolve after newer
+  // SSE or point-read observations; those late snapshots must not regress an
+  // already-observed row from Active back to Pending or drop a row created
+  // after the snapshot cursor.
   applySnapshot(rows: SessionRow[], snapshotCursor: string | null): void {
+    const previousRows = this.rows;
     const visibleByID = new Map<string, SessionRow>();
     for (const row of rows) {
-      if (row.visible) visibleByID.set(row.id, row);
+      if (!row.visible) continue;
+      const existing = previousRows.get(row.id);
+      visibleByID.set(
+        row.id,
+        existing && existing.row_version > row.row_version ? existing : row,
+      );
+    }
+    if (snapshotCursor) {
+      for (const [id, row] of previousRows) {
+        if (visibleByID.has(id)) continue;
+        if (rowVersionAfterCursor(row.row_version, snapshotCursor)) {
+          visibleByID.set(id, row);
+        }
+      }
     }
     this.rows = visibleByID;
     // Clear tombstones that the server now considers visible — a
@@ -120,7 +134,7 @@ export class SessionStore {
         this.tombstones.delete(id);
       }
     }
-    this.cursor = snapshotCursor;
+    this.cursor = maxRowCursor(this.cursor, snapshotCursor);
     this.emit({ kind: "snapshot-replaced" });
   }
 
@@ -130,14 +144,17 @@ export class SessionStore {
     const row = payload.row;
     if (!row || !row.id) return false;
 
-    // Cursor monotonicity: out-of-order deliveries are dropped at
-    // the application layer. The cursor advance is done in App.tsx
-    // when applying SSE events, not here, because the SSE handler
-    // already drops payloads ≤ current cursor before they reach us.
-    // applyRowUpdate trusts the payload is meant to be applied.
+    // Keep the resume cursor monotonic even when an older frame is ignored.
+    // The row itself is still version-gated below so stale payloads cannot
+    // replace newer row state.
+    this.cursor = maxRowCursor(this.cursor, payload.cursor);
 
     if (this.tombstones.has(row.id)) {
       this.emit({ kind: "row-dropped-tombstoned", id: row.id });
+      return false;
+    }
+    const existing = this.rows.get(row.id);
+    if (existing && existing.row_version > row.row_version) {
       return false;
     }
     if (!row.visible) {
@@ -152,9 +169,8 @@ export class SessionStore {
       }
       return false;
     }
-    const had = this.rows.has(row.id);
+    const had = existing != null;
     this.rows.set(row.id, row);
-    this.cursor = payload.cursor;
     this.emit({ kind: had ? "row-replaced" : "row-added", row });
     return true;
   }
@@ -354,6 +370,27 @@ function numberField(value: Record<string, unknown>, key: string): number | null
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function rowCursorNumber(cursor: string | null): number | null {
+  if (!cursor) return null;
+  const n = Number(cursor);
+  return Number.isFinite(n) ? n : null;
+}
+
+function maxRowCursor(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  const an = rowCursorNumber(a);
+  const bn = rowCursorNumber(b);
+  if (an !== null && bn !== null) return an >= bn ? a : b;
+  return a >= b ? a : b;
+}
+
+function rowVersionAfterCursor(rowVersion: number, cursor: string): boolean {
+  const cursorNumber = rowCursorNumber(cursor);
+  if (cursorNumber === null) return false;
+  return rowVersion > cursorNumber;
 }
 
 function compareSessionRowsForSidebar(a: SessionRow, b: SessionRow): number {

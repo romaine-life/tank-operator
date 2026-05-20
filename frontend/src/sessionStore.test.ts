@@ -39,6 +39,52 @@ test("applyRowUpdate replaces by id without duplicating", () => {
   assert.equal(store.getCursor(), "2");
 });
 
+test("applyRowUpdate ignores older row versions", () => {
+  const store = new SessionStore();
+  store.applyRowUpdate({ cursor: "10", row: row("8", { status: "Active", row_version: 10 }) });
+
+  const applied = store.applyRowUpdate({
+    cursor: "8",
+    row: row("8", { status: "Pending", row_version: 8 }),
+  });
+
+  assert.equal(applied, false, "older row update must not replace newer state");
+  assert.equal(store.list()[0].status, "Active");
+  assert.equal(store.getCursor(), "10");
+});
+
+test("applySnapshot does not regress rows updated after the snapshot was read", () => {
+  const store = new SessionStore();
+  store.applyRowUpdate({ cursor: "2", row: row("51", { status: "Active", row_version: 2 }) });
+
+  store.applySnapshot([
+    row("51", { status: "Pending", row_version: 1 }),
+  ], "1");
+
+  const list = store.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].status, "Active");
+  assert.equal(store.getCursor(), "2");
+});
+
+test("applySnapshot preserves rows newer than the snapshot cursor", () => {
+  const store = new SessionStore();
+  store.applySnapshot([
+    row("old", { row_version: 4, sidebar_position: 2 }),
+  ], "4");
+  store.applyRowUpdate({
+    cursor: "5",
+    row: row("new", { row_version: 5, sidebar_position: 1 }),
+  });
+
+  store.applySnapshot([
+    row("old", { row_version: 4, sidebar_position: 2 }),
+  ], "4");
+
+  assert.deepEqual(store.list().map((r) => r.id), ["old", "new"]);
+  assert.equal(store.getCursor(), "5");
+});
+
 // TestOptimisticDeleteTombstones is the protective-layer
 // behavior the user asked for: click delete → row gone immediately,
 // subsequent server-side wire payloads for the same id are dropped.
