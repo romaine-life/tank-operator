@@ -2192,6 +2192,14 @@ function normalizeToolState(status: string | undefined): string {
   return normalized;
 }
 
+function isAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return entry.toolName === "AskUserQuestion";
+}
+
+function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
+  return isAskUserQuestionTool(entry) && normalizeToolState(entry.toolStatus) === "running";
+}
+
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
@@ -4223,12 +4231,16 @@ function RunToolGroup({
   const runningCount = entries.filter(
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
+  const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
   const errorCount = entries.filter(
     (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
     summaryParts.push(`${runningCount} running`);
+  }
+  if (pendingAskUserCount > 0) {
+    summaryParts.push("needs input");
   }
   if (errorCount > 0) {
     summaryParts.push(`${errorCount} error${errorCount === 1 ? "" : "s"}`);
@@ -4300,7 +4312,7 @@ function RunToolGroup({
 }
 
 function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
-  return autoExpand || entry.toolName === "AskUserQuestion";
+  return autoExpand || isAskUserQuestionTool(entry);
 }
 
 function toolItemExpanded(
@@ -4316,7 +4328,11 @@ function toolGroupDefaultOpen(
   autoExpand: boolean,
   toolExpansionOverrides: Record<string, boolean>,
 ): boolean {
-  return autoExpand || entries.some((entry) => toolExpansionOverrides[entry.id] === true);
+  return (
+    autoExpand ||
+    entries.some(isPendingAskUserQuestionTool) ||
+    entries.some((entry) => toolExpansionOverrides[entry.id] === true)
+  );
 }
 
 // RunMessages renders the durable transcript through react-virtuoso so the
