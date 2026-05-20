@@ -1122,6 +1122,30 @@ function isSessionShortcutEditableTarget(_target: EventTarget | null): boolean {
   return false;
 }
 
+function isTextEntryShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  if (editable && editable.getAttribute("contenteditable") !== "false") return true;
+  const field = target.closest("input, textarea, select");
+  if (!field) return false;
+  if (field instanceof HTMLInputElement) {
+    const type = field.type.toLowerCase();
+    return ![
+      "button",
+      "checkbox",
+      "color",
+      "file",
+      "hidden",
+      "image",
+      "radio",
+      "range",
+      "reset",
+      "submit",
+    ].includes(type);
+  }
+  return true;
+}
+
 function shortcutSessionId(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   const sessionEl = target.closest("[data-session-id]") as HTMLElement | null;
@@ -7895,6 +7919,8 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeComposerWrapRef = useRef<HTMLElement | null>(null);
+  const pendingHomeComposerFocusRef = useRef(false);
   // Files picked / dropped / pasted onto the home composer before the
   // session pod exists. They are uploaded to `/api/sessions/{id}/files/upload`
   // after the pod becomes Ready, then their absolute paths are appended to
@@ -7926,6 +7952,16 @@ export function App() {
       if (att?.previewUrl) URL.revokeObjectURL(att.previewUrl);
       return prev.filter((a) => a.id !== id);
     });
+  }, []);
+  const focusHomeComposerTextarea = useCallback((): boolean => {
+    const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+      | HTMLTextAreaElement
+      | null;
+    if (!textarea || textarea.disabled) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
   useEffect(() => {
@@ -8522,6 +8558,53 @@ export function App() {
   }, [sessions]);
 
   useEffect(() => {
+    if (active !== null) {
+      pendingHomeComposerFocusRef.current = false;
+      return;
+    }
+    if (homeActiveTab !== "chat" || !pendingHomeComposerFocusRef.current) return;
+    pendingHomeComposerFocusRef.current = false;
+    requestAnimationFrame(() => {
+      focusHomeComposerTextarea();
+    });
+  }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  useEffect(() => {
+    if (active !== null) return;
+    const focusHomeComposer = (event: KeyboardEvent) => {
+      if (
+        event.key !== "/" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      if (textarea && event.target === textarea) return;
+      if (isTextEntryShortcutTarget(event.target)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      pendingHomeComposerFocusRef.current = true;
+      if (homeActiveTab !== "chat") {
+        setHomeActiveTab("chat");
+        return;
+      }
+      pendingHomeComposerFocusRef.current = false;
+      requestAnimationFrame(() => {
+        focusHomeComposerTextarea();
+      });
+    };
+    window.addEventListener("keydown", focusHomeComposer, { capture: true });
+    return () => window.removeEventListener("keydown", focusHomeComposer, { capture: true });
+  }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = shiftArrowSessionDirection(event);
       if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
@@ -8540,7 +8623,15 @@ export function App() {
     const renameHighlightedSession = (event: KeyboardEvent) => {
       if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
       const targetId = shortcutSessionId(event.target) ?? active;
-      if (!targetId || closingIds.has(targetId)) return;
+      if (!targetId) {
+        if (active == null) {
+          event.preventDefault();
+          event.stopPropagation();
+          setHomeEditingTitle(true);
+        }
+        return;
+      }
+      if (closingIds.has(targetId)) return;
       const session = sessions.find((s) => s.id === targetId);
       if (!session) return;
       event.preventDefault();
@@ -9324,6 +9415,7 @@ export function App() {
               </button>
             </>)}
             composerVisible={homeActiveTab === "chat"}
+            composerWrapRef={homeComposerWrapRef}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
               if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
