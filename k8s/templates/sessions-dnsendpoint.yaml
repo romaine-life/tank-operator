@@ -1,4 +1,5 @@
-{{- if or .Values.testEnv.enabled .Values.sessionsIngress.dnsEndpoint.enabled -}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
+{{- if or (eq (include "tank-operator.isTestEnv" .) "true") .Values.sessionsIngress.dnsEndpoint.enabled -}}
 # Wildcard DNS for the slot's session subdomain space, watched by
 # external-dns. Pairs with the wildcard cert + Gateway listener that
 # cover *.{{ include "tank-operator.ingressHostname" . }}. Without this, external-dns
@@ -18,4 +19,5 @@ spec:
       recordTTL: {{ .Values.sessionsIngress.dnsEndpoint.ttl }}
       targets:
         - {{ include "tank-operator.sessionsIngressGatewayIP" . | quote }}
+{{- end }}
 {{- end }}

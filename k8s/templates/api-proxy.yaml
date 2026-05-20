@@ -26,6 +26,7 @@ NODE_EXTRA_CA_CERTS by sessions.py for the platform.claude.com gateway).
 We issue a second leaf from the same Issuer so pods trust this proxy's
 api.anthropic.com cert without any new trust-store work in the image.
 */}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -40,6 +41,7 @@ spec:
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
+{{- end }}
 ---
 {{- /*
 SA carries no azure.workload.identity/client-id annotation. The WI
@@ -49,12 +51,15 @@ arrive via envFrom from the ESO-synced config Secret below, so
 DefaultAzureCredential can mint a federated KV token without the
 annotation. Same pattern as the orchestrator Deployment.
 */}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: {{ .Values.apiProxy.serviceAccount }}
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+{{- end }}
 ---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -75,6 +80,7 @@ spec:
     - name: metrics
       port: 9100
       targetPort: metrics
+{{- end }}
 ---
 {{- /*
 Envoy config. Top-of-config rationale:
@@ -98,6 +104,7 @@ Envoy config. Top-of-config rationale:
     response carries one — turning "which call 4xx'd?" into a
     `kubectl logs -c envoy` grep.
 */}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -223,6 +230,7 @@ data:
                         socket_address:
                           address: 127.0.0.1
                           port_value: 9000
+{{- end }}
 ---
 {{- /*
 Workload-identity config secret for the ext_proc sidecar. Same pattern
@@ -230,6 +238,7 @@ as the orchestrator's: ESO syncs AZURE_CLIENT_ID and AZURE_TENANT_ID
 out of KV so DefaultAzureCredential can mint a federated KV token for
 the rotated-blob write.
 */}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -259,7 +268,9 @@ spec:
         decodingStrategy: None
         metadataPolicy: None
         nullBytePolicy: Ignore
+{{- end }}
 ---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -346,6 +357,7 @@ spec:
           secret:
             secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
             optional: true
+{{- end }}
 ---
 {{- /*
 Codex API proxy: same Envoy/ext_proc image as the Anthropic proxy, but
@@ -354,6 +366,7 @@ chain. Codex session pods use a placeholder chatgptAuthTokens auth.json;
 the proxy injects the real Authorization and ChatGPT-Account-ID headers
 from the centrally mounted codex-credentials Secret.
 */}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -368,7 +381,9 @@ spec:
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
+{{- end }}
 ---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -386,7 +401,9 @@ spec:
     - name: metrics
       port: 9100
       targetPort: metrics
+{{- end }}
 ---
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -509,7 +526,9 @@ data:
                         socket_address:
                           address: 127.0.0.1
                           port_value: 9000
+{{- end }}
 ---
+{{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -596,3 +615,4 @@ spec:
           secret:
             secretName: {{ include "tank-operator.codexCredentialsSecret" . }}
             optional: true
+{{- end }}

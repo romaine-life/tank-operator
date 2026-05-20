@@ -1,3 +1,4 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 # Orchestrator (running as the `tank-operator` SA in the tank-operator ns)
 # owns ephemeral session Pods in the sessions namespace. A Pod is the session
 # runtime; if it dies, the session is failed rather than transparently
@@ -65,6 +66,7 @@ roleRef:
   kind: Role
   name: tank-operator-design-selection
 ---
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 # Orchestrator SA needs auth-delegator so internal endpoints can call
 # TokenReview for audience-scoped service-account tokens.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -97,3 +99,5 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: cluster-admin
+{{- end }}
+{{- end }}

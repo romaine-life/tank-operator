@@ -9,7 +9,7 @@ to override explicitly.
 {{- define "tank-operator.claudeCredentialsKvKey" -}}
 {{- if .Values.externalSecret.claudeCredentials.kvKey -}}
 {{- .Values.externalSecret.claudeCredentials.kvKey -}}
-{{- else if .Values.testEnv.enabled -}}
+{{- else if eq (include "tank-operator.isTestEnv" .) "true" -}}
 {{- .Values.testEnv.claudeCredentialsKvKey -}}
 {{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
 claude-code-credentials
@@ -18,40 +18,67 @@ claude-code-credentials
 {{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.renderMode" -}}
+{{- $mode := .Values.renderMode | default "normal" -}}
+{{- if not (has $mode (list "normal" "warm" "hot")) -}}
+{{- fail (printf "renderMode must be one of: normal, warm, hot; got %q" $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "tank-operator.isTestEnv" -}}
+{{- $mode := include "tank-operator.renderMode" . -}}
+{{- if or (eq $mode "warm") (eq $mode "hot") -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.slotName" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ required "testEnv.slotName is required when renderMode is warm or hot" .Values.testEnv.slotName }}{{- else -}}{{ .Release.Name }}{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.renderWarm" -}}
+{{- $mode := include "tank-operator.renderMode" . -}}
+{{- if or (eq $mode "normal") (eq $mode "warm") -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.renderHot" -}}
+{{- $mode := include "tank-operator.renderMode" . -}}
+{{- if or (eq $mode "normal") (eq $mode "hot") -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.orchestratorNamespace" -}}
-{{- if .Values.testEnv.enabled -}}{{ .Release.Namespace }}{{- else -}}{{ .Values.namespaces.orchestrator }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ .Release.Namespace }}{{- else -}}{{ .Values.namespaces.orchestrator }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionsNamespace" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-sessions" .Release.Name }}{{- else -}}{{ .Values.namespaces.sessions }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-sessions" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.namespaces.sessions }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.ingressHostname" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s.%s" .Release.Name .Values.testEnv.recordBase }}{{- else -}}{{ .Values.ingress.hostname }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s.%s" (include "tank-operator.slotName" .) .Values.testEnv.recordBase }}{{- else -}}{{ .Values.ingress.hostname }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.ingressTlsSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-tls" .Release.Name }}{{- else -}}{{ .Values.ingress.tlsSecret }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-tls" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.ingress.tlsSecret }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.orchestratorServiceAccount" -}}
-{{- if .Values.testEnv.enabled -}}{{ .Release.Name }}{{- else -}}{{ .Values.orchestrator.serviceAccount }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ include "tank-operator.slotName" . }}{{- else -}}{{ .Values.orchestrator.serviceAccount }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionServiceAccount" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-session" .Release.Name }}{{- else -}}{{ .Values.session.serviceAccount }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-session" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.session.serviceAccount }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionConfigMap" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-session-config" .Release.Name }}{{- else -}}{{ .Values.session.configMap }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-session-config" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.session.configMap }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.appConfigMap" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-app-config" .Release.Name }}{{- else -}}{{ .Values.appConfig.configMap }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-app-config" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.appConfig.configMap }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionRegistryScope" -}}
-{{- if .Values.testEnv.enabled -}}{{ .Release.Name }}{{- else -}}{{ .Values.session.registryScope }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ include "tank-operator.slotName" . }}{{- else -}}{{ .Values.session.registryScope }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.internalURL" -}}
@@ -59,42 +86,42 @@ claude-code-credentials
 {{- end -}}
 
 {{- define "tank-operator.oauthGatewayHost" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "claude-oauth-gateway.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.oauthGateway.serviceHost }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "claude-oauth-gateway.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.oauthGateway.serviceHost }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.apiProxyHost" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "claude-api-proxy.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.apiProxy.serviceHost }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "claude-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.apiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.codexApiProxyHost" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" .Release.Name }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
 
 {{- define "tank-operator.githubAppSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-github-app-creds" .Release.Name }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-github-app-creds" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-codex-credentials" .Release.Name }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.claudeCredentialsSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-claude-code-credentials" .Release.Name }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.credentialRefresherConfigSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-credentials-refresher-config" .Release.Name }}{{- else -}}{{ .Values.credentialRefresher.configSecret }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-credentials-refresher-config" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.credentialRefresher.configSecret }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.apiProxyConfigSecret" -}}
-{{- if .Values.testEnv.enabled -}}{{ printf "%s-api-proxy-config" .Release.Name }}{{- else -}}{{ .Values.apiProxy.configSecret }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-api-proxy-config" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.apiProxy.configSecret }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionsIngressDnsEnabled" -}}
-{{- if .Values.testEnv.enabled -}}true{{- else -}}{{ .Values.sessionsIngress.dnsEndpoint.enabled }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}true{{- else -}}{{ .Values.sessionsIngress.dnsEndpoint.enabled }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionsIngressGatewayIP" -}}
-{{- if .Values.testEnv.enabled -}}{{ .Values.testEnv.sessionsGatewayIP }}{{- else -}}{{ .Values.sessionsIngress.gatewayIP }}{{- end -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ .Values.testEnv.sessionsGatewayIP }}{{- else -}}{{ .Values.sessionsIngress.gatewayIP }}{{- end -}}
 {{- end -}}

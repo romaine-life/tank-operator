@@ -15,7 +15,7 @@
 //      that drives Claude SDK integration).
 //
 //   2. Prod doesn't suffer because of a dev practice — the hot-swap path
-//      is gated on .Values.testEnv.enabled, exactly like the orchestrator's
+//      is gated on renderMode=hot, exactly like the orchestrator's
 //      hot-swap is today. Production session pods see zero behavioral
 //      change. The image gains a small baked binary (tank-supervisor) and
 //      a tiny shim script, both dormant when the env vars aren't set.

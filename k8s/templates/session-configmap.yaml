@@ -1,3 +1,4 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -22,5 +23,6 @@ data:
 {{- range $path, $_ := $.Files.Glob (printf "session-config/skills/%s/**" $scope) }}
   skills__{{ trimPrefix "session-config/skills/" $path | replace "/" "__" }}: |
 {{ $.Files.Get $path | indent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

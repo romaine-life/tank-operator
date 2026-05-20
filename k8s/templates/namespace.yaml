@@ -1,6 +1,8 @@
+{{- if and (eq (include "tank-operator.renderWarm" .) "true") (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
 apiVersion: v1
 kind: Namespace
 metadata:
   name: {{ include "tank-operator.sessionsNamespace" . }}
   labels:
     app.kubernetes.io/managed-by: tank-operator
+{{- end }}

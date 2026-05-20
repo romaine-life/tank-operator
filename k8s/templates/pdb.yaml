@@ -1,6 +1,7 @@
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
 {{- /*
 PDB is only rendered for production tank-operator. Test environments
-(Glimmung native-k8s slots, etc.) set testEnv.enabled=true; those run
+(Glimmung native-k8s slots, etc.) set renderMode=warm/hot; those run
 with a single replica and the deployment scales to zero between runs,
 so a minAvailable=1 PDB becomes a zombie that AKS's upgrade
 orchestration may interpret as "this pool can't be drained safely."
@@ -9,7 +10,7 @@ If a test environment ever legitimately needs disruption protection,
 flip this back to unconditional and revisit the surrounding semantics
 (replica count, scale-to-zero behavior, AKS upgrade interaction).
 */}}
-{{- if and .Values.orchestrator.podDisruptionBudget.enabled (not .Values.testEnv.enabled) }}
+{{- if and .Values.orchestrator.podDisruptionBudget.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -22,4 +23,5 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: tank-operator
+{{- end }}
 {{- end }}
