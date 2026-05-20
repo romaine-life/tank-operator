@@ -9402,6 +9402,38 @@ export function App() {
                       )}
                     </>
                   )}
+                </section>
+
+                <section className="home-panel home-panel-actions" aria-labelledby="home-actions-title">
+                  <div className="home-panel-head">
+                    <h3 id="home-actions-title">Setup</h3>
+                  </div>
+                  <div className="home-quick-actions">
+                    <button
+                      className="home-quick-action"
+                      onClick={() => createSession("api_key")}
+                      disabled={busy}
+                    >
+                      <IconKey className="home-quick-icon" />
+                      <span className="home-quick-main">
+                        <span className="home-quick-title">API key</span>
+                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
+                      </span>
+                    </button>
+                    {configMode && (
+                      <button
+                        className="home-quick-action"
+                        onClick={() => createSession(configMode)}
+                        disabled={busy}
+                      >
+                        <IconWrench className="home-quick-icon" />
+                        <span className="home-quick-main">
+                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
+                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                        </span>
+                      </button>
+                    )}
+                  </div>
                   {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                     <RepoPicker
                       selected={selectedRepos}
@@ -9440,38 +9472,6 @@ export function App() {
                       }}
                     />
                   )}
-                </section>
-
-                <section className="home-panel home-panel-actions" aria-labelledby="home-actions-title">
-                  <div className="home-panel-head">
-                    <h3 id="home-actions-title">Setup</h3>
-                  </div>
-                  <div className="home-quick-actions">
-                    <button
-                      className="home-quick-action"
-                      onClick={() => createSession("api_key")}
-                      disabled={busy}
-                    >
-                      <IconKey className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">API key</span>
-                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
-                      </span>
-                    </button>
-                    {configMode && (
-                      <button
-                        className="home-quick-action"
-                        onClick={() => createSession(configMode)}
-                        disabled={busy}
-                      >
-                        <IconWrench className="home-quick-icon" />
-                        <span className="home-quick-main">
-                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
-                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
-                        </span>
-                      </button>
-                    )}
-                  </div>
                 </section>
               </div>
                 </div>
