@@ -75,6 +75,38 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS sessions_email_scope_row_version
 		ON sessions (email, session_scope, row_version)`,
 
+	// Durable sidebar ordering. The pre-migration SPA stored manual
+	// order in localStorage, which meant any row_version-sorted update
+	// (test/rollout/activity) could reshuffle unpinned rows and every
+	// browser tab had a different source of truth. Keep the user's
+	// render order on the sessions row instead. Larger values render
+	// earlier; existing rows backfill newest-first and future creates
+	// get a sequence-backed value that naturally lands at the top until
+	// the user drags rows into a custom order.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS sidebar_position bigint`,
+	`WITH ranked AS (
+		SELECT email, session_scope, session_id,
+			row_number() OVER (
+				PARTITION BY email, session_scope
+				ORDER BY created_at ASC, session_id ASC
+			)::bigint AS position
+		FROM sessions
+	)
+	UPDATE sessions
+	SET sidebar_position = ranked.position
+	FROM ranked
+	WHERE sessions.email = ranked.email
+	  AND sessions.session_scope = ranked.session_scope
+	  AND sessions.session_id = ranked.session_id
+	  AND sessions.sidebar_position IS NULL`,
+	`ALTER TABLE sessions
+		ALTER COLUMN sidebar_position SET DEFAULT nextval('sessions_row_version_seq')`,
+	`ALTER TABLE sessions
+		ALTER COLUMN sidebar_position SET NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS sessions_email_scope_visible_sidebar_position
+		ON sessions (email, session_scope, visible, sidebar_position DESC, created_at DESC)`,
+
 	// Phase 2 (docs/session-list-redesign.md) — test_state and
 	// rollout_state move onto the row so Reader.List can build the
 	// snapshot Info without a K8s pod read. Pod annotations are still

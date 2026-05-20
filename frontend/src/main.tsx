@@ -47,7 +47,6 @@ const TANK_KEY_ALLOWLIST = [
   "tank.defaultSessionMode",
   "tank.defaultInteraction",
   "tank.sessionInteraction:",
-  "tank.sessionOrder",      // matches tank.sessionOrder.<sub>
 ];
 function isAllowedTankKey(key: string): boolean {
   for (const allowed of TANK_KEY_ALLOWLIST) {

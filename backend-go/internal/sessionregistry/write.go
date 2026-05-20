@@ -78,18 +78,19 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	if repos == nil {
 		repos = []string{}
 	}
+	sidebarPosition := record.SidebarPosition
 	const q = `
 		INSERT INTO sessions (
 			email, session_scope, session_id,
 			mode, pod_name, name, visible,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos
+			repos, sidebar_position
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, COALESCE($9, now()), $10,
 			COALESCE(NULLIF($11, ''), 'Pending'), $12,
-			$13
+			$13, COALESCE(NULLIF($14, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -119,6 +120,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		status,
 		nullableTimestamp(readyAt),
 		repos,
+		sidebarPosition,
 	)
 	return err
 }
@@ -206,6 +208,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			sidebar_position,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
@@ -217,14 +220,14 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		visible                                              bool
 		activitySummary, testState, rolloutState, cloneState []byte
 		repos                                                []string
-		rowVersion                                           int64
+		sidebarPosition, rowVersion                          int64
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
-		&repos, &cloneState,
+		&repos, &cloneState, &sidebarPosition,
 		&rowVersion,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -255,9 +258,128 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RolloutState:    unmarshalJSONB(rolloutState),
 		Repos:           repos,
 		CloneState:      unmarshalJSONB(cloneState),
+		SidebarPosition: sidebarPosition,
 		RowVersion:      rowVersion,
 	}
 	return record, true, nil
+}
+
+// Reorder replaces the visible sidebar order for one owner/scope. The
+// caller must send a complete permutation of the currently-visible ids;
+// partial orders are rejected instead of letting a stale browser tab
+// overwrite a newer durable list.
+func (s *Store) Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return nil, nil
+	}
+	cleaned := make([]string, 0, len(orderedIDs))
+	seen := map[string]struct{}{}
+	for _, id := range orderedIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			return nil, sessionmodel.ErrSessionOrderConflict
+		}
+		seen[id] = struct{}{}
+		cleaned = append(cleaned, id)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	const listQ = `
+		SELECT session_id, visible
+		FROM sessions
+		WHERE email = $1 AND session_scope = $2
+		ORDER BY sidebar_position DESC, created_at DESC, session_id DESC
+	`
+	rows, err := tx.Query(ctx, listQ, normalized, s.scope)
+	if err != nil {
+		return nil, err
+	}
+	var current []string
+	for rows.Next() {
+		var id string
+		var visible bool
+		if err := rows.Scan(&id, &visible); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if visible {
+			current = append(current, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	if len(cleaned) != len(current) {
+		return nil, sessionmodel.ErrSessionOrderConflict
+	}
+	currentSet := map[string]struct{}{}
+	for _, id := range current {
+		currentSet[id] = struct{}{}
+	}
+	for _, id := range cleaned {
+		if _, ok := currentSet[id]; !ok {
+			return nil, sessionmodel.ErrSessionOrderConflict
+		}
+	}
+
+	positions := make([]int64, len(cleaned))
+	for i := range cleaned {
+		positions[i] = int64(len(cleaned) - i)
+	}
+	const updateQ = `
+		WITH updated AS (
+			UPDATE sessions
+			SET sidebar_position = v.position,
+				updated_at = now(),
+				row_version = nextval('sessions_row_version_seq')
+			FROM unnest($4::text[], $5::bigint[]) AS v(session_id, position)
+			WHERE sessions.email = $1
+			  AND sessions.session_scope = $2
+			  AND sessions.visible = true
+			  AND sessions.session_id = v.session_id
+			RETURNING sessions.session_id, sessions.row_version
+		)
+		SELECT session_id
+		FROM updated
+		ORDER BY row_version ASC
+	`
+	rows, err = tx.Query(ctx, updateQ, normalized, s.scope, cleaned, positions)
+	if err != nil {
+		return nil, err
+	}
+	var publishIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		publishIDs = append(publishIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(publishIDs) != len(cleaned) {
+		return nil, sessionmodel.ErrSessionOrderConflict
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return publishIDs, nil
 }
 
 // OwnerForSession returns the owner email associated with the given

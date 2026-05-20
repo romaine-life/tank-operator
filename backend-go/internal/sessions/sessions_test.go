@@ -29,19 +29,19 @@ func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
 	})
 	registry := registryRecords{
 		{
-			ID:            "12",
-			Email:         "nelson@romaine.life",
-			Mode:          sessionmodel.CodexGUIMode,
-			PodName:       "session-12",
-			Name:          stringPtr("Workbench"),
-			Visible:       true,
-			RequestedAt:   "2026-05-11T00:00:00+00:00",
-			CreatedAt:     "2026-05-11T00:00:01+00:00",
-			Status:        "Active",
-			ReadyAt:       "2026-05-11T00:00:03+00:00",
+			ID:              "12",
+			Email:           "nelson@romaine.life",
+			Mode:            sessionmodel.CodexGUIMode,
+			PodName:         "session-12",
+			Name:            stringPtr("Workbench"),
+			Visible:         true,
+			RequestedAt:     "2026-05-11T00:00:00+00:00",
+			CreatedAt:       "2026-05-11T00:00:01+00:00",
+			Status:          "Active",
+			ReadyAt:         "2026-05-11T00:00:03+00:00",
 			ActivitySummary: activity,
-			TestState:     map[string]any{"active": true},
-			RolloutState:  map[string]any{"active": true},
+			TestState:       map[string]any{"active": true},
+			RolloutState:    map[string]any{"active": true},
 		},
 	}
 	// Empty K8s client — proves the snapshot doesn't touch K8s.
@@ -119,14 +119,14 @@ func TestListSkipsInvisibleRows(t *testing.T) {
 }
 
 // TestListSortsByRegistryOrder pins that the snapshot preserves the
-// row order returned by registry.List (oldest-first by created_at).
-// The SPA does its own ordering on top, but the snapshot's stable
-// order is what makes the SSE reducer's "find row by id" predictable.
+// row order returned by registry.List. The registry owns durable
+// sidebar_position ordering; row_version changes for status/test/
+// rollout updates must not become the render order.
 func TestListSortsByRegistryOrder(t *testing.T) {
 	registry := registryRecords{
-		{ID: "11", Email: "u@example.com", Visible: true, Status: "Active"},
-		{ID: "21", Email: "u@example.com", Visible: true, Status: "Active"},
-		{ID: "31", Email: "u@example.com", Visible: true, Status: "Active"},
+		{ID: "31", Email: "u@example.com", Visible: true, Status: "Active", SidebarPosition: 3, RowVersion: 1},
+		{ID: "21", Email: "u@example.com", Visible: true, Status: "Active", SidebarPosition: 2, RowVersion: 99},
+		{ID: "11", Email: "u@example.com", Visible: true, Status: "Active", SidebarPosition: 1, RowVersion: 2},
 	}
 	reader := NewReaderFull(fake.NewSimpleClientset(), sessionmodel.SessionsNamespace, registry, "default")
 	got, err := reader.List(context.Background(), "u@example.com")
@@ -137,8 +137,8 @@ func TestListSortsByRegistryOrder(t *testing.T) {
 	for _, info := range got {
 		ids = append(ids, info.ID)
 	}
-	if !slices.Equal(ids, []string{"11", "21", "31"}) {
-		t.Fatalf("ids = %v, want [11 21 31] in registry order", ids)
+	if !slices.Equal(ids, []string{"31", "21", "11"}) {
+		t.Fatalf("ids = %v, want [31 21 11] in registry order", ids)
 	}
 }
 

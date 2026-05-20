@@ -71,6 +71,10 @@ export interface SessionRow {
   // tooltip / status pill off this map; null/missing means
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
+  // Durable user-facing order for the sidebar. Larger values render
+  // earlier. This is intentionally separate from row_version so
+  // status/test/rollout/activity updates do not reshuffle rows.
+  sidebar_position: number;
   row_version: number;
 }
 
@@ -171,6 +175,31 @@ export class SessionStore {
     }
   }
 
+  // applyLocalOrder is the short optimistic window after a user drag
+  // and before PUT /api/sessions/order confirms. It updates the same
+  // row field the server owns, so any following row update preserves
+  // the visible order unless the persistence call fails and App.tsx
+  // refreshes from the authoritative snapshot.
+  applyLocalOrder(orderedIds: string[]): boolean {
+    if (orderedIds.length !== this.rows.size) return false;
+    const seen = new Set<string>();
+    for (const id of orderedIds) {
+      if (seen.has(id) || !this.rows.has(id)) return false;
+      seen.add(id);
+    }
+    for (let index = 0; index < orderedIds.length; index += 1) {
+      const id = orderedIds[index];
+      const row = this.rows.get(id);
+      if (!row) return false;
+      this.rows.set(id, {
+        ...row,
+        sidebar_position: orderedIds.length - index,
+      });
+    }
+    this.emit({ kind: "snapshot-replaced" });
+    return true;
+  }
+
   // getCursor returns the latest row_version applied. Used by
   // App.tsx to seed the EventSource Last-Event-ID on reconnect.
   getCursor(): string | null {
@@ -185,12 +214,11 @@ export class SessionStore {
     this.cursor = cursor;
   }
 
-  // list returns the cached rows in row_version-descending order
-  // (most recently changed first). The App-side ordering hook re-
-  // orders by user-pinned position; this default order is just
-  // stable + deterministic.
+  // list returns the cached rows in durable sidebar order. RowVersion
+  // is only the live-update cursor; sorting by it would move sessions
+  // whenever test/rollout/activity state changes.
   list(): SessionRow[] {
-    return [...this.rows.values()].sort((a, b) => b.row_version - a.row_version);
+    return [...this.rows.values()].sort(compareSessionRowsForSidebar);
   }
 
   get(id: string): SessionRow | undefined {
@@ -262,7 +290,8 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
   if (!id || !owner || !sessionScope) return null;
   const visible = rowRaw.visible === true;
   const rowVersion = numberField(rowRaw, "row_version");
-  if (rowVersion === null) return null;
+  const sidebarPosition = numberField(rowRaw, "sidebar_position");
+  if (rowVersion === null || sidebarPosition === null) return null;
   return {
     cursor,
     row: {
@@ -296,6 +325,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       clone_state: isRecord(rowRaw.clone_state)
         ? (rowRaw.clone_state as Record<string, unknown>)
         : undefined,
+      sidebar_position: sidebarPosition,
       row_version: rowVersion,
     },
   };
@@ -326,4 +356,16 @@ function numberField(value: Record<string, unknown>, key: string): number | null
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function compareSessionRowsForSidebar(a: SessionRow, b: SessionRow): number {
+  if (a.sidebar_position !== b.sidebar_position) {
+    return b.sidebar_position - a.sidebar_position;
+  }
+  const aCreated = Date.parse(a.created_at ?? "");
+  const bCreated = Date.parse(b.created_at ?? "");
+  const aCreatedSafe = Number.isFinite(aCreated) ? aCreated : 0;
+  const bCreatedSafe = Number.isFinite(bCreated) ? bCreated : 0;
+  if (aCreatedSafe !== bCreatedSafe) return bCreatedSafe - aCreatedSafe;
+  return b.id.localeCompare(a.id, undefined, { numeric: true });
 }

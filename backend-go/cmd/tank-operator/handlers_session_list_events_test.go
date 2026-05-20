@@ -131,9 +131,10 @@ func TestMarshalRowUpdateIncludesDeletedRow(t *testing.T) {
 	var probe struct {
 		Cursor string `json:"cursor"`
 		Row    struct {
-			ID         string `json:"id"`
-			Visible    bool   `json:"visible"`
-			RowVersion int64  `json:"row_version"`
+			ID              string `json:"id"`
+			Visible         bool   `json:"visible"`
+			SidebarPosition int64  `json:"sidebar_position"`
+			RowVersion      int64  `json:"row_version"`
 		} `json:"row"`
 	}
 	if err := json.Unmarshal(payload, &probe); err != nil {
@@ -147,6 +148,36 @@ func TestMarshalRowUpdateIncludesDeletedRow(t *testing.T) {
 	}
 	if probe.Row.RowVersion != 99 || probe.Cursor != "99" {
 		t.Fatalf("row_version/cursor mismatch: %#v", probe)
+	}
+}
+
+func TestMarshalRowUpdateIncludesSidebarPosition(t *testing.T) {
+	payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:              "8",
+		Email:           "u@example.com",
+		Scope:           "default",
+		Visible:         true,
+		Status:          "Active",
+		SidebarPosition: 42,
+		RowVersion:      99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Row struct {
+			SidebarPosition int64 `json:"sidebar_position"`
+			RowVersion      int64 `json:"row_version"`
+		} `json:"row"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Row.SidebarPosition != 42 {
+		t.Fatalf("sidebar_position = %d, want 42", probe.Row.SidebarPosition)
+	}
+	if probe.Row.RowVersion != 99 {
+		t.Fatalf("row_version = %d, want 99", probe.Row.RowVersion)
 	}
 }
 

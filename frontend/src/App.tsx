@@ -257,6 +257,7 @@ interface Session {
   // clone_state is the per-repo init-container outcome (stage 3).
   // Optional until stage 3 ships and the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  sidebar_position?: number;
 }
 
 interface TestState {
@@ -646,7 +647,6 @@ const DEMO_LANDING_LINES = [
 const DEFAULT_SESSION_MODE_KEY = "tank.defaultSessionMode";
 const DEFAULT_INTERACTION_KEY = "tank.defaultInteraction";
 const SESSION_INTERACTION_KEY_PREFIX = "tank.sessionInteraction:";
-const SESSION_ORDER_KEY_PREFIX = "tank.sessionOrder";
 
 function normalizeSessionMode(value: string | null): string | null {
   return value;
@@ -741,32 +741,7 @@ function normalizeSession(session: Session): Session {
   return next;
 }
 
-function sessionOrderStorageKey(user: SessionUser): string {
-  return `${SESSION_ORDER_KEY_PREFIX}.${user.sub}`;
-}
-
-function readSessionOrder(key: string): string[] {
-  try {
-    const stored = localStorage.getItem(key);
-    const parsed: unknown = stored ? JSON.parse(stored) : [];
-    if (Array.isArray(parsed)) {
-      return parsed.filter((id): id is string => typeof id === "string");
-    }
-  } catch {
-    // Ordering persistence is best-effort; server order is still usable.
-  }
-  return [];
-}
-
-function writeSessionOrder(key: string, order: string[]): void {
-  try {
-    localStorage.setItem(key, JSON.stringify(order));
-  } catch {
-    // Ordering persistence is best-effort.
-  }
-}
-
-function orderSessions(sessions: Session[], order: string[]): Session[] {
+function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
   if (sessions.length < 2 || order.length === 0) return sessions;
   const rank = new Map(order.map((id, index) => [id, index]));
   return [...sessions].sort((a, b) => {
@@ -8363,9 +8338,9 @@ export function App() {
   // /api/sessions and hydrates BOTH the sessions list and the
   // sessionActivities map from the response. The activity block lives on
   // each Session row (server-side join against the latest
-  // session.activity_changed lifecycle event); the prior activity-poll
+  // sessions.activity_summary row column; the prior activity-poll
   // endpoint is gone (tank-operator#83). Steady-state updates after the
-  // initial snapshot flow through the typed SSE stream; refresh() is
+  // initial snapshot flow through the row-update SSE stream; refresh() is
   // only used for first-load and post-resync reseeding.
   // rowToSession projects one SessionStore row back into the
   // SPA's Session shape for React-state consumption. The wire row's
@@ -8384,11 +8359,8 @@ export function App() {
       name: row.name ?? null,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
+      sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
-      // repos is always an array on the wire (see backend
-      // sessioncontroller.MarshalRowUpdate). The fallback here is
-      // for older snapshots that pre-date the column — they'll
-      // get an empty array and render with no chips.
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
     };
@@ -8400,6 +8372,11 @@ export function App() {
   // copy with snapshot-only defaults (visible=true; session_scope
   // unused at render).
   function infoJSONToSessionRow(raw: any): SessionRow {
+    const sidebarPosition = Number(raw.sidebar_position);
+    const rowVersion = Number(raw.row_version);
+    if (!Number.isFinite(sidebarPosition) || !Number.isFinite(rowVersion)) {
+      throw new Error("session snapshot missing row order cursor");
+    }
     return {
       id: String(raw.id ?? ""),
       owner: String(raw.owner ?? ""),
@@ -8417,7 +8394,8 @@ export function App() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
-      row_version: typeof raw.row_version === "number" ? raw.row_version : 0,
+      sidebar_position: sidebarPosition,
+      row_version: rowVersion,
     };
   }
 
@@ -8447,16 +8425,17 @@ export function App() {
         sessionCount: listed.length,
         source: "initial",
       });
+      const sessionsFromStore = sessionStoreRef.current.list().map(rowToSession);
       setSessions((prev) => {
         const previousById = new Map(prev.map((session) => [session.id, session]));
-        const merged = listed.map((session) =>
+        return sessionsFromStore.map((session) =>
           mergeMutualSessionSkillState(session, previousById.get(session.id)),
         );
-        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
       });
       const nextActivities: Record<string, SessionActivitySummary> = {};
-      for (const session of listed) {
-        if (session.activity) nextActivities[session.id] = session.activity;
+      for (const row of sessionStoreRef.current.list()) {
+        const activity = sessionStoreRef.current.activityForRender(row.id);
+        if (activity) nextActivities[row.id] = activity;
       }
       setSessionActivities(nextActivities);
       // Synchronously mirror into the ref so the SSE handler reading
@@ -8477,7 +8456,7 @@ export function App() {
         listed
           .map((session): [string, string | null] => [
             session.id,
-            session.activity?.last_order_key ?? null,
+            sessionStoreRef.current.activityForRender(session.id)?.last_order_key ?? null,
           ])
           .filter((entry): entry is [string, string] => entry[1] !== null),
       );
@@ -8622,14 +8601,12 @@ export function App() {
         }
 
         // Derive sessions[] + activities from the store. The
-        // ordering pass mirrors what refresh() does on snapshot.
+        // store's durable sidebar_position sort mirrors what
+        // refresh() does on snapshot.
         const rows = store.list();
         const sessionsFromStore: Session[] = rows.map(rowToSession);
-        const ordered = user
-          ? orderSessions(sessionsFromStore, readSessionOrder(sessionOrderStorageKey(user)))
-          : sessionsFromStore;
-        setSessions(ordered);
-        sessionsRef.current = ordered;
+        setSessions(sessionsFromStore);
+        sessionsRef.current = sessionsFromStore;
 
         const nextActivities: Record<string, SessionActivitySummary> = {};
         for (const id of rows.map((r) => r.id)) {
@@ -8854,6 +8831,22 @@ export function App() {
     setDragOverSessionId(id);
   }
 
+  async function persistSessionOrder(sessionIds: string[]): Promise<void> {
+    try {
+      const res = await authedFetch("/api/sessions/order", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_ids: sessionIds }),
+      });
+      if (!res.ok) {
+        throw new Error(`session order update failed: ${res.status}`);
+      }
+    } catch (e) {
+      setError(String(e));
+      void refresh();
+    }
+  }
+
   function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
     event.preventDefault();
     const movedId = event.dataTransfer.getData("text/plain") || draggingSessionId;
@@ -8861,13 +8854,14 @@ export function App() {
     setDragOverSessionId(null);
     if (!movedId || movedId === id || !user) return;
 
-    setSessions((prev) => {
-      const currentOrder = prev.map((session) => session.id);
-      const next = moveSessionId(currentOrder, movedId, id);
-      if (next === currentOrder) return prev;
-      writeSessionOrder(sessionOrderStorageKey(user), next);
-      return orderSessions(prev, next);
-    });
+    const currentOrder = sessions.map((session) => session.id);
+    const next = moveSessionId(currentOrder, movedId, id);
+    if (next === currentOrder) return;
+    sessionStoreRef.current.applyLocalOrder(next);
+    const ordered = orderSessionsByIds(sessions, next);
+    setSessions(ordered);
+    sessionsRef.current = ordered;
+    void persistSessionOrder(next);
   }
 
   function dragSessionEnd() {
@@ -8952,8 +8946,7 @@ export function App() {
       // rename UI behind the same delay.
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
-        const merged = [created, ...prev];
-        return user ? orderSessions(merged, readSessionOrder(sessionOrderStorageKey(user))) : merged;
+        return [created, ...prev];
       });
       activate(created.id);
       if (requestedNameApplied) {

@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
@@ -312,6 +313,33 @@ func parseRowVersionCursor(r *http.Request) int64 {
 		}
 	}
 	return 0
+}
+
+// handleReorderSessions persists the caller's complete visible sidebar
+// order. The backend owns the durable order; browser-local ordering is
+// not a source of truth.
+func (s *appServer) handleReorderSessions(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		SessionIDs []string `json:"session_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	owner := user.OwnerEmail()
+	if err := s.mgr.ReorderSessions(r.Context(), owner, body.SessionIDs); err != nil {
+		if errors.Is(err, sessionmodel.ErrSessionOrderConflict) {
+			writeError(w, http.StatusConflict, "session order is stale; refresh and retry")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleDeleteSession deletes a session.
