@@ -3515,22 +3515,6 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
-/* Passive variant of .run-transcript-load-older — same pill shape so
-   layout doesn't jump when the auto-paginate fetch fires, but no hover
-   affordance and no cursor pointer because it isn't a clickable action.
-   Used when scroll-up triggers loadSdkOlderEvents and we want feedback
-   that something happened. */
-.run-transcript-load-older-passive {
-  cursor: default;
-  color: var(--text-muted);
-  border-style: dashed;
-}
-
-.run-transcript-load-older-passive:hover {
-  background: var(--bg-elevated);
-  border-color: var(--border-subtle);
-}
-
 /* Beginning-of-conversation divider — replaces the back-paginate button
    once foundOldest flips true. Rule-flanked label so the user can tell
    they hit the head of the ledger instead of just a silent scroll-stop.
@@ -4265,14 +4249,16 @@ textarea.run-files-viewer-editor:focus {
   transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
-.run-transcript-load-older:hover:not(:disabled) {
+.run-transcript-load-older:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--bg-default);
   border-color: var(--border-default);
 }
 
-.run-transcript-load-older:disabled {
+.run-transcript-load-older:disabled,
+.run-transcript-load-older[aria-disabled="true"] {
   cursor: progress;
   color: var(--text-muted);
+  border-style: dashed;
 }
 
 .run-transcript-load-error {

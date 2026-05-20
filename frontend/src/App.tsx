@@ -7790,37 +7790,22 @@ function ChatPane({
             {/* Top-of-transcript pagination surface. Auto-load still fires via
                 Virtuoso's startReached, and the explicit button keeps older
                 history reachable if the virtualized edge callback misses.
-                States:
-                  - sdkLoadingOlder: spinner-ish "Loading earlier messages…"
-                    surfaced while the back-paginate fetch is in flight so
-                    the user has feedback that the silent scroll-up triggered
-                    something.
-                  - sdkOlderError: visible retry instead of a silent stop.
-                  - !sdkFoundOldest: explicit load button for long sessions.
-                  - sdkFoundOldest: a "Beginning of conversation" divider so
-                    the user can tell they've hit the head of the ledger
-                    instead of just a scroll-stop with no explanation.
-                Loading and terminal states use status/alert roles so
-                screenreaders announce them. */}
-            {sdkLoadingOlder ? (
-              <div
-                className="run-transcript-load-older run-transcript-load-older-passive"
-                role="status"
-                aria-live="polite"
-              >
-                Loading earlier messages…
-              </div>
-            ) : sdkOlderError ? (
+                Keep the load button mounted while loading: replacing the
+                focused button with status text makes browsers drop focus and
+                can yank the transcript toward the live tail. */}
+            {sdkOlderError ? (
               <div className="run-transcript-load-error" role="alert">
                 <span>{sdkOlderError}</span>
                 <button
                   type="button"
                   className="run-transcript-load-older"
                   onClick={() => {
-                    void loadSdkOlderEvents();
+                    if (!sdkLoadingOlder) void loadSdkOlderEvents();
                   }}
+                  aria-disabled={sdkLoadingOlder || undefined}
+                  aria-busy={sdkLoadingOlder || undefined}
                 >
-                  Retry
+                  {sdkLoadingOlder ? "Loading earlier messages…" : "Retry"}
                 </button>
               </div>
             ) : !sdkFoundOldest && renderedEntries.length > 0 ? (
@@ -7828,10 +7813,13 @@ function ChatPane({
                 type="button"
                 className="run-transcript-load-older"
                 onClick={() => {
-                  void loadSdkOlderEvents();
+                  if (!sdkLoadingOlder) void loadSdkOlderEvents();
                 }}
+                aria-disabled={sdkLoadingOlder || undefined}
+                aria-busy={sdkLoadingOlder || undefined}
+                aria-live="polite"
               >
-                Load earlier messages
+                {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
               </button>
             ) : sdkFoundOldest && renderedEntries.length > 0 ? (
               <div
