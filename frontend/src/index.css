@@ -5336,6 +5336,21 @@ textarea.run-files-viewer-editor:focus {
   flex-shrink: 0;
 }
 
+.run-msg-system-avatar {
+  grid-column: 1;
+  grid-row: 1;
+  width: 2.625rem;
+  height: 2.625rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: rgba(207, 218, 232, 0.9);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
 .run-msg-ai-icon {
   width: 2.625rem;
   height: 2.625rem;
@@ -5349,6 +5364,11 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript-message[data-variant="assistant"]::after {
+  content: none;
+}
+
+.run-transcript-message[data-variant="system"]::before,
+.run-transcript-message[data-variant="system"]::after {
   content: none;
 }
 
@@ -5452,6 +5472,18 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.run-transcript [data-slot="message"][data-variant="system"] .run-transcript-message-content {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: start;
+  max-width: min(36rem, 100%);
+  padding: 0.58rem 0.78rem;
+  background: rgba(255, 255, 255, 0.028);
+  color: var(--text-muted);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  font-size: var(--run-chat-font-sm);
 }
 
 /* Claude assistant variant — same shell as the generic assistant bubble.

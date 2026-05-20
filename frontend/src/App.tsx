@@ -148,7 +148,8 @@ type AskUserQuestionAnswer = {
   notes?: string;
   preview?: string;
 };
-type TranscriptEntry = SandboxTranscriptEntry & {
+type TranscriptEntry = Omit<SandboxTranscriptEntry, "role"> & {
+  role?: "user" | "assistant" | "system";
   toolKind?: ToolKind;
   toolServer?: string;
   toolAction?: string;
@@ -196,6 +197,18 @@ type SdkHistoryRefreshSource =
   | "terminal-refresh";
 type SkillStateName = "test" | "rollout";
 type HomeTab = "chat" | "settings" | "help";
+
+type SessionStartupDraft = {
+  loadingAt: string;
+  readyAt?: string;
+  failedAt?: string;
+  initialUser?: {
+    clientNonce: string;
+    text: string;
+    skillName?: SkillStateName;
+    createdAt: string;
+  };
+};
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -784,6 +797,12 @@ const PROVIDERS: Provider[] = ["anthropic", "codex", "hermes", "pi"];
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
   const modes = PROVIDER_INTERACTION_MODES[provider];
   return modes[interaction] ?? modes.gui ?? modes.cli ?? "claude_gui";
+}
+
+function chatModeForHomePrompt(mode: SessionMode): SessionMode {
+  if (CHAT_MODES.has(mode)) return mode;
+  const provider = MODE_MENU_ICONS[mode];
+  return PROVIDER_INTERACTION_MODES[provider].gui ?? mode;
 }
 
 function availableInteractionFor(
@@ -1889,6 +1908,93 @@ function appendSkillInvocation(
   );
 }
 
+const SESSION_STARTUP_LOADING_TEXT = "Session is loading.";
+const SESSION_STARTUP_READY_TEXT = "Session is ready.";
+const SESSION_STARTUP_FAILED_TEXT = "Session failed to load.";
+
+function startupSystemEntry(
+  sessionId: string,
+  state: "loading" | "ready" | "failed",
+  text: string,
+  time: string,
+): TranscriptEntry {
+  return {
+    id: `startup-${state}-${sessionId}`,
+    kind: "message",
+    role: "system",
+    text,
+    time,
+    localOnly: true,
+    transcriptSource: "realtime",
+  } as TranscriptEntry;
+}
+
+function startupTranscriptEntries(
+  session: Session,
+  draft?: SessionStartupDraft,
+): TranscriptEntry[] {
+  const entries: TranscriptEntry[] = [];
+  if (draft?.initialUser) {
+    const user = draft.initialUser;
+    const userEntries = user.skillName
+      ? appendSkillInvocation([], user.skillName, user.text, user.createdAt)
+      : ([
+          {
+            id: `startup-user-${session.id}`,
+            kind: "message",
+            role: "user",
+            text: user.text,
+            time: user.createdAt,
+          } as TranscriptEntry,
+        ]);
+    entries.push(
+      ...userEntries.map((entry, index) => ({
+        ...entry,
+        id: `${entry.id}-${session.id}-${index}`,
+        clientNonce: user.clientNonce,
+        localOnly: true,
+        transcriptSource: "realtime" as const,
+      })),
+    );
+  }
+
+  const loadingAt =
+    draft?.loadingAt ??
+    session.requested_at ??
+    session.created_at ??
+    nowIso();
+  if (draft || session.status !== "Active") {
+    entries.push(
+      startupSystemEntry(
+        session.id,
+        "loading",
+        SESSION_STARTUP_LOADING_TEXT,
+        loadingAt,
+      ),
+    );
+  }
+  if (draft?.readyAt || (draft && session.status === "Active")) {
+    entries.push(
+      startupSystemEntry(
+        session.id,
+        "ready",
+        SESSION_STARTUP_READY_TEXT,
+        draft.readyAt ?? session.ready_at ?? nowIso(),
+      ),
+    );
+  } else if (draft?.failedAt || session.status === "Failed") {
+    entries.push(
+      startupSystemEntry(
+        session.id,
+        "failed",
+        SESSION_STARTUP_FAILED_TEXT,
+        draft?.failedAt ?? nowIso(),
+      ),
+    );
+  }
+  return entries;
+}
+
 function eventTimelineCursor(event: JsonObject): string | null {
   return typeof event.order_key === "string" && event.order_key ? event.order_key : null;
 }
@@ -2864,6 +2970,52 @@ function mergeSdkTranscript(
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
+function mergeStartupTranscript(
+  startup: TranscriptEntry[],
+  entries: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (startup.length === 0) return entries;
+  if (entries.length === 0) return startup;
+  const usedServerIds = new Set<string>();
+  const mergedStartup = startup.map((startupEntry) => {
+    if (!startupEntry.clientNonce) return startupEntry;
+    const replacement = entries.find((entry) => {
+      if (usedServerIds.has(entry.id)) return false;
+      if (entry.clientNonce !== startupEntry.clientNonce) return false;
+      if (entry.kind !== startupEntry.kind) return false;
+      if (entry.kind === "message" && startupEntry.kind === "message") {
+        return entry.role === startupEntry.role;
+      }
+      const startupMeta = entryMetaFingerprint(startupEntry);
+      const entryMeta = entryMetaFingerprint(entry);
+      return startupMeta !== null && startupMeta === entryMeta;
+    });
+    if (!replacement) return startupEntry;
+    usedServerIds.add(replacement.id);
+    return replacement;
+  });
+  const startupMessageFingerprints = new Set(
+    mergedStartup
+      .map(entryMessageFingerprint)
+      .filter((fingerprint): fingerprint is string => fingerprint !== null),
+  );
+  const startupMetaFingerprints = new Set(
+    mergedStartup
+      .map(entryMetaFingerprint)
+      .filter((fingerprint): fingerprint is string => fingerprint !== null),
+  );
+  const remaining = entries.filter((entry) => {
+    if (usedServerIds.has(entry.id)) return false;
+    const messageFingerprint = entryMessageFingerprint(entry);
+    if (messageFingerprint && startupMessageFingerprints.has(messageFingerprint)) {
+      return false;
+    }
+    const metaFingerprint = entryMetaFingerprint(entry);
+    return !metaFingerprint || !startupMetaFingerprints.has(metaFingerprint);
+  });
+  return [...mergedStartup, ...remaining];
+}
+
 function countTranscriptMessages(entries: TranscriptEntry[]): number {
   return entries.filter((entry) => entry.kind === "message").length;
 }
@@ -2908,6 +3060,7 @@ function conversationEntriesToTranscript(
       ...skillEntry,
       transcriptSource: "server",
       sourceEventId: entry.sourceEventId,
+      clientNonce: entry.clientNonce,
       orderKey: entry.orderKey ? `${entry.orderKey}:skill:${index}` : undefined,
     }));
   });
@@ -3494,7 +3647,8 @@ function RunMessageBubble({
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
 }) {
-  const variant = entry.role === "user" ? "user" : "assistant";
+  const variant =
+    entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
   const { user } = useContext(RunContext);
   const text = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
@@ -3530,6 +3684,11 @@ function RunMessageBubble({
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
       )}
+      {variant === "system" && (
+        <span className="run-msg-system-avatar" aria-hidden="true">
+          <BotIcon size={16} strokeWidth={2.1} />
+        </span>
+      )}
       <div
         className="run-transcript-message-content"
         data-slot="message-content"
@@ -3558,10 +3717,14 @@ function RunMessageBubble({
           {variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
           )}
-          <QuoteButton text={text} style="fence" onQuote={onQuote} />
-          <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
-          <CopyButton text={text} />
-          <LinkButton sessionId={sessionId} entryId={entry.id} />
+          {variant !== "system" && (
+            <>
+              <QuoteButton text={text} style="fence" onQuote={onQuote} />
+              <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+              <CopyButton text={text} />
+              {!entry.localOnly && <LinkButton sessionId={sessionId} entryId={entry.id} />}
+            </>
+          )}
           <div className="run-msg-timings">
             {showDuration && durationMs != null && (
               <span className="run-msg-timing-row">
@@ -4769,6 +4932,7 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
+  startupDraft,
   pendingScrollMessageId,
   onScrollConsumed,
   runPrefs,
@@ -4784,6 +4948,7 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
+  startupDraft?: SessionStartupDraft;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
   // receive null and skip the scroll logic.
@@ -4814,6 +4979,17 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
+  const [observedStartupDraft, setObservedStartupDraft] = useState<SessionStartupDraft | undefined>(
+    () =>
+      session.status !== "Active"
+        ? {
+            loadingAt:
+              session.requested_at ??
+              session.created_at ??
+              nowIso(),
+          }
+        : undefined,
+  );
 
   // Parent-driven auto-rename. When App sets autoRenameSessionId to this
   // session's id (freshly created, or F2 pressed), the chat-pane title
@@ -4826,6 +5002,55 @@ function ChatPane({
     setEditingTitle(true);
     onAutoRenameConsumed();
   }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
+  useEffect(() => {
+    setObservedStartupDraft(
+      session.status !== "Active"
+        ? {
+            loadingAt:
+              session.requested_at ??
+              session.created_at ??
+              nowIso(),
+          }
+        : undefined,
+    );
+  }, [session.id]);
+  useEffect(() => {
+    if (startupDraft) return;
+    setObservedStartupDraft((prev) => {
+      if (session.status === "Failed") {
+        return {
+          ...(prev ?? {
+            loadingAt:
+              session.requested_at ??
+              session.created_at ??
+              nowIso(),
+          }),
+          failedAt: prev?.failedAt ?? nowIso(),
+        };
+      }
+      if (session.status !== "Active") {
+        return (
+          prev ?? {
+            loadingAt:
+              session.requested_at ??
+              session.created_at ??
+              nowIso(),
+          }
+        );
+      }
+      if (!prev || prev.readyAt) return prev;
+      return {
+        ...prev,
+        readyAt: session.ready_at ?? nowIso(),
+      };
+    });
+  }, [
+    startupDraft,
+    session.status,
+    session.ready_at,
+    session.requested_at,
+    session.created_at,
+  ]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
   const activeToolNameRef = useRef<string | null>(null);
@@ -6828,6 +7053,22 @@ function ChatPane({
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
   const ready = session.status === "Active";
+  const effectiveStartupDraft = startupDraft ?? observedStartupDraft;
+  const startupEntries = useMemo(
+    () => startupTranscriptEntries(session, effectiveStartupDraft),
+    [
+      session.id,
+      session.status,
+      session.requested_at,
+      session.created_at,
+      session.ready_at,
+      effectiveStartupDraft,
+    ],
+  );
+  const renderedEntries = useMemo(
+    () => mergeStartupTranscript(startupEntries, entries),
+    [startupEntries, entries],
+  );
   const supportsFileAttachments = FILE_ATTACHMENT_MODES.has(session.mode);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
@@ -7309,11 +7550,6 @@ function ChatPane({
               </div>
             </div>
           </div>
-        ) : !ready ? (
-          <div className="run-empty">
-            <Loader2Icon size={20} className="run-spin" aria-hidden="true" />
-            <span className="run-muted">waiting for session pod…</span>
-          </div>
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
             runPrefs={runPrefs}
@@ -7328,7 +7564,7 @@ function ChatPane({
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
-        ) : entries.length === 0 ? (
+        ) : renderedEntries.length === 0 ? (
           null
         ) : (
           <>
@@ -7355,7 +7591,7 @@ function ChatPane({
               >
                 Loading earlier messages…
               </div>
-            ) : sdkFoundOldest && entries.length > 0 ? (
+            ) : sdkFoundOldest && renderedEntries.length > 0 ? (
               <div
                 className="run-transcript-beginning"
                 role="status"
@@ -7374,7 +7610,7 @@ function ChatPane({
               </div>
             )}
             <RunMessages
-              entries={entries}
+              entries={renderedEntries}
               avatar={sessionAvatar}
               sessionId={session.id}
               pendingScrollMessageId={pendingScrollMessageId}
@@ -7465,7 +7701,7 @@ function ChatPane({
           (loaded window doesn't include the oldest event yet). Hidden
           while scrolled-to-bottom on a fresh session so the at-tail UI
           isn't cluttered. Sits above the scroll-to-bottom button. */}
-      {activeTab === "chat" && entries.length > 0 && !sdkFoundOldest && userScrolledUp && (
+      {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && userScrolledUp && (
         <button
           type="button"
           className="run-scroll-to-top"
@@ -7488,7 +7724,7 @@ function ChatPane({
           "N new" so the user knows the conversation moved (Slack /
           Discord pattern). Click reaches the live tail in one round-trip
           — refetching the tail if the user back-paginated past it. */}
-      {activeTab === "chat" && entries.length > 0 && (
+      {activeTab === "chat" && renderedEntries.length > 0 && (
         <button
           type="button"
           className={`run-scroll-to-bottom${
@@ -8213,6 +8449,7 @@ export function App() {
   // wire the F2 keyboard shortcut to the same surface. Cleared by ChatPane
   // via onAutoRenameConsumed once it has applied the signal.
   const [autoRenameSessionId, setAutoRenameSessionId] = useState<string | null>(null);
+  const [sessionStartupDrafts, setSessionStartupDrafts] = useState<Record<string, SessionStartupDraft>>({});
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
@@ -8751,6 +8988,37 @@ export function App() {
   }, [sessions, active, closingIds]);
 
   useEffect(() => {
+    setSessionStartupDrafts((prev) => {
+      const byId = new Map(sessions.map((s) => [s.id, s]));
+      let changed = false;
+      const next: Record<string, SessionStartupDraft> = {};
+      for (const [id, draft] of Object.entries(prev)) {
+        const session = byId.get(id);
+        if (!session || closingIds.has(id)) {
+          changed = true;
+          continue;
+        }
+        if (!draft.readyAt && (session.status === "Active" || session.ready_at)) {
+          next[id] = {
+            ...draft,
+            readyAt: session.ready_at ?? nowIso(),
+          };
+          changed = true;
+        } else if (!draft.failedAt && session.status === "Failed") {
+          next[id] = {
+            ...draft,
+            failedAt: nowIso(),
+          };
+          changed = true;
+        } else {
+          next[id] = draft;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions, closingIds]);
+
+  useEffect(() => {
     const target = initialSessionId.current;
     if (!target) return;
     if (!sessions.some((s) => s.id === target)) return;
@@ -8908,6 +9176,13 @@ export function App() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const requestedName = homeSessionName.trim();
+    const seedPrompt = initialPrompt?.trim() ?? "";
+    const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? [...homeAttachments] : [];
+    const seedTurnRequested =
+      (seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) &&
+      CHAT_MODES.has(mode);
+    const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
+    const startupAt = nowIso();
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -8933,6 +9208,22 @@ export function App() {
       }
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
+        setSessionStartupDrafts((prev) => ({
+          ...prev,
+          [created.id]: {
+            loadingAt: startupAt,
+            ...(seedClientNonce && (seedPrompt || initialSkillName)
+              ? {
+                  initialUser: {
+                    clientNonce: seedClientNonce,
+                    text: seedPrompt,
+                    ...(initialSkillName ? { skillName: initialSkillName } : {}),
+                    createdAt: startupAt,
+                  },
+                }
+              : {}),
+          },
+        }));
       }
       // Insert the freshly-created session into the local list and focus the
       // chat pane immediately, without waiting on /api/sessions to re-list or
@@ -8963,9 +9254,7 @@ export function App() {
       // for the pod to become ready and submit it as the first turn. Only
       // chat modes have a turn endpoint; non-chat modes ignore the prompt
       // because the home composer would not have surfaced a sensible target.
-      const seedPrompt = initialPrompt?.trim() ?? "";
-      const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? homeAttachments : [];
-      if ((seedPrompt || pendingHomeAttachments.length > 0 || initialSkillName) && CHAT_MODES.has(mode)) {
+      if (seedTurnRequested) {
         const model =
           selectedProvider === "anthropic" || selectedProvider === "codex"
             ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
@@ -8975,7 +9264,12 @@ export function App() {
             ? selectedHomeEffortId
             : "";
         try {
-          await waitForSessionReady(created.id);
+          const readySession = await waitForSessionReady(created.id);
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === created.id ? mergeMutualSessionSkillState(readySession, s) : s,
+            ),
+          );
           if (initialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
               setError(String(e));
@@ -9022,7 +9316,7 @@ export function App() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              client_nonce: newForkTurnId(),
+              client_nonce: seedClientNonce,
               prompt: turnPrompt,
               model,
               ...(effort ? { effort } : {}),
@@ -9150,7 +9444,7 @@ export function App() {
       }
       await new Promise((resolve) => window.setTimeout(resolve, 1000));
     }
-    throw new Error("fork failed: new session did not become ready");
+    throw new Error("new session did not become ready");
   }
 
   function setDefaultProvider(provider: Provider) {
@@ -9874,8 +10168,12 @@ export function App() {
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
                 onSubmit={({ text, permissionMode }) => {
                   const trimmed = text.trim();
+                  const mode =
+                    trimmed || homeAttachments.length > 0
+                      ? chatModeForHomePrompt(defaultSessionMode)
+                      : defaultSessionMode;
                   void createSession(
-                    defaultSessionMode,
+                    mode,
                     trimmed || undefined,
                     permissionMode,
                   );
@@ -9976,6 +10274,7 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
+                      startupDraft={sessionStartupDrafts[s.id]}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
                           ? pendingScrollMessageId
