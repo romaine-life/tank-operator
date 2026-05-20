@@ -118,7 +118,7 @@ type rowWireShape struct {
 	// the snapshot Info struct field-for-field (see
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
 	// the SPA never has to special-case "absent vs. empty"; clone
-	// state is omitted until stage 3's init container writes back.
+	// state is omitted until the repo-cloner init container writes back.
 	Repos           []string       `json:"repos"`
 	CloneState      map[string]any `json:"clone_state,omitempty"`
 	SidebarPosition int64          `json:"sidebar_position"`

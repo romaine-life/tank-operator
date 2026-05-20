@@ -278,10 +278,10 @@ interface Session {
   // session creation. Always an array on the wire (empty when none
   // picked). The splash chips for existing sessions read from here
   // — never from localStorage — so the chip list never contradicts
-  // the server's view. Stage 1 of the auto-clone feature.
+  // the server's view.
   repos: string[];
-  // clone_state is the per-repo init-container outcome (stage 3).
-  // Optional until stage 3 ships and the cloner writes back.
+  // clone_state is the per-repo repo-cloner init-container outcome.
+  // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
   sidebar_position?: number;
 }
@@ -8482,7 +8482,7 @@ export function App() {
       return [];
     });
   }, [defaultSessionMode]);
-  // Splash-page repo picker state. Stage 1 of the auto-clone feature:
+  // Splash-page repo picker state:
   //
   //   - selectedRepos: the chips the user has staged for the
   //     about-to-be-created session. Posted to /api/sessions on
@@ -8497,15 +8497,14 @@ export function App() {
   //     close.
   //   - repoInput: the manual-entry text field's controlled value.
   //
-  // Stage 2 will widen the picker with an "All repos" section sourced
-  // from /api/github/repos; until then the manual text input is the
-  // escape hatch for first-use repos.
+  // "All repos" is sourced from /api/github/repos; the manual text
+  // input remains the escape hatch when enumeration fails or lags.
   const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
-  // Stage 2: All-repos lazy-load state. Sourced from /api/github/repos,
+  // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
   // result. Refreshed after a successful session create so just-used
@@ -8572,9 +8571,9 @@ export function App() {
     }
   }, []);
 
-  // Stage 2: fetch the full installation repo list. Lazy-loaded on
-  // first picker open and refreshed after a successful session create
-  // so just-installed repos appear in the list next time.
+  // Fetch the full installation repo list. Lazy-loaded on first picker
+  // open and refreshed after a successful session create so just-installed
+  // repos appear in the list next time.
   //
   // The endpoint mints an on-behalf-of service JWT (auth.romaine.life
   // PR #43) and proxies to mcp-github; failures here become a

@@ -71,8 +71,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	// is owned by the create call; subsequent manager updates
 	// (SetName, mark-deleted, lifecycle row writes) must not stomp
 	// the selection. `clone_state` is not touched here at all; the
-	// stage 3 init container is the only writer, via its own
-	// service-principal path. Empty slice serializes to `{}` which
+	// repo-cloner init container writes it via its own service-principal
+	// path. Empty slice serializes to `{}` which
 	// matches the schema default.
 	repos := record.Repos
 	if repos == nil {
@@ -159,6 +159,13 @@ func (s *Store) SetRolloutState(ctx context.Context, email, sessionID string, st
 	return s.setJSONBColumn(ctx, "rollout_state", email, sessionID, state)
 }
 
+// SetCloneState replaces the row's clone_state jsonb. Written by the
+// repo-cloner init container via the internal service-principal API so
+// partial clone progress/failures are visible in the durable session row.
+func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error {
+	return s.setJSONBColumn(ctx, "clone_state", email, sessionID, state)
+}
+
 func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID string, state map[string]any) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -174,7 +181,7 @@ func (s *Store) setJSONBColumn(ctx context.Context, column, email, sessionID str
 	}
 	// Column is parameterized via constant strings only; no SQL
 	// injection risk because the caller supplies a literal column
-	// name from two known values.
+	// name from the known state-column methods above.
 	q := fmt.Sprintf(`
 		UPDATE sessions
 		SET %s        = $4,

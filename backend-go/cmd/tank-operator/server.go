@@ -98,15 +98,13 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/github/install/url", s.handleGitHubInstallURL)
 	mux.HandleFunc("GET /api/github/install/callback", s.handleGitHubInstallCallback)
 	// /api/github/recent-repos surfaces the caller's recently-selected
-	// repo slugs to the splash-page picker. Stage 1 of the auto-clone
-	// feature; reads sessions.repos directly with no mcp-github hop, so
-	// it works the moment the schema migration lands. See
-	// handlers_repos.go for the SQL.
+	// repo slugs to the splash-page picker. It reads sessions.repos
+	// directly with no mcp-github hop. See handlers_repos.go for the SQL.
 	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
 	// /api/github/repos enumerates the caller's GitHub App installation
-	// repos via mcp-github. Stage 2 of the auto-clone feature; pairs
-	// with the auth.romaine.life on-behalf-of exchange so the
-	// orchestrator can mint a service JWT acting for the SPA user.
+	// repos via mcp-github. Pairs with the auth.romaine.life on-behalf-of
+	// exchange so the orchestrator can mint a service JWT acting for the
+	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
@@ -173,6 +171,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/clone-state", s.handleInternalSetCloneState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)
 
 	// Static files.
