@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const conversationReducerSource = readFileSync(
+  new URL("./conversationReducer.ts", import.meta.url),
+  "utf8",
+);
 const chatScrollTelemetrySource = readFileSync(
   new URL("./chatScrollTelemetry.ts", import.meta.url),
   "utf8",
@@ -102,6 +106,17 @@ test("chat live stream waits for timeline bootstrap", () => {
   assert.match(
     appSource,
     /if \(!visible \|\| session\.status !== "Active" \|\| !historyBootstrapped\) return;/,
+  );
+});
+
+test("startup transcript rows come from durable conversation events", () => {
+  assert.equal(appSource.includes("startupTranscript"), false);
+  assert.equal(appSource.includes("sessionStartupDrafts"), false);
+  assert.equal(appSource.includes("startupDraft"), false);
+  assert.equal(conversationReducerSource.includes('"session.status"'), true);
+  assert.match(
+    appSource,
+    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\)\) return;\n    if \(timelineBootstrap\.status !== "idle"\) return;/,
   );
 });
 

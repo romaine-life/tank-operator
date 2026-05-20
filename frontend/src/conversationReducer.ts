@@ -190,6 +190,8 @@ export function conversationReducer(
         failed: false,
         lastError: null,
       };
+    case "session.status":
+      return applySessionStatusMessage(next, event);
     case "item.started":
       return upsertItem(next, event, "started");
     case "item.completed":
@@ -307,6 +309,26 @@ function applyUserMessage(
     seenClientNonces: event.client_nonce
       ? [...state.seenClientNonces, event.client_nonce]
       : state.seenClientNonces,
+    messages: [...state.messages, message],
+  };
+}
+
+function applySessionStatusMessage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const text = stringPayload(event, "text") ?? "";
+  if (!event.timeline_id || !text) return state;
+  const message: ConversationMessage = {
+    id: event.timeline_id,
+    role: "system",
+    text,
+    orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
+  };
+  return {
+    ...state,
     messages: [...state.messages, message],
   };
 }
