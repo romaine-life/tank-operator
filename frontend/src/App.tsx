@@ -2281,6 +2281,15 @@ interface QueuedMessage {
   skillName?: string;
 }
 
+interface PendingLaunchState {
+  sessionId: string;
+  clientNonce: string;
+  previewText: string;
+  skillName?: SkillStateName;
+  startedAt: string;
+  stage: "loading" | "ready" | "complete" | "failed";
+}
+
 interface McpServerEntry {
   name: string;
   transport: string;
@@ -5097,6 +5106,7 @@ function ChatPane({
   onRename,
   onSessionPatch,
   onForkMessage,
+  pendingLaunch,
   pendingScrollMessageId,
   onScrollConsumed,
   runPrefs,
@@ -5114,6 +5124,7 @@ function ChatPane({
   onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
+  pendingLaunch?: PendingLaunchState | null;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
   // receive null and skip the scroll logic.
@@ -5206,6 +5217,9 @@ function ChatPane({
   // Context tokens used in the most recent assistant turn.
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [pendingLaunchPrompt, setPendingLaunchPrompt] = useState<TranscriptEntry | null>(null);
+  const [pendingLaunchNote, setPendingLaunchNote] = useState<TranscriptEntry | null>(null);
+  const pendingLaunchNonceRef = useRef<string | null>(null);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
   const [slashOpen, setSlashOpen] = useState(false);
@@ -5254,6 +5268,67 @@ function ChatPane({
   useEffect(() => {
     setRolloutState(session.rollout_state ?? null);
   }, [session.rollout_state]);
+
+  useEffect(() => {
+    if (!pendingLaunch || pendingLaunch.sessionId !== session.id) return;
+    const trigger = pendingLaunch.skillName
+      ? skillTrigger(MODE_MENU_ICONS[session.mode] === "anthropic", pendingLaunch.skillName)
+      : "the first turn";
+    const promptText = pendingLaunch.previewText.trim();
+    const previewText = promptText || (pendingLaunch.skillName ? skillActionText(pendingLaunch.skillName) : "First turn");
+    if (pendingLaunchNonceRef.current !== pendingLaunch.clientNonce) {
+      pendingLaunchNonceRef.current = pendingLaunch.clientNonce;
+      setPendingLaunchPrompt({
+        id: `pending-launch-${session.id}-${pendingLaunch.clientNonce}`,
+        kind: "message",
+        role: "user",
+        text: previewText,
+        time: pendingLaunch.startedAt,
+        transcriptSource: "realtime",
+        localOnly: true,
+      } as TranscriptEntry);
+    } else {
+      setPendingLaunchPrompt((prev) => {
+        if (!prev || prev.id !== `pending-launch-${session.id}-${pendingLaunch.clientNonce}`) {
+          return prev;
+        }
+        if (prev.text === previewText) return prev;
+        return {
+          ...prev,
+          text: previewText,
+          time: pendingLaunch.startedAt,
+        };
+      });
+    }
+
+    if (pendingLaunch.stage === "failed") {
+      setPendingLaunchPrompt(null);
+      setPendingLaunchNote(null);
+      pendingLaunchNonceRef.current = null;
+      return;
+    }
+
+    if (pendingLaunch.stage === "complete") {
+      setPendingLaunchNote(null);
+      return;
+    }
+
+    setPendingLaunchNote({
+      id: `pending-launch-${session.id}-${pendingLaunch.clientNonce}:note`,
+      kind: "meta",
+      time: pendingLaunch.startedAt,
+      meta: {
+        title: "Pending",
+        detail:
+          pendingLaunch.stage === "loading"
+            ? `Waiting for the session to load before ${trigger} starts.`
+            : `Session is ready; starting ${trigger}.`,
+        severity: "info",
+      },
+      transcriptSource: "realtime",
+      localOnly: true,
+    } as TranscriptEntry);
+  }, [pendingLaunch, session.id, session.mode]);
 
   const [dragActive, setDragActive] = useState(false);
   const setChatFontScale = (value: number) => {
@@ -7274,7 +7349,15 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
-  const renderedEntries = entries;
+  const renderedEntries = useMemo(
+    () =>
+      [
+        ...(pendingLaunchPrompt ? [pendingLaunchPrompt] : []),
+        ...(pendingLaunchNote ? [pendingLaunchNote] : []),
+        ...entries,
+      ],
+    [entries, pendingLaunchNote, pendingLaunchPrompt],
+  );
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
@@ -8816,6 +8899,7 @@ export function App() {
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
     null,
   );
+  const [pendingLaunch, setPendingLaunch] = useState<PendingLaunchState | null>(null);
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
@@ -9568,6 +9652,7 @@ export function App() {
       (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
+    const seedLaunchStartedAt = seedTurnRequested ? nowIso() : "";
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
@@ -9624,6 +9709,14 @@ export function App() {
       // chat modes have a turn endpoint; non-chat modes ignore the prompt
       // because the home composer would not have surfaced a sensible target.
       if (seedTurnRequested) {
+        setPendingLaunch({
+          sessionId: created.id,
+          clientNonce: seedClientNonce,
+          previewText: seedPrompt || (requestedInitialSkillName ? skillActionText(requestedInitialSkillName) : "First turn"),
+          skillName: requestedInitialSkillName,
+          startedAt: seedLaunchStartedAt,
+          stage: "loading",
+        });
         const model =
           selectedProvider === "anthropic" || selectedProvider === "codex"
             ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
@@ -9635,6 +9728,11 @@ export function App() {
         try {
           const readySession = await waitForSessionReady(created.id);
           setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
+          setPendingLaunch((prev) =>
+            prev && prev.sessionId === created.id && prev.clientNonce === seedClientNonce
+              ? { ...prev, stage: "ready" }
+              : prev,
+          );
           if (requestedInitialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
               setError(String(e));
@@ -9674,6 +9772,11 @@ export function App() {
                   .map((p) => `- ${p.absPath}`)
                   .join("\n")}`
               : seedPrompt;
+          setPendingLaunch((prev) =>
+            prev && prev.sessionId === created.id && prev.clientNonce === seedClientNonce
+              ? { ...prev, previewText: composedPrompt || prev.previewText }
+              : prev,
+          );
           const turnPrompt = requestedInitialSkillName
             ? composeSkillPrompt(mode, requestedInitialSkillName, composedPrompt)
             : composedPrompt;
@@ -9700,7 +9803,17 @@ export function App() {
             }
             throw new Error(detail);
           }
+          setPendingLaunch((prev) =>
+            prev && prev.sessionId === created.id && prev.clientNonce === seedClientNonce
+              ? { ...prev, stage: "complete" }
+              : prev,
+          );
         } catch (e) {
+          setPendingLaunch((prev) =>
+            prev && prev.sessionId === created.id && prev.clientNonce === seedClientNonce
+              ? { ...prev, stage: "failed" }
+              : prev,
+          );
           setError(String(e));
         }
       }
@@ -10672,6 +10785,11 @@ export function App() {
                       onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
+                      pendingLaunch={
+                        pendingLaunch && pendingLaunch.sessionId === s.id
+                          ? pendingLaunch
+                          : null
+                      }
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
                           ? pendingScrollMessageId
