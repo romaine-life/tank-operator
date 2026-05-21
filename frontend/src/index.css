@@ -3487,6 +3487,40 @@ button:disabled {
   box-shadow: none !important;
 }
 
+/* Interactive composer shells keep the text box + send button visually live
+   even while sibling tool buttons are disabled. */
+.run-composer.run-composer-interactive,
+.run-composer.run-composer-runpane {
+  transition:
+    border-color var(--motion-fast, 120ms) ease,
+    box-shadow var(--motion-fast, 120ms) ease,
+    background var(--motion-fast, 120ms) ease;
+}
+
+.run-composer.run-composer-interactive:focus-within,
+.run-composer.run-composer-runpane:focus-within {
+  border-color: rgba(110, 168, 255, 0.42);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow:
+    0 0 0 1px rgba(110, 168, 255, 0.12),
+    0 18px 36px rgba(0, 0, 0, 0.22);
+}
+
+.run-composer.run-composer-interactive > [data-slot="input-group"],
+.run-composer.run-composer-runpane > [data-slot="input-group"] {
+  opacity: 1 !important;
+}
+
+.run-composer.run-composer-interactive .run-composer-hint,
+.run-composer.run-composer-runpane .run-composer-hint {
+  color: var(--text-secondary);
+}
+
+.run-composer.run-composer-interactive .run-composer-textarea::placeholder,
+.run-composer.run-composer-runpane .run-composer-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.42);
+}
+
 .run-mode-pill {
   display: inline-flex;
   align-items: center;
@@ -3525,7 +3559,7 @@ button:disabled {
 
 /* Fades out once the composer has any content. */
 .run-composer-hint-faded {
-  opacity: 0.32;
+  opacity: 0.44;
 }
 
 /* Clear-input X — sits between the hint and the send button. */
@@ -3835,6 +3869,11 @@ button:disabled {
 .run-usage-ring[data-level="mid"]  { color: #fbbf24; }
 .run-usage-ring[data-level="high"] { color: #f87171; }
 
+.run-usage-ring.is-placeholder {
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
 .run-usage-ring-svg {
   position: absolute;
   inset: 0;
@@ -3849,6 +3888,10 @@ button:disabled {
   color: var(--text-body);
   letter-spacing: 0.02em;
   z-index: 1;
+}
+
+.run-usage-ring.is-placeholder .run-usage-ring-text {
+  color: var(--text-muted);
 }
 
 /* Comment badge — placeholder slot for thread/notes count. */
