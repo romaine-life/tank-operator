@@ -48,7 +48,6 @@ const TANK_KEY_ALLOWLIST = [
   "tank.defaultInteraction",
   "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
-  "tank.chatScrollEvents",
 ];
 function isAllowedTankKey(key: string): boolean {
   for (const allowed of TANK_KEY_ALLOWLIST) {

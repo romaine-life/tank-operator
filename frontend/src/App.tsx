@@ -4914,6 +4914,8 @@ export function RunMessages({
   entries,
   avatar,
   sessionId,
+  sessionMode = "unknown",
+  telemetrySurface = "session",
   pendingScrollMessageId,
   onScrollConsumed,
   showThinking,
@@ -4936,6 +4938,8 @@ export function RunMessages({
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
   sessionId: string;
+  sessionMode?: string;
+  telemetrySurface?: string;
   // Set when the SPA cold-started with ?message=<entry.id>. RunMessages
   // searches the loaded groups for that id and, when found, scrolls
   // Virtuoso to it and lights up a highlight pulse on the bubble. If
@@ -5067,7 +5071,9 @@ export function RunMessages({
     const nextIndex = currentKeys.indexOf(previousFirst);
     if (nextIndex <= 0) return;
     logChatScrollGroups("prepend-preserve-scroll", groups, entries.length, {
+      surface: telemetrySurface,
       sessionId,
+      sessionMode,
       previousFirst,
       nextIndex,
       ...chatScrollElementSnapshot(scrollParent),
@@ -5077,20 +5083,24 @@ export function RunMessages({
       align: "start",
       behavior: "auto",
     });
-  }, [entries.length, groups, scrollParent, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId, sessionMode, telemetrySurface]);
   useEffect(() => {
     logChatScrollGroups("virtuoso-window", groups, entries.length, {
+      surface: telemetrySurface,
       sessionId,
+      sessionMode,
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
       ...chatScrollElementSnapshot(scrollParent),
     });
-  }, [entries.length, groups, scrollParent, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId, sessionMode, telemetrySurface]);
   useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
     if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
     consumedScrollToLatestSignalRef.current = scrollToLatestSignal;
     logChatScrollGroups("scroll-to-latest", groups, entries.length, {
+      surface: telemetrySurface,
       sessionId,
+      sessionMode,
       signal: scrollToLatestSignal,
       behavior: scrollToLatestBehavior,
       reason: scrollToLatestReason,
@@ -5111,11 +5121,15 @@ export function RunMessages({
     scrollToLatestReason,
     scrollToLatestSignal,
     sessionId,
+    sessionMode,
+    telemetrySurface,
   ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
+      surface: telemetrySurface,
       sessionId,
+      sessionMode,
       signal: scrollToOldestSignal,
       ...chatScrollElementSnapshot(scrollParent),
     });
@@ -5124,7 +5138,7 @@ export function RunMessages({
       align: "start",
       behavior: "smooth",
     });
-  }, [entries.length, groups, scrollParent, scrollToOldestSignal, sessionId]);
+  }, [entries.length, groups, scrollParent, scrollToOldestSignal, sessionId, sessionMode, telemetrySurface]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
   // Tool groups have no single id, so the first child id identifies the
   // group while later tool entries append during a streaming turn.
@@ -5224,21 +5238,25 @@ export function RunMessages({
   );
   const handleStartReached = useCallback(() => {
     logChatScrollGroups("start-reached", groups, entries.length, {
+      surface: telemetrySurface,
       sessionId,
+      sessionMode,
       ...chatScrollElementSnapshot(scrollParent),
     });
     onStartReached?.();
-  }, [entries.length, groups, onStartReached, scrollParent, sessionId]);
+  }, [entries.length, groups, onStartReached, scrollParent, sessionId, sessionMode, telemetrySurface]);
   const handleAtBottomChange = useCallback(
     (atBottom: boolean) => {
       logChatScrollGroups("at-bottom-change", groups, entries.length, {
+        surface: telemetrySurface,
         sessionId,
+        sessionMode,
         atBottom,
         ...chatScrollElementSnapshot(scrollParent),
       });
       onAtBottomChange?.(atBottom);
     },
-    [entries.length, groups, onAtBottomChange, scrollParent, sessionId],
+    [entries.length, groups, onAtBottomChange, scrollParent, sessionId, sessionMode, telemetrySurface],
   );
   // followOutput="smooth" keeps the user stuck to the live tail when they
   // ARE at the bottom; releases when they scroll up. Returning false from
@@ -5661,10 +5679,12 @@ function ChatPane({
   const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
     setTranscriptScrollEl(node);
     logChatScrollEvent(node ? "scroll-parent-mounted" : "scroll-parent-unmounted", {
+      surface: "session",
       sessionId: session.id,
+      sessionMode: session.mode,
       ...chatScrollElementSnapshot(node),
     });
-  }, [session.id]);
+  }, [session.id, session.mode]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
@@ -5915,7 +5935,9 @@ function ChatPane({
       epoch,
     });
     logChatScrollEvent("tail-bootstrap-reset", {
+      surface: "session",
       sessionId: session.id,
+      sessionMode: session.mode,
       reason,
       epoch,
       source: timelineBootstrapSourceRef.current,
@@ -6245,7 +6267,9 @@ function ChatPane({
         timelineBootstrapScrollToLatestRef.current = false;
       }
       logChatScrollEvent("timeline-request", {
+        surface: "session",
         sessionId: refreshSessionId,
+        sessionMode: session.mode,
         source,
         anchor,
         clearRealtime,
@@ -6257,7 +6281,9 @@ function ChatPane({
       );
       if (!res.ok) {
         logChatScrollEvent("timeline-error", {
+          surface: "session",
           sessionId: refreshSessionId,
+          sessionMode: session.mode,
           source,
           anchor,
           status: res.status,
@@ -6281,7 +6307,9 @@ function ChatPane({
       if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
       if (sdkWindowEpochRef.current !== refreshEpoch) {
         logChatScrollEvent("timeline-stale", {
+          surface: "session",
           sessionId: refreshSessionId,
+          sessionMode: session.mode,
           source,
           anchor,
           epoch: refreshEpoch,
@@ -6335,7 +6363,9 @@ function ChatPane({
       );
       const projectedEntries = conversationEntriesToTranscript(projection.entries);
       logChatScrollEntries("timeline-loaded", projectedEntries, {
+        surface: "session",
         sessionId: refreshSessionId,
+        sessionMode: session.mode,
         source,
         anchor,
         eventCount: Array.isArray(body.events) ? body.events.length : 0,
@@ -6386,7 +6416,9 @@ function ChatPane({
     setSdkLoadingOlder(true);
     if (!oldest) {
       logChatScrollEvent("older-missing-cursor", {
+        surface: "session",
         sessionId: refreshSessionId,
+        sessionMode: session.mode,
       });
       try {
         await jumpSdkToOldest();
@@ -6401,7 +6433,9 @@ function ChatPane({
       return;
     }
     logChatScrollEvent("older-request", {
+      surface: "session",
       sessionId: refreshSessionId,
+      sessionMode: session.mode,
       beforeOrderKey: oldest,
     });
     try {
@@ -6444,7 +6478,9 @@ function ChatPane({
           "older-loaded",
           conversationEntriesToTranscript(projection.entries),
           {
+            surface: "session",
             sessionId: refreshSessionId,
+            sessionMode: session.mode,
             eventCount: olderEvents.length,
             beforeOrderKey: oldest,
           },
@@ -8330,6 +8366,7 @@ function ChatPane({
               entries={renderedEntries}
               avatar={sessionAvatar}
               sessionId={session.id}
+              sessionMode={session.mode}
               pendingScrollMessageId={pendingScrollMessageId}
               onScrollConsumed={onScrollConsumed}
               showThinking={runPrefs.showThinking}

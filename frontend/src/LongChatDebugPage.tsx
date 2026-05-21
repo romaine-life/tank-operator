@@ -3,24 +3,17 @@ import type { CSSProperties } from "react";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
-  BugIcon,
-  ClipboardListIcon,
   Loader2Icon,
-  Trash2Icon,
 } from "lucide-react";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { WorkspaceShell } from "./WorkspaceShell";
 import { getSessionAvatar } from "./sessionAvatars";
 import {
   chatScrollElementSnapshot,
-  clearChatScrollEvents,
-  isChatScrollDebugEnabled,
   logChatScrollEvent,
-  readChatScrollEvents,
-  setChatScrollDebugEnabled,
-  type ChatScrollTelemetryRecord,
 } from "./chatScrollTelemetry";
 import { RunMessages, type TranscriptEntry } from "./App";
+import { bootstrapAuth, startLogin } from "./auth";
 
 const DEBUG_SESSION_ID = "debug-long-chat";
 const INITIAL_TURN_COUNT = 240;
@@ -39,13 +32,10 @@ const debugChatFontScaleStyle = {
 } as CSSProperties;
 
 export function LongChatDebugPage() {
+  const [access, setAccess] = useState<"loading" | "admin" | "signed-out" | "denied">("loading");
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     makeMockTranscript(0, INITIAL_TURN_COUNT),
   );
-  const [records, setRecords] = useState<ChatScrollTelemetryRecord[]>(() =>
-    readChatScrollEvents(),
-  );
-  const [consoleDebug, setConsoleDebug] = useState(() => isChatScrollDebugEnabled());
   const [permissionMode, setPermissionMode] = useState<RunComposerMode>("default");
   const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -60,11 +50,18 @@ export function LongChatDebugPage() {
   const mockReplyIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const refreshRecords = () => setRecords(readChatScrollEvents());
-    refreshRecords();
-    window.addEventListener("tank:chat-scroll-telemetry", refreshRecords);
+    let cancelled = false;
+    bootstrapAuth()
+      .then((user) => {
+        if (cancelled) return;
+        if (!user) setAccess("signed-out");
+        else setAccess(user.role === "admin" ? "admin" : "denied");
+      })
+      .catch(() => {
+        if (!cancelled) setAccess("signed-out");
+      });
     return () => {
-      window.removeEventListener("tank:chat-scroll-telemetry", refreshRecords);
+      cancelled = true;
       if (mockTimerRef.current !== null) {
         window.clearInterval(mockTimerRef.current);
         mockTimerRef.current = null;
@@ -90,6 +87,8 @@ export function LongChatDebugPage() {
   const bodyRef = useCallback((node: HTMLElement | null) => {
     setScrollParent(node);
     logChatScrollEvent(node ? "debug-scroll-parent-mounted" : "debug-scroll-parent-unmounted", {
+      surface: "debug_lab",
+      sessionMode: "debug",
       sessionId: DEBUG_SESSION_ID,
       ...chatScrollElementSnapshot(node),
     });
@@ -102,6 +101,8 @@ export function LongChatDebugPage() {
     setAtBottom(true);
     setScrollToLatestSignal((value) => value + 1);
     logChatScrollEvent("debug-reset-transcript", {
+      surface: "debug_lab",
+      sessionMode: "debug",
       sessionId: DEBUG_SESSION_ID,
       turnCount,
       ...chatScrollElementSnapshot(scrollParent),
@@ -118,6 +119,8 @@ export function LongChatDebugPage() {
       setEntries((current) => [...older, ...current]);
       setLoadingOlder(false);
       logChatScrollEvent("debug-prepend-older", {
+        surface: "debug_lab",
+        sessionMode: "debug",
         sessionId: DEBUG_SESSION_ID,
         addedTurns: PREPEND_TURN_COUNT,
         oldestTurn: nextOldest,
@@ -132,6 +135,8 @@ export function LongChatDebugPage() {
     const next = makeMockTranscript(start, count);
     setEntries((current) => [...current, ...next]);
     logChatScrollEvent("debug-append-burst", {
+      surface: "debug_lab",
+      sessionMode: "debug",
       sessionId: DEBUG_SESSION_ID,
       addedTurns: count,
       atBottom,
@@ -157,6 +162,8 @@ export function LongChatDebugPage() {
       );
     }
     logChatScrollEvent("debug-mock-reply-stopped", {
+      surface: "debug_lab",
+      sessionMode: "debug",
       sessionId: DEBUG_SESSION_ID,
       replyId: stoppedId ?? "",
       ...chatScrollElementSnapshot(scrollParent),
@@ -179,6 +186,8 @@ export function LongChatDebugPage() {
       mockMessageEntry(turn, 3, "assistant", "Thinking...", "posted", replyId),
     ]);
     logChatScrollEvent("debug-submit-message", {
+      surface: "debug_lab",
+      sessionMode: "debug",
       sessionId: DEBUG_SESSION_ID,
       turn,
       atBottom,
@@ -203,6 +212,8 @@ export function LongChatDebugPage() {
         mockReplyIdRef.current = null;
         setRunning(false);
         logChatScrollEvent("debug-mock-reply-complete", {
+          surface: "debug_lab",
+          sessionMode: "debug",
           sessionId: DEBUG_SESSION_ID,
           turn,
           ...chatScrollElementSnapshot(scrollParent),
@@ -211,8 +222,23 @@ export function LongChatDebugPage() {
     }, 120);
   }, [atBottom, running, scrollParent]);
 
-  const recentRecords = records.slice(-160).reverse();
   const avatar = getSessionAvatar(DEBUG_SESSION_ID);
+
+  if (access === "loading") {
+    return <DebugAccessScreen title="Loading debug session..." />;
+  }
+  if (access === "signed-out") {
+    return (
+      <DebugAccessScreen
+        title="Sign in required"
+        actionLabel="Sign in"
+        onAction={() => void startLogin()}
+      />
+    );
+  }
+  if (access !== "admin") {
+    return <DebugAccessScreen title="Admin access required" />;
+  }
 
   return (
     <div className="debug-scroll-lab">
@@ -260,6 +286,8 @@ export function LongChatDebugPage() {
               entries={entries}
               avatar={avatar}
               sessionId={DEBUG_SESSION_ID}
+              sessionMode="debug"
+              telemetrySurface="debug_lab"
               showThinking
               autoExpandTools={false}
               showTimestamps
@@ -308,58 +336,29 @@ export function LongChatDebugPage() {
           />
         )}
       />
-      <aside className="debug-scroll-ledger" aria-label="Chat scroll telemetry">
-        <div className="debug-scroll-ledger-header">
-          <div>
-            <span className="debug-scroll-ledger-title">
-              <ClipboardListIcon size={15} aria-hidden="true" />
-              Scroll ledger
-            </span>
-            <span className="debug-scroll-ledger-subtitle">{records.length} captured</span>
-          </div>
-          <div className="debug-scroll-ledger-actions">
-            <button
-              type="button"
-              className={`debug-scroll-ledger-btn${consoleDebug ? " active" : ""}`}
-              onClick={() => {
-                const next = !consoleDebug;
-                setConsoleDebug(next);
-                setChatScrollDebugEnabled(next);
-              }}
-              title="Toggle console mirror"
-              aria-pressed={consoleDebug}
-            >
-              <BugIcon size={14} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="debug-scroll-ledger-btn"
-              onClick={() => {
-                clearChatScrollEvents();
-                setRecords([]);
-              }}
-              title="Clear scroll ledger"
-            >
-              <Trash2Icon size={14} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <div className="debug-scroll-records">
-          {recentRecords.length === 0 ? (
-            <div className="debug-scroll-empty">No scroll events captured yet.</div>
-          ) : (
-            recentRecords.map((record) => (
-              <article key={record.id} className="debug-scroll-record">
-                <header>
-                  <span>{record.event}</span>
-                  <time dateTime={record.at}>{formatDebugTime(record.at)}</time>
-                </header>
-                <pre>{formatDebugDetail(record.detail)}</pre>
-              </article>
-            ))
-          )}
-        </div>
-      </aside>
+    </div>
+  );
+}
+
+function DebugAccessScreen({
+  title,
+  actionLabel,
+  onAction,
+}: {
+  title: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="debug-scroll-access">
+      <div>
+        <h1>{title}</h1>
+        {actionLabel && onAction && (
+          <button type="button" className="btn-primary" onClick={onAction}>
+            {actionLabel}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -481,7 +480,7 @@ function mockReplyFor(prompt: string, turn: number): string {
   return [
     `Mock response for turn ${turn}.`,
     `You posted: "${prompt.slice(0, 120)}".`,
-    "This reply streams in chunks so follow-output, tail pinning, and the scroll ledger can be inspected without a live runner.",
+    "This reply streams in chunks so follow-output, tail pinning, and Prometheus scroll metrics can be inspected without a live runner.",
     "If you scroll upward before it finishes, the viewport should stay where you left it and the latest button should become reachable.",
   ].join(" ");
 }
@@ -497,18 +496,4 @@ function mockTime(turn: number, sequence: number): string {
 function mockOrderKey(turn: number, sequence: number): string {
   const millis = TURN_TIME_BASE + (turn + TURN_ORDER_OFFSET) * 60_000 + sequence * 1000;
   return `${String(millis).padStart(13, "0")}-${String(Math.round(sequence * 1000)).padStart(8, "0")}-debug`;
-}
-
-function formatDebugTime(value: string): string {
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return value;
-  return new Date(parsed).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function formatDebugDetail(detail: Record<string, unknown>): string {
-  return JSON.stringify(detail, null, 2);
 }
