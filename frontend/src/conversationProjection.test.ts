@@ -231,6 +231,41 @@ test("projects canonical user and assistant events into chat messages", () => {
   assert.equal(projection.runStatus, "ready");
 });
 
+test("projects turn terminal metadata onto completed turn entries", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-terminal",
+        payload: { text: "hello" },
+      }),
+      ev("2", "turn.started", { source: "claude" }),
+      ev("3", "item.completed", {
+        actor: "tool",
+        source: "claude",
+        timeline_id: "tool-1",
+        payload: { kind: "tool", title: "Read", output: "done" },
+      }),
+      ev("4", "item.completed", {
+        actor: "assistant",
+        source: "claude",
+        timeline_id: "assistant-1",
+        payload: { kind: "message", text: "world" },
+      }),
+      ev("5", "turn.completed", {
+        source: "claude",
+        created_at: "2026-05-12T00:00:05.000Z",
+      }),
+    ]),
+  );
+
+  for (const entry of projection.entries) {
+    assert.equal(entry.turnTerminalStatus, "completed");
+    assert.equal(entry.turnTerminalAt, "2026-05-12T00:00:05.000Z");
+    assert.equal(entry.turnTerminalEventId, "5");
+  }
+});
+
 test("keys assistant messages by Tank timeline id, not provider item id", () => {
   const projection = projectConversationState(
     reduceConversationEvents([
