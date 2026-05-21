@@ -126,6 +126,12 @@ import {
   workspacePathFromHref,
   type WorkspacePathTarget,
 } from "./workspaceLinks";
+import {
+  sessionContainerAvailable,
+  sessionFilesAvailable,
+  sessionFilesTabTitle,
+  sessionModeSupportsWorkspaceFiles,
+} from "./sessionWorkspace";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 
@@ -810,7 +816,6 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
-const FILE_ATTACHMENT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
 const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
@@ -5167,6 +5172,12 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
+  const ready = session.mode === "hermes_gui"
+    ? session.status === "Active"
+    : sessionContainerAvailable(session);
+  const supportsFileAttachments = sessionModeSupportsWorkspaceFiles(session.mode);
+  const filesAvailable = sessionFilesAvailable(session);
+  const filesTabTitle = sessionFilesTabTitle(session);
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
   // the splash screen is where the user adjusts the defaults before a
@@ -6265,10 +6276,15 @@ function ChatPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyBootstrapped, session.status, visible]);
 
+  useEffect(() => {
+    if (activeTab !== "files" || filesAvailable) return;
+    setActiveTab("chat");
+  }, [activeTab, filesAvailable]);
+
   // Files tab — fetch directory listing whenever the path changes or the
   // user opens the tab on a ready session.
   useEffect(() => {
-    if (activeTab !== "files" || session.status !== "Active") return;
+    if (activeTab !== "files" || !filesAvailable) return;
     let cancelled = false;
     setFilesLoading(true);
     setFilesError(null);
@@ -6295,11 +6311,11 @@ function ChatPane({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, filesPath, session.id, session.status]);
+  }, [activeTab, filesAvailable, filesPath, session.id]);
 
   // Selected-file content fetch.
   useEffect(() => {
-    if (!selectedFile || selectedFile.text || selectedFile.binary) return;
+    if (!filesAvailable || !selectedFile || selectedFile.text || selectedFile.binary) return;
     // text empty + not binary == placeholder created by openFile; load it.
     let cancelled = false;
     setFileContentLoading(true);
@@ -6322,7 +6338,7 @@ function ChatPane({
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, session.id]);
+  }, [filesAvailable, selectedFile, session.id]);
 
   useEffect(() => {
     if (session.status !== "Active") {
@@ -6404,6 +6420,7 @@ function ChatPane({
   }
 
   function openWorkspacePath(target: WorkspacePathTarget | string) {
+    if (!filesAvailable) return;
     const normalized = typeof target === "string"
       ? normalizeWorkspacePathTarget(target)
       : target;
@@ -7257,7 +7274,6 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
-  const ready = session.status === "Active";
   const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
@@ -7271,7 +7287,6 @@ function ChatPane({
     if (entry?.id) setSelectedShellTaskId(entry.id);
     setActiveTab("shell_tasks");
   }, []);
-  const supportsFileAttachments = FILE_ATTACHMENT_MODES.has(session.mode);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
@@ -7426,6 +7441,7 @@ function ChatPane({
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
+    if (tab === "files" && !filesAvailable) return;
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
   const retryTimelineBootstrap = () => {
@@ -7550,7 +7566,8 @@ function ChatPane({
             className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
             onClick={() => toggleRunTab("files")}
             aria-pressed={activeTab === "files"}
-            title="Browse files in /workspace"
+            disabled={!filesAvailable}
+            title={filesTabTitle}
           >
             <FolderIcon
               className="run-tab-icon"
@@ -8748,7 +8765,7 @@ export function App() {
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
   useEffect(() => {
-    if (FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
+    if (sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
     setHomeDragActive(false);
     setHomeAttachments((prev) => {
       for (const att of prev) {
@@ -9546,7 +9563,7 @@ export function App() {
     const requestedName = homeSessionName.trim();
     const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
     const seedPrompt = composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
-    const pendingHomeAttachments = FILE_ATTACHMENT_MODES.has(mode) ? [...homeAttachments] : [];
+    const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode) ? [...homeAttachments] : [];
     const seedTurnRequested =
       (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
@@ -10226,7 +10243,7 @@ export function App() {
             composerWrapRef={homeComposerWrapRef}
             composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
             onComposerWrapDragOver={(e) => {
-              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
               e.preventDefault();
               if (!homeDragActive) setHomeDragActive(true);
             }}
@@ -10234,13 +10251,13 @@ export function App() {
               if (e.currentTarget === e.target) setHomeDragActive(false);
             }}
             onComposerWrapDrop={(e) => {
-              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
               e.preventDefault();
               setHomeDragActive(false);
               addHomeAttachments(e.dataTransfer?.files ?? null);
             }}
             onComposerWrapPaste={(e) => {
-              if (!FILE_ATTACHMENT_MODES.has(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
               const items = e.clipboardData?.items;
               if (!items) return;
               const fs: File[] = [];
@@ -10572,12 +10589,12 @@ export function App() {
                         className="run-composer-icon-btn"
                         aria-label="Attach files"
                         title={
-                          FILE_ATTACHMENT_MODES.has(defaultSessionMode)
+                          sessionModeSupportsWorkspaceFiles(defaultSessionMode)
                             ? "Attach files for the first turn"
                             : "File attachments require a session workspace"
                         }
                         onClick={() => homeFileInputRef.current?.click()}
-                        disabled={busy || !FILE_ATTACHMENT_MODES.has(defaultSessionMode)}
+                        disabled={busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode)}
                       >
                         <ImageIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
