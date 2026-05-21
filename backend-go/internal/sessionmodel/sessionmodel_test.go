@@ -141,6 +141,10 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	if got, want := codexRunner["image"], "codex-image"; got != want {
 		t.Fatalf("codex-runner image = %v, want %q (same image as the user container; the runner is a multi-stage build into the same image)", got, want)
 	}
+	codexRunnerResources := codexRunner["resources"].(map[string]any)
+	if got, want := codexRunnerResources["limits"].(map[string]any)["memory"], "3072Mi"; got != want {
+		t.Fatalf("codex-runner memory limit = %v, want %q", got, want)
+	}
 	assertVolumeMount(t, codexRunner, "tank-operator-sa-token")
 	assertVolumeMount(t, codexRunner, "auth-romaine-sa-token")
 	volumes := spec["volumes"].([]any)
