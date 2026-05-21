@@ -116,7 +116,10 @@ import {
   logSessionListSseOpen,
   logSessionListStreamSignal,
 } from "./sessionListTelemetry";
-import { isChatScrollDebugEnabled, logChatScrollEvent } from "./chatScrollTelemetry";
+import {
+  chatScrollElementSnapshot,
+  logChatScrollEvent,
+} from "./chatScrollTelemetry";
 import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
@@ -170,7 +173,7 @@ type AskUserQuestionAnswer = {
   notes?: string;
   preview?: string;
 };
-type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
+export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task";
   role?: "user" | "assistant" | "system";
   toolKind?: ToolKind;
@@ -3049,7 +3052,6 @@ function logChatScrollGroups(
   entryCount: number,
   detail: Record<string, unknown> = {},
 ): void {
-  if (!isChatScrollDebugEnabled()) return;
   logChatScrollEvent(event, {
     ...detail,
     ...chatScrollGroupSnapshot(groups, entryCount),
@@ -3061,7 +3063,6 @@ function logChatScrollEntries(
   entries: TranscriptEntry[],
   detail: Record<string, unknown> = {},
 ): void {
-  if (!isChatScrollDebugEnabled()) return;
   logChatScrollEvent(event, {
     ...detail,
     ...chatScrollEntrySnapshot(entries),
@@ -4626,7 +4627,7 @@ function toolGroupDefaultOpen(
 // inline render. The `followOutput` + `startReached` +
 // `atBottomStateChange` props replace the hand-rolled scroll-detect /
 // auto-scroll effects deleted from ChatPane in this stage.
-function RunMessages({
+export function RunMessages({
   entries,
   avatar,
   sessionId,
@@ -4727,19 +4728,21 @@ function RunMessages({
       sessionId,
       previousFirst,
       nextIndex,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: nextIndex,
       align: "start",
       behavior: "auto",
     });
-  }, [entries.length, groups, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId]);
   useEffect(() => {
     logChatScrollGroups("virtuoso-window", groups, entries.length, {
       sessionId,
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
+      ...chatScrollElementSnapshot(scrollParent),
     });
-  }, [entries.length, groups, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId]);
   useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
     if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
@@ -4749,6 +4752,7 @@ function RunMessages({
       signal: scrollToLatestSignal,
       behavior: scrollToLatestBehavior,
       reason: scrollToLatestReason,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
@@ -4760,6 +4764,7 @@ function RunMessages({
     entries.length,
     groups,
     onScrollToLatestConsumed,
+    scrollParent,
     scrollToLatestBehavior,
     scrollToLatestReason,
     scrollToLatestSignal,
@@ -4770,13 +4775,14 @@ function RunMessages({
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       sessionId,
       signal: scrollToOldestSignal,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: 0,
       align: "start",
       behavior: "smooth",
     });
-  }, [entries.length, groups, scrollToOldestSignal, sessionId]);
+  }, [entries.length, groups, scrollParent, scrollToOldestSignal, sessionId]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
   // Tool groups have no single id, so the first child id identifies the
   // group while later tool entries append during a streaming turn.
@@ -4861,18 +4867,20 @@ function RunMessages({
   const handleStartReached = useCallback(() => {
     logChatScrollGroups("start-reached", groups, entries.length, {
       sessionId,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     onStartReached?.();
-  }, [entries.length, groups, onStartReached, sessionId]);
+  }, [entries.length, groups, onStartReached, scrollParent, sessionId]);
   const handleAtBottomChange = useCallback(
     (atBottom: boolean) => {
       logChatScrollGroups("at-bottom-change", groups, entries.length, {
         sessionId,
         atBottom,
+        ...chatScrollElementSnapshot(scrollParent),
       });
       onAtBottomChange?.(atBottom);
     },
-    [entries.length, groups, onAtBottomChange, sessionId],
+    [entries.length, groups, onAtBottomChange, scrollParent, sessionId],
   );
   // followOutput="smooth" keeps the user stuck to the live tail when they
   // ARE at the bottom; releases when they scroll up. Returning false from
@@ -5293,7 +5301,11 @@ function ChatPane({
   const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
   const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
     setTranscriptScrollEl(node);
-  }, []);
+    logChatScrollEvent(node ? "scroll-parent-mounted" : "scroll-parent-unmounted", {
+      sessionId: session.id,
+      ...chatScrollElementSnapshot(node),
+    });
+  }, [session.id]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
@@ -5959,26 +5971,24 @@ function ChatPane({
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
-      if (isChatScrollDebugEnabled()) {
-        const projection = projectConversationState(
-          reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
-        );
-        const projectedEntries = conversationEntriesToTranscript(projection.entries);
-        logChatScrollEntries("timeline-loaded", projectedEntries, {
-          sessionId: refreshSessionId,
-          source,
-          anchor,
-          eventCount: Array.isArray(body.events) ? body.events.length : 0,
-          canonicalEventCount: canonicalEvents.length,
-          foundOldest,
-          foundNewest,
-          hasPrevCursor: Boolean(prevAfter),
-          hasNextCursor: Boolean(nextAfter),
-          clearRealtime,
-          terminalStatus: terminal?.status ?? "",
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-      }
+      const projection = projectConversationState(
+        reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
+      );
+      const projectedEntries = conversationEntriesToTranscript(projection.entries);
+      logChatScrollEntries("timeline-loaded", projectedEntries, {
+        sessionId: refreshSessionId,
+        source,
+        anchor,
+        eventCount: Array.isArray(body.events) ? body.events.length : 0,
+        canonicalEventCount: canonicalEvents.length,
+        foundOldest,
+        foundNewest,
+        hasPrevCursor: Boolean(prevAfter),
+        hasNextCursor: Boolean(nextAfter),
+        clearRealtime,
+        terminalStatus: terminal?.status ?? "",
+        durationMs: Math.round(performance.now() - startedAt),
+      });
       if (canonicalEvents.length === 0) {
         if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
         return { replayed: false, terminal };
@@ -6068,20 +6078,18 @@ function ChatPane({
           ...sdkServerEventsRef.current,
         ]);
         syncSdkRenderedEntries();
-        if (isChatScrollDebugEnabled()) {
-          const projection = projectConversationState(
-            reduceConversationEvents(sdkServerEventsRef.current),
-          );
-          logChatScrollEntries(
-            "older-loaded",
-            conversationEntriesToTranscript(projection.entries),
-            {
-              sessionId: refreshSessionId,
-              eventCount: olderEvents.length,
-              beforeOrderKey: oldest,
-            },
-          );
-        }
+        const projection = projectConversationState(
+          reduceConversationEvents(sdkServerEventsRef.current),
+        );
+        logChatScrollEntries(
+          "older-loaded",
+          conversationEntriesToTranscript(projection.entries),
+          {
+            sessionId: refreshSessionId,
+            eventCount: olderEvents.length,
+            beforeOrderKey: oldest,
+          },
+        );
       }
       const prevAfter =
         typeof body.prev_order_key === "string" ? body.prev_order_key : "";
