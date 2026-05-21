@@ -1813,15 +1813,6 @@ function DemoLanding() {
                     </button>
                     <button
                       type="button"
-                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                      disabled
-                      aria-label="Start test skill"
-                      title="Sign in to start a session"
-                    >
-                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
                       className="run-composer-icon-btn run-command-menu-btn"
                       disabled
                       aria-label="Show slash commands"
@@ -8716,7 +8707,6 @@ export function App() {
   // session's run pane (which uses its own per-session composerMode state).
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
-  const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
@@ -10581,9 +10571,8 @@ export function App() {
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 disabled={busy}
-                onTextChange={setHomeComposerText}
                 toolButtons={
-                    <>
+                  <>
                       <button
                         type="button"
                         className="run-composer-icon-btn"
@@ -10609,29 +10598,6 @@ export function App() {
                           <TankIcon className="run-composer-icon" />
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                        onClick={() => {
-                          void createSession(
-                            defaultSessionMode,
-                            homeComposerText.trim() || undefined,
-                            homeComposerMode,
-                            "test",
-                          );
-                        }}
-                        disabled={busy || !CHAT_MODES.has(defaultSessionMode)}
-                        aria-label="Start test skill"
-                        title={
-                          CHAT_MODES.has(defaultSessionMode)
-                            ? selectedProvider === "anthropic"
-                              ? "Start with /test"
-                              : "Start with $test"
-                            : "Choose a GUI chat runtime to start with test"
-                        }
-                      >
-                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
                       <button
                         type="button"
                         className="run-composer-icon-btn run-command-menu-btn"

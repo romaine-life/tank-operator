@@ -167,12 +167,15 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   assert.equal(skillStateBody.includes('if (testActive) return "test"'), false);
 });
 
-test("home splash test action seeds the first turn as a skill invocation", () => {
-  assert.equal(appSource.includes("composeSkillPrompt"), true);
-  assert.match(appSource, /initialSkillName\?: SkillStateName/);
-  assert.match(appSource, /\.\.\.\(requestedInitialSkillName \? \{ skill_name: requestedInitialSkillName \} : \{\}\)/);
-  assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
-  assert.equal(appSource.includes("Available once your session starts"), false);
+test("home splash uses code+test instead of a direct test-skill button", () => {
+  assert.equal(
+    /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/.test(
+      appSource,
+    ),
+    false,
+  );
+  assert.equal(appSource.includes('label: "Code + test"'), true);
+  assert.equal(appSource.includes('hint: "Starts the test skill"'), true);
 });
 
 test("files tab is gated until the session container is available", () => {
