@@ -42,6 +42,26 @@ export function modeSupportsRepos(mode: string): boolean {
   return REPO_SUPPORTED_MODES.has(mode);
 }
 
+export function normalizeRepoSlugs(
+  raw: readonly string[],
+  limit = MAX_REPOS_PER_SESSION,
+): string[] {
+  if (limit <= 0) return [];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawSlug of raw) {
+    const slug = rawSlug.trim();
+    if (!isValidRepoSlug(slug)) continue;
+    const key = slug.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(slug);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 export function recentRepoPreviewSlugs(
   recent: string[],
   selected: string[],

@@ -9,6 +9,7 @@ import {
   addRepoSlug,
   isValidRepoSlug,
   modeSupportsRepos,
+  normalizeRepoSlugs,
   recentRepoPreviewSlugs,
   removeRepoSlug,
 } from "./repos";
@@ -67,6 +68,28 @@ test("MAX_REPOS_PER_SESSION matches backend cap", () => {
   // Update both sides together — this test exists to surface a
   // one-sided change.
   assert.equal(MAX_REPOS_PER_SESSION, 5);
+});
+
+test("normalizeRepoSlugs trims, dedupes, and caps staged repo defaults", () => {
+  assert.deepEqual(
+    normalizeRepoSlugs([
+      "  nelsong6/tank-operator  ",
+      "NelsonG6/Tank-Operator",
+      "bad slug",
+      "nelsong6/infra-bootstrap",
+      "nelsong6/mcp-tank-operator",
+      "openai/codex",
+      "example/fifth",
+      "example/sixth",
+    ]),
+    [
+      "nelsong6/tank-operator",
+      "nelsong6/infra-bootstrap",
+      "nelsong6/mcp-tank-operator",
+      "openai/codex",
+      "example/fifth",
+    ],
+  );
 });
 
 test("RECENT_REPO_PREVIEW_LIMIT keeps the splash recent list short", () => {
