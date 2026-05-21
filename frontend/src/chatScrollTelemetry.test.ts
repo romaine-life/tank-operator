@@ -2,19 +2,21 @@ import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  clearChatScrollEvents,
+  flushChatScrollMetricsForTest,
   isChatScrollDebugEnabled,
   logChatScrollEvent,
-  readChatScrollEvents,
 } from "./chatScrollTelemetry";
 
 let fakeStorage: Record<string, string>;
 let consoleLogs: Array<[string, unknown[]]>;
 let origConsoleLog: typeof console.log;
+let fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }>;
+let origFetch: typeof fetch;
 
 beforeEach(() => {
   fakeStorage = {};
   consoleLogs = [];
+  fetchCalls = [];
 
   (globalThis as { localStorage?: unknown }).localStorage = {
     getItem(key: string) {
@@ -41,20 +43,25 @@ beforeEach(() => {
   console.log = (message: string, ...args: unknown[]) => {
     consoleLogs.push([message, args]);
   };
-  clearChatScrollEvents();
+  origFetch = fetch;
+  (globalThis as { fetch: typeof fetch }).fetch = (async (input, init) => {
+    fetchCalls.push({ input, init });
+    return new Response("{}", { status: 202 });
+  }) as typeof fetch;
 });
 
 afterEach(() => {
   console.log = origConsoleLog;
+  (globalThis as { fetch: typeof fetch }).fetch = origFetch;
   delete (globalThis as { localStorage?: unknown }).localStorage;
+  delete (globalThis as { window?: unknown }).window;
 });
 
 test("chat scroll debug logs are off by default", () => {
   assert.equal(isChatScrollDebugEnabled(), false);
   logChatScrollEvent("timeline-loaded", { sessionId: "101" });
   assert.equal(consoleLogs.length, 0);
-  assert.equal(readChatScrollEvents().length, 1);
-  assert.equal(readChatScrollEvents()[0]?.event, "timeline-loaded");
+  assert.equal(fakeStorage["tank.chatScrollEvents"], undefined);
 });
 
 test("chat scroll debug logs fire when tankDebug includes chat-scroll", () => {
@@ -65,9 +72,27 @@ test("chat scroll debug logs fire when tankDebug includes chat-scroll", () => {
   assert.equal(consoleLogs[0]?.[0], "[tank/chat-scroll] timeline-loaded");
 });
 
-test("chat scroll ledger can be cleared without console debug", () => {
-  logChatScrollEvent("at-bottom-change", { sessionId: "101", atBottom: false });
-  assert.equal(readChatScrollEvents().length, 1);
-  clearChatScrollEvents();
-  assert.deepEqual(readChatScrollEvents(), []);
+test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
+  fakeStorage["auth-romaine-jwt"] = "token-123";
+  const listeners: Record<string, EventListener> = {};
+  (globalThis as { window?: unknown }).window = {
+    location: { pathname: "/sessions/101" },
+    setTimeout: () => 1,
+    addEventListener: (event: string, listener: EventListener) => {
+      listeners[event] = listener;
+    },
+  };
+  logChatScrollEvent("at-bottom-change", {
+    sessionMode: "codex_gui",
+    atBottom: false,
+    bottomDistance: 240,
+  });
+  flushChatScrollMetricsForTest();
+
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0]?.input, "/api/client-metrics/chat-scroll");
+  assert.equal(fetchCalls[0]?.init?.method, "POST");
+  assert.equal(new Headers(fetchCalls[0]?.init?.headers).get("Authorization"), "Bearer token-123");
+  assert.match(String(fetchCalls[0]?.init?.body), /"event":"at-bottom-change"/);
+  assert.match(String(fetchCalls[0]?.init?.body), /"sessionMode":"codex_gui"/);
 });

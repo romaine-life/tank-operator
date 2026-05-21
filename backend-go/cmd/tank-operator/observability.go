@@ -236,6 +236,90 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// --- Browser chat-scroll metrics ---
+//
+// The SPA reports semantic scroll decisions here; the orchestrator owns
+// label bucketing so browser details never become high-cardinality series.
+// No user, session_id, URL, or raw path labels are exposed.
+
+var (
+	chatScrollClientReportsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_chat_scroll_client_reports_total",
+			Help: "Browser chat-scroll metric report requests, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
+	chatScrollClientEventsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_chat_scroll_client_events_total",
+			Help: "Semantic chat transcript scroll events reported by browsers.",
+		},
+		[]string{"event", "surface", "session_mode", "at_bottom", "has_scroll_parent"},
+	)
+	chatScrollClientBottomDistancePixels = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "tank_chat_scroll_client_bottom_distance_pixels",
+			Help: "Distance in pixels from the transcript viewport bottom when browser scroll events were reported.",
+			Buckets: []float64{
+				0, 1, 4, 24, 100, 500, 1000, 5000, 10000, 50000,
+			},
+		},
+		[]string{"event", "surface", "session_mode"},
+	)
+	chatScrollClientEntries = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "tank_chat_scroll_client_entries",
+			Help:    "Transcript entry counts attached to browser scroll events.",
+			Buckets: []float64{0, 10, 50, 100, 200, 500, 1000, 2000, 5000},
+		},
+		[]string{"event", "surface", "session_mode"},
+	)
+)
+
+func recordChatScrollClientReport(result string) {
+	chatScrollClientReportsTotal.WithLabelValues(result).Inc()
+}
+
+func recordChatScrollClientEvent(event chatScrollMetricEvent) {
+	eventLabel := chatScrollEventLabel(event.Event)
+	surface := chatScrollSurfaceLabel(event.Surface)
+	mode := chatScrollSessionModeLabel(event.SessionMode)
+	atBottom := boolMetricLabel(event.AtBottom)
+	hasScrollParent := boolMetricLabel(event.HasScrollParent)
+	chatScrollClientEventsTotal.WithLabelValues(
+		eventLabel,
+		surface,
+		mode,
+		atBottom,
+		hasScrollParent,
+	).Inc()
+	if event.BottomDistance != nil && *event.BottomDistance >= 0 {
+		chatScrollClientBottomDistancePixels.WithLabelValues(
+			eventLabel,
+			surface,
+			mode,
+		).Observe(*event.BottomDistance)
+	}
+	if event.Entries != nil && *event.Entries >= 0 {
+		chatScrollClientEntries.WithLabelValues(
+			eventLabel,
+			surface,
+			mode,
+		).Observe(*event.Entries)
+	}
+}
+
+func boolMetricLabel(value *bool) string {
+	if value == nil {
+		return "unknown"
+	}
+	if *value {
+		return "true"
+	}
+	return "false"
+}
+
 // GET /api/github/repos counters. The endpoint proxies through to
 // mcp-github via an on-behalf-of token mint; both legs can fail
 // independently, so we surface a simple ok|error outcome label plus

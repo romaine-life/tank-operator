@@ -1,30 +1,39 @@
+import { getStoredToken } from "./auth";
+
 // Chat transcript scroll telemetry. Console logging is opt-in per browser with
 // `localStorage.tankDebug = "chat-scroll"` or a comma-separated list that
 // includes `chat-scroll`.
 //
-// The bounded local ledger is always written. It gives the app an after-the-
-// fact diagnostic surface for user-visible scroll trust failures without
-// making browser-local position a product source of truth.
+// Production observability is Prometheus-backed: semantic browser events are
+// batched to the orchestrator, which owns the bounded metric labels.
 
 const DEBUG_STORAGE_KEY = "tankDebug";
 const DEBUG_TOKEN = "chat-scroll";
 const CONSOLE_PREFIX = "[tank/chat-scroll]";
-const LEDGER_STORAGE_KEY = "tank.chatScrollEvents";
-const LEDGER_EVENT_NAME = "tank:chat-scroll-telemetry";
-const MAX_LEDGER_RECORDS = 500;
+const METRICS_ENDPOINT = "/api/client-metrics/chat-scroll";
+const MAX_BATCH_EVENTS = 40;
+const FLUSH_DELAY_MS = 1_000;
 const MAX_DETAIL_KEYS = 60;
 const MAX_STRING_LENGTH = 260;
 
-export interface ChatScrollTelemetryRecord {
-  id: string;
-  at: string;
+interface ChatScrollMetricPayload {
   event: string;
-  detail: Record<string, unknown>;
-  path?: string;
+  surface: string;
+  sessionMode: string;
+  atBottom?: boolean;
+  hasScrollParent?: boolean;
+  scrollTop?: number;
+  scrollHeight?: number;
+  clientHeight?: number;
+  bottomDistance?: number;
+  entries?: number;
+  groups?: number;
+  messages?: number;
+  toolGroups?: number;
 }
 
-let volatileLedger: ChatScrollTelemetryRecord[] = [];
-let sequence = 0;
+let pendingMetrics: ChatScrollMetricPayload[] = [];
+let flushTimer: number | null = null;
 
 export function isChatScrollDebugEnabled(): boolean {
   try {
@@ -38,48 +47,14 @@ export function isChatScrollDebugEnabled(): boolean {
   }
 }
 
-export function setChatScrollDebugEnabled(enabled: boolean): void {
-  try {
-    const tokens = new Set(
-      (localStorage.getItem(DEBUG_STORAGE_KEY) ?? "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    );
-    if (enabled) tokens.add(DEBUG_TOKEN);
-    else tokens.delete(DEBUG_TOKEN);
-    if (tokens.size === 0) {
-      localStorage.removeItem(DEBUG_STORAGE_KEY);
-    } else {
-      localStorage.setItem(DEBUG_STORAGE_KEY, [...tokens].join(","));
-    }
-  } catch {
-    // localStorage can be unavailable in hardened/private contexts.
-  }
-}
-
 export function logChatScrollEvent(
   event: string,
   detail: Record<string, unknown> = {},
 ): void {
-  const record = appendChatScrollRecord(event, detail);
+  const sanitized = sanitizeDetail(detail);
+  enqueueChatScrollMetric(event, sanitized);
   if (!isChatScrollDebugEnabled()) return;
-  console.log(`${CONSOLE_PREFIX} ${event}`, record.detail);
-}
-
-export function readChatScrollEvents(): ChatScrollTelemetryRecord[] {
-  const persisted = readPersistedLedger();
-  return persisted.length > 0 ? persisted : volatileLedger;
-}
-
-export function clearChatScrollEvents(): void {
-  volatileLedger = [];
-  try {
-    localStorage.removeItem(LEDGER_STORAGE_KEY);
-  } catch {
-    // localStorage can be unavailable in hardened/private contexts.
-  }
-  emitChatScrollRecordEvent(null);
+  console.log(`${CONSOLE_PREFIX} ${event}`, sanitized);
 }
 
 export function chatScrollElementSnapshot(
@@ -98,52 +73,87 @@ export function chatScrollElementSnapshot(
   };
 }
 
-function appendChatScrollRecord(
+export function flushChatScrollMetricsForTest(): void {
+  if (flushTimer !== null && typeof window !== "undefined") {
+    if (typeof window.clearTimeout === "function") {
+      window.clearTimeout(flushTimer);
+    }
+    flushTimer = null;
+  }
+  flushChatScrollMetrics();
+}
+
+function enqueueChatScrollMetric(
   event: string,
   detail: Record<string, unknown>,
-): ChatScrollTelemetryRecord {
-  sequence += 1;
-  const record: ChatScrollTelemetryRecord = {
-    id: `${Date.now()}-${sequence}`,
-    at: new Date().toISOString(),
+): void {
+  if (typeof window === "undefined") return;
+  pendingMetrics.push({
     event,
-    detail: sanitizeDetail(detail),
-    path: typeof window !== "undefined" ? window.location.pathname : undefined,
-  };
-  const nextLedger = [...readChatScrollEvents(), record].slice(-MAX_LEDGER_RECORDS);
-  volatileLedger = nextLedger;
-  try {
-    localStorage.setItem(LEDGER_STORAGE_KEY, JSON.stringify(nextLedger));
-  } catch {
-    // Keep the in-memory ledger when localStorage quota/access fails.
+    surface: metricString(detail.surface) || inferMetricSurface(),
+    sessionMode: metricString(detail.sessionMode) || "unknown",
+    atBottom: typeof detail.atBottom === "boolean" ? detail.atBottom : undefined,
+    hasScrollParent:
+      typeof detail.hasScrollParent === "boolean" ? detail.hasScrollParent : undefined,
+    scrollTop: metricNumber(detail.scrollTop),
+    scrollHeight: metricNumber(detail.scrollHeight),
+    clientHeight: metricNumber(detail.clientHeight),
+    bottomDistance: metricNumber(detail.bottomDistance),
+    entries: metricNumber(detail.entries),
+    groups: metricNumber(detail.groups),
+    messages: metricNumber(detail.messages),
+    toolGroups: metricNumber(detail.toolGroups),
+  });
+  if (pendingMetrics.length >= MAX_BATCH_EVENTS) {
+    flushChatScrollMetrics();
+    return;
   }
-  emitChatScrollRecordEvent(record);
-  return record;
+  scheduleFlush();
 }
 
-function readPersistedLedger(): ChatScrollTelemetryRecord[] {
-  try {
-    const raw = localStorage.getItem(LEDGER_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isChatScrollTelemetryRecord).slice(-MAX_LEDGER_RECORDS);
-  } catch {
-    return [];
-  }
+function scheduleFlush(): void {
+  if (typeof window === "undefined" || flushTimer !== null) return;
+  flushTimer = window.setTimeout(() => {
+    flushTimer = null;
+    flushChatScrollMetrics();
+  }, FLUSH_DELAY_MS);
 }
 
-function isChatScrollTelemetryRecord(value: unknown): value is ChatScrollTelemetryRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.id === "string" &&
-    typeof candidate.at === "string" &&
-    typeof candidate.event === "string" &&
-    Boolean(candidate.detail) &&
-    typeof candidate.detail === "object" &&
-    !Array.isArray(candidate.detail)
-  );
+function flushChatScrollMetrics(): void {
+  if (typeof window === "undefined" || pendingMetrics.length === 0) return;
+  const events = pendingMetrics.splice(0, MAX_BATCH_EVENTS);
+  let token: string | null = null;
+  try {
+    token = getStoredToken();
+  } catch {
+    return;
+  }
+  if (!token) return;
+  if (typeof fetch !== "function") return;
+  fetch(METRICS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ events }),
+    keepalive: true,
+  }).catch(() => undefined);
+  if (pendingMetrics.length > 0) scheduleFlush();
+}
+
+function inferMetricSurface(): string {
+  if (typeof window === "undefined") return "unknown";
+  return window.location.pathname.startsWith("/_debug/") ? "debug_lab" : "session";
+}
+
+function metricString(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().slice(0, 80);
+}
+
+function metricNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function sanitizeDetail(detail: Record<string, unknown>): Record<string, unknown> {
@@ -170,7 +180,10 @@ function sanitizeValue(value: unknown, depth: number): unknown {
   if (typeof value === "object") {
     if (depth >= 2) return "[object]";
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 20)) {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(
+      0,
+      20,
+    )) {
       out[key] = sanitizeValue(child, depth + 1);
     }
     return out;
@@ -178,11 +191,6 @@ function sanitizeValue(value: unknown, depth: number): unknown {
   return String(value);
 }
 
-function emitChatScrollRecordEvent(record: ChatScrollTelemetryRecord | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.dispatchEvent(new CustomEvent(LEDGER_EVENT_NAME, { detail: record }));
-  } catch {
-    // CustomEvent can be blocked in unusual embedded contexts.
-  }
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushChatScrollMetrics);
 }

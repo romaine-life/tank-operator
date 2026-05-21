@@ -9,6 +9,7 @@ function readSource(path: string): string {
 const appSource = readSource("./App.tsx");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
+const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
 const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
@@ -228,17 +229,20 @@ test("chat back-pagination keeps the focused load button mounted while loading",
   assert.equal(appSource.includes("run-transcript-load-older-passive"), false);
 });
 
-test("chat scroll diagnostics are debug gated", () => {
+test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
   assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
-  assert.equal(chatScrollTelemetrySource.includes("readChatScrollEvents"), true);
-  assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), true);
+  assert.equal(chatScrollTelemetrySource.includes("/api/client-metrics/chat-scroll"), true);
+  assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
 });
 
-test("long-chat scroll lab route is available without the authenticated app", () => {
+test("long-chat scroll lab route is admin gated and uses prometheus metrics", () => {
   assert.equal(mainSource.includes('"/_debug/long-chat"'), true);
   assert.equal(mainSource.includes("LongChatDebugPage"), true);
-  assert.equal(mainSource.includes("tank.chatScrollEvents"), true);
+  assert.equal(mainSource.includes("tank.chatScrollEvents"), false);
+  assert.equal(longChatDebugSource.includes("bootstrapAuth"), true);
+  assert.equal(longChatDebugSource.includes('user.role === "admin"'), true);
+  assert.equal(longChatDebugSource.includes("readChatScrollEvents"), false);
 });

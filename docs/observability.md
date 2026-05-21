@@ -40,6 +40,12 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_session_event_stream_lag_seconds` histogram. Same names as the
   prior expvar counters (`_total` suffix added where missing per Prom
   convention).
+- `tank_chat_scroll_client_*` - browser-reported transcript scroll
+  diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
+  Labels are server-bucketed only: `event`, `surface`, `session_mode`,
+  `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
+  `session_id`, email, raw route paths, or user-supplied event names as
+  labels; unknown values collapse to `other` / `unknown`.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
   to `/interrupt`. Single label `outcome` with three bounded values:
   `persisted`, `persist_failed`, `publish_failed`. Steady-state
