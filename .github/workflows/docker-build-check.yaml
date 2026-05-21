@@ -114,6 +114,10 @@ jobs:
           git checkout --detach "$full_sha"
           echo "Resolved ${INPUT_REF} -> ${full_sha}"
 
+      - name: Check Glimmung native contract
+        if: matrix.name == 'app'
+        run: bash scripts/test-glimmung-native-contract.sh
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
