@@ -178,6 +178,18 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
+test("pending launch preview is prepended before the durable transcript entries", () => {
+  assert.match(
+    appSource,
+    /const renderedEntries = useMemo\(\n\s*\(\) =>\n\s*\[\n\s*\.\.\.\(pendingLaunchPrompt \? \[pendingLaunchPrompt\] : \[\]\),\n\s*\.\.\.\(pendingLaunchNote \? \[pendingLaunchNote\] : \[\]\),\n\s*\.\.\.entries,\n\s*\],\n\s*\[entries, pendingLaunchNote, pendingLaunchPrompt\],\n\s*\);/,
+  );
+  assert.match(
+    appSource,
+    /const hasDurableLaunchMessage =\n\s+pendingLaunch\.stage === "complete" &&\n\s+entries\.some\(\n\s+\(entry\) =>\n\s+entry\.kind === "message" &&\n\s+entry\.role === "user" &&\n\s+entry\.clientNonce === pendingLaunch\.clientNonce,\n\s+\);/,
+  );
+  assert.match(appSource, /if \(hasDurableLaunchMessage\) \{\n\s+setPendingLaunchPrompt\(null\);/);
+});
+
 test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);

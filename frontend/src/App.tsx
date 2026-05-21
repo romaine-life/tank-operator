@@ -5276,6 +5276,14 @@ function ChatPane({
       : "the first turn";
     const promptText = pendingLaunch.previewText.trim();
     const previewText = promptText || (pendingLaunch.skillName ? skillActionText(pendingLaunch.skillName) : "First turn");
+    const hasDurableLaunchMessage =
+      pendingLaunch.stage === "complete" &&
+      entries.some(
+        (entry) =>
+          entry.kind === "message" &&
+          entry.role === "user" &&
+          entry.clientNonce === pendingLaunch.clientNonce,
+      );
     if (pendingLaunchNonceRef.current !== pendingLaunch.clientNonce) {
       pendingLaunchNonceRef.current = pendingLaunch.clientNonce;
       setPendingLaunchPrompt({
@@ -5308,8 +5316,10 @@ function ChatPane({
       return;
     }
 
-    if (pendingLaunch.stage === "complete") {
+    if (hasDurableLaunchMessage) {
+      setPendingLaunchPrompt(null);
       setPendingLaunchNote(null);
+      pendingLaunchNonceRef.current = pendingLaunch.clientNonce;
       return;
     }
 
@@ -5328,7 +5338,7 @@ function ChatPane({
       transcriptSource: "realtime",
       localOnly: true,
     } as TranscriptEntry);
-  }, [pendingLaunch, session.id, session.mode]);
+  }, [entries, pendingLaunch, session.id, session.mode]);
 
   const [dragActive, setDragActive] = useState(false);
   const setChatFontScale = (value: number) => {
