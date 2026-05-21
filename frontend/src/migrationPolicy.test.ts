@@ -2,44 +2,25 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
-const conversationReducerSource = readFileSync(
-  new URL("./conversationReducer.ts", import.meta.url),
-  "utf8",
+function readSource(path: string): string {
+  return readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+}
+
+const appSource = readSource("./App.tsx");
+const conversationReducerSource = readSource("./conversationReducer.ts");
+const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
+const mainSource = readSource("./main.tsx");
+const indexCssSource = readSource("./index.css");
+const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
+const installTankDocsSource = readSource("../../k8s/session-config/install-tank-docs.sh");
+const agentRunnerLaunchSource = readSource("../../k8s/session-config/agent-runner-launch.sh");
+const codexRunnerLaunchSource = readSource("../../k8s/session-config/codex-runner-launch.sh");
+const defaultClaudeSource = readSource("../../k8s/session-config/default-claude.md");
+const bundledQualityTimeframesSource = readSource(
+  "../../k8s/session-config/docs/quality-timeframes.md",
 );
-const chatScrollTelemetrySource = readFileSync(
-  new URL("./chatScrollTelemetry.ts", import.meta.url),
-  "utf8",
-);
-const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
-const indexCssSource = readFileSync(new URL("./index.css", import.meta.url), "utf8");
-const sessionConfigMapSource = readFileSync(
-  new URL("../../k8s/templates/session-configmap.yaml", import.meta.url),
-  "utf8",
-);
-const installTankDocsSource = readFileSync(
-  new URL("../../k8s/session-config/install-tank-docs.sh", import.meta.url),
-  "utf8",
-);
-const agentRunnerLaunchSource = readFileSync(
-  new URL("../../k8s/session-config/agent-runner-launch.sh", import.meta.url),
-  "utf8",
-);
-const codexRunnerLaunchSource = readFileSync(
-  new URL("../../k8s/session-config/codex-runner-launch.sh", import.meta.url),
-  "utf8",
-);
-const defaultClaudeSource = readFileSync(
-  new URL("../../k8s/session-config/default-claude.md", import.meta.url),
-  "utf8",
-);
-const bundledQualityTimeframesSource = readFileSync(
-  new URL("../../k8s/session-config/docs/quality-timeframes.md", import.meta.url),
-  "utf8",
-);
-const bundledMigrationPolicySource = readFileSync(
-  new URL("../../k8s/session-config/docs/migration-policy.md", import.meta.url),
-  "utf8",
+const bundledMigrationPolicySource = readSource(
+  "../../k8s/session-config/docs/migration-policy.md",
 );
 
 test("session activity is not refreshed by a steady interval", () => {
@@ -250,6 +231,14 @@ test("chat back-pagination keeps the focused load button mounted while loading",
 test("chat scroll diagnostics are debug gated", () => {
   assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
   assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
+  assert.equal(chatScrollTelemetrySource.includes("readChatScrollEvents"), true);
+  assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), true);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
+});
+
+test("long-chat scroll lab route is available without the authenticated app", () => {
+  assert.equal(mainSource.includes('"/_debug/long-chat"'), true);
+  assert.equal(mainSource.includes("LongChatDebugPage"), true);
+  assert.equal(mainSource.includes("tank.chatScrollEvents"), true);
 });
