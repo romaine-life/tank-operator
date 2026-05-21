@@ -117,7 +117,10 @@ import {
   logSessionListSseOpen,
   logSessionListStreamSignal,
 } from "./sessionListTelemetry";
-import { isChatScrollDebugEnabled, logChatScrollEvent } from "./chatScrollTelemetry";
+import {
+  chatScrollElementSnapshot,
+  logChatScrollEvent,
+} from "./chatScrollTelemetry";
 import { compactCompletedTurnEntries } from "./turnCompaction";
 import {
   isDurableTankConversationEvent,
@@ -172,7 +175,7 @@ type AskUserQuestionAnswer = {
   notes?: string;
   preview?: string;
 };
-type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
+export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task";
   role?: "user" | "assistant" | "system";
   toolKind?: ToolKind;
@@ -880,10 +883,10 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
-  // Platform role carried in the tank-operator session JWT. `admin` and
+  // Platform role carried in the auth.romaine.life JWT. `admin` and
   // `service` bypass the OnboardingWall; `user` is the standard signed-in
-  // caller. auth.romaine.life mints `pending` by default but tank-operator's
-  // exchange rejects that before a session JWT is ever issued.
+  // caller. auth.romaine.life mints `pending` by default; tank-operator
+  // rejects that role on direct JWT verification.
   role: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
@@ -911,8 +914,10 @@ const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
 // hardcoding every variant.
 const INSTALL_ERROR_HINTS: Record<string, string> = {
   missing_state: "Install link expired before you returned. Try again.",
-  invalid_state: "Install link signature didn't validate. Try again.",
+  invalid_state: "Install link didn't validate. Try again.",
   missing_installation_id: "GitHub didn't send an installation id. Re-run the install.",
+  install_state_unavailable: "Install tracking is unavailable. Try again later.",
+  install_state_failed: "Install tracking failed. Try again.",
   pending_approval: "Your install needs an org admin's approval. Once they approve, log in again.",
   session_expired: "Your session expired during install. Sign in again then re-run the install.",
   session_invalid: "Your session token didn't validate. Sign in again.",
@@ -928,6 +933,44 @@ function clearInstallError(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("install_error");
   window.history.replaceState({}, "", url.toString());
+}
+
+function readPendingGitHubInstallState(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("github_install_state");
+}
+
+function clearPendingGitHubInstallState(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("github_install_state");
+  window.history.replaceState({}, "", url.toString());
+}
+
+function setInstallErrorParam(reason: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("github_install_state");
+  url.searchParams.set("install_error", reason);
+  window.history.replaceState({}, "", url.toString());
+}
+
+async function completeGitHubInstall(state: string): Promise<SessionUser> {
+  const res = await authedFetch("/api/github/install/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+  if (!res.ok) {
+    let detail = `install_complete_failed_${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // Keep the status-derived detail when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  const body = (await res.json()) as { user: SessionUser };
+  return body.user;
 }
 
 function readInitialSessionId(): string | null {
@@ -3115,7 +3158,6 @@ function logChatScrollGroups(
   entryCount: number,
   detail: Record<string, unknown> = {},
 ): void {
-  if (!isChatScrollDebugEnabled()) return;
   logChatScrollEvent(event, {
     ...detail,
     ...chatScrollGroupSnapshot(groups, entryCount),
@@ -3127,7 +3169,6 @@ function logChatScrollEntries(
   entries: TranscriptEntry[],
   detail: Record<string, unknown> = {},
 ): void {
-  if (!isChatScrollDebugEnabled()) return;
   logChatScrollEvent(event, {
     ...detail,
     ...chatScrollEntrySnapshot(entries),
@@ -4869,7 +4910,7 @@ function RunTurnActivityGroup({
 // inline render. The `followOutput` + `startReached` +
 // `atBottomStateChange` props replace the hand-rolled scroll-detect /
 // auto-scroll effects deleted from ChatPane in this stage.
-function RunMessages({
+export function RunMessages({
   entries,
   avatar,
   sessionId,
@@ -5029,19 +5070,21 @@ function RunMessages({
       sessionId,
       previousFirst,
       nextIndex,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: nextIndex,
       align: "start",
       behavior: "auto",
     });
-  }, [entries.length, groups, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId]);
   useEffect(() => {
     logChatScrollGroups("virtuoso-window", groups, entries.length, {
       sessionId,
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
+      ...chatScrollElementSnapshot(scrollParent),
     });
-  }, [entries.length, groups, sessionId]);
+  }, [entries.length, groups, scrollParent, sessionId]);
   useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
     if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
@@ -5051,6 +5094,7 @@ function RunMessages({
       signal: scrollToLatestSignal,
       behavior: scrollToLatestBehavior,
       reason: scrollToLatestReason,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: groups.length - 1,
@@ -5062,6 +5106,7 @@ function RunMessages({
     entries.length,
     groups,
     onScrollToLatestConsumed,
+    scrollParent,
     scrollToLatestBehavior,
     scrollToLatestReason,
     scrollToLatestSignal,
@@ -5072,13 +5117,14 @@ function RunMessages({
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       sessionId,
       signal: scrollToOldestSignal,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     virtuosoRef.current?.scrollToIndex({
       index: 0,
       align: "start",
       behavior: "smooth",
     });
-  }, [entries.length, groups, scrollToOldestSignal, sessionId]);
+  }, [entries.length, groups, scrollParent, scrollToOldestSignal, sessionId]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
   // Tool groups have no single id, so the first child id identifies the
   // group while later tool entries append during a streaming turn.
@@ -5179,18 +5225,20 @@ function RunMessages({
   const handleStartReached = useCallback(() => {
     logChatScrollGroups("start-reached", groups, entries.length, {
       sessionId,
+      ...chatScrollElementSnapshot(scrollParent),
     });
     onStartReached?.();
-  }, [entries.length, groups, onStartReached, sessionId]);
+  }, [entries.length, groups, onStartReached, scrollParent, sessionId]);
   const handleAtBottomChange = useCallback(
     (atBottom: boolean) => {
       logChatScrollGroups("at-bottom-change", groups, entries.length, {
         sessionId,
         atBottom,
+        ...chatScrollElementSnapshot(scrollParent),
       });
       onAtBottomChange?.(atBottom);
     },
-    [entries.length, groups, onAtBottomChange, sessionId],
+    [entries.length, groups, onAtBottomChange, scrollParent, sessionId],
   );
   // followOutput="smooth" keeps the user stuck to the live tail when they
   // ARE at the bottom; releases when they scroll up. Returning false from
@@ -5612,7 +5660,11 @@ function ChatPane({
   const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
   const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
     setTranscriptScrollEl(node);
-  }, []);
+    logChatScrollEvent(node ? "scroll-parent-mounted" : "scroll-parent-unmounted", {
+      sessionId: session.id,
+      ...chatScrollElementSnapshot(node),
+    });
+  }, [session.id]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
@@ -6278,26 +6330,24 @@ function ChatPane({
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
-      if (isChatScrollDebugEnabled()) {
-        const projection = projectConversationState(
-          reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
-        );
-        const projectedEntries = conversationEntriesToTranscript(projection.entries);
-        logChatScrollEntries("timeline-loaded", projectedEntries, {
-          sessionId: refreshSessionId,
-          source,
-          anchor,
-          eventCount: Array.isArray(body.events) ? body.events.length : 0,
-          canonicalEventCount: canonicalEvents.length,
-          foundOldest,
-          foundNewest,
-          hasPrevCursor: Boolean(prevAfter),
-          hasNextCursor: Boolean(nextAfter),
-          clearRealtime,
-          terminalStatus: terminal?.status ?? "",
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-      }
+      const projection = projectConversationState(
+        reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
+      );
+      const projectedEntries = conversationEntriesToTranscript(projection.entries);
+      logChatScrollEntries("timeline-loaded", projectedEntries, {
+        sessionId: refreshSessionId,
+        source,
+        anchor,
+        eventCount: Array.isArray(body.events) ? body.events.length : 0,
+        canonicalEventCount: canonicalEvents.length,
+        foundOldest,
+        foundNewest,
+        hasPrevCursor: Boolean(prevAfter),
+        hasNextCursor: Boolean(nextAfter),
+        clearRealtime,
+        terminalStatus: terminal?.status ?? "",
+        durationMs: Math.round(performance.now() - startedAt),
+      });
       if (canonicalEvents.length === 0) {
         if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
         return { replayed: false, terminal };
@@ -6387,20 +6437,18 @@ function ChatPane({
           ...sdkServerEventsRef.current,
         ]);
         syncSdkRenderedEntries();
-        if (isChatScrollDebugEnabled()) {
-          const projection = projectConversationState(
-            reduceConversationEvents(sdkServerEventsRef.current),
-          );
-          logChatScrollEntries(
-            "older-loaded",
-            conversationEntriesToTranscript(projection.entries),
-            {
-              sessionId: refreshSessionId,
-              eventCount: olderEvents.length,
-              beforeOrderKey: oldest,
-            },
-          );
-        }
+        const projection = projectConversationState(
+          reduceConversationEvents(sdkServerEventsRef.current),
+        );
+        logChatScrollEntries(
+          "older-loaded",
+          conversationEntriesToTranscript(projection.entries),
+          {
+            sessionId: refreshSessionId,
+            eventCount: olderEvents.length,
+            beforeOrderKey: oldest,
+          },
+        );
       }
       const prevAfter =
         typeof body.prev_order_key === "string" ? body.prev_order_key : "";
@@ -9159,8 +9207,21 @@ export function App() {
 
   useEffect(() => {
     bootstrapAuth()
-      .then((u) => {
-        setUser(u);
+      .then(async (u) => {
+        const pendingInstallState = readPendingGitHubInstallState();
+        if (u && pendingInstallState) {
+          try {
+            const installedUser = await completeGitHubInstall(pendingInstallState);
+            clearPendingGitHubInstallState();
+            setUser(installedUser);
+          } catch (e) {
+            const reason = errorMessage(e);
+            setInstallErrorParam(reason);
+            setUser(u);
+          }
+        } else {
+          setUser(u);
+        }
         setBooted(true);
       })
       .catch((e) => {

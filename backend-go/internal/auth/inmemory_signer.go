@@ -9,9 +9,10 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// InMemoryJWT is a test-only Signer + KeyResolver. Generates an ephemeral
+// InMemoryJWT is a test helper KeyResolver with an in-process signer.
+// Generates an ephemeral
 // RSA key, signs in-process, resolves its own kid. Lets unit tests exercise
-// the Verifier/Minter without standing up Key Vault.
+// the Verifier without hitting auth.romaine.life's live JWKS.
 type InMemoryJWT struct {
 	priv *rsa.PrivateKey
 	pub  *rsa.PublicKey
@@ -40,8 +41,4 @@ func (m *InMemoryJWT) PublicKey(_ context.Context, kid string) (*rsa.PublicKey, 
 		return nil, fmt.Errorf("unknown kid %q", kid)
 	}
 	return m.pub, nil
-}
-
-func (m *InMemoryJWT) CurrentJWK(_ context.Context) (JWK, error) {
-	return rsaPublicJWK(m.kid, m.pub), nil
 }

@@ -13,8 +13,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const CookieName = "auth_token"
-
 // keyResolveTimeout caps how long a verify call can spend fetching a missing
 // public key from KV. Verify is on the request path; a stalled KV call must
 // not block forever.
@@ -24,18 +22,17 @@ type User struct {
 	Sub   string
 	Email string
 	Name  string
-	// Role is the platform-wide claim carried in the tank-operator session JWT,
-	// copied from the auth.romaine.life upstream token at exchange time.
+	// Role is the platform-wide claim carried in the auth.romaine.life JWT.
 	// "admin" gets bypasses (e.g. OnboardingWall); "user" is the standard
 	// signed-in caller; "service" is a k8s service-principal minted by
 	// auth.romaine.life via /api/auth/exchange/k8s for session pods that
 	// need to call tank-operator on their own behalf (see nelsong6/tank-operator#486).
-	// Any other value (including the empty string) is rejected by Decode —
+	// Any other value (including the empty string) is rejected by Decode -
 	// that's how a "pending" auth.romaine.life user who hasn't been
 	// promoted by an admin gets kept out of tank-operator.
 	Role string
 	// ActorEmail carries the human owner whose pod is making the call.
-	// Only populated when Role == RoleService — service principals carry
+	// Only populated when Role == RoleService - service principals carry
 	// this claim from the upstream exchange so handlers can scope writes
 	// to the actor's session tree (a child session opened by pod X must
 	// be owned by the same human who owns pod X's parent session).
@@ -49,14 +46,12 @@ const (
 	RoleService = "service"
 )
 
-// allowedRoles is the closed set of roles this service accepts on its own
-// session JWT. auth.romaine.life mints `pending` by default for any fresh
-// Microsoft sign-in; an admin promotes via auth.romaine.life's /admin console
-// before the user becomes useful here. We never re-mint a session for a
-// `pending` (or otherwise unknown) role, so seeing one here means tampering or
-// a stale token after a downgrade. `service` is accepted but per-route
-// gating is required — no human-facing route should accept service callers
-// by default, and no service-only route should accept human callers.
+// allowedRoles is the closed set of roles this service accepts from
+// auth.romaine.life. auth.romaine.life mints `pending` by default for any
+// fresh Microsoft sign-in; an admin promotes via auth.romaine.life's /admin
+// console before the user becomes useful here. `service` is accepted but
+// per-route gating is required: no human-facing route should accept service
+// callers by default, and no service-only route should accept human callers.
 var allowedRoles = map[string]struct{}{
 	RoleAdmin:   {},
 	RoleUser:    {},
@@ -113,7 +108,7 @@ func (v *Verifier) Decode(tokenString string) (User, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), keyResolveTimeout)
 		defer cancel()
 		return v.resolver.PublicKey(ctx, kid)
-	})
+	}, jwt.WithLeeway(60*time.Second), jwt.WithIssuer(authRomaineLifeIssuer))
 	if err != nil || !token.Valid {
 		if err == nil {
 			err = errors.New("invalid token")
@@ -136,7 +131,7 @@ func (v *Verifier) Decode(tokenString string) (User, error) {
 		Role:  role,
 	}
 	if role == RoleService {
-		// Service principals MUST carry an actor_email claim — without it
+		// Service principals MUST carry an actor_email claim - without it
 		// there is no way to scope side-effects to a specific human. The
 		// upstream exchange (auth.romaine.life /api/auth/exchange/k8s)
 		// refuses to mint such a token, so seeing one here means either
@@ -156,9 +151,6 @@ func (v *Verifier) Decode(tokenString string) (User, error) {
 func tokenFromRequest(r *http.Request) (string, error) {
 	if authorization := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(authorization), "bearer ") {
 		return strings.TrimSpace(authorization[7:]), nil
-	}
-	if cookie, err := r.Cookie(CookieName); err == nil && cookie.Value != "" {
-		return cookie.Value, nil
 	}
 	return "", errHTTP{status: http.StatusUnauthorized, message: "missing authentication"}
 }

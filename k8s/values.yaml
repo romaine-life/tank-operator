@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-83d20a068cfc10870ca6b3504fcf09967d61e4094c680ff65f8c7d7d86fbcbfb"
+  tag: "app-26dc4ff2e4f9d003d2581330ae1e20caa59bf4496d1df34f9c9f9baa65095078"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -280,13 +280,6 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
-# Session-JWT signing key in Key Vault. Private bytes never leave the vault;
-# orchestrator calls KV's Sign operation per mint and caches the public key
-# locally for in-process verification. See infra/jwt_signing_key.tf.
-jwt:
-  kvVault: https://romaine-kv.vault.azure.net/
-  kvKeyName: tank-operator-jwt-signing
-
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

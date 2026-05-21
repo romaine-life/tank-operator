@@ -38,7 +38,7 @@ type appServer struct {
 	sessionBus               sessionCommandBus
 	readStates               store.ConversationReadStateStore
 	verifier                 *auth.Verifier
-	minter                   *auth.Minter
+	gitHubInstallStates      gitHubInstallStateStore
 	namespace                string
 	sessionScope             string
 	sessionServiceAccount    string
@@ -88,15 +88,13 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)
 
 	// Auth.
-	mux.HandleFunc("POST /api/auth/exchange", s.handleAuthExchange)
-	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
 	mux.HandleFunc("PUT /api/auth/prefs", s.handleUpdatePrefs)
-	mux.HandleFunc("POST /api/internal/auth/k8s", s.handleK8sAuth)
 
 	// GitHub install.
 	mux.HandleFunc("GET /api/github/install/url", s.handleGitHubInstallURL)
 	mux.HandleFunc("GET /api/github/install/callback", s.handleGitHubInstallCallback)
+	mux.HandleFunc("POST /api/github/install/complete", s.handleGitHubInstallComplete)
 	// /api/github/recent-repos surfaces the caller's recently-selected
 	// repo slugs to the splash-page picker. It reads sessions.repos
 	// directly with no mcp-github hop. See handlers_repos.go for the SQL.
@@ -106,7 +104,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// exchange so the orchestrator can mint a service JWT acting for the
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
-	mux.HandleFunc("GET /.well-known/jwks.json", s.handleInternalJWKS)
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
@@ -161,7 +158,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/sandbox-agent/v1/processes/{process_id}/terminal/ws", s.handleSandboxTerminalProxy)
 
 	// Internal API.
-	mux.HandleFunc("GET /api/internal/jwks", s.handleInternalJWKS)
 	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
@@ -206,8 +202,7 @@ func (s *appServer) handleConfig(w http.ResponseWriter, _ *http.Request) {
 func publicConfig() map[string]string {
 	return map[string]string{
 		// Where the SPA redirects users for sign-in. Microsoft auth happens
-		// at auth.romaine.life; tank-operator verifies the JWT it hands back
-		// and mints its own session JWT.
+		// at auth.romaine.life; tank-operator verifies that JWT directly.
 		"auth_url": envDefault("AUTH_URL", "https://auth.romaine.life"),
 		"fork_session_prompt_template": readOptionalFile(
 			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),

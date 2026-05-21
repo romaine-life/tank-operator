@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { LongChatDebugPage } from "./LongChatDebugPage";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
 import { StyleguideButtons } from "./styleguide/buttons";
@@ -42,12 +43,12 @@ if (typeof document !== "undefined") {
 // Anything in our namespace not listed is treated as debris.
 // Non-tank keys are left alone — other libs/sites share this origin.
 const TANK_KEY_ALLOWLIST = [
-  "tank-operator-jwt",      // session JWT (auth.ts)
   "tank-run-pref-",         // run-pane prefs (App.tsx)
   "tank.defaultSessionMode",
   "tank.defaultInteraction",
   "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
+  "tank.chatScrollEvents",
 ];
 function isAllowedTankKey(key: string): boolean {
   for (const allowed of TANK_KEY_ALLOWLIST) {
@@ -96,8 +97,14 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/avatars": () => <StyleguideAvatars />,
 };
 
+const DEBUG_ROUTES: Record<string, () => JSX.Element> = {
+  "/_debug/long-chat": () => <LongChatDebugPage />,
+};
+
 function Root() {
   if (typeof window !== "undefined") {
+    const debugRender = DEBUG_ROUTES[window.location.pathname];
+    if (debugRender) return debugRender();
     const render = STYLEGUIDE_ROUTES[window.location.pathname];
     if (render) return render();
   }

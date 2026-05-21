@@ -42,6 +42,7 @@ func TestHandleInternalGitHubInstallationResolvesFromProfile(t *testing.T) {
 	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
 		"sub":         "svc:tank:session-x",
 		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
 		"name":        "Service: tank pod-session-x",
 		"role":        "service",
 		"actor_email": "owner@example.test",
@@ -94,6 +95,7 @@ func TestHandleInternalGitHubInstallationFlagsHost(t *testing.T) {
 	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
 		"sub":         "svc:tank:session-x",
 		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
 		"name":        "Service: tank pod-session-x",
 		"role":        "service",
 		"actor_email": "host@example.test",
@@ -143,6 +145,7 @@ func TestHandleInternalGitHubInstallationReturnsNullForUnknownEmail(t *testing.T
 	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
 		"sub":         "svc:tank:session-x",
 		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
 		"name":        "Service: tank pod-session-x",
 		"role":        "service",
 		"actor_email": "stranger@example.test",
@@ -185,6 +188,7 @@ func TestHandleInternalGitHubInstallationRejectsNonService(t *testing.T) {
 	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "u-admin",
 		"email": "admin@example.test",
+		"iss":   "https://auth.romaine.life",
 		"name":  "Admin",
 		"role":  "admin",
 	})
@@ -310,6 +314,7 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 		claims := jwt.MapClaims{
 			"sub":   "svc:tank:session-x",
 			"email": "pod-session-x@service.tank.romaine.life",
+			"iss":   "https://auth.romaine.life",
 			"name":  "Service: tank pod-session-x",
 			"role":  role,
 		}

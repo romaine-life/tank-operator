@@ -14,9 +14,9 @@ import (
 //
 // All schema definitions use `IF NOT EXISTS` so a re-run is a no-op. Schema
 // changes go in as new entries appended to this slice with their own
-// `IF NOT EXISTS` semantics — there is no version table.
+// `IF NOT EXISTS` semantics â€” there is no version table.
 var schemaMigrations = []string{
-	// `profiles` — single row per user, keyed by email.
+	// `profiles` â€” single row per user, keyed by email.
 	`CREATE TABLE IF NOT EXISTS profiles (
 		email           text PRIMARY KEY,
 		github_login    text,
@@ -25,7 +25,21 @@ var schemaMigrations = []string{
 		updated_at      timestamptz NOT NULL DEFAULT now()
 	)`,
 
-	// `sessions` — the session registry. One row per (email, scope, session_id).
+	// github_install_states stores opaque, single-use nonces for the
+	// GitHub App install callback. The callback records GitHub's
+	// installation_id; the authenticated SPA completion consumes it.
+	`CREATE TABLE IF NOT EXISTS github_install_states (
+		state           text PRIMARY KEY,
+		email           text NOT NULL,
+		installation_id bigint,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		expires_at      timestamptz NOT NULL,
+		callback_at     timestamptz,
+		consumed_at     timestamptz
+	)`,
+	`CREATE INDEX IF NOT EXISTS github_install_states_expires_at
+		ON github_install_states (expires_at)`,
+	// `sessions` â€” the session registry. One row per (email, scope, session_id).
 	// `visible` is the soft-delete flag the SPA's "delete session" toggles.
 	`CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
@@ -107,7 +121,7 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS sessions_email_scope_visible_sidebar_position
 		ON sessions (email, session_scope, visible, sidebar_position DESC, created_at DESC)`,
 
-	// Phase 2 (docs/session-list-redesign.md) — test_state and
+	// Phase 2 (docs/session-list-redesign.md) â€” test_state and
 	// rollout_state move onto the row so Reader.List can build the
 	// snapshot Info without a K8s pod read. Pod annotations are still
 	// patched by Manager.SetTestState/SetRolloutState (the session-
@@ -150,7 +164,7 @@ var schemaMigrations = []string{
 	// array means "no auto-cloning, agent will mint clone tokens on
 	// demand at runtime" (today's only shape). `clone_state` is the
 	// per-repo init-container outcome the cloner writes back before
-	// the agent starts — keyed by slug, value is
+	// the agent starts â€” keyed by slug, value is
 	// {status: pending|cloning|cloned|failed, error?: string,
 	//  started_at?, finished_at?, path?}. Existing rows back-fill to
 	// '{}'/NULL respectively, matching the
@@ -160,7 +174,7 @@ var schemaMigrations = []string{
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS clone_state jsonb`,
 
-	// `session_events` — the durable transcript ledger. Partition key in
+	// `session_events` â€” the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.
 	// `order_key` is the canonical render-order watermark each event ships
@@ -468,7 +482,7 @@ var schemaMigrations = []string{
 		  AND session_events.order_key = command_exit.order_key
 		  AND command_exit.exit_code <> 0`,
 
-	// `session_counters` — monotonic session-id allocator, one row per scope.
+	// `session_counters` â€” monotonic session-id allocator, one row per scope.
 	// Replaces the Cosmos `session-counter[:scope]` document the previous
 	// store kept under a sentinel email. The atomic INCREMENT-AND-RETURN
 	// happens via the UPSERT in sessionregistry.NextSessionID.
@@ -479,7 +493,7 @@ var schemaMigrations = []string{
 		updated_at          timestamptz NOT NULL DEFAULT now()
 	)`,
 
-	// `conversation_read_state` — per-user, per-session render cursor.
+	// `conversation_read_state` â€” per-user, per-session render cursor.
 	`CREATE TABLE IF NOT EXISTS conversation_read_state (
 		email                text NOT NULL,
 		session_scope        text NOT NULL,

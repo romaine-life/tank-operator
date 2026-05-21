@@ -65,7 +65,6 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 	timelineQuery.Set("num_after", "100")
 	timelineURL.RawQuery = timelineQuery.Encode()
 	sessionURL := &url.URL{Path: "/api/sessions/" + url.PathEscape(sessionID)}
-	authExchangeURL := &url.URL{Path: "/api/auth/exchange"}
 	beforeURL := &url.URL{
 		Path: "/api/sessions/" + url.PathEscape(sessionID) + "/timeline",
 	}
@@ -83,10 +82,9 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 		"browser_url": browserURL,
 		"json_url":    absoluteURL(origin, jsonURL),
 		"api": map[string]any{
-			"session_url":       absoluteURL(origin, sessionURL),
-			"timeline_url":      absoluteURL(origin, timelineURL),
-			"auth_exchange_url": absoluteURL(origin, authExchangeURL),
-			"page_before_url":   absoluteURL(origin, beforeURL),
+			"session_url":     absoluteURL(origin, sessionURL),
+			"timeline_url":    absoluteURL(origin, timelineURL),
+			"page_before_url": absoluteURL(origin, beforeURL),
 		},
 		"agent_recipe": []map[string]string{
 			{
@@ -101,24 +99,19 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 			},
 			{
 				"step":    "3",
-				"purpose": "Exchange the auth.romaine.life JWT for this Tank origin's session JWT.",
-				"curl":    "TANK_JWT=$(curl -fsS -X POST " + shellQuoteForDocs(absoluteURL(origin, authExchangeURL)) + " -H 'Content-Type: application/json' -d \"$(jq -nc --arg auth_jwt \"$AUTH_JWT\" '{auth_jwt:$auth_jwt}')\" | jq -r .token)",
+				"purpose": "Fetch the resolved transcript window around the linked message.",
+				"curl":    "curl -fsS " + shellQuoteForDocs(absoluteURL(origin, jsonURL)) + " -H \"Authorization: Bearer $AUTH_JWT\"",
 			},
 			{
 				"step":    "4",
-				"purpose": "Fetch the resolved transcript window around the linked message.",
-				"curl":    "curl -fsS " + shellQuoteForDocs(absoluteURL(origin, jsonURL)) + " -H \"Authorization: Bearer $TANK_JWT\"",
-			},
-			{
-				"step":    "5",
 				"purpose": "If the returned timeline has found_oldest=false and you need earlier context, keep paging backward with prev_order_key until found_oldest=true or you have enough context.",
-				"curl":    "curl -fsS " + shellQuoteForDocs(absoluteURL(origin, beforeURL)) + " -H \"Authorization: Bearer $TANK_JWT\"",
+				"curl":    "curl -fsS " + shellQuoteForDocs(absoluteURL(origin, beforeURL)) + " -H \"Authorization: Bearer $AUTH_JWT\"",
 			},
 		},
 		"usage": []string{
 			"Use the timeline_url with Tank authentication to fetch a bounded durable transcript page around the linked message.",
 			"Equivalently, request this same URL with Accept: application/json or ?format=json; authenticated callers receive the resolved timeline payload inline.",
-			"From a Tank session pod, exchange /run/secrets/auth.romaine.life/token at https://auth.romaine.life/api/auth/exchange/k8s using Authorization: Bearer <service-account-token>, POST that auth_jwt to this origin's /api/auth/exchange, then call timeline_url with Authorization: Bearer <tank-token>.",
+			"From a Tank session pod, exchange /run/secrets/auth.romaine.life/token at https://auth.romaine.life/api/auth/exchange/k8s using Authorization: Bearer <service-account-token>, then call timeline_url with Authorization: Bearer <auth-token>.",
 			"If found_oldest is false, use prev_order_key as before_order_key to page backward for earlier transcript context.",
 		},
 	}
@@ -168,9 +161,6 @@ func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request
 
 func tankMessageLinkHasCredentials(r *http.Request) bool {
 	if authorization := strings.TrimSpace(r.Header.Get("Authorization")); authorization != "" {
-		return true
-	}
-	if cookie, err := r.Cookie(auth.CookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
 		return true
 	}
 	return false

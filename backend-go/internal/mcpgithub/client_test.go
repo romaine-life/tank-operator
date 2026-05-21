@@ -179,8 +179,8 @@ func TestListRepos_DifferentUsersGetDifferentTokens(t *testing.T) {
 
 // TestListRepos_RejectsEmptyEmail catches the load-bearing
 // "actor_email is required" contract at the client boundary. The
-// SPA's session JWT is always non-empty, but a regression on the
-// inbound auth path that sets user.Email = "" must not result in
+// SPA's verified auth.romaine.life JWT is always non-empty, but a regression
+// on the inbound auth path that sets user.Email = "" must not result in
 // an exchange call (which would land on the legacy synthetic
 // actor_email branch in auth.romaine.life).
 func TestListRepos_RejectsEmptyEmail(t *testing.T) {

@@ -241,6 +241,16 @@ const blocked = [
   { name: "removed desktop-auth IPC channel", pattern: /\bdesktop-auth:microsoft-login\b/ },
   { name: "removed tankOperatorDesktop window bridge", pattern: /\btankOperatorDesktop\b/ },
   { name: "removed tank-operator:// custom protocol", pattern: /\btank-operator:\/\/auth\b/ },
+  // Tank-local JWT minting was retired after auth.romaine.life became the
+  // only token issuer. The SPA stores/presents the upstream JWT directly,
+  // GitHub install state is an opaque Postgres nonce, and service principals
+  // use auth.romaine.life's /api/auth/exchange/k8s endpoint directly.
+  { name: "removed Tank auth exchange route", pattern: /\/api\/auth\/exchange(?!\/k8s)\b/ },
+  { name: "removed Tank internal k8s auth route", pattern: /\/api\/internal\/auth\/k8s\b/ },
+  { name: "removed Tank local auth storage key", pattern: /\btank-operator-jwt\b/ },
+  { name: "removed Tank auth cookie", pattern: /\bauth_token\b/ },
+  { name: "removed Tank JWT signing config", pattern: /\btank-operator-jwt-signing\b|\bJWT_KV_(?:VAULT|KEY_NAME)\b/ },
+  { name: "removed Tank JWT minter", pattern: /\bNewMinter\b|\bMintSession\b|\bMintInstallState\b|\bVerifyInstallState\b|\bKeyVaultJWT\b|\bhandleAuthExchange\b|\bhandleK8sAuth\b/ },
   // ALLOWED_EMAILS allowlist retired in favor of the auth.romaine.life
   // role claim. Block reintroduction of the env var, KV mount, and
   // emails-list constructor signature so a future PR can't quietly bring
