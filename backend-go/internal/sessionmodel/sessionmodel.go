@@ -779,7 +779,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
 			},
-			"resources": agentRunnerResources(),
+			"resources": codexRunnerResources(),
 		}
 		if len(envFrom) > 0 {
 			codexRunnerContainer["envFrom"] = envFrom
@@ -959,6 +959,17 @@ func agentRunnerResources() map[string]any {
 			"memory": "1536Mi",
 		},
 	}
+}
+
+func codexRunnerResources() map[string]any {
+	resources := agentRunnerResources()
+	limits := resources["limits"].(map[string]any)
+	// Codex app-server compaction runs in the runner container. Session
+	// 146 showed that the shared 1536Mi Claude-runner cap can OOMKill a
+	// live Codex thread during compaction, so Codex gets more burst
+	// headroom while keeping the same scheduling request.
+	limits["memory"] = "3072Mi"
+	return resources
 }
 
 func sandboxAgentResources() map[string]any {
