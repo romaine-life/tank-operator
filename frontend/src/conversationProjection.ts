@@ -4,6 +4,8 @@ import type {
   ConversationItem,
   ConversationReducerState,
   ConversationRunStatus,
+  ConversationTurnTerminal,
+  ConversationTurnTerminalStatus,
 } from "./conversationReducer";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 
@@ -99,6 +101,9 @@ interface ConversationEntryBase {
   providerItemId?: string;
   sourceEventId?: string;
   orderKey?: string;
+  turnTerminalStatus?: ConversationTurnTerminalStatus;
+  turnTerminalAt?: string;
+  turnTerminalEventId?: string;
 }
 
 export interface ConversationProjection {
@@ -122,7 +127,7 @@ export function projectConversationState(
   state: ConversationReducerState,
 ): ConversationProjection {
   const backgroundProviderItemIds = backgroundTaskProviderItemIds(state);
-  const entries = orderProjectedEntries([
+  const entries = annotateTurnTerminals(orderProjectedEntries([
     ...state.messages.flatMap((message, index) => {
       const text = message.text.trim();
       if (!text) return [];
@@ -187,16 +192,16 @@ export function projectConversationState(
         orderKey: request.orderKey,
       },
     })),
-  ]);
+  ]), state.turnTerminals);
 
   const activeItem = activeToolItem(state);
-  const backgroundTasks = orderProjectedEntries(
+  const backgroundTasks = annotateTurnTerminals(orderProjectedEntries(
     state.backgroundTasks.map((task, index) => ({
       index,
       orderKey: task.orderKey,
       entry: projectBackgroundTask(task),
     })),
-  ).filter((entry): entry is ConversationBackgroundTaskEntry => entry.kind === "background_task");
+  ), state.turnTerminals).filter((entry): entry is ConversationBackgroundTaskEntry => entry.kind === "background_task");
   return {
     entries,
     backgroundTasks,
@@ -337,6 +342,24 @@ function orderProjectedEntries(
       return order !== 0 ? order : a.index - b.index;
     })
     .map((item) => item.entry);
+}
+
+function annotateTurnTerminals(
+  entries: ConversationViewEntry[],
+  terminals: Record<string, ConversationTurnTerminal>,
+): ConversationViewEntry[] {
+  if (Object.keys(terminals).length === 0) return entries;
+  return entries.map((entry) => {
+    if (!entry.turnId) return entry;
+    const terminal = terminals[entry.turnId];
+    if (!terminal) return entry;
+    return {
+      ...entry,
+      turnTerminalStatus: terminal.status,
+      turnTerminalAt: terminal.time,
+      turnTerminalEventId: terminal.sourceEventId,
+    };
+  });
 }
 
 function compareNullableString(a: string | undefined, b: string | undefined): number {

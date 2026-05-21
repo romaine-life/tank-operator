@@ -10,6 +10,7 @@ export type ConversationRunStatus =
   | "error";
 
 export type ConversationItemStatus = "started" | "completed" | "failed";
+export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted";
 export type ConversationBackgroundTaskStatus =
   | "running"
   | "completed"
@@ -62,6 +63,15 @@ export interface ConversationInterruptRequest {
   time: string;
 }
 
+export interface ConversationTurnTerminal {
+  turnId: string;
+  status: ConversationTurnTerminalStatus;
+  clientNonce?: string;
+  orderKey?: string;
+  time: string;
+  sourceEventId: string;
+}
+
 export interface ConversationBackgroundTask {
   id: string;
   taskId: string;
@@ -94,6 +104,7 @@ export interface ConversationReducerState {
   messages: ConversationMessage[];
   items: ConversationItem[];
   interruptRequests: ConversationInterruptRequest[];
+  turnTerminals: Record<string, ConversationTurnTerminal>;
   backgroundTasks: ConversationBackgroundTask[];
   runStatus: ConversationRunStatus;
   activeTurnId: string | null;
@@ -111,6 +122,7 @@ export const initialConversationState: ConversationReducerState = {
   messages: [],
   items: [],
   interruptRequests: [],
+  turnTerminals: {},
   backgroundTasks: [],
   runStatus: "ready",
   activeTurnId: null,
@@ -155,7 +167,7 @@ export function conversationReducer(
       };
     case "turn.completed":
       return {
-        ...next,
+        ...applyTurnTerminal(next, event, "completed"),
         runStatus: "ready",
         activeTurnId: null,
         activeItemId: null,
@@ -166,7 +178,7 @@ export function conversationReducer(
       };
     case "turn.failed":
       return {
-        ...next,
+        ...applyTurnTerminal(next, event, "failed"),
         runStatus: "error",
         activeTurnId: null,
         activeItemId: null,
@@ -177,7 +189,7 @@ export function conversationReducer(
       };
     case "turn.command_failed":
       return {
-        ...next,
+        ...applyTurnTerminal(next, event, "failed"),
         runStatus: "error",
         activeTurnId: null,
         activeItemId: null,
@@ -189,7 +201,7 @@ export function conversationReducer(
       return applyInterruptRequested(next, event);
     case "turn.interrupted":
       return {
-        ...next,
+        ...applyTurnTerminal(next, event, "interrupted"),
         runStatus: "stopped",
         activeTurnId: null,
         activeItemId: null,
@@ -261,6 +273,28 @@ export function reduceConversationEvents(
   seed: ConversationReducerState = initialConversationState,
 ): ConversationReducerState {
   return events.reduce(conversationReducer, seed);
+}
+
+function applyTurnTerminal(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+  status: ConversationTurnTerminalStatus,
+): ConversationReducerState {
+  if (!event.turn_id) return state;
+  return {
+    ...state,
+    turnTerminals: {
+      ...state.turnTerminals,
+      [event.turn_id]: {
+        turnId: event.turn_id,
+        status,
+        clientNonce: event.client_nonce,
+        orderKey: event.order_key,
+        time: event.created_at,
+        sourceEventId: event.event_id,
+      },
+    },
+  };
 }
 
 function applyInterruptRequested(

@@ -112,6 +112,8 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
   assert.equal(state.items[0]?.actor, "assistant");
   assert.equal(state.items[0]?.text, "summary");
   assert.equal(state.activeTurnId, null);
+  assert.equal(state.turnTerminals["turn-1"]?.status, "completed");
+  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "5");
 });
 
 test("origin_session_id on user message flows onto ConversationMessage", () => {
@@ -454,6 +456,8 @@ test("Provider error becomes terminal error state without needs-input", () => {
   assert.equal(state.failed, true);
   assert.equal(state.needsInput, false);
   assert.equal(state.activeTurnId, null);
+  assert.equal(state.turnTerminals["turn-1"]?.status, "failed");
+  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
 });
 
 test("turn.interrupt_requested transitions streaming → stopping", () => {
@@ -487,6 +491,8 @@ test("turn.interrupt_requested → turn.interrupted resolves to stopped", () => 
   assert.equal(state.runStatus, "stopped");
   assert.equal(state.activeTurnId, null);
   assert.equal(state.interruptRequests.length, 1);
+  assert.equal(state.turnTerminals["turn-1"]?.status, "interrupted");
+  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
 });
 
 test("turn.interrupt_requested losing race to turn.completed resolves to ready", () => {
@@ -500,6 +506,8 @@ test("turn.interrupt_requested losing race to turn.completed resolves to ready",
   assert.equal(state.activeTurnId, null);
   // Chip stays as transcript evidence even though stop "lost the race."
   assert.equal(state.interruptRequests.length, 1);
+  assert.equal(state.turnTerminals["turn-1"]?.status, "completed");
+  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
 });
 
 test("turn.interrupt_requested followed by turn.command_failed resolves to error", () => {
@@ -516,6 +524,8 @@ test("turn.interrupt_requested followed by turn.command_failed resolves to error
   assert.equal(state.runStatus, "error");
   assert.equal(state.failed, true);
   assert.equal(state.interruptRequests.length, 1);
+  assert.equal(state.turnTerminals["turn-1"]?.status, "failed");
+  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
 });
 
 test("Late turn.interrupt_requested after terminal state does NOT downgrade run status", () => {

@@ -126,7 +126,7 @@ test("startup transcript rows come from durable conversation events", () => {
   assert.equal(conversationReducerSource.includes('"session.status"'), true);
   assert.match(
     appSource,
-    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\)\) return;\n    if \(timelineBootstrap\.status !== "idle"\) return;/,
+    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\)\) return;\r?\n    if \(timelineBootstrap\.status !== "idle"\) return;/,
   );
 });
 

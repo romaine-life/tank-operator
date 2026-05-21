@@ -23,6 +23,7 @@ import {
   reduceTimelineBootstrap,
 } from "./chatTimelineBootstrap";
 import {
+  ActivityIcon,
   AlertCircleIcon,
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -120,6 +121,7 @@ import {
   chatScrollElementSnapshot,
   logChatScrollEvent,
 } from "./chatScrollTelemetry";
+import { compactCompletedTurnEntries } from "./turnCompaction";
 import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
@@ -189,6 +191,9 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   startedAt?: string;
   updatedAt?: string;
   completedAt?: string;
+  turnTerminalStatus?: "completed" | "failed" | "interrupted";
+  turnTerminalAt?: string;
+  turnTerminalEventId?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble swaps in that session's deterministic avatar in
@@ -2578,6 +2583,7 @@ interface RunPrefs {
   sendByCtrlEnter: boolean;
   showThinking: boolean;
   autoExpandTools: boolean;
+  condenseCompletedTurns: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
   turnCompleteSound: boolean;
@@ -2608,6 +2614,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   sendByCtrlEnter: false,
   showThinking: true,
   autoExpandTools: false,
+  condenseCompletedTurns: true,
   showTimestamps: true,
   showDuration: true,
   turnCompleteSound: true,
@@ -2780,6 +2787,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           role: entry.role,
           text: entry.text,
           durationMs: (entry as Record<string, unknown>).durationMs,
+          turnTerminalStatus: entry.turnTerminalStatus,
+          turnTerminalAt: entry.turnTerminalAt,
         };
       }
       if (entry.kind === "tool") {
@@ -2792,6 +2801,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           toolStatus: entry.toolStatus,
           startedAt: entry.startedAt,
           completedAt: entry.completedAt,
+          turnTerminalStatus: entry.turnTerminalStatus,
+          turnTerminalAt: entry.turnTerminalAt,
         };
       }
       if (entry.kind === "reasoning") {
@@ -2799,6 +2810,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           kind: entry.kind,
           id: entry.id,
           reasoning: entry.reasoning,
+          turnTerminalStatus: entry.turnTerminalStatus,
+          turnTerminalAt: entry.turnTerminalAt,
         };
       }
       if (entry.kind === "background_task") {
@@ -2819,11 +2832,15 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           startedAt: entry.startedAt,
           updatedAt: entry.updatedAt,
           completedAt: entry.completedAt,
+          turnTerminalStatus: entry.turnTerminalStatus,
+          turnTerminalAt: entry.turnTerminalAt,
         };
       }
       return {
         kind: entry.kind,
         meta: entry.meta,
+        turnTerminalStatus: entry.turnTerminalStatus,
+        turnTerminalAt: entry.turnTerminalAt,
       };
     }),
   );
@@ -2991,6 +3008,10 @@ function conversationEntriesToTranscript(
       transcriptSource: "server",
       sourceEventId: entry.sourceEventId,
       clientNonce: entry.clientNonce,
+      turnId: entry.turnId,
+      turnTerminalStatus: entry.turnTerminalStatus,
+      turnTerminalAt: entry.turnTerminalAt,
+      turnTerminalEventId: entry.turnTerminalEventId,
       orderKey: entry.orderKey ? `${entry.orderKey}:skill:${index}` : undefined,
     }));
   });
@@ -3006,12 +3027,15 @@ function conversationEntriesToTranscript(
 
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
-  | { kind: "tools"; entries: TranscriptEntry[] };
+  | { kind: "tools"; entries: TranscriptEntry[] }
+  | { kind: "activity"; id: string; turnId: string; entries: TranscriptEntry[] };
+type FlatEntryGroup = Exclude<EntryGroup, { kind: "activity" }>;
 
 function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
     return toolGroupStateKey(g.entries);
   }
+  if (g.kind === "activity") return g.id;
   return g.entry.id;
 }
 
@@ -3020,27 +3044,60 @@ function toolGroupStateKey(entries: TranscriptEntry[]): string {
   return `tools-${head}`;
 }
 
-function groupTranscriptEntries(entries: TranscriptEntry[]): EntryGroup[] {
-  const groups: EntryGroup[] = [];
-  let bucket: TranscriptEntry[] = [];
-  const flush = () => {
-    if (bucket.length) {
-      groups.push({ kind: "tools", entries: bucket });
-      bucket = [];
-    }
-  };
+function pushTranscriptEntryGroup(
+  groups: EntryGroup[],
+  entry: TranscriptEntry,
+  bucket: { entries: TranscriptEntry[] },
+): void {
+  if (entry.kind === "tool") {
+    bucket.entries.push(entry);
+    return;
+  }
+  if (bucket.entries.length) {
+    groups.push({ kind: "tools", entries: bucket.entries });
+    bucket.entries = [];
+  }
+  if (entry.kind === "message") groups.push({ kind: "message", entry });
+  else if (entry.kind === "reasoning") groups.push({ kind: "reasoning", entry });
+  else if (entry.kind === "background_task") groups.push({ kind: "background_task", entry });
+  else groups.push({ kind: "meta", entry });
+}
+
+function flushTranscriptToolBucket(
+  groups: EntryGroup[],
+  bucket: { entries: TranscriptEntry[] },
+): void {
+  if (!bucket.entries.length) return;
+  groups.push({ kind: "tools", entries: bucket.entries });
+  bucket.entries = [];
+}
+
+function groupFlatTranscriptEntries(entries: TranscriptEntry[]): FlatEntryGroup[] {
+  const groups: FlatEntryGroup[] = [];
+  const bucket = { entries: [] as TranscriptEntry[] };
   for (const e of entries) {
-    if (e.kind === "tool") {
-      bucket.push(e);
+    pushTranscriptEntryGroup(groups, e, bucket);
+  }
+  flushTranscriptToolBucket(groups, bucket);
+  return groups;
+}
+
+function groupTranscriptEntries(
+  entries: TranscriptEntry[],
+  condenseCompletedTurns = true,
+): EntryGroup[] {
+  if (!condenseCompletedTurns) return groupFlatTranscriptEntries(entries);
+  const groups: EntryGroup[] = [];
+  const bucket = { entries: [] as TranscriptEntry[] };
+  for (const group of compactCompletedTurnEntries(entries, true)) {
+    if (group.kind === "activity") {
+      flushTranscriptToolBucket(groups, bucket);
+      groups.push(group);
       continue;
     }
-    flush();
-    if (e.kind === "message") groups.push({ kind: "message", entry: e });
-    else if (e.kind === "reasoning") groups.push({ kind: "reasoning", entry: e });
-    else if (e.kind === "background_task") groups.push({ kind: "background_task", entry: e });
-    else groups.push({ kind: "meta", entry: e });
+    pushTranscriptEntryGroup(groups, group.entry, bucket);
   }
-  flush();
+  flushTranscriptToolBucket(groups, bucket);
   return groups;
 }
 
@@ -3054,6 +3111,8 @@ function chatScrollGroupSnapshot(
   let backgroundTasks = 0;
   let toolGroups = 0;
   let toolEntries = 0;
+  let activityGroups = 0;
+  let activityEntries = 0;
   for (const group of groups) {
     if (group.kind === "tools") {
       toolGroups += 1;
@@ -3064,6 +3123,11 @@ function chatScrollGroupSnapshot(
       reasoning += 1;
     } else if (group.kind === "background_task") {
       backgroundTasks += 1;
+    } else if (group.kind === "activity") {
+      activityGroups += 1;
+      activityEntries += group.entries.length;
+      toolEntries += group.entries.filter((entry) => entry.kind === "tool").length;
+      backgroundTasks += group.entries.filter((entry) => entry.kind === "background_task").length;
     } else {
       meta += 1;
     }
@@ -3077,6 +3141,8 @@ function chatScrollGroupSnapshot(
     backgroundTasks,
     toolGroups,
     toolEntries,
+    activityGroups,
+    activityEntries,
     firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
     lastGroupKey: groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
   };
@@ -4654,6 +4720,183 @@ function toolGroupDefaultOpen(
   );
 }
 
+function plural(count: number, singular: string, pluralLabel = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralLabel}`;
+}
+
+function turnActivitySummary(entries: TranscriptEntry[]): string {
+  const toolCount = entries.filter((entry) => entry.kind === "tool").length;
+  const noteCount = entries.filter(
+    (entry) => entry.kind === "message" && entry.role === "assistant",
+  ).length;
+  const reasoningCount = entries.filter((entry) => entry.kind === "reasoning").length;
+  const taskCount = entries.filter((entry) => entry.kind === "background_task").length;
+  const errorCount = entries.filter(
+    (entry) =>
+      (entry.kind === "tool" &&
+        ((entry.toolStatus ?? "") === "failed" || (entry.toolStatus ?? "") === "error")) ||
+      (entry.kind === "background_task" && entry.taskStatus === "failed") ||
+      (entry.kind === "meta" && entry.meta?.severity === "error"),
+  ).length;
+  const parts: string[] = [];
+  if (toolCount > 0) parts.push(plural(toolCount, "tool call"));
+  if (taskCount > 0) parts.push(plural(taskCount, "background task"));
+  if (noteCount > 0) parts.push(plural(noteCount, "progress note"));
+  if (reasoningCount > 0) parts.push(plural(reasoningCount, "reasoning block"));
+  if (errorCount > 0) parts.push(plural(errorCount, "error", "errors"));
+  return parts.length > 0 ? parts.join(" / ") : plural(entries.length, "update");
+}
+
+function RunTurnActivityGroup({
+  group,
+  open,
+  onOpenChange,
+  avatar,
+  sessionId,
+  showThinking,
+  autoExpandTools,
+  showTimestamps,
+  showDuration,
+  toolGroupOpenOverrides,
+  onToolGroupOpenChange,
+  toolExpansionOverrides,
+  onToolExpandedChange,
+  highlightedEntryId,
+  onQuote,
+  onFork,
+  onOpenBackgroundTask,
+}: {
+  group: Extract<EntryGroup, { kind: "activity" }>;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  avatar: AgentAvatar;
+  sessionId: string;
+  showThinking: boolean;
+  autoExpandTools: boolean;
+  showTimestamps: boolean;
+  showDuration: boolean;
+  toolGroupOpenOverrides: Record<string, boolean>;
+  onToolGroupOpenChange: (groupKey: string, open: boolean) => void;
+  toolExpansionOverrides: Record<string, boolean>;
+  onToolExpandedChange: (entryId: string, expanded: boolean) => void;
+  highlightedEntryId: string | null;
+  onQuote: (text: string, style: QuoteStyle) => void;
+  onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+}) {
+  const childGroups = useMemo(
+    () => groupFlatTranscriptEntries(group.entries),
+    [group.entries],
+  );
+  const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
+  const completedAt = [...group.entries]
+    .reverse()
+    .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
+  return (
+    <div className="run-turn-activity" data-state={open ? "open" : "closed"}>
+      <button
+        type="button"
+        className="run-turn-activity-header"
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+      >
+        <span
+          className="run-turn-activity-icon"
+          title="Condensed turn activity"
+          aria-label="Condensed turn activity"
+        >
+          <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+        </span>
+        <span className="run-turn-activity-label">Turn activity</span>
+        <span className="run-turn-activity-summary">{turnActivitySummary(group.entries)}</span>
+        {showTimestamps && (
+          <ToolTiming
+            startedAt={startedAt?.startedAt ?? startedAt?.time}
+            completedAt={
+              completedAt?.completedAt ??
+              completedAt?.turnTerminalAt ??
+              completedAt?.time
+            }
+            running={false}
+          />
+        )}
+        <span className="run-turn-activity-chevron">
+          {open ? (
+            <ChevronUpIcon size={14} className="run-chevron-icon" />
+          ) : (
+            <ChevronDownIcon size={14} className="run-chevron-icon" />
+          )}
+        </span>
+      </button>
+      {open && (
+        <div className="run-turn-activity-body">
+          {childGroups.map((child) => {
+            if (child.kind === "tools") {
+              const childGroupKey = toolGroupStateKey(child.entries);
+              return (
+                <RunToolGroup
+                  key={childGroupKey}
+                  entries={child.entries}
+                  autoExpand={autoExpandTools}
+                  showTimestamps={showTimestamps}
+                  open={
+                    toolGroupOpenOverrides[childGroupKey] ??
+                    toolGroupDefaultOpen(
+                      child.entries,
+                      autoExpandTools,
+                      toolExpansionOverrides,
+                    )
+                  }
+                  onOpenChange={(nextOpen) =>
+                    onToolGroupOpenChange(childGroupKey, nextOpen)
+                  }
+                  toolExpansionOverrides={toolExpansionOverrides}
+                  onToolExpandedChange={onToolExpandedChange}
+                />
+              );
+            }
+            if (child.kind === "reasoning") {
+              return (
+                <RunReasoningBlock
+                  key={child.entry.id}
+                  entry={child.entry}
+                  showThinking={showThinking}
+                />
+              );
+            }
+            if (child.kind === "meta") {
+              return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
+            }
+            if (child.kind === "background_task") {
+              return (
+                <RunBackgroundTaskBlock
+                  key={child.entry.id}
+                  entry={child.entry}
+                  showTimestamps={showTimestamps}
+                  onOpenTask={onOpenBackgroundTask}
+                />
+              );
+            }
+            return (
+              <RunMessageBubble
+                key={child.entry.id}
+                entry={child.entry}
+                avatar={avatar}
+                sessionId={sessionId}
+                highlighted={highlightedEntryId === child.entry.id}
+                showTimestamps={showTimestamps}
+                showDuration={showDuration}
+                onQuote={onQuote}
+                onFork={onFork}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // RunMessages renders the durable transcript through react-virtuoso so the
 // DOM stays bounded regardless of session length — Mattermost / Element /
 // Slack / Discord all converge on this architecture (see
@@ -4675,6 +4918,7 @@ export function RunMessages({
   onScrollConsumed,
   showThinking,
   autoExpandTools,
+  condenseCompletedTurns = true,
   showTimestamps,
   showDuration,
   onQuote,
@@ -4703,6 +4947,7 @@ export function RunMessages({
   onScrollConsumed?: () => void;
   showThinking: boolean;
   autoExpandTools: boolean;
+  condenseCompletedTurns?: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
@@ -4717,11 +4962,15 @@ export function RunMessages({
   onScrollToLatestConsumed?: () => void;
   scrollToOldestSignal?: number;
 }) {
-  const groups = useMemo(() => groupTranscriptEntries(entries), [entries]);
+  const groups = useMemo(
+    () => groupTranscriptEntries(entries, condenseCompletedTurns),
+    [condenseCompletedTurns, entries],
+  );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   // Keep disclosure choices above virtualized row components so streaming
   // events and offscreen remounts do not reset expanded tool details.
+  const [activityOpenOverrides, setActivityOpenOverrides] = useState<Record<string, boolean>>({});
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
   const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
   // Highlighted entry is the bubble that should pulse after a deep-link
@@ -4732,17 +4981,63 @@ export function RunMessages({
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
   const consumedScrollToLatestSignalRef = useRef(0);
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
+  const setActivityOpen = useCallback((groupKey: string, open: boolean) => {
+    setActivityOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
   useEffect(() => {
     const target = pendingScrollMessageId;
     if (!target) return;
     if (consumedScrollIdRef.current === target) return;
+    let activityGroupKey: string | null = null;
+    let targetToolGroupKey: string | null = null;
     const groupIndex = groups.findIndex((g) => {
-      if (g.kind === "tools") return g.entries.some((e) => e.id === target);
+      if (g.kind === "tools") {
+        const contains = g.entries.some((e) => e.id === target);
+        if (contains) targetToolGroupKey = toolGroupStateKey(g.entries);
+        return contains;
+      }
+      if (g.kind === "activity") {
+        const contains = g.entries.some((e) => e.id === target);
+        if (contains) {
+          activityGroupKey = entryGroupKey(g);
+          const targetEntry = g.entries.find((entry) => entry.id === target);
+          if (targetEntry?.kind === "tool") {
+            const childToolGroup = groupFlatTranscriptEntries(g.entries).find(
+              (child) =>
+                child.kind === "tools" &&
+                child.entries.some((entry) => entry.id === target),
+            );
+            if (childToolGroup?.kind === "tools") {
+              targetToolGroupKey = toolGroupStateKey(childToolGroup.entries);
+            }
+          }
+        }
+        return contains;
+      }
       return g.entry.id === target;
     });
     if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
     consumedScrollIdRef.current = target;
     setHighlightedEntryId(target);
+    if (activityGroupKey) {
+      setActivityOpen(activityGroupKey, true);
+    }
+    if (targetToolGroupKey) {
+      setToolGroupOpen(targetToolGroupKey, true);
+      setToolExpanded(target, true);
+    }
     const handle = virtuosoRef.current;
     if (handle) {
       // align: "center" puts the bubble in the middle of the viewport
@@ -4755,7 +5050,14 @@ export function RunMessages({
       setHighlightedEntryId((current) => (current === target ? null : current));
     }, 2400);
     return () => window.clearTimeout(timer);
-  }, [pendingScrollMessageId, groups, onScrollConsumed]);
+  }, [
+    pendingScrollMessageId,
+    groups,
+    onScrollConsumed,
+    setActivityOpen,
+    setToolExpanded,
+    setToolGroupOpen,
+  ]);
   useLayoutEffect(() => {
     const previousKeys = previousGroupKeysRef.current;
     const currentKeys = groups.map(entryGroupKey);
@@ -4830,16 +5132,6 @@ export function RunMessages({
     (_index: number, g: EntryGroup) => entryGroupKey(g),
     [],
   );
-  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
-    setToolGroupOpenOverrides((prev) => (
-      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
-    ));
-  }, []);
-  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
-    setToolExpansionOverrides((prev) => (
-      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
-    ));
-  }, []);
   const renderItem = useCallback(
     (_index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
@@ -4874,6 +5166,30 @@ export function RunMessages({
           />
         );
       }
+      if (g.kind === "activity") {
+        const groupKey = entryGroupKey(g);
+        return (
+          <RunTurnActivityGroup
+            group={g}
+            open={activityOpenOverrides[groupKey] ?? false}
+            onOpenChange={(open) => setActivityOpen(groupKey, open)}
+            avatar={avatar}
+            sessionId={sessionId}
+            showThinking={showThinking}
+            autoExpandTools={autoExpandTools}
+            showTimestamps={showTimestamps}
+            showDuration={showDuration}
+            toolGroupOpenOverrides={toolGroupOpenOverrides}
+            onToolGroupOpenChange={setToolGroupOpen}
+            toolExpansionOverrides={toolExpansionOverrides}
+            onToolExpandedChange={setToolExpanded}
+            highlightedEntryId={highlightedEntryId}
+            onQuote={onQuote}
+            onFork={onFork}
+            onOpenBackgroundTask={onOpenBackgroundTask}
+          />
+        );
+      }
       return (
         <RunMessageBubble
           entry={g.entry}
@@ -4888,12 +5204,14 @@ export function RunMessages({
       );
     },
     [
+      activityOpenOverrides,
       autoExpandTools,
       avatar,
       highlightedEntryId,
       onFork,
       onOpenBackgroundTask,
       onQuote,
+      setActivityOpen,
       sessionId,
       setToolExpanded,
       setToolGroupOpen,
@@ -5097,6 +5415,7 @@ function RunSettingsPanel({
         </div>
         {([
           ["showThinking", "Show reasoning"],
+          ["condenseCompletedTurns", "Condense finished turns"],
           ["autoExpandTools", "Auto-expand tools"],
           ["showTimestamps", "Show timestamps"],
           ["showDuration", "Show duration"],
@@ -8015,6 +8334,7 @@ function ChatPane({
               onScrollConsumed={onScrollConsumed}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
+              condenseCompletedTurns={runPrefs.condenseCompletedTurns}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
               onQuote={appendQuotedMessage}
