@@ -15,12 +15,15 @@ native_require_env() {
   fi
 }
 
+native_managed_runner() {
+  [ "${GLIMMUNG_MANAGED_RUNNER:-}" = "1" ]
+}
+
 native_init() {
   native_require_env \
     GLIMMUNG_ATTEMPT_TOKEN \
     GLIMMUNG_COMPLETED_URL \
     GLIMMUNG_EVENTS_URL \
-    GLIMMUNG_FAILED_URL \
     GLIMMUNG_GITHUB_TOKEN_URL \
     GLIMMUNG_JOB_ID \
     GLIMMUNG_RUN_ID
@@ -53,6 +56,9 @@ native_post_json() {
 }
 
 native_event() {
+  if native_managed_runner; then
+    return 0
+  fi
   local event="$1"
   local step_slug="${2:-}"
   local message="${3:-}"
@@ -111,8 +117,25 @@ native_log_stream() {
 native_failed() {
   local reason="$1"
   local payload
-  payload="$(jq -nc --arg reason "$reason" --arg job_id "$GLIMMUNG_JOB_ID" '{reason: $reason, job_id: $job_id}')"
-  native_post_json "$GLIMMUNG_FAILED_URL" "$payload" || true
+  if native_managed_runner; then
+    if [ -n "${GLIMMUNG_COMPLETION_FILE:-}" ]; then
+      jq -nc --arg summary "$reason" '{summary_markdown: $summary}' >"$GLIMMUNG_COMPLETION_FILE"
+    fi
+    echo "$reason" >&2
+    return 0
+  fi
+  payload="$(
+    jq -nc \
+      --arg conclusion "failure" \
+      --arg reason "$reason" \
+      --arg job_id "$GLIMMUNG_JOB_ID" \
+      '{
+        conclusion: $conclusion,
+        job_id: $job_id,
+        summary_markdown: $reason
+      }'
+  )"
+  native_post_json "$GLIMMUNG_COMPLETED_URL" "$payload" || true
 }
 
 native_completed() {
@@ -120,6 +143,23 @@ native_completed() {
   local verification_json="${2:-null}"
   local summary_markdown="${3:-}"
   local payload
+  if native_managed_runner; then
+    if [ "$outputs_json" != "null" ] && [ -n "${GLIMMUNG_OUTPUT_FILE:-}" ]; then
+      jq -c . <<<"$outputs_json" >>"$GLIMMUNG_OUTPUT_FILE"
+    fi
+    if [ -n "${GLIMMUNG_COMPLETION_FILE:-}" ]; then
+      jq -nc \
+        --argjson verification "$verification_json" \
+        --arg summary "$summary_markdown" \
+        '{
+          verification: $verification,
+          summary_markdown: $summary
+        }
+        | with_entries(select(.value != null and .value != ""))' \
+        >"$GLIMMUNG_COMPLETION_FILE"
+    fi
+    return 0
+  fi
   payload="$(
     jq -nc \
       --arg conclusion "success" \
