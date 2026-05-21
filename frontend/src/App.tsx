@@ -1792,7 +1792,7 @@ function DemoLanding() {
                   session. The icon row mirrors the authenticated home so
                   the demo accurately previews the chat surface. */}
               <ChatComposer
-                className="run-composer-home"
+                className="run-composer-home run-composer-interactive"
                 placeholder="Sign in to start a session…"
                 onSubmit={() => {
                   startLogin();
@@ -8303,7 +8303,7 @@ function ChatPane({
       </>)}
       composer={(
         <ChatComposer
-            className="run-composer-runpane"
+            className="run-composer-runpane run-composer-interactive"
             placeholder={RUN_COMPOSER_PLACEHOLDER}
             onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
             permissionMode={composerMode}
@@ -10562,6 +10562,7 @@ export function App() {
             </>)}
             composer={(
               <ChatComposer
+                className={busy ? "run-composer-home" : "run-composer-home run-composer-interactive"}
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
                 onSubmit={({ text, permissionMode }) => {
                   const trimmed = text.trim();

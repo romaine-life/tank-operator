@@ -3499,9 +3499,9 @@ button:disabled {
   box-shadow: none !important;
 }
 
-/* Run-pane composer: keep the text box + send button visually live even
-   while session-bound controls are unavailable. Disabled siblings still
-   render as disabled, but the shell no longer fades the whole composer. */
+/* Interactive composer shells keep the text box + send button visually live
+   even while sibling tool buttons are disabled. */
+.run-composer.run-composer-interactive,
 .run-composer.run-composer-runpane {
   transition:
     border-color var(--motion-fast, 120ms) ease,
@@ -3509,6 +3509,7 @@ button:disabled {
     background var(--motion-fast, 120ms) ease;
 }
 
+.run-composer.run-composer-interactive:focus-within,
 .run-composer.run-composer-runpane:focus-within {
   border-color: rgba(110, 168, 255, 0.42);
   background: rgba(255, 255, 255, 0.025);
@@ -3517,14 +3518,17 @@ button:disabled {
     0 18px 36px rgba(0, 0, 0, 0.22);
 }
 
+.run-composer.run-composer-interactive > [data-slot="input-group"],
 .run-composer.run-composer-runpane > [data-slot="input-group"] {
   opacity: 1 !important;
 }
 
+.run-composer.run-composer-interactive .run-composer-hint,
 .run-composer.run-composer-runpane .run-composer-hint {
   color: var(--text-secondary);
 }
 
+.run-composer.run-composer-interactive .run-composer-textarea::placeholder,
 .run-composer.run-composer-runpane .run-composer-textarea::placeholder {
   color: rgba(255, 255, 255, 0.42);
 }
