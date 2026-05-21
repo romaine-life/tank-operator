@@ -12,6 +12,7 @@ const chatScrollTelemetrySource = readFileSync(
   "utf8",
 );
 const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+const indexCssSource = readFileSync(new URL("./index.css", import.meta.url), "utf8");
 const sessionConfigMapSource = readFileSync(
   new URL("../../k8s/templates/session-configmap.yaml", import.meta.url),
   "utf8",
@@ -179,6 +180,15 @@ test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
   assert.match(appSource, /disabled=\{!filesAvailable\}/);
+});
+
+test("shell tasks page uses stacked full-width sections instead of a side pane", () => {
+  assert.match(indexCssSource, /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/);
+  assert.equal(
+    indexCssSource.includes("grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)"),
+    false,
+  );
+  assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
