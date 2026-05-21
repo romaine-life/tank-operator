@@ -91,6 +91,10 @@ import {
   isValidRepoSlug,
   removeRepoSlug,
 } from "./repos";
+import {
+  readHomeSelectedRepos,
+  writeHomeSelectedRepos,
+} from "./homeRepos";
 import { ProviderIcon } from "./providerIcons";
 import {
   normalizeSessionActivity,
@@ -8778,8 +8782,8 @@ export function App() {
   //
   //   - selectedRepos: the chips the user has staged for the
   //     about-to-be-created session. Posted to /api/sessions on
-  //     create; cleared after a successful create so the next
-  //     session starts empty.
+  //     create; persisted as the next splash default so the last
+  //     picked repo set reappears when the user comes back home.
   //   - recentRepos: GET /api/github/recent-repos result for this
   //     user. The picker's "Recent" section reads from here. Stays
   //     empty (and the section hidden) when the user has never
@@ -8791,7 +8795,7 @@ export function App() {
   //
   // "All repos" is sourced from /api/github/repos; the manual text
   // input remains the escape hatch when enumeration fails or lags.
-  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [selectedRepos, setSelectedRepos] = useState<string[]>(readHomeSelectedRepos);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
@@ -8912,16 +8916,19 @@ export function App() {
   }, [user, refreshRecentRepos]);
 
   // Close the picker when the user switches default mode to one
-  // that doesn't support repos, AND clear any staged selection so a
-  // mode flip on the splash can't leave behind chips that would 400
-  // the create call.
+  // that doesn't support repos. The staged repos stay intact so the
+  // splash can restore the last-picked set if the user switches back
+  // to a repo-capable mode.
   useEffect(() => {
     if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
-      if (selectedRepos.length > 0) setSelectedRepos([]);
       if (repoPickerOpen) setRepoPickerOpen(false);
       if (repoError) setRepoError(null);
     }
-  }, [defaultSessionMode, selectedRepos.length, repoPickerOpen, repoError]);
+  }, [defaultSessionMode, repoPickerOpen, repoError]);
+
+  useEffect(() => {
+    writeHomeSelectedRepos(selectedRepos);
+  }, [selectedRepos]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
@@ -9704,13 +9711,14 @@ export function App() {
           setError(String(e));
         }
       }
-      // Clear the chip selection and refresh "Recent" so the just-
-      // used repos float to the top next time the splash opens.
+      // Keep the last-picked repos staged so the next splash can
+      // default to the same repo set. Close the picker and reset the
+      // inline editor state; if repos were used, refresh "Recent" so
+      // the just-used repos float to the top next time the splash opens.
+      setRepoPickerOpen(false);
+      setRepoInput("");
+      setRepoError(null);
       if (repos.length > 0) {
-        setSelectedRepos([]);
-        setRepoPickerOpen(false);
-        setRepoInput("");
-        setRepoError(null);
         void refreshRecentRepos();
         // Invalidate the All-repos cache too: a user who just
         // installed our App on a new account expects the new repos

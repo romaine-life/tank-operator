@@ -46,6 +46,7 @@ const TANK_KEY_ALLOWLIST = [
   "tank-run-pref-",         // run-pane prefs (App.tsx)
   "tank.defaultSessionMode",
   "tank.defaultInteraction",
+  "tank.homeSelectedRepos",
   "tank.sessionInteraction:",
 ];
 function isAllowedTankKey(key: string): boolean {
