@@ -280,13 +280,6 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
-# Session-JWT signing key in Key Vault. Private bytes never leave the vault;
-# orchestrator calls KV's Sign operation per mint and caches the public key
-# locally for in-process verification. See infra/jwt_signing_key.tf.
-jwt:
-  kvVault: https://romaine-kv.vault.azure.net/
-  kvKeyName: tank-operator-jwt-signing
-
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

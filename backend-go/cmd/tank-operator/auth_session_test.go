@@ -42,6 +42,7 @@ func signedTokenWithRole(t *testing.T, email, role string) string {
 	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "sub-" + email,
 		"email": email,
+		"iss":   "https://auth.romaine.life",
 		"name":  email,
 		"role":  role,
 		"iat":   time.Now().Unix(),
@@ -58,6 +59,7 @@ func signedServiceToken(t *testing.T, email, actorEmail string) string {
 	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":         "sub-" + email,
 		"email":       email,
+		"iss":         "https://auth.romaine.life",
 		"name":        email,
 		"role":        auth.RoleService,
 		"actor_email": actorEmail,

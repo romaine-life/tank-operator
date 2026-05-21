@@ -878,10 +878,10 @@ interface SessionUser {
   sub: string;
   email: string;
   name: string;
-  // Platform role carried in the tank-operator session JWT. `admin` and
+  // Platform role carried in the auth.romaine.life JWT. `admin` and
   // `service` bypass the OnboardingWall; `user` is the standard signed-in
-  // caller. auth.romaine.life mints `pending` by default but tank-operator's
-  // exchange rejects that before a session JWT is ever issued.
+  // caller. auth.romaine.life mints `pending` by default; tank-operator
+  // rejects that role on direct JWT verification.
   role: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
@@ -909,8 +909,10 @@ const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
 // hardcoding every variant.
 const INSTALL_ERROR_HINTS: Record<string, string> = {
   missing_state: "Install link expired before you returned. Try again.",
-  invalid_state: "Install link signature didn't validate. Try again.",
+  invalid_state: "Install link didn't validate. Try again.",
   missing_installation_id: "GitHub didn't send an installation id. Re-run the install.",
+  install_state_unavailable: "Install tracking is unavailable. Try again later.",
+  install_state_failed: "Install tracking failed. Try again.",
   pending_approval: "Your install needs an org admin's approval. Once they approve, log in again.",
   session_expired: "Your session expired during install. Sign in again then re-run the install.",
   session_invalid: "Your session token didn't validate. Sign in again.",
@@ -926,6 +928,44 @@ function clearInstallError(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("install_error");
   window.history.replaceState({}, "", url.toString());
+}
+
+function readPendingGitHubInstallState(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("github_install_state");
+}
+
+function clearPendingGitHubInstallState(): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("github_install_state");
+  window.history.replaceState({}, "", url.toString());
+}
+
+function setInstallErrorParam(reason: string): void {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("github_install_state");
+  url.searchParams.set("install_error", reason);
+  window.history.replaceState({}, "", url.toString());
+}
+
+async function completeGitHubInstall(state: string): Promise<SessionUser> {
+  const res = await authedFetch("/api/github/install/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ state }),
+  });
+  if (!res.ok) {
+    let detail = `install_complete_failed_${res.status}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      // Keep the status-derived detail when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  const body = (await res.json()) as { user: SessionUser };
+  return body.user;
 }
 
 function readInitialSessionId(): string | null {
@@ -8847,8 +8887,21 @@ export function App() {
 
   useEffect(() => {
     bootstrapAuth()
-      .then((u) => {
-        setUser(u);
+      .then(async (u) => {
+        const pendingInstallState = readPendingGitHubInstallState();
+        if (u && pendingInstallState) {
+          try {
+            const installedUser = await completeGitHubInstall(pendingInstallState);
+            clearPendingGitHubInstallState();
+            setUser(installedUser);
+          } catch (e) {
+            const reason = errorMessage(e);
+            setInstallErrorParam(reason);
+            setUser(u);
+          }
+        } else {
+          setUser(u);
+        }
         setBooted(true);
       })
       .catch((e) => {

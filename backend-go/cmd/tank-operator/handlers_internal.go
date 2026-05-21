@@ -44,19 +44,6 @@ var builtinSlashCommands = []menuCommandEntry{
 	{Name: "/usage", Desc: "Show token / billing usage", Source: "builtin"},
 }
 
-func (s *appServer) handleInternalJWKS(w http.ResponseWriter, r *http.Request) {
-	if s.minter == nil {
-		writeError(w, http.StatusInternalServerError, "JWT minter not configured")
-		return
-	}
-	jwks, err := s.minter.PublicJWKS(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load public signing key: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, jwks)
-}
-
 // handleInternalGitHubInstallation resolves the caller's actor_email to a
 // {installation_id, is_host, is_super_admin} triple by reading the user's
 // profile row. The canonical lookup mcp-github performs on every request:

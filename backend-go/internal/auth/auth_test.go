@@ -27,17 +27,6 @@ func TestVerifierAcceptsBearerToken(t *testing.T) {
 	}
 }
 
-func TestVerifierAcceptsCookie(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	verifier := NewVerifier(jwtKey)
-	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
-	request.AddCookie(&http.Cookie{Name: CookieName, Value: signedTestToken(t, jwtKey, "user@example.com", "user", nil)})
-
-	if _, err := verifier.CurrentUser(request); err != nil {
-		t.Fatalf("CurrentUser returned error: %v", err)
-	}
-}
-
 func TestVerifierRejectsMissingAuthentication(t *testing.T) {
 	verifier := NewVerifier(newTestJWT(t))
 	_, err := verifier.CurrentUser(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil))
@@ -48,7 +37,7 @@ func TestVerifierRejectsMissingAuthentication(t *testing.T) {
 
 func TestVerifierRejectsPendingRole(t *testing.T) {
 	// auth.romaine.life mints role=pending by default for fresh Microsoft
-	// sign-ins. Tank-operator must refuse those tokens — the upstream
+	// sign-ins. Tank-operator must refuse those tokens â€” the upstream
 	// admin promotion via /admin is the gate.
 	jwtKey := newTestJWT(t)
 	verifier := NewVerifier(jwtKey)
@@ -63,6 +52,17 @@ func TestVerifierRejectsMissingRole(t *testing.T) {
 	verifier := NewVerifier(jwtKey)
 	_, err := verifier.Decode(signedTestToken(t, jwtKey, "user@example.com", "", nil))
 	if err == nil || ErrorStatus(err) != http.StatusForbidden {
+		t.Fatalf("err = %v, status = %d", err, ErrorStatus(err))
+	}
+}
+
+func TestVerifierRejectsUnexpectedIssuer(t *testing.T) {
+	jwtKey := newTestJWT(t)
+	verifier := NewVerifier(jwtKey)
+	_, err := verifier.Decode(signedTestToken(t, jwtKey, "user@example.com", "user", jwt.MapClaims{
+		"iss": "https://not-auth.romaine.life",
+	}))
+	if err == nil || ErrorStatus(err) != http.StatusUnauthorized {
 		t.Fatalf("err = %v, status = %d", err, ErrorStatus(err))
 	}
 }
@@ -106,7 +106,7 @@ func TestVerifierAcceptsServiceRoleWithActorEmail(t *testing.T) {
 }
 
 func TestVerifierRejectsServiceRoleWithoutActorEmail(t *testing.T) {
-	// Service-role token missing actor_email is unscoped — refuse 401.
+	// Service-role token missing actor_email is unscoped â€” refuse 401.
 	jwtKey := newTestJWT(t)
 	verifier := NewVerifier(jwtKey)
 	_, err := verifier.Decode(signedTestToken(t, jwtKey,
@@ -198,132 +198,6 @@ func TestVerifierRejectsHS256Tokens(t *testing.T) {
 	}
 }
 
-func TestMinterIssuesVerifiableSession(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	tok, err := minter.MintSession("sub-1", "user@example.com", "User", "user", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	verifier := NewVerifier(jwtKey)
-	got, err := verifier.Decode(tok)
-	if err != nil {
-		t.Fatalf("minted token did not verify: %v", err)
-	}
-	if got.Email != "user@example.com" || got.Sub != "sub-1" || got.Role != "user" {
-		t.Fatalf("user = %#v", got)
-	}
-	if got.ActorEmail != "" {
-		t.Fatalf("ActorEmail = %q on user-role token, want empty", got.ActorEmail)
-	}
-}
-
-// TestMinterIssuesVerifiableServiceSession is the round-trip the verifier-
-// side TestVerifierAcceptsServiceRoleWithActorEmail asserts on the read
-// side: a service-role token minted with actor_email decodes back into a
-// User carrying the same lowercased actor_email. The regression this
-// guards against (nelsong6/tank-operator#558): MintSession previously
-// took no actor_email parameter, so /api/auth/exchange minted service
-// tokens that 401'd on the very next call.
-func TestMinterIssuesVerifiableServiceSession(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	tok, err := minter.MintSession(
-		"svc:tank:42",
-		"pod-42@service.tank.romaine.life",
-		"Service: tank pod-42",
-		RoleService,
-		"Owner@Example.com",
-	)
-	if err != nil {
-		t.Fatalf("MintSession: %v", err)
-	}
-	verifier := NewVerifier(jwtKey)
-	got, err := verifier.Decode(tok)
-	if err != nil {
-		t.Fatalf("minted service token did not verify: %v", err)
-	}
-	if !got.IsService() {
-		t.Fatalf("IsService() = false, want true; user = %#v", got)
-	}
-	if got.ActorEmail != "owner@example.com" {
-		t.Fatalf("ActorEmail = %q, want lowercased owner@example.com", got.ActorEmail)
-	}
-	if got.Email != "pod-42@service.tank.romaine.life" {
-		t.Fatalf("Email = %q, want service principal email", got.Email)
-	}
-}
-
-func TestMinterRejectsServiceRoleWithoutActorEmail(t *testing.T) {
-	// Constructor enforces the verifier's contract — the failure mode
-	// in #558 was that MintSession silently produced a token the
-	// verifier would refuse. Refuse at mint time too.
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	if _, err := minter.MintSession("svc:tank:1", "pod-1@service.tank.romaine.life", "", RoleService, ""); err == nil {
-		t.Fatal("MintSession(role=service, actor_email=\"\") returned nil error; want rejection")
-	}
-}
-
-func TestMinterRejectsHumanRoleWithActorEmail(t *testing.T) {
-	// Defense in depth: actor_email is only meaningful for service
-	// principals (it carries the human owner). On a human-role token
-	// the human IS the owner; a stray actor_email would silently shift
-	// scope semantics for any handler that learns to consult both
-	// fields. Reject at mint time.
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	for _, role := range []string{RoleAdmin, RoleUser} {
-		if _, err := minter.MintSession("sub-1", "user@example.com", "User", role, "someone@example.com"); err == nil {
-			t.Fatalf("MintSession(role=%s, actor_email=\"someone@…\") returned nil error; want rejection", role)
-		}
-	}
-}
-
-func TestMinterPublishesJWKS(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	jwks, err := minter.PublicJWKS(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(jwks.Keys) != 1 {
-		t.Fatalf("jwks key count = %d, want 1", len(jwks.Keys))
-	}
-	key := jwks.Keys[0]
-	if key.Kid != "test-kid" || key.Kty != "RSA" || key.Alg != "RS256" || key.N == "" || key.E == "" {
-		t.Fatalf("unexpected jwk = %#v", key)
-	}
-}
-
-func TestInstallStateRoundtrips(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	tok, err := minter.MintInstallState("user@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	email, err := minter.VerifyInstallState(tok)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if email != "user@example.com" {
-		t.Fatalf("email = %q, want %q", email, "user@example.com")
-	}
-}
-
-func TestInstallStateRejectsSessionTokenWithDifferentAudience(t *testing.T) {
-	jwtKey := newTestJWT(t)
-	minter := NewMinter(jwtKey, jwtKey)
-	sessionTok, err := minter.MintSession("sub-1", "user@example.com", "User", "user", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := minter.VerifyInstallState(sessionTok); err == nil {
-		t.Fatal("session token accepted as install-state token; audience check broken")
-	}
-}
-
 func TestGravatarURLMatchesPython(t *testing.T) {
 	got := GravatarURL("  USER@Example.COM  ", 128)
 	want := "https://www.gravatar.com/avatar/b58996c504c5638798eb6b511e6f49af?s=128&d=mp"
@@ -346,6 +220,7 @@ func signedTestToken(t *testing.T, jwtKey *InMemoryJWT, email, role string, extr
 	claims := jwt.MapClaims{
 		"sub":   "sub-1",
 		"email": email,
+		"iss":   authRomaineLifeIssuer,
 		"name":  "User",
 		"role":  role,
 		"iat":   time.Now().Unix(),

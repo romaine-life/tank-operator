@@ -23,8 +23,8 @@ Kubernetes service-account token and auth.romaine.life's
 `/api/auth/exchange/k8s` flow. Those tokens carry `role=service` and an
 `actor_email` claim for the human owner. The SPA treats service principals as
 authenticated platform callers and does not require a user-facing GitHub App
-installation — the OnboardingWall is skipped for `role=service`. Do not
-install the GitHub App for a service account just to run browser automation.
+installation; the OnboardingWall is skipped for `role=service`. Do not install
+the GitHub App for a service account just to run browser automation.
 
 End-to-end exchange from a session pod:
 
@@ -33,53 +33,44 @@ SA=$(cat /var/run/secrets/auth.romaine.life/token)
 AUTH_JWT=$(curl -sS -X POST https://auth.romaine.life/api/auth/exchange/k8s \
   -H "Authorization: Bearer $SA" -H 'Content-Type: application/json' -d '{}' \
   | jq -r .token)                                       # role=service + actor_email
-SESSION_JWT=$(curl -sS -X POST https://tank-operator-slot-1.tank.dev.romaine.life/api/auth/exchange \
-  -H 'Content-Type: application/json' -d "{\"auth_jwt\":\"$AUTH_JWT\"}" \
-  | jq -r .token)                                       # tank-operator session JWT
 curl -sS https://tank-operator-slot-1.tank.dev.romaine.life/api/auth/me \
-  -H "Authorization: Bearer $SESSION_JWT"               # 200, role=service
+  -H "Authorization: Bearer $AUTH_JWT"                  # 200, role=service
 ```
 
-The same minted JWT is what powers authenticated browser automation against
-slot URLs — see the next section.
+The same auth.romaine.life JWT powers authenticated browser automation against
+slot URLs.
 
 ## Authenticated browser automation via inspect_browser_url
 
 `inspect_browser_url` (in [`mcp-glimmung`](https://github.com/nelsong6/mcp-glimmung))
-drives the slot's `slot-playwright` pod against a URL. The playwright pod
+drives the slot's `slot-playwright` pod against a URL. The Playwright pod
 itself holds no credentials, so anything signed-in has to come from the
-caller. The tool exposes three injection knobs that map directly to
-Playwright's `BrowserContext` configuration:
+caller. The tool exposes injection knobs that map directly to Playwright's
+`BrowserContext` configuration:
 
 | Param | Forwarded to | Use |
 |---|---|---|
-| `cookies` | `context.addCookies(cookies)` | Session cookies; the tank-operator `auth_token` cookie is the dominant case |
-| `extra_http_headers` | `context.setExtraHTTPHeaders(headers)` | `Authorization: Bearer …` on slot URLs that hit JSON APIs |
-| `local_storage` | `addInitScript` running before every page script | SPAs that boot from `localStorage[tank-operator-jwt]` |
+| `extra_http_headers` | `context.setExtraHTTPHeaders(headers)` | `Authorization: Bearer ...` on slot URLs that hit JSON APIs |
+| `local_storage` | `addInitScript` running before every page script | SPAs that boot from `localStorage[auth-romaine-jwt]` |
 
-Recommended pattern for the chat UI: produce the session JWT with the
-exchange above, then pass it as the `auth_token` cookie. Playwright lands on
-the slot URL already signed in as the service principal, and the SPA's
-bootstrap path validates the existing JWT via `/api/auth/me` instead of
-hitting the silent-exchange flow.
+Recommended pattern for the chat UI: mint the auth.romaine.life service token
+above, then seed it into the SPA's localStorage. Playwright lands on the slot
+URL already signed in as the service principal, and the SPA's bootstrap path
+validates the token via `/api/auth/me`.
 
 ```python
 inspect_browser_url(
     url="https://tank-operator-slot-1.tank.dev.romaine.life/",
     tank_session_id="<your session id>",
-    cookies=[{
-        "name": "auth_token",
-        "value": SESSION_JWT,                # minted via /api/auth/exchange above
-        "url": "https://tank-operator-slot-1.tank.dev.romaine.life",
-        "httpOnly": True,
-        "secure": True,
-        "sameSite": "Lax",
-    }],
-    local_storage={"https://tank-operator-slot-1.tank.dev.romaine.life": {"tank-operator-jwt": SESSION_JWT}},
+    local_storage={
+        "https://tank-operator-slot-1.tank.dev.romaine.life": {
+            "auth-romaine-jwt": AUTH_JWT,
+        },
+    },
 )
 ```
 
 This is the production-correct path. Do not work around an old "stub
-`/api/auth/me` in Playwright" pattern; the backend bypass for
-`role=service` is live and the inspector now plumbs the cookie through, so
-the real auth path is always available.
+`/api/auth/me` in Playwright" pattern; the backend bypass for `role=service`
+is live and the inspector now plumbs localStorage through, so the real auth
+path is always available.
