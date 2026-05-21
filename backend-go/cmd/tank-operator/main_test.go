@@ -69,7 +69,7 @@ func TestConfig(t *testing.T) {
 }
 
 func TestConfigDefaultsAuthURL(t *testing.T) {
-	// AUTH_URL not set — default to auth.romaine.life.
+	// AUTH_URL not set â€” default to auth.romaine.life.
 	t.Setenv("AUTH_URL", "")
 	response := httptest.NewRecorder()
 	config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
@@ -234,10 +234,10 @@ func TestMeRejectsUnauthenticated(t *testing.T) {
 	}
 }
 
-// Pins the canonical user-response shape that both /api/auth/exchange
-// (fresh sign-in) and /api/auth/me (existing-JWT bootstrap) build via
-// userResponseBody. A missing field reads as undefined in the SPA and —
-// because `undefined == null` in JS — flips installation_id-driven UI like
+// Pins the canonical user-response shape that /api/auth/me and GitHub
+// install completion build via userResponseBody. A missing field reads as
+// undefined in the SPA and
+// because `undefined == null` in JS â€” flips installation_id-driven UI like
 // the OnboardingWall into the "not installed" branch even for users who
 // are installed. That was the bug in #391; this test prevents it
 // reappearing if the helper is refactored.
@@ -253,7 +253,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 		RunPrefs:       prefs,
 	})
 
-	// Cast InstallationID for comparison — go's map[string]any doesn't
+	// Cast InstallationID for comparison â€” go's map[string]any doesn't
 	// equate *int64 with int64 directly, so we dereference via the helper.
 	if got, ok := body["installation_id"].(*int64); !ok || got == nil || *got != installationID {
 		t.Fatalf("installation_id = %#v, want pointer to %d", body["installation_id"], installationID)
@@ -274,7 +274,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 
 // Verifies the response shape also tolerates an empty profile (e.g. a
 // first-time login where the profiles row doesn't exist yet). All profile-
-// derived fields should serialize as JSON null — not be missing — so the
+// derived fields should serialize as JSON null â€” not be missing â€” so the
 // SPA reads them as `null` and renders the install-CTA branch correctly
 // instead of dead-ending on an undefined field access. Asserting on the
 // marshaled JSON (not the map) because Go's typed-nil-in-interface
@@ -300,7 +300,7 @@ func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
 }
 
 // testJWT returns a process-singleton InMemoryJWT so verifier and signed-token
-// helpers in this file share the same key — necessary because each test now
+// helpers in this file share the same key â€” necessary because each test now
 // constructs a verifier and a token separately and they must agree on the kid.
 var sharedTestJWT *auth.InMemoryJWT
 
@@ -322,6 +322,7 @@ func signedMainToken(t *testing.T, _ /*unused secret arg*/, email string) string
 	tok, err := testJWT(t).MintJWT(context.Background(), jwt.MapClaims{
 		"sub":   "sub-1",
 		"email": email,
+		"iss":   "https://auth.romaine.life",
 		"name":  "User",
 		"role":  "user",
 		"iat":   time.Now().Unix(),

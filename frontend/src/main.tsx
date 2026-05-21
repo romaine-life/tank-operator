@@ -43,7 +43,6 @@ if (typeof document !== "undefined") {
 // Anything in our namespace not listed is treated as debris.
 // Non-tank keys are left alone — other libs/sites share this origin.
 const TANK_KEY_ALLOWLIST = [
-  "tank-operator-jwt",      // session JWT (auth.ts)
   "tank-run-pref-",         // run-pane prefs (App.tsx)
   "tank.defaultSessionMode",
   "tank.defaultInteraction",

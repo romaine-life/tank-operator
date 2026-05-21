@@ -12,7 +12,7 @@
 //  2. POST that SA token to /api/auth/exchange/k8s with the SPA
 //     user's email in the body's `actor_email` field. auth.romaine.life
 //     mints a role=service JWT whose `actor_email` claim equals the
-//     supplied email (privilege gated at the IdP — orchestrator is
+//     supplied email (privilege gated at the IdP - orchestrator is
 //     the only namespace with allowActorOverride=true).
 //  3. Present that JWT to mcp-github over the cluster network. The
 //     mcp-github auth middleware reads `actor_email`, calls back to
@@ -26,7 +26,7 @@
 // surface lives at the IdP layer.
 //
 // Per docs/observability.md: outbound exchange + MCP calls are
-// instrumented at the call site (see handlers_repos.go), not here —
+// instrumented at the call site (see handlers_repos.go), not here -
 // this package is a transport, not a policy layer.
 package mcpgithub
 
@@ -46,7 +46,7 @@ import (
 )
 
 // Default cluster-internal address for mcp-github. Mirrors the
-// session-pod mcp-auth-proxy's LISTENERS map entry (port 9992 →
+// session-pod mcp-auth-proxy's LISTENERS map entry (port 9992 ->
 // http://mcp-github.mcp-github.svc:80). Configurable on the Client
 // struct for tests + local dev.
 const DefaultMCPGitHubURL = "http://mcp-github.mcp-github.svc:80"
@@ -86,7 +86,7 @@ type Options struct {
 	// client uses os.ReadFile.
 	ReadToken func(path string) (string, error)
 	// Now is the wall-clock injection point for the token cache.
-	// Tests override; production passes nil → time.Now.
+	// Tests override; production passes nil -> time.Now.
 	Now func() time.Time
 }
 
@@ -125,7 +125,7 @@ func NewClient(opts Options) *Client {
 		cache:     map[string]cachedToken{},
 	}
 	if c.http == nil {
-		// 20s aligns with the picker's UX budget — bigger than a
+		// 20s aligns with the picker's UX budget - bigger than a
 		// normal MCP call (sub-second) but bounded so a hung
 		// mcp-github doesn't tie up the SPA's request indefinitely.
 		c.http = &http.Client{Timeout: 20 * time.Second}
@@ -153,9 +153,9 @@ func NewClient(opts Options) *Client {
 // the user, then forwards to mcp-github's `list_installation_repos`
 // tool.
 //
-// userEmail is the SPA caller's verified email — it must come from a
-// trusted source (the tank-operator session JWT on the inbound
-// request), not from the SPA's request body. mcp-github will read
+// userEmail is the SPA caller's verified email; it must come from the
+// verified auth.romaine.life JWT on the inbound request, not from the
+// SPA's request body. mcp-github will read
 // the `actor_email` claim out of the minted JWT and route the call
 // to that user's installation.
 func (c *Client) ListRepos(ctx context.Context, userEmail string) ([]Repo, error) {
@@ -257,8 +257,8 @@ func (c *Client) mintToken(ctx context.Context, userEmail string) (string, time.
 // callListInstallationRepos issues a single MCP JSON-RPC `tools/call`
 // against mcp-github with the `list_installation_repos` tool name.
 // Response shape: mcp-github replies as `text/event-stream` framing
-// JSON-RPC results in `data:` lines. We tolerate either shape — bare
-// JSON or SSE — so a future mcp-github content-negotiation change
+// JSON-RPC results in `data:` lines. We tolerate either shape - bare
+// JSON or SSE - so a future mcp-github content-negotiation change
 // doesn't quietly break this path.
 func (c *Client) callListInstallationRepos(ctx context.Context, token string) ([]Repo, error) {
 	rpc := map[string]any{
@@ -300,8 +300,8 @@ func parseListReposResponse(reader interface {
 	Read(p []byte) (int, error)
 }) ([]Repo, error) {
 	scanner := bufio.NewScanner(reader)
-	// Default scanner buf is 64 KB — bump so a many-repo response
-	// (5 KB/repo × 100 repos) fits on a single SSE data line.
+	// Default scanner buf is 64 KB - bump so a many-repo response
+	// (5 KB/repo x 100 repos) fits on a single SSE data line.
 	scanner.Buffer(make([]byte, 0, 1<<16), 1<<22)
 
 	var rpcRaw []byte
@@ -310,7 +310,7 @@ func parseListReposResponse(reader interface {
 		if len(line) == 0 {
 			continue
 		}
-		// Bare JSON path — the first line that starts with '{' is the
+		// Bare JSON path - the first line that starts with '{' is the
 		// whole response.
 		if line[0] == '{' {
 			rpcRaw = append([]byte{}, line...)

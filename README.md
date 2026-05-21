@@ -16,10 +16,10 @@ to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:
 
-- [`mcp-azure-personal`](https://github.com/nelsong6/mcp-azure-personal) — first-party personal Azure MCP server and chart.
-- [`mcp-github`](https://github.com/nelsong6/mcp-github) — custom GitHub App-backed MCP server.
-- [`mcp-k8s`](https://github.com/nelsong6/mcp-k8s) — read-only kubectl/helm MCP server.
-- [`mcp-argocd`](https://github.com/nelsong6/mcp-argocd) — read-only ArgoCD MCP server.
+- [`mcp-azure-personal`](https://github.com/nelsong6/mcp-azure-personal) â€” first-party personal Azure MCP server and chart.
+- [`mcp-github`](https://github.com/nelsong6/mcp-github) â€” custom GitHub App-backed MCP server.
+- [`mcp-k8s`](https://github.com/nelsong6/mcp-k8s) â€” read-only kubectl/helm MCP server.
+- [`mcp-argocd`](https://github.com/nelsong6/mcp-argocd) â€” read-only ArgoCD MCP server.
 
 Runtime UAMIs (e.g. `mcp.tf`, `mcp-server/`) live under `infra/`. CI auth
 (image-push to ACR) for those standalone MCP repos is managed by
@@ -62,12 +62,12 @@ session lifecycle goal changes.
 backend-go/                   Go orchestrator (Postgres + KV + k8s exec)
 frontend/                     Vite + React UI
 api-proxy/                    Envoy ext_proc (Python): injects provider OAuth, refreshes on 401
-agent-container/              Long-lived pod-side runner (Go) — in progress, see CLAUDE.md
+agent-container/              Long-lived pod-side runner (Go) â€” in progress, see CLAUDE.md
 claude-container/             Claude session image bootstrap + Dockerfile
 k8s/                          Helm chart: deployment, RBAC, HTTPRoute, ExternalSecret
-infra/                        Tofu — Postgres, KV, UAMI, role assignments
-Dockerfile                    multi-stage: vite build → go build → alpine runtime
-.github/workflows/build.yml   OIDC az login → build → push to ACR
+infra/                        Tofu â€” Postgres, KV, UAMI, role assignments
+Dockerfile                    multi-stage: vite build â†’ go build â†’ alpine runtime
+.github/workflows/build.yml   OIDC az login â†’ build â†’ push to ACR
 ```
 
 ## Local dev
@@ -75,15 +75,14 @@ Dockerfile                    multi-stage: vite build → go build → alpine ru
 ```bash
 # Orchestrator
 cd backend-go && go build ./... && go test ./...
-# Run requires kube context (in-cluster or kubeconfig) plus the JWT_KV_VAULT
-# and JWT_KV_KEY_NAME envs pointing at the signing key.
+# Run requires kube context (in-cluster or kubeconfig).
 
 # Frontend
 cd frontend && npm install && npm run dev
-# Vite dev server proxies /api → http://localhost:8000.
+# Vite dev server proxies /api â†’ http://localhost:8000.
 # Sign-in is delegated to auth.romaine.life; clicking Sign-in redirects you
 # there, you complete Microsoft sign-in, and bounce back. For local dev the
-# session cookie on .romaine.life makes the silent-exchange path "just work"
+# session cookie on .romaine.life makes the silent auth path "just work"
 # if you're already signed into another romaine.life app in the same browser.
 ```
 
@@ -203,17 +202,13 @@ Project metadata for Glimmung:
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is
-present, otherwise via a top-level redirect through Microsoft) and POSTs it
-to `/api/auth/exchange`. The orchestrator verifies the RS256 signature
-against auth.romaine.life/api/auth/jwks and mints its own session JWT
-signed by a Key Vault Key (private bytes never leave KV; see
-[backend-go/internal/auth/](backend-go/internal/auth/) and
-[infra/jwt_signing_key.tf](infra/jwt_signing_key.tf)). Sessions are scoped
-by SHA-256 of the signed-in user's email. The access gate is the `role`
-claim on the auth.romaine.life JWT: `admin` and `user` are the human
+present, otherwise via a top-level redirect through Microsoft) and presents it
+directly to tank-operator. The orchestrator verifies the RS256 signature
+against auth.romaine.life/api/auth/jwks and gates on the `role` claim:
+`admin` and `user` are the human
 roles, `service` is reserved for k8s service principals (session pods
 that exchange their projected SA token for an auth.romaine.life JWT via
-`/api/auth/exchange/k8s` — see
+`/api/auth/exchange/k8s` â€” see
 [nelsong6/tank-operator#486](https://github.com/nelsong6/tank-operator/issues/486)).
 `pending` (auth.romaine.life's default for fresh Microsoft sign-ups)
 gets a 403 until an admin promotes the user via auth.romaine.life's
@@ -221,5 +216,5 @@ gets a 403 until an admin promotes the user via auth.romaine.life's
 
 Service-role tokens carry an `actor_email` claim with the human owner
 of the calling pod's session. Every `/api/internal/sessions/*` handler
-gates on this claim to scope writes to the actor's session tree — a
+gates on this claim to scope writes to the actor's session tree â€” a
 pod cannot create or mutate sessions for any other actor.

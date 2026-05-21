@@ -1,19 +1,8 @@
 import type { SessionRole } from "./authPolicy";
 
-// Microsoft sign-in happens upstream at auth.romaine.life. This SPA:
-//   1. On boot, checks for a stored tank-operator session JWT and validates
-//      it via /api/auth/me.
-//   2. If no valid session, tries to fetch an auth.romaine.life JWT from
-//      that service's /api/auth/token endpoint — the auth-service session
-//      cookie is on `.romaine.life` so it's auto-attached. If the user is
-//      already signed into auth.romaine.life from another app, this is the
-//      seamless path that lands them signed in here without any redirect.
-//      The JWT is then exchanged at /api/auth/exchange for a tank-operator-
-//      signed session JWT.
-//   3. If both fail, render the Sign-in button. Clicking it redirects to
-//      auth.romaine.life's Microsoft sign-in flow, which sets the
-//      .romaine.life session cookie and returns the user here. Step 2 then
-//      runs again on bootstrap and succeeds.
+// Microsoft sign-in happens upstream at auth.romaine.life. This SPA stores
+// the upstream JWT and presents it directly to tank-operator; tank no longer
+// exchanges it for a locally minted session token.
 
 interface AppConfig {
   auth_url: string;
@@ -32,7 +21,7 @@ interface SessionUser {
   run_prefs: Record<string, unknown> | null;
 }
 
-const TOKEN_KEY = "tank-operator-jwt";
+const TOKEN_KEY = "auth-romaine-jwt";
 
 let cachedConfig: AppConfig | null = null;
 
@@ -55,19 +44,15 @@ async function fetchUpstreamJWT(authURL: string): Promise<string | null> {
   }
 }
 
-async function exchange(upstreamJWT: string): Promise<SessionUser> {
-  const res = await fetch("/api/auth/exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ auth_jwt: upstreamJWT }),
+async function fetchMe(token: string): Promise<SessionUser> {
+  const res = await fetch("/api/auth/me", {
+    headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Sign-in exchange failed (${res.status}): ${text}`);
+    throw new Error(`auth validation failed (${res.status}): ${text}`);
   }
-  const body = (await res.json()) as { token: string; user: SessionUser };
-  storeToken(body.token);
-  return body.user;
+  return (await res.json()) as SessionUser;
 }
 
 // Same eviction-on-quota dance as before: a bloated localStorage shouldn't
@@ -107,21 +92,19 @@ export function clearStoredToken(): void {
 
 /**
  * Boot-time auth check. Resolves to the signed-in user, or null. Does NOT
- * trigger a redirect on its own — the SPA shows a Sign-in button for that.
+ * trigger a redirect on its own; the SPA shows a Sign-in button for that.
  * Auto-redirecting on boot would silently re-SSO users who just signed out.
  */
 export async function bootstrapAuth(): Promise<SessionUser | null> {
-  // 1. Existing tank-operator session?
   const existing = getStoredToken();
   if (existing) {
-    const res = await fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${existing}` },
-    });
-    if (res.ok) return (await res.json()) as SessionUser;
-    clearStoredToken();
+    try {
+      return await fetchMe(existing);
+    } catch {
+      clearStoredToken();
+    }
   }
 
-  // 2. Try to silently exchange an auth.romaine.life session cookie.
   let config: AppConfig;
   try {
     config = await fetchConfig();
@@ -132,37 +115,30 @@ export async function bootstrapAuth(): Promise<SessionUser | null> {
   const upstreamJWT = await fetchUpstreamJWT(config.auth_url);
   if (upstreamJWT) {
     try {
-      return await exchange(upstreamJWT);
+      storeToken(upstreamJWT);
+      return await fetchMe(upstreamJWT);
     } catch (e) {
-      console.warn("silent exchange failed; user must click Sign-in", e);
+      clearStoredToken();
+      console.warn("silent auth bootstrap failed; user must click Sign-in", e);
     }
   }
 
-  // 3. Not signed in. Wait for startLogin().
   return null;
 }
 
 /** User-initiated sign-in: redirect to auth.romaine.life's Microsoft flow. */
 export async function startLogin(): Promise<void> {
   const config = await fetchConfig();
-  const callbackURL = encodeURIComponent(window.location.origin + window.location.pathname);
-  // auth.romaine.life exposes a GET endpoint at /sign-in/microsoft that
-  // takes callbackURL as a query param, kicks off Better Auth's social
-  // flow, and 302s back to the callback once Microsoft completes. The
-  // Better Auth routes under /api/auth/* are POST-only, so a top-level
-  // GET redirect there 404s.
+  const current = new URL(window.location.href);
+  const callbackTarget = current.searchParams.has("github_install_state")
+    ? `${current.origin}${current.pathname}${current.search}`
+    : `${current.origin}${current.pathname}`;
+  const callbackURL = encodeURIComponent(callbackTarget);
   window.location.href = `${config.auth_url}/sign-in/microsoft?callbackURL=${callbackURL}`;
 }
 
 export async function logout(): Promise<void> {
   clearStoredToken();
-  try {
-    await fetch("/api/auth/logout", { method: "POST" });
-  } catch {
-    // best-effort
-  }
-  // Also clear the auth.romaine.life session cookie so the next page load
-  // doesn't silently re-SSO via fetchUpstreamJWT.
   try {
     const config = await fetchConfig();
     await fetch(`${config.auth_url}/api/auth/sign-out`, {

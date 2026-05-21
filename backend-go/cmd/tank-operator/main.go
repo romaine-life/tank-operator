@@ -90,7 +90,7 @@ func (promHermesRecorder) TranslatorError(reason string) {
 
 // buildMCPGitHubClient wires up the mcpgithub client when the
 // orchestrator pod has the auth.romaine.life-audience projected SA
-// token mounted. The same token Hermes already uses today — stage 2
+// token mounted. The same token Hermes already uses today â€” stage 2
 // reuses the path rather than minting a parallel projected volume.
 // Returns nil (and logs) when the token isn't mounted; the
 // /api/github/repos handler then 503s loudly rather than failing
@@ -180,7 +180,7 @@ func main() {
 	// Session image tags come from the chart's values.yaml session.*
 	// keys, bumped per-commit to fingerprinted tags by the
 	// claude-container-build workflow. Fail loudly at startup if any
-	// are missing — a silent `:latest` fallback hid this exact bug for
+	// are missing â€” a silent `:latest` fallback hid this exact bug for
 	// 15 hours after the Go cutover (the Python orchestrator read these
 	// env vars; the Go port forgot, every new session pod fell back to
 	// an April-25 `:latest` that didn't have mcp-auth-proxy installed,
@@ -189,7 +189,7 @@ func main() {
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
 	piSessionImage := os.Getenv("PI_SESSION_IMAGE")
 	if sessionImage == "" || codexSessionImage == "" || piSessionImage == "" {
-		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / PI_SESSION_IMAGE to fingerprinted tags",
+		slog.Error("session image env vars missing â€” chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / PI_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
 			"PI_SESSION_IMAGE", piSessionImage,
@@ -202,7 +202,7 @@ func main() {
 	// chat-activity emitter). The Fetcher reads post-write row state
 	// from the registry; the Publisher hands the marshaled payload to
 	// NATS. Per docs/session-list-redesign.md Phase 3 this is the
-	// single wire path the SPA's SessionStore consumes — no typed-
+	// single wire path the SPA's SessionStore consumes â€” no typed-
 	// event reducer, no event-type switch.
 	rowPublisher := &sessioncontroller.RowPublisher{
 		Fetcher:   rowFetcherFor(sessionReg),
@@ -236,36 +236,17 @@ func main() {
 		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
 	})
 
-	// 10. Init auth signer + verifier (RS256). Two key sources:
-	//   - KV-backed `tank-operator-jwt-signing` for legacy tank-operator-
-	//     minted JWTs (browser cookies issued by /api/auth/exchange).
-	//   - auth.romaine.life's published JWKS for JWTs the platform IdP
-	//     mints directly (admin bot tokens from /admin/bot-tokens,
-	//     future service-role tokens, anything else issued by
-	//     auth.romaine.life itself).
-	// The chained resolver tries both and short-circuits on the first
-	// success. Key namespaces are disjoint in production — auth.romaine
-	// .life signs with auth-jwt-signing, tank-operator signs with
-	// tank-operator-jwt-signing — so the chain produces a deterministic
-	// answer per kid.
-	jwtKey, err := buildJWTSigner(azCred)
-	if err != nil {
-		slog.Error("JWT signing key failed", "error", err)
-		os.Exit(1)
-	}
-	keyResolver := auth.NewChainedKeyResolver(
-		auth.NewRomaineLifeKeyResolver(),
-		jwtKey,
-	)
-	verifier := auth.NewVerifier(keyResolver)
-	minter := auth.NewMinter(jwtKey, jwtKey)
+	// 10. Init auth. Tank verifies the upstream auth.romaine.life JWT
+	// directly; it does not mint a service-local session token.
+	verifier := auth.NewVerifier(auth.NewRomaineLifeKeyResolver())
+	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
 
 	// 11. Start reaper.
 	ctx := context.Background()
 	mgr.StartReaper(ctx)
 	// Build the shared RowWriter that the K8s watch and chat-activity
 	// emitter call through. Per docs/session-list-redesign.md Phase 4
-	// the durable sessions row is the only persistent state — the prior
+	// the durable sessions row is the only persistent state â€” the prior
 	// session_lifecycle_events ledger is gone. RowWriter updates the
 	// row columns (status / ready_at / terminating_at / activity_summary
 	// + row_version bump) and fans the post-write row state out on the
@@ -283,7 +264,7 @@ func main() {
 		}
 		rowWriter = rw
 	}
-	// Wire the chat-event → activity-summary delta hook so the
+	// Wire the chat-event â†’ activity-summary delta hook so the
 	// persister emits session.activity_changed rows + sessions
 	// activity_summary updates on each indicator-affecting chat event.
 	// Done after the session bus + lifecycle store + RowWriter are
@@ -307,7 +288,7 @@ func main() {
 	}
 	// Start the K8s watch producer (leader-elected; the follower keeps
 	// a warm k8s client + the SSE handlers stay up). Skipped when the
-	// session bus or RowWriter is unwired — the stub paths are
+	// session bus or RowWriter is unwired â€” the stub paths are
 	// local-dev only and have no consumers.
 	if rowWriter != nil && pgPool != nil {
 		orchestratorNamespace := currentPodNamespace()
@@ -344,7 +325,7 @@ func main() {
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
 		verifier:                 verifier,
-		minter:                   minter,
+		gitHubInstallStates:      gitHubInstallStates,
 		namespace:                namespace,
 		sessionScope:             sessionScope,
 		sessionServiceAccount:    sessionServiceAccount,
@@ -357,7 +338,7 @@ func main() {
 
 	// 14. Listen and serve. Every request flows through
 	// httpInstrumentationMiddleware so 5xx errors carry method, route,
-	// email, and the underlying detail field to slog — the missing
+	// email, and the underlying detail field to slog â€” the missing
 	// context that made the retired activity-polling endpoint's 500s
 	// undebuggable from logs.
 	server := &http.Server{
@@ -386,27 +367,10 @@ func loadKubeConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-// buildJWTSigner constructs the Key Vault-backed JWT signer/verifier the
-// orchestrator uses for its session and install-state tokens. Required:
-// JWT_KV_VAULT (vault DNS URL) and JWT_KV_KEY_NAME (key name within the
-// vault). Returns an error if either is unset or KV is unreachable —
-// the orchestrator must not silently fall back to an unsigned/HS256 path.
-func buildJWTSigner(azCred *azidentity.DefaultAzureCredential) (*auth.KeyVaultJWT, error) {
-	vaultURL := strings.TrimSpace(os.Getenv("JWT_KV_VAULT"))
-	keyName := strings.TrimSpace(os.Getenv("JWT_KV_KEY_NAME"))
-	if vaultURL == "" || keyName == "" {
-		return nil, fmt.Errorf("JWT_KV_VAULT and JWT_KV_KEY_NAME must be set")
-	}
-	if azCred == nil {
-		return nil, fmt.Errorf("azure credential not available")
-	}
-	return auth.NewKeyVaultJWT(vaultURL, keyName, azCred)
-}
-
 // buildPostgresPool constructs the shared Postgres connection pool the
 // orchestrator's durable stores all share. Returns nil when POSTGRES_HOST is
 // unset (local-dev paths fall back to in-memory stubs in the build* helpers
-// below). Fails loud on any other configuration error — silently degrading
+// below). Fails loud on any other configuration error â€” silently degrading
 // hides the bug where the orchestrator runs against stubs in production.
 func buildPostgresPool(azCred *azidentity.DefaultAzureCredential) *pgxpool.Pool {
 	host := strings.TrimSpace(os.Getenv("POSTGRES_HOST"))
@@ -444,6 +408,14 @@ func buildProfileStore(pool *pgxpool.Pool) profilesStore {
 	return profiles.NewPostgresStore(pool)
 }
 
+func buildGitHubInstallStateStore(pool *pgxpool.Pool) gitHubInstallStateStore {
+	if pool == nil {
+		slog.Warn("github install state store disabled; POSTGRES_HOST is unset")
+		return nil
+	}
+	return pgstore.NewGitHubInstallStateStore(pool)
+}
+
 func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {
 	if pool == nil {
 		return &stubSessionRegistry{}
@@ -479,7 +451,7 @@ func (stubRowFetcher) Get(_ context.Context, _, _ string) (sessionmodel.SessionR
 // so the chat-activity emitter can call OwnerForSession via the narrow
 // sessioncontroller.SessionToOwnerResolver interface. The Postgres-backed
 // Store satisfies this directly; the in-memory stub returns "" for every
-// session, which the emitter treats as "no owner, no emit" — fine for
+// session, which the emitter treats as "no owner, no emit" â€” fine for
 // local dev.
 func buildSessionRegistryOwnerResolver(reg sessions.SessionRegistry) sessioncontroller.SessionToOwnerResolver {
 	if resolver, ok := reg.(sessioncontroller.SessionToOwnerResolver); ok {

@@ -108,7 +108,7 @@ spec:
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
             # credential rotation lives in the api-proxy's ext_proc sidecar
-            # (k8s/templates/api-proxy.yaml) â€” same UAMI, same env.
+            # (k8s/templates/api-proxy.yaml) - same UAMI, same env.
             #
             # Token file is mounted by the WI webhook because the pod
             # carries the `azure.workload.identity/use=true` label;
@@ -122,7 +122,7 @@ spec:
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST
               value: https://login.microsoftonline.com/
-            # Postgres Flexible Server — durable history layer. Auth is via
+            # Postgres Flexible Server - durable history layer. Auth is via
             # the same workload identity as the KV writer above; pgx mints a
             # fresh AAD token for `ossrdbms-aad.database.windows.net` on every
             # dial via BeforeConnect, and pool MaxConnLifetime is bounded
@@ -168,13 +168,6 @@ spec:
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
               value: {{ .Values.internalApi.tankUiHost | quote }}
-            # Session-JWT signing key in Key Vault. The orchestrator never
-            # holds the private bytes â€” it calls KV's Sign operation per mint
-            # via workload identity. See infra/jwt_signing_key.tf.
-            - name: JWT_KV_VAULT
-              value: {{ .Values.jwt.kvVault | quote }}
-            - name: JWT_KV_KEY_NAME
-              value: {{ .Values.jwt.kvKeyName | quote }}
             # Hermes Agent's OpenAI-compatible API server (cluster-internal).
             # Tank's backend posts to /v1/runs for `hermes_gui` session
             # turns (no pod), tails the SSE stream, and translates events
@@ -190,7 +183,7 @@ spec:
             # mcpgithub.Client exchanges it on-behalf-of the SPA caller
             # at auth.romaine.life (PR #43 added the actor_email
             # override surface), then calls mcp-github. No additional
-            # mount needed — one volume, two consumers, one audience.
+            # mount needed - one volume, two consumers, one audience.
             - name: HERMES_API_URL
               value: {{ .Values.hermes.apiURL | quote }}
             - name: HERMES_AUTH_ROMAINE_EXCHANGE_URL
@@ -271,7 +264,7 @@ spec:
         - name: claude-credentials
           secret:
             # ESO-managed; the orchestrator's in-process rotation writes
-            # to KV and ESO mirrors KV â†’ here within ~1m. Marked optional
+            # to KV and ESO mirrors KV to here within ~1m. Marked optional
             # so first install doesn't crash-loop the pod before ESO has
             # synced (or before "+ config sub" has seeded credentials).
             secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
