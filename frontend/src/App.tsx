@@ -1125,8 +1125,8 @@ function clearGlimmungLaunchContext(): void {
 const SESSION_BOOT_TICK_MS = 1_000;
 const SESSION_RUNTIME_TICK_MS = 30_000;
 
-function shiftArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
-  if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return null;
+function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
+  if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return null;
   if (event.key === "ArrowUp") return -1;
   if (event.key === "ArrowDown") return 1;
   return null;
@@ -1486,7 +1486,7 @@ function DemoLanding() {
 
   useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
-      const direction = shiftArrowSessionDirection(event);
+      const direction = altArrowSessionDirection(event);
       if (!activeDemoSession || direction == null || isSessionShortcutEditableTarget(event.target)) return;
       const nextId = adjacentSessionId(demoSessions, activeDemoSession, direction);
       if (nextId == null) return;
@@ -9413,7 +9413,7 @@ export function App() {
 
   useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
-      const direction = shiftArrowSessionDirection(event);
+      const direction = altArrowSessionDirection(event);
       if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
       const nextId = adjacentSessionId(sessions, active, direction, closingIds);
       if (nextId == null) return;
