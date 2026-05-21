@@ -9412,6 +9412,28 @@ export function App() {
   }, [active, focusHomeComposerTextarea, homeActiveTab]);
 
   useEffect(() => {
+    const openNewSessionPage = (event: KeyboardEvent) => {
+      if (
+        event.key !== "+" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.isComposing ||
+        isTextEntryShortcutTarget(event.target)
+      ) {
+        return;
+      }
+      if (active === null && homeActiveTab === "chat") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      goHome();
+    };
+    window.addEventListener("keydown", openNewSessionPage, { capture: true });
+    return () => window.removeEventListener("keydown", openNewSessionPage, { capture: true });
+  }, [active, homeActiveTab]);
+
+  useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = altArrowSessionDirection(event);
       if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
