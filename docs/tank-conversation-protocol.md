@@ -286,13 +286,13 @@ or storage behavior.
 For a turn that ended with `turn.completed` and produced at least one final
 assistant message, the client may condense pre-final assistant progress notes,
 tool rows, reasoning blocks, background-task rows, and meta rows into a single
-Activity disclosure row. The final assistant message remains visible in the
+Turn activity disclosure row. The final assistant message remains visible in the
 main transcript. Active turns, failed turns, interrupted turns, and turns that
 never produce a final assistant message stay expanded so failure and stop
 context is not hidden.
 
 Deep links still target the original `timeline_id`; opening a link to a
-compacted item expands the Activity row around that item.
+compacted item expands the Turn activity row around that item.
 
 `shell_task.*` events are session-level background shell processes spawned
 by a tool call. They are not normal tool items: they can continue after the

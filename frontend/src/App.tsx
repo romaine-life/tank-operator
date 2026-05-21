@@ -4759,10 +4759,14 @@ function RunTurnActivityGroup({
         onClick={() => onOpenChange(!open)}
         aria-expanded={open}
       >
-        <span className="run-turn-activity-icon" title="Condensed activity" aria-label="Condensed activity">
+        <span
+          className="run-turn-activity-icon"
+          title="Condensed turn activity"
+          aria-label="Condensed turn activity"
+        >
           <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
         </span>
-        <span className="run-turn-activity-label">Activity</span>
+        <span className="run-turn-activity-label">Turn activity</span>
         <span className="run-turn-activity-summary">{turnActivitySummary(group.entries)}</span>
         {showTimestamps && (
           <ToolTiming
