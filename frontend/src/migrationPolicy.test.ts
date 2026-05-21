@@ -167,7 +167,11 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   assert.equal(skillStateBody.includes('if (testActive) return "test"'), false);
 });
 
-test("home splash uses code+test instead of a direct test-skill button", () => {
+test("home splash keeps a disabled test-skill button and uses code+test", () => {
+  assert.match(
+    appSource,
+    /className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"[\s\S]*?disabled[\s\S]*?aria-label="Start test skill"[\s\S]*?title="Sign in to start a session"/,
+  );
   assert.equal(
     /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/.test(
       appSource,

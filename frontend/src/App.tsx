@@ -1813,6 +1813,15 @@ function DemoLanding() {
                     </button>
                     <button
                       type="button"
+                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                      disabled
+                      aria-label="Start test skill"
+                      title="Sign in to start a session"
+                    >
+                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
                       className="run-composer-icon-btn run-command-menu-btn"
                       disabled
                       aria-label="Show slash commands"
