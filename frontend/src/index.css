@@ -3499,6 +3499,36 @@ button:disabled {
   box-shadow: none !important;
 }
 
+/* Run-pane composer: keep the text box + send button visually live even
+   while session-bound controls are unavailable. Disabled siblings still
+   render as disabled, but the shell no longer fades the whole composer. */
+.run-composer.run-composer-runpane {
+  transition:
+    border-color var(--motion-fast, 120ms) ease,
+    box-shadow var(--motion-fast, 120ms) ease,
+    background var(--motion-fast, 120ms) ease;
+}
+
+.run-composer.run-composer-runpane:focus-within {
+  border-color: rgba(110, 168, 255, 0.42);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow:
+    0 0 0 1px rgba(110, 168, 255, 0.12),
+    0 18px 36px rgba(0, 0, 0, 0.22);
+}
+
+.run-composer.run-composer-runpane > [data-slot="input-group"] {
+  opacity: 1 !important;
+}
+
+.run-composer.run-composer-runpane .run-composer-hint {
+  color: var(--text-secondary);
+}
+
+.run-composer.run-composer-runpane .run-composer-textarea::placeholder {
+  color: rgba(255, 255, 255, 0.42);
+}
+
 .run-mode-pill {
   display: inline-flex;
   align-items: center;
@@ -3537,7 +3567,7 @@ button:disabled {
 
 /* Fades out once the composer has any content. */
 .run-composer-hint-faded {
-  opacity: 0.32;
+  opacity: 0.44;
 }
 
 /* Clear-input X — sits between the hint and the send button. */

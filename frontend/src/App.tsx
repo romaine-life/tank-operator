@@ -8303,13 +8303,15 @@ function ChatPane({
       </>)}
       composer={(
         <ChatComposer
+            className="run-composer-runpane"
             placeholder={RUN_COMPOSER_PLACEHOLDER}
             onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
             permissionMode={composerMode}
             onPermissionModeChange={setComposerMode}
             sendByCtrlEnter={runPrefs.sendByCtrlEnter}
             hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-            disabled={!ready}
+            canSubmit={ready}
+            controlsDisabled={!ready}
             submitStatus={submitStatus}
             onStop={cancelRun}
             isStopping={runStatus === "stopping"}

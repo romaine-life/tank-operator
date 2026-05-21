@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { FormEventHandler, ReactNode } from "react";
 import {
   PromptInput,
   PromptInputFooter,
@@ -92,6 +92,13 @@ export interface ChatComposerProps {
   hintSuffix?: string;
   /** Disables the textarea and submit (and stop) interactions. */
   disabled?: boolean;
+  /**
+   * Keeps the composer interactive but ignores submit attempts.
+   * Used while a session is warming up so the text box still invites input.
+   */
+  canSubmit?: boolean;
+  /** Disables the permission-mode dropdown and any other internal controls. */
+  controlsDisabled?: boolean;
   /** PromptInputSubmit status — drives spinner/stop icon swaps while a turn streams. */
   submitStatus?: ChatStatus;
   onStop?: () => void;
@@ -121,6 +128,8 @@ export function ChatComposer({
   sendByCtrlEnter,
   hintSuffix,
   disabled,
+  canSubmit = true,
+  controlsDisabled,
   submitStatus,
   onStop,
   isStopping,
@@ -159,13 +168,26 @@ export function ChatComposer({
 
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
+      if (!canSubmit) return;
       onSubmit({ text: message.text, permissionMode });
       // PromptInput auto-clears after a sync onSubmit; reflect that in our
       // mirror so the hint un-fades and the clear-X disappears.
       setText("");
       onTextChange?.("");
     },
-    [onSubmit, onTextChange, permissionMode],
+    [canSubmit, onSubmit, onTextChange, permissionMode],
+  );
+
+  const handleSubmitCapture = useCallback<FormEventHandler<HTMLFormElement>>(
+    (event) => {
+      if (canSubmit) return;
+      // PromptInput resets the underlying form before its own submit handler
+      // runs. Stopping propagation in capture keeps the warm-up text in place
+      // until the session is ready to accept a real turn.
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    [canSubmit],
   );
 
   const handleClear = useCallback(() => {
@@ -209,6 +231,7 @@ export function ChatComposer({
     >
       <PromptInput
         onSubmit={handleSubmit}
+        onSubmitCapture={handleSubmitCapture}
         className={["run-composer", className].filter(Boolean).join(" ")}
       >
         <PromptInputTextarea
@@ -223,6 +246,7 @@ export function ChatComposer({
                 <button
                   type="button"
                   className="run-mode-pill run-mode-pill-button"
+                  disabled={disabled || controlsDisabled}
                   aria-label="Permission mode"
                 >
                   <span
