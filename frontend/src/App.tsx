@@ -1015,6 +1015,61 @@ function currentSessionSkillState(
   return null;
 }
 
+interface ComposerUsageRingProps {
+  tokensUsed: number;
+  contextWindow: number;
+  placeholder?: boolean;
+  ariaLabel?: string;
+  title?: string;
+}
+
+function ComposerUsageRing({
+  tokensUsed,
+  contextWindow,
+  placeholder = false,
+  ariaLabel = "Context usage",
+  title,
+}: ComposerUsageRingProps) {
+  const safeContextWindow = Math.max(contextWindow, 1);
+  const usagePct = Math.min(100, (tokensUsed / safeContextWindow) * 100);
+  const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
+  const displayPct = usagePct.toFixed(usagePct < 10 ? 1 : 0);
+
+  return (
+    <span
+      className={`run-usage-ring${placeholder ? " is-placeholder" : ""}`}
+      aria-label={ariaLabel}
+      aria-disabled={placeholder || undefined}
+      title={title ?? `${tokensUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
+      data-level={placeholder ? undefined : usageLevel}
+    >
+      <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+        <circle
+          cx="16"
+          cy="16"
+          r="13"
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity="0.18"
+          strokeWidth="2.5"
+        />
+        <circle
+          cx="16"
+          cy="16"
+          r="13"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
+          transform="rotate(-90 16 16)"
+        />
+      </svg>
+      <span className="run-usage-ring-text">{displayPct}%</span>
+    </span>
+  );
+}
+
 function sessionSkillStateClass(session: Session): string {
   const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
   if (currentSkill === "test") return " is-skill-test";
@@ -1811,6 +1866,24 @@ function DemoLanding() {
                     >
                       <ImageIcon className="run-composer-icon" aria-hidden="true" />
                     </button>
+                    <ComposerUsageRing
+                      tokensUsed={0}
+                      contextWindow={getContextWindow(selectedDemoModelId)}
+                      placeholder
+                      ariaLabel="Context usage preview"
+                      title="Context usage appears after sign in"
+                    />
+                    {GUI_ROLLOUT_MODES.has(selectedMode) && (
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                        disabled
+                        aria-label="Start rollout"
+                        title="Sign in to use /rollout"
+                      >
+                        <TankIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
@@ -7291,8 +7364,6 @@ function ChatPane({
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const contextWindow = getContextWindow(selectedModelId);
-  const usagePct = Math.min(100, (tokensUsed / contextWindow) * 100);
-  const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
 
   const focusComposerTextarea = useCallback((): boolean => {
     const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -8331,41 +8402,13 @@ function ChatPane({
                   }
                   onClick={() => fileInputRef.current?.click()}
                   disabled={!supportsFileAttachments}
-                >
-                  <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                </button>
-                <span
-                  className="run-usage-ring"
-                  aria-label={`Context usage: ${usagePct.toFixed(1)}%`}
-                  title={`${tokensUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
-                  data-level={usageLevel}
-                >
-                  <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
-                    <circle
-                      cx="16"
-                      cy="16"
-                      r="13"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeOpacity="0.18"
-                      strokeWidth="2.5"
-                    />
-                    <circle
-                      cx="16"
-                      cy="16"
-                      r="13"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
-                      transform="rotate(-90 16 16)"
-                    />
-                  </svg>
-                  <span className="run-usage-ring-text">
-                    {usagePct.toFixed(usagePct < 10 ? 1 : 0)}%
-                  </span>
-                </span>
+                  >
+                    <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                  </button>
+                <ComposerUsageRing
+                  tokensUsed={tokensUsed}
+                  contextWindow={contextWindow}
+                />
                 {GUI_ROLLOUT_MODES.has(session.mode) && (
                   <button
                     type="button"
@@ -10562,7 +10605,7 @@ export function App() {
             </>)}
             composer={(
               <ChatComposer
-                className={busy ? "run-composer-home" : "run-composer-home run-composer-interactive"}
+                className="run-composer-home run-composer-interactive"
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
                 onSubmit={({ text, permissionMode }) => {
                   const trimmed = text.trim();
@@ -10598,9 +10641,16 @@ export function App() {
                         }
                         onClick={() => homeFileInputRef.current?.click()}
                         disabled={busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode)}
-                      >
-                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
+                    >
+                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
+                    </button>
+                    <ComposerUsageRing
+                      tokensUsed={0}
+                      contextWindow={getContextWindow(selectedHomeModelId)}
+                      placeholder
+                      ariaLabel="Context usage preview"
+                      title="Context usage appears after the session starts"
+                    />
                       {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
                         <button
                           type="button"
