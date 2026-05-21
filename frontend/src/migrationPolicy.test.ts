@@ -158,6 +158,14 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
+test("home splash test action stays disabled on the splash page", () => {
+  assert.match(appSource, /disabled\s+aria-label="Start test skill"\s+title="Available in an active chat session"/);
+  assert.equal(
+    appSource.includes("disabled={busy || !CHAT_MODES.has(defaultSessionMode)}"),
+    false,
+  );
+});
+
 test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
