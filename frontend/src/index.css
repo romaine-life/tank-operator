@@ -3488,22 +3488,19 @@ button:disabled {
 }
 
 /* Interactive composer shells keep the text box + send button visually live
-   even while sibling tool buttons are disabled. */
+   even while sibling tool buttons are disabled. The blue outline is always
+   visible; the textarea caret already communicates focus. */
 .run-composer.run-composer-interactive,
 .run-composer.run-composer-runpane {
-  transition:
-    border-color var(--motion-fast, 120ms) ease,
-    box-shadow var(--motion-fast, 120ms) ease,
-    background var(--motion-fast, 120ms) ease;
-}
-
-.run-composer.run-composer-interactive:focus-within,
-.run-composer.run-composer-runpane:focus-within {
   border-color: rgba(110, 168, 255, 0.42);
   background: rgba(255, 255, 255, 0.025);
   box-shadow:
     0 0 0 1px rgba(110, 168, 255, 0.12),
     0 18px 36px rgba(0, 0, 0, 0.22);
+  transition:
+    border-color var(--motion-fast, 120ms) ease,
+    box-shadow var(--motion-fast, 120ms) ease,
+    background var(--motion-fast, 120ms) ease;
 }
 
 .run-composer.run-composer-interactive > [data-slot="input-group"],
