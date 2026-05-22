@@ -104,11 +104,6 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	if !user.IsHuman() {
-		recordStreamAuthTicket("create", "", "denied")
-		writeError(w, http.StatusForbidden, "human user required")
-		return
-	}
 	if s.streamAuthTickets == nil {
 		recordStreamAuthTicket("create", "", "store_unavailable")
 		writeError(w, http.StatusServiceUnavailable, "stream auth ticket store not configured")
