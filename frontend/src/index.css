@@ -3095,8 +3095,11 @@ button:disabled {
 .run-main {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: scroll;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(180, 180, 180, 0.36) rgba(255, 255, 255, 0.035);
   display: flex;
   flex-direction: column;
   --run-chat-font-scale: 1;
@@ -3106,6 +3109,27 @@ button:disabled {
   --run-chat-font-code-xs: 0.7rem;
   --run-chat-font-code-sm: 0.78rem;
   --run-chat-font-star: 0.95rem;
+}
+
+.run-main::-webkit-scrollbar {
+  width: 0.75rem;
+}
+
+.run-main::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.run-main::-webkit-scrollbar-thumb {
+  min-height: 2.5rem;
+  border: 0.2rem solid transparent;
+  border-radius: 999px;
+  background: rgba(180, 180, 180, 0.34);
+  background-clip: padding-box;
+}
+
+.run-main::-webkit-scrollbar-thumb:hover {
+  background: rgba(205, 205, 205, 0.46);
+  background-clip: padding-box;
 }
 
 .run-shell {
