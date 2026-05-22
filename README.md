@@ -177,23 +177,23 @@ Project metadata for Glimmung:
     "agent_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd agent-runner && npm ci && npm run build && find dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g' {} +",
-      "source": "agent-runner/dist",
-      "target": "/var/run/agent-runner-hot/dist",
+      "build_command": "cd agent-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/agent-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/agent-runner-hot/runner-shared/|g' {} +",
+      "source": "agent-runner/hot",
+      "target": "/var/run/agent-runner-hot",
       "restart": "SIGHUP",
       "container": "agent-runner",
-      "pod_selector": "tank-operator/session-id",
+      "pod_selector": "tank-operator/session-id,tank-operator/mode=claude_gui",
       "builder_image": "node:20-alpine"
     },
     "codex_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd codex-runner && npm ci && npm run build && find dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/opt/runner-shared/|g' {} +",
-      "source": "codex-runner/dist",
-      "target": "/var/run/codex-runner-hot/dist",
+      "build_command": "cd codex-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/codex-runner-hot/runner-shared/|g' {} +",
+      "source": "codex-runner/hot",
+      "target": "/var/run/codex-runner-hot",
       "restart": "SIGHUP",
       "container": "codex-runner",
-      "pod_selector": "tank-operator/session-id",
+      "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
       "builder_image": "node:20-alpine"
     }
   }
