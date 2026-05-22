@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -18,6 +19,8 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -249,6 +252,47 @@ func TestHandleInternalSessionTurnTerminalRejectsOtherSession(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
+	server := internalSessionRuntimeServer(t, "12")
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "12",
+		Email:   "owner@example.test",
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: true,
+		Status:  "Active",
+		Model:   "gpt-5.5",
+		Effort:  "xhigh",
+	})
+	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
+		"model":"gpt-5.5",
+		"effort":"xhigh"
+	}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalSessionRuntimeConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RuntimeModel != "gpt-5.5" || body.RuntimeEffort != "xhigh" || body.RuntimeConfiguredAt == nil || *body.RuntimeConfiguredAt == "" {
+		t.Fatalf("runtime config response = %#v", body)
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
+	if err != nil || !ok {
+		t.Fatalf("registry Get ok=%v err=%v", ok, err)
+	}
+	if record.RuntimeModel != "gpt-5.5" || record.RuntimeEffort != "xhigh" || record.RuntimeConfiguredAt == "" {
+		t.Fatalf("registry runtime config = %#v", record)
 	}
 }
 

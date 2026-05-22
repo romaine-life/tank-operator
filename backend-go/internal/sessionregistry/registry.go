@@ -54,6 +54,11 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			model,
+			effort,
+			runtime_model,
+			runtime_effort,
+			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
 			sidebar_position,
 			row_version
 		FROM sessions
@@ -75,6 +80,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos                                                       []string
+			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
 			sidebarPosition, rowVersion                                 int64
 		)
 		if err := rows.Scan(
@@ -82,7 +88,9 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState, &sidebarPosition,
+			&repos, &cloneState, &model, &effort,
+			&runtimeModel, &runtimeEffort, &runtimeAt,
+			&sidebarPosition,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -91,26 +99,31 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			mode = sessionmodel.DefaultSessionMode
 		}
 		records = append(records, sessionmodel.SessionRecord{
-			ID:              sessionID,
-			Email:           normalized,
-			Mode:            mode,
-			Scope:           s.scope,
-			PodName:         podName,
-			Name:            name,
-			Visible:         visible,
-			RequestedAt:     requestedAt,
-			CreatedAt:       createdAt,
-			UpdatedAt:       updatedAt,
-			Status:          status,
-			ReadyAt:         readyAt,
-			TerminatingAt:   terminatingAt,
-			ActivitySummary: activitySummary,
-			TestState:       unmarshalJSONB(testState),
-			RolloutState:    unmarshalJSONB(rolloutState),
-			Repos:           repos,
-			CloneState:      unmarshalJSONB(cloneState),
-			SidebarPosition: sidebarPosition,
-			RowVersion:      rowVersion,
+			ID:                  sessionID,
+			Email:               normalized,
+			Mode:                mode,
+			Scope:               s.scope,
+			PodName:             podName,
+			Name:                name,
+			Visible:             visible,
+			RequestedAt:         requestedAt,
+			CreatedAt:           createdAt,
+			UpdatedAt:           updatedAt,
+			Status:              status,
+			ReadyAt:             readyAt,
+			TerminatingAt:       terminatingAt,
+			ActivitySummary:     activitySummary,
+			TestState:           unmarshalJSONB(testState),
+			RolloutState:        unmarshalJSONB(rolloutState),
+			Repos:               repos,
+			CloneState:          unmarshalJSONB(cloneState),
+			Model:               model,
+			Effort:              effort,
+			RuntimeModel:        runtimeModel,
+			RuntimeEffort:       runtimeEffort,
+			RuntimeConfiguredAt: runtimeAt,
+			SidebarPosition:     sidebarPosition,
+			RowVersion:          rowVersion,
 		})
 	}
 	return records, rows.Err()

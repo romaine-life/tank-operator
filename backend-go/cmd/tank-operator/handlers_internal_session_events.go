@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
 type internalSessionPodCaller struct {
@@ -53,6 +56,83 @@ func (s *appServer) handleInternalSessionTurnTerminal(w http.ResponseWriter, r *
 		"terminal": true,
 		"event":    event,
 	})
+}
+
+func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireInternalSessionPodCaller(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	if sessionID != caller.SessionID {
+		recordSessionRuntimeConfigUpdate("unknown", "forbidden")
+		writeError(w, http.StatusForbidden, "session target does not match caller pod")
+		return
+	}
+
+	var body struct {
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if s.mgr == nil {
+		recordSessionRuntimeConfigUpdate("unknown", "manager_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "session manager unavailable")
+		return
+	}
+	model := strings.TrimSpace(body.Model)
+	if model != "" && validateTurnArg(model) == "" {
+		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "model is invalid")
+		return
+	}
+
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), caller.Email, sessionID)
+	if err != nil {
+		recordSessionRuntimeConfigUpdate("unknown", "not_found")
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "session mode does not support SDK runtime config")
+		return
+	}
+	effortInput := strings.TrimSpace(body.Effort)
+	effort := validateEffort(provider, effortInput)
+	if effortInput != "" && effort == "" {
+		recordSessionRuntimeConfigUpdate(provider, "bad_request")
+		if provider == "codex" {
+			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max")
+		return
+	}
+
+	updated, err := s.mgr.SetRuntimeConfig(r.Context(), caller.Email, sessionID, model, effort)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			recordSessionRuntimeConfigUpdate(provider, "not_found")
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		recordSessionRuntimeConfigUpdate(provider, "update_failed")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordSessionRuntimeConfigUpdate(provider, "ok")
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *appServer) requireInternalSessionPodCaller(w http.ResponseWriter, r *http.Request) (internalSessionPodCaller, bool) {

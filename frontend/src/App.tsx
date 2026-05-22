@@ -315,6 +315,11 @@ interface Session {
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  model?: string;
+  effort?: string;
+  runtime_model?: string;
+  runtime_effort?: string;
+  runtime_configured_at?: string | null;
   sidebar_position?: number;
 }
 
@@ -796,6 +801,12 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.model = typeof session.model === "string" ? session.model : "";
+  next.effort = typeof session.effort === "string" ? session.effort : "";
+  next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
+  next.runtime_effort = typeof session.runtime_effort === "string" ? session.runtime_effort : "";
+  next.runtime_configured_at =
+    typeof session.runtime_configured_at === "string" ? session.runtime_configured_at : null;
   return next;
 }
 
@@ -2655,6 +2666,37 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+
+function modelOptionsForMode(mode: SessionMode): ModelOption[] {
+  if (mode === "claude_gui") return CLAUDE_MODELS;
+  if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
+    return CODEX_MODELS;
+  }
+  return [];
+}
+
+function effortOptionsForMode(mode: SessionMode): EffortOption[] {
+  if (mode === "claude_gui") return CLAUDE_EFFORTS;
+  if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
+    return CODEX_EFFORTS;
+  }
+  return [];
+}
+
+function modelDisplayLabel(mode: SessionMode, modelId: string): string {
+  const trimmed = modelId.trim();
+  if (!trimmed && (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server")) {
+    return "Codex account default";
+  }
+  if (!trimmed) return "";
+  return modelOptionsForMode(mode).find((option) => option.id === trimmed)?.label ?? trimmed;
+}
+
+function effortDisplayLabel(mode: SessionMode, effortId: string): string {
+  const trimmed = effortId.trim();
+  if (!trimmed) return "";
+  return effortOptionsForMode(mode).find((option) => option.id === trimmed)?.label ?? trimmed;
+}
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
 // sessions in this browser. Keys mirror cloudcli's QuickSettings.
@@ -5654,20 +5696,39 @@ function ChatPane({
   // because the runners seal model + effort from the first submit_turn —
   // the splash screen is where the user adjusts the defaults before a
   // session is created.
-  const initialModelId = isClaude
-    ? (CLAUDE_MODELS.some((opt) => opt.id === runPrefs.claudeModelId)
-        ? runPrefs.claudeModelId
-        : DEFAULT_CLAUDE_MODEL_ID)
-    : (CODEX_MODELS.some((opt) => opt.id === runPrefs.codexModelId)
-        ? runPrefs.codexModelId
-        : DEFAULT_CODEX_MODEL_ID);
-  const initialEffortId = isClaude
-    ? (CLAUDE_EFFORTS.some((opt) => opt.id === runPrefs.claudeEffort)
-        ? runPrefs.claudeEffort
-        : DEFAULT_CLAUDE_EFFORT_ID)
-    : (CODEX_EFFORTS.some((opt) => opt.id === runPrefs.codexEffort)
-        ? runPrefs.codexEffort
-        : DEFAULT_CODEX_EFFORT_ID);
+  // Existing sessions prefer the durable session-owned run config; browser
+  // prefs are only the fallback for older rows that do not have it.
+  const configuredModelId = (session.model ?? "").trim();
+  const configuredEffortId = (session.effort ?? "").trim();
+  const hasConfiguredSessionRunConfig = Boolean(configuredModelId || configuredEffortId);
+  const modelOptions = modelOptionsForMode(session.mode);
+  const effortOptions = effortOptionsForMode(session.mode);
+  const preferredModelId = isClaude
+    ? runPrefs.claudeModelId
+    : isCodex
+      ? runPrefs.codexModelId
+      : "";
+  const preferredEffortId = isClaude
+    ? runPrefs.claudeEffort
+    : isCodex
+      ? runPrefs.codexEffort
+      : "";
+  const fallbackModelId = isClaude
+    ? DEFAULT_CLAUDE_MODEL_ID
+    : isCodex
+      ? DEFAULT_CODEX_MODEL_ID
+      : "";
+  const fallbackEffortId = isClaude
+    ? DEFAULT_CLAUDE_EFFORT_ID
+    : isCodex
+      ? DEFAULT_CODEX_EFFORT_ID
+      : "";
+  const initialModelId = hasConfiguredSessionRunConfig
+    ? (configuredModelId || (isCodex ? CODEX_ACCOUNT_DEFAULT_MODEL_ID : fallbackModelId))
+    : (modelOptions.some((opt) => opt.id === preferredModelId) ? preferredModelId : fallbackModelId);
+  const initialEffortId = hasConfiguredSessionRunConfig
+    ? (configuredEffortId || fallbackEffortId)
+    : (effortOptions.some((opt) => opt.id === preferredEffortId) ? preferredEffortId : fallbackEffortId);
   const [selectedModelId] = useState<string>(initialModelId);
   const [selectedEffortId] = useState<string>(initialEffortId);
   // Run timing — drives the streaming status pill's elapsed counter and the
@@ -7834,7 +7895,27 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const contextWindow = getContextWindow(selectedModelId);
+  const appliedModelId = (session.runtime_model ?? "").trim();
+  const appliedEffortId = (session.runtime_effort ?? "").trim();
+  const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
+  const configuredDisplayModelId =
+    selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId;
+  const configuredModelLabel =
+    modelDisplayLabel(session.mode, configuredDisplayModelId) || "default model";
+  const configuredEffortLabel = effortDisplayLabel(session.mode, selectedEffortId);
+  const modelChipLabel = hasAppliedRuntimeConfig
+    ? (modelDisplayLabel(session.mode, appliedModelId) || "Default model")
+    : "Model pending";
+  const effortChipLabel = hasAppliedRuntimeConfig
+    ? effortDisplayLabel(session.mode, appliedEffortId)
+    : "";
+  const modelChipTitle = hasAppliedRuntimeConfig
+    ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
+    : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
+  const modelForContext = selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
+    ? DEFAULT_CODEX_MODEL_ID
+    : selectedModelId;
+  const contextWindow = getContextWindow(modelForContext);
 
   const focusComposerTextarea = useCallback((): boolean => {
     const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
@@ -8952,6 +9033,19 @@ function ChatPane({
                   </span>
                 )}
               </button>
+              {(isClaude || isCodex) && (
+                <span
+                  className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                  title={modelChipTitle}
+                  aria-label={modelChipTitle}
+                >
+                  <BrainIcon className="run-model-chip-icon" aria-hidden="true" />
+                  <span className="run-model-chip-label">{modelChipLabel}</span>
+                  {effortChipLabel && (
+                    <span className="run-model-chip-effort">{effortChipLabel}</span>
+                  )}
+                </span>
+              )}
             </>
           }
         />
@@ -9506,6 +9600,11 @@ export function App() {
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
+      model: row.model ?? "",
+      effort: row.effort ?? "",
+      runtime_model: row.runtime_model ?? "",
+      runtime_effort: row.runtime_effort ?? "",
+      runtime_configured_at: row.runtime_configured_at ?? null,
     };
   }
 
@@ -9537,6 +9636,12 @@ export function App() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
+      model: typeof raw.model === "string" ? raw.model : undefined,
+      effort: typeof raw.effort === "string" ? raw.effort : undefined,
+      runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
+      runtime_effort: typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
+      runtime_configured_at:
+        typeof raw.runtime_configured_at === "string" ? raw.runtime_configured_at : undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     };
@@ -10152,6 +10257,8 @@ export function App() {
       selectedProvider === "anthropic" || selectedProvider === "codex"
         ? selectedHomeEffortId
         : "";
+    const sessionModel = SDK_CHAT_MODES.has(mode) ? seedModel : "";
+    const sessionEffort = SDK_CHAT_MODES.has(mode) ? seedEffort : "";
     const seedInitialTurnAtCreate =
       seedTurnRequested && CREATE_TIME_INITIAL_TURN_MODES.has(mode);
     const seedTurnDeferredAtCreate =
@@ -10166,8 +10273,6 @@ export function App() {
           client_nonce: seedClientNonce,
           prompt: createTimeTurnPrompt,
           ...(seedTurnDeferredAtCreate ? { deferred: true } : {}),
-          model: seedModel,
-          ...(seedEffort ? { effort: seedEffort } : {}),
           permission_mode: initialPermissionMode,
           ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
         }
@@ -10179,6 +10284,7 @@ export function App() {
         body: JSON.stringify({
           mode,
           repos,
+          ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
@@ -10287,8 +10393,6 @@ export function App() {
             body: JSON.stringify({
               client_nonce: seedClientNonce,
               prompt: turnPrompt,
-              model: seedModel,
-              ...(seedEffort ? { effort: seedEffort } : {}),
               permission_mode: initialPermissionMode,
               ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
               ...(seedTurnDeferredAtCreate ? { existing_user_message: true } : {}),
@@ -10341,7 +10445,12 @@ export function App() {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({
+          mode,
+          ...(SDK_CHAT_MODES.has(mode) && (request.model || request.effort)
+            ? { model: request.model, effort: request.effort }
+            : {}),
+        }),
       });
       if (!res.ok) {
         let detail = `fork failed: ${res.status}`;
@@ -10371,10 +10480,6 @@ export function App() {
         body: JSON.stringify({
           client_nonce: newForkTurnId(),
           prompt,
-          model: request.model,
-          // Same omit-when-empty rule as enqueueSdkTurn: don't carry an
-          // empty effort on the wire for Codex forks.
-          ...(request.effort ? { effort: request.effort } : {}),
           permission_mode: request.permissionMode,
           follow_up: false,
           origin_session_id: request.sourceSession.id,

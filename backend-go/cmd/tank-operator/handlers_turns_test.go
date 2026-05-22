@@ -143,6 +143,44 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
+	bus := &recordingSessionBus{}
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "63",
+		Email:   "user@example.com",
+		Mode:    sessionmodel.ClaudeGUIMode,
+		Visible: true,
+		Model:   "claude-opus-4-7",
+		Effort:  "high",
+	})
+	app := testTurnsAppWithRegistry(
+		t,
+		bus,
+		registry,
+		sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"),
+	)
+	req := authedTurnRequest(t, "63", `{
+		"client_nonce":"turn-session-config",
+		"prompt":"hello",
+		"model":"claude-sonnet-4-6",
+		"effort":"bogus"
+	}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	got := bus.commands[0]
+	if got.Model != "claude-opus-4-7" || got.Effort != "high" {
+		t.Fatalf("command run config = model %q effort %q, want session-owned model/effort", got.Model, got.Effort)
+	}
+}
+
 func TestCreateSessionInitialTurnPersistsBeforeStartupStatus(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -884,6 +922,13 @@ func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *app
 		namespace:     ns,
 		sessionScope:  "default",
 	}
+}
+
+func testTurnsAppWithRegistry(t *testing.T, bus sessionCommandBus, registry sessions.SessionRegistry, pods ...*corev1.Pod) *appServer {
+	t.Helper()
+	app := testTurnsApp(t, bus, pods...)
+	app.mgr = sessions.NewManager(app.k8s, nil, app.namespace, registry, nil, sessions.ManagerOptions{})
+	return app
 }
 
 func sdkSessionPod(name, sessionID, email, mode, runnerContainer string) *corev1.Pod {

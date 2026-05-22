@@ -9,6 +9,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
 
@@ -135,6 +136,8 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 
 	var body struct {
 		Mode            string         `json:"mode"`
+		Model           string         `json:"model,omitempty"`
+		Effort          string         `json:"effort,omitempty"`
 		GlimmungContext map[string]any `json:"glimmung_context"`
 		Name            string         `json:"name"`
 		Repos           []string       `json:"repos"`
@@ -142,14 +145,20 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
+	mode := sessionmodel.NormalizeSessionMode(body.Mode)
 
 	repos, err := validateRepoSlugs(body.Repos)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	if status != 0 {
+		writeError(w, status, detail)
 		return
 	}
 
@@ -161,10 +170,12 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	// of scope for the repos feature.
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           user.ActorEmail,
-		Mode:            body.Mode,
+		Mode:            mode,
 		GlimmungContext: body.GlimmungContext,
 		RequestedAt:     body.Name,
 		Repos:           repos,
+		Model:           runConfig.Model,
+		Effort:          runConfig.Effort,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

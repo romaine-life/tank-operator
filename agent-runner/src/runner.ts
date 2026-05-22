@@ -55,6 +55,7 @@ import {
   type SessionCommandRecord,
 } from "./sessionCommands.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
+import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   askUserQuestionPendingGauge,
   askUserQuestionWaitSeconds,
@@ -608,6 +609,9 @@ export class Runner {
     };
 
     this.sdkQuery = this.launchSdkQuery(options);
+    void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
+      console.warn("runtime config report failed:", err);
+    });
     this.resolveSdkReady();
   }
 

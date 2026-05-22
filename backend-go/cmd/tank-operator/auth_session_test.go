@@ -278,6 +278,21 @@ func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ 
 func (r *testSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
+func (r *testSessionRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
+	records := r.records[email]
+	if records == nil {
+		return nil
+	}
+	record, ok := records[sessionID]
+	if !ok {
+		return nil
+	}
+	record.RuntimeModel = model
+	record.RuntimeEffort = effort
+	record.RuntimeConfiguredAt = time.Now().UTC().Format(time.RFC3339Nano)
+	records[sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }

@@ -85,12 +85,12 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			mode, pod_name, name, visible,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos, sidebar_position
+			repos, model, effort, sidebar_position
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, COALESCE($9, now()), $10,
 			COALESCE(NULLIF($11, ''), 'Pending'), $12,
-			$13, COALESCE(NULLIF($14, 0), nextval('sessions_row_version_seq'))
+			$13, $14, $15, COALESCE(NULLIF($16, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -120,8 +120,33 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		status,
 		nullableTimestamp(readyAt),
 		repos,
+		strings.TrimSpace(record.Model),
+		strings.TrimSpace(record.Effort),
 		sidebarPosition,
 	)
+	return err
+}
+
+// SetRuntimeConfig records the model/effort options the pod-side runner
+// actually handed to the provider executable or SDK. The intended session
+// config is immutable after create; this applied surface is allowed to
+// update on runner restart so the UI reflects the current process.
+func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET runtime_model         = $4,
+			runtime_effort        = $5,
+			runtime_configured_at = now(),
+			updated_at            = now(),
+			row_version           = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, strings.TrimSpace(model), strings.TrimSpace(effort))
 	return err
 }
 
@@ -234,26 +259,34 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			model,
+			effort,
+			runtime_model,
+			runtime_effort,
+			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
 			sidebar_position,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	var (
-		mode, podName, requestedAt, createdAt, updatedAt     string
-		status, readyAt, terminatingAt                       string
-		name                                                 *string
-		visible                                              bool
-		activitySummary, testState, rolloutState, cloneState []byte
-		repos                                                []string
-		sidebarPosition, rowVersion                          int64
+		mode, podName, requestedAt, createdAt, updatedAt      string
+		status, readyAt, terminatingAt                        string
+		name                                                  *string
+		visible                                               bool
+		activitySummary, testState, rolloutState, cloneState  []byte
+		repos                                                 []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt string
+		sidebarPosition, rowVersion                           int64
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
-		&repos, &cloneState, &sidebarPosition,
+		&repos, &cloneState, &model, &effort,
+		&runtimeModel, &runtimeEffort, &runtimeAt,
+		&sidebarPosition,
 		&rowVersion,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -266,26 +299,31 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		mode = sessionmodel.DefaultSessionMode
 	}
 	record := sessionmodel.SessionRecord{
-		ID:              sessionID,
-		Email:           normalized,
-		Mode:            mode,
-		Scope:           s.scope,
-		PodName:         podName,
-		Name:            name,
-		Visible:         visible,
-		RequestedAt:     requestedAt,
-		CreatedAt:       createdAt,
-		UpdatedAt:       updatedAt,
-		Status:          status,
-		ReadyAt:         readyAt,
-		TerminatingAt:   terminatingAt,
-		ActivitySummary: activitySummary,
-		TestState:       unmarshalJSONB(testState),
-		RolloutState:    unmarshalJSONB(rolloutState),
-		Repos:           repos,
-		CloneState:      unmarshalJSONB(cloneState),
-		SidebarPosition: sidebarPosition,
-		RowVersion:      rowVersion,
+		ID:                  sessionID,
+		Email:               normalized,
+		Mode:                mode,
+		Scope:               s.scope,
+		PodName:             podName,
+		Name:                name,
+		Visible:             visible,
+		RequestedAt:         requestedAt,
+		CreatedAt:           createdAt,
+		UpdatedAt:           updatedAt,
+		Status:              status,
+		ReadyAt:             readyAt,
+		TerminatingAt:       terminatingAt,
+		ActivitySummary:     activitySummary,
+		TestState:           unmarshalJSONB(testState),
+		RolloutState:        unmarshalJSONB(rolloutState),
+		Repos:               repos,
+		CloneState:          unmarshalJSONB(cloneState),
+		Model:               model,
+		Effort:              effort,
+		RuntimeModel:        runtimeModel,
+		RuntimeEffort:       runtimeEffort,
+		RuntimeConfiguredAt: runtimeAt,
+		SidebarPosition:     sidebarPosition,
+		RowVersion:          rowVersion,
 	}
 	return record, true, nil
 }

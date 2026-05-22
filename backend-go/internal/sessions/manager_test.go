@@ -266,6 +266,38 @@ func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
 	}
 }
 
+func TestManagerSetRuntimeConfigPersistsAndPublishes(t *testing.T) {
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{
+			{
+				ID:      "8",
+				Email:   "nelson@romaine.life",
+				Mode:    sessionmodel.CodexGUIMode,
+				Visible: true,
+				Status:  "Active",
+			},
+		},
+	}
+	emitter := &recordingRowEmitter{}
+	mgr := &Manager{
+		client:    fake.NewSimpleClientset(),
+		namespace: sessionmodel.SessionsNamespace,
+		registry:  registry,
+		emitter:   emitter,
+	}
+
+	info, err := mgr.SetRuntimeConfig(context.Background(), "nelson@romaine.life", "8", "gpt-5.5", "xhigh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RuntimeModel != "gpt-5.5" || info.RuntimeEffort != "xhigh" || info.RuntimeConfiguredAt == nil || *info.RuntimeConfiguredAt == "" {
+		t.Fatalf("runtime config info = %#v", info)
+	}
+	if strings.Join(emitter.ids, ",") != "8" {
+		t.Fatalf("published ids = %v, want [8]", emitter.ids)
+	}
+}
+
 func assertSkillStateActive(t *testing.T, label string, state map[string]any, want bool) {
 	t.Helper()
 	if got := state["active"]; got != want {
@@ -334,6 +366,18 @@ func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, m
 }
 
 func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+
+func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].RuntimeModel = model
+			r.records[i].RuntimeEffort = effort
+			r.records[i].RuntimeConfiguredAt = "2026-05-21T00:00:00Z"
+			return nil
+		}
+	}
 	return nil
 }
 

@@ -427,6 +427,35 @@ type sdkTurnRequest struct {
 	OriginSessionID string
 }
 
+type sessionRunConfig struct {
+	Model  string
+	Effort string
+}
+
+func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig, int, string) {
+	modelInput := strings.TrimSpace(rawModel)
+	effortInput := strings.TrimSpace(rawEffort)
+	if modelInput == "" && effortInput == "" {
+		return sessionRunConfig{}, 0, ""
+	}
+	provider, ok := sdkProviderForMode(mode)
+	if !ok {
+		return sessionRunConfig{}, http.StatusBadRequest, "model and effort are only supported for SDK chat sessions"
+	}
+	model := validateTurnArg(modelInput)
+	if modelInput != "" && model == "" {
+		return sessionRunConfig{}, http.StatusBadRequest, "model is invalid"
+	}
+	effort := validateEffort(provider, effortInput)
+	if effortInput != "" && effort == "" {
+		if provider == "codex" {
+			return sessionRunConfig{}, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
+		}
+		return sessionRunConfig{}, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
+	}
+	return sessionRunConfig{Model: model, Effort: effort}, 0, ""
+}
+
 func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]string, int, string) {
 	createdAt := req.CreatedAt
 	if createdAt.IsZero() {
@@ -506,8 +535,14 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	// runner trusts whatever lands on the wire and has no rejection path
 	// of its own, so the choke point is here. Empty is allowed and means
 	// "use the runner's baked-in default" — that mapping is preserved.
+	model := validateTurnArg(req.Model)
 	effort := validateEffort(provider, strings.TrimSpace(req.Effort))
-	if strings.TrimSpace(req.Effort) != "" && effort == "" {
+	registered, regErr := s.mgr.GetRegisteredByOwner(ctx, email, sessionID)
+	hasSessionRunConfig := regErr == nil && (registered.Model != "" || registered.Effort != "")
+	if hasSessionRunConfig {
+		model = registered.Model
+		effort = registered.Effort
+	} else if strings.TrimSpace(req.Effort) != "" && effort == "" {
 		if provider == "codex" {
 			return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
 		}
@@ -565,7 +600,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		TurnID:            turnID,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
-		Model:             validateTurnArg(req.Model),
+		Model:             model,
 		Effort:            effort,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,

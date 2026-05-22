@@ -54,6 +54,7 @@ import {
   type SessionCommandRecord,
 } from "./sessionCommands.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
+import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   commandsConsumedTotal,
   eventTruncatedTotal,
@@ -345,9 +346,19 @@ export class Runner {
             cwd: cfg.workspace,
             onRequestUserInput: (request, requestSignal) =>
               this.requestAppServerUserInput(request, requestSignal),
+            onRuntimeConfigApplied: (threadOptions) =>
+              this.reportAppliedRuntimeConfig(threadOptions),
           })
         : null;
     this.codexAdapter = new CodexTankEventAdapter(cfg);
+  }
+
+  private reportAppliedRuntimeConfig(threadOptions: ThreadOptions): void {
+    const model = String(threadOptions.model ?? "").trim();
+    const effort = String(threadOptions.modelReasoningEffort ?? "").trim();
+    void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
+      console.warn("runtime config report failed:", err);
+    });
   }
 
   // Run until externally aborted. Each iteration awaits one user
@@ -375,7 +386,9 @@ export class Runner {
         if (next.done) break;
         const { text: input, clientNonce, commandRecord } = next.value;
         if (!this.appServerTransport && !this.thread) {
-          this.thread = this.codex.startThread(threadOptionsForCommand(this.cfg, commandRecord));
+          const threadOptions = threadOptionsForCommand(this.cfg, commandRecord);
+          this.thread = this.codex.startThread(threadOptions);
+          this.reportAppliedRuntimeConfig(threadOptions);
         }
         const turnSeq = ++this.turnSeq;
         if (

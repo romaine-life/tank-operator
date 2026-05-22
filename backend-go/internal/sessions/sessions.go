@@ -66,6 +66,14 @@ type Info struct {
 	// from the sessions.activity_summary column (Phase 2);
 	// nil for sessions that haven't produced any chat activity yet.
 	Activity *sessionactivity.ActivitySummary `json:"activity,omitempty"`
+	// Model/Effort are the durable session-owned run options. Runtime*
+	// fields are written back by the runner after it applies the config
+	// to the provider executable/SDK.
+	Model               string  `json:"model,omitempty"`
+	Effort              string  `json:"effort,omitempty"`
+	RuntimeModel        string  `json:"runtime_model,omitempty"`
+	RuntimeEffort       string  `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt *string `json:"runtime_configured_at,omitempty"`
 }
 
 type Reader struct {
@@ -223,21 +231,26 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		repos = []string{}
 	}
 	info := Info{
-		ID:              record.ID,
-		PodName:         optionalString(record.PodName),
-		Owner:           owner,
-		Status:          status,
-		Mode:            sessionmodel.NormalizeSessionMode(record.Mode),
-		RequestedAt:     firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:       optionalString(record.CreatedAt),
-		ReadyAt:         optionalString(record.ReadyAt),
-		Name:            record.Name,
-		TestState:       record.TestState,
-		RolloutState:    record.RolloutState,
-		Repos:           repos,
-		CloneState:      record.CloneState,
-		RowVersion:      record.RowVersion,
-		SidebarPosition: record.SidebarPosition,
+		ID:                  record.ID,
+		PodName:             optionalString(record.PodName),
+		Owner:               owner,
+		Status:              status,
+		Mode:                sessionmodel.NormalizeSessionMode(record.Mode),
+		RequestedAt:         firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:           optionalString(record.CreatedAt),
+		ReadyAt:             optionalString(record.ReadyAt),
+		Name:                record.Name,
+		TestState:           record.TestState,
+		RolloutState:        record.RolloutState,
+		Repos:               repos,
+		CloneState:          record.CloneState,
+		RowVersion:          record.RowVersion,
+		SidebarPosition:     record.SidebarPosition,
+		Model:               record.Model,
+		Effort:              record.Effort,
+		RuntimeModel:        record.RuntimeModel,
+		RuntimeEffort:       record.RuntimeEffort,
+		RuntimeConfiguredAt: optionalString(record.RuntimeConfiguredAt),
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
 		info.Activity = activity

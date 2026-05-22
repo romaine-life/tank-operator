@@ -266,6 +266,11 @@ type CreateOptions struct {
 	// the registry row and threads them into the pod manifest for the
 	// repo-cloner init container.
 	Repos []string
+	// Model/Effort are the session-owned SDK run configuration. The
+	// HTTP handler validates provider-specific effort values before
+	// calling Create; Manager persists them unchanged.
+	Model  string
+	Effort string
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -284,6 +289,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if repos == nil {
 		repos = []string{}
 	}
+	model := opts.Model
+	effort := opts.Effort
 
 	// hermes_gui (and any future no-pod mode) short-circuits the K8s
 	// pod-create path. The session exists as a Postgres registry row +
@@ -300,7 +307,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		// no-pod. The repos arg is threaded for forward-compat with
 		// any future no-pod mode that wants repo metadata visible in
 		// the SPA without pod-side cloning.
-		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos)
+		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos, model, effort)
 	}
 
 	// Lazy re-resolution for first-install ordering.
@@ -368,6 +375,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			RequestedAt: requestedAt,
 			UpdatedAt:   requestedAt,
 			Repos:       repos,
+			Model:       model,
+			Effort:      effort,
 		}); regErr != nil {
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -405,6 +414,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		RequestedAt: &requestedAt,
 		CreatedAt:   createdAt,
 		Repos:       repos,
+		Model:       model,
+		Effort:      effort,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
@@ -421,6 +432,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			CreatedAt:   *createdAt,
 			UpdatedAt:   requestedAt,
 			Repos:       repos,
+			Model:       model,
+			Effort:      effort,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -469,7 +482,7 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 // makes sense for the external backend — here, "Active" once the row is
 // written. Reaper does not touch no-pod sessions because reaper lists
 // pods, not registry rows.
-func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string) (Info, error) {
+func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string, model, effort string) (Info, error) {
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
 		return Info{}, err
@@ -493,6 +506,8 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		Status:      "Active",
 		ReadyAt:     now,
 		Repos:       repos,
+		Model:       model,
+		Effort:      effort,
 	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, rec); regErr != nil {
@@ -515,6 +530,8 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		CreatedAt:   &now,
 		ReadyAt:     &now,
 		Repos:       repos,
+		Model:       model,
+		Effort:      effort,
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
@@ -554,6 +571,9 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	}
 	m.publishRow(ctx, owner, sessionID)
 
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
@@ -616,6 +636,24 @@ func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, st
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+type runtimeConfigRegistry interface {
+	SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error
+}
+
+// SetRuntimeConfig records the model/effort the runner actually applied
+// to the provider executable/SDK and publishes the updated session row.
+func (m *Manager) SetRuntimeConfig(ctx context.Context, owner, sessionID, model, effort string) (Info, error) {
+	registry, ok := m.registry.(runtimeConfigRegistry)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	if err := registry.SetRuntimeConfig(ctx, owner, sessionID, model, effort); err != nil {
+		return Info{}, err
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
 }
 
 // ReorderSessions persists the complete visible sidebar order for one
