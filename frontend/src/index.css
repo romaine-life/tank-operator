@@ -3683,37 +3683,6 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
-/* Beginning-of-conversation divider — replaces the back-paginate button
-   once foundOldest flips true. Rule-flanked label so the user can tell
-   they hit the head of the ledger instead of just a silent scroll-stop.
-   Slack/Discord both ship this divider; the visual is intentionally
-   quieter than the load-older pill it replaces because it's an end-state,
-   not an action. */
-.run-transcript-beginning {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin: var(--space-4) auto var(--space-3);
-  padding: 0 var(--space-5);
-  color: var(--text-muted);
-  font-family: var(--font-primary);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.run-transcript-beginning-rule {
-  flex: 1;
-  height: 1px;
-  background: var(--border-subtle);
-}
-
-.run-transcript-beginning-label {
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
 /* Composer textarea — taller, more breathing room. Auto-grows with
    content (CSS field-sizing-content from AI Elements) up to max-h. */
 .run-composer-textarea {
@@ -4383,34 +4352,8 @@ textarea.run-files-viewer-editor:focus {
   animation: run-status-pulse 2.4s ease-in-out infinite;
 }
 
-/* Brief banner shown above the transcript when entries are restored from
-   localStorage on mount or from the backend history endpoint. Auto-fades
-   after 3s via React state. */
-.run-continue-hint {
-  align-self: center;
-  margin: var(--space-3) auto var(--space-2);
-  padding: 0.4rem 0.85rem;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
-  font-family: var(--font-primary);
-  font-size: var(--text-xs);
-  letter-spacing: 0.02em;
-  animation: run-continue-hint-fade 3s ease-out forwards;
-}
-
-@keyframes run-continue-hint-fade {
-  0%   { opacity: 0; transform: translateY(-4px); }
-  10%  { opacity: 1; transform: translateY(0); }
-  85%  { opacity: 1; }
-  100% { opacity: 0; }
-}
-
 /* "Load earlier messages" pill — sits at the top of the transcript when
-   the loaded window doesn't yet include the head of the ledger. Visual
-   sibling of .run-continue-hint, with a stronger affordance because
-   it's an action, not a status. */
+   the loaded window doesn't yet include the head of the ledger. */
 .run-transcript-load-older {
   align-self: center;
   margin: var(--space-3) auto var(--space-2);

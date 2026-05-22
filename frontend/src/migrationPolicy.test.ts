@@ -133,6 +133,11 @@ test("startup transcript rows come from durable conversation events", () => {
   assert.equal(appSource.includes("startupTranscript"), false);
   assert.equal(appSource.includes("sessionStartupDrafts"), false);
   assert.equal(appSource.includes("startupDraft"), false);
+  assert.equal(appSource.includes("Continuing previous conversation"), false);
+  assert.equal(appSource.includes("run-continue-hint"), false);
+  assert.equal(appSource.includes("run-transcript-beginning"), false);
+  assert.equal(appSource.includes("Beginning of conversation"), false);
+  assert.equal(appSource.includes("session-status-transition"), false);
   assert.equal(appSource.includes("initial_turn"), true);
   assert.equal(appSource.includes("CREATE_TIME_INITIAL_TURN_MODES"), true);
   assert.equal(appSource.includes("composeLaunchUserPrompt"), true);

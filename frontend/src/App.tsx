@@ -6299,20 +6299,15 @@ function ChatPane({
       initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
-  const previousSessionStatusRef = useRef(session.status);
-  // Toggled briefly when entries are restored from backend history so we can
-  // show a "Continuing previous conversation" hint.
-  const [continueHintVisible, setContinueHintVisible] = useState(false);
 
   // History replay hits the canonical event log written by the pod-side
   // runner, then renders through the same reducer/projection path used for
   // live SDK frames.
   function refreshSdkRunHistory(
-    showHint: boolean,
     clearRealtime = false,
     source: SdkHistoryRefreshSource = "history",
   ): Promise<boolean> {
-    return refreshSdkRunHistoryResult(showHint, clearRealtime, undefined, source).then(
+    return refreshSdkRunHistoryResult(clearRealtime, undefined, source).then(
       (result) => result.replayed,
     );
   }
@@ -6331,7 +6326,6 @@ function ChatPane({
   // transcript deep link, which the backend resolves from timeline_id to
   // order_key and returns as a bounded window around that persisted cursor.
   function refreshSdkRunHistoryResult(
-    showHint: boolean,
     clearRealtime = false,
     clientNonce?: string,
     source: SdkHistoryRefreshSource = "history",
@@ -6481,10 +6475,6 @@ function ChatPane({
       if (scrollToLatestOnReady) {
         timelineBootstrapScrollToLatestRef.current = false;
         requestScrollToLatest("auto", source);
-      }
-      if (showHint) {
-        setContinueHintVisible(true);
-        window.setTimeout(() => setContinueHintVisible(false), 3000);
       }
       return { replayed: true, terminal };
     };
@@ -6705,7 +6695,6 @@ function ChatPane({
     const refreshEpoch = sdkWindowEpochRef.current;
     const source = timelineBootstrapSourceRef.current;
     const clearRealtime = timelineBootstrapClearRealtimeRef.current;
-    const showHint = source === "history" && entries.length === 0;
     const run = currentRunRef.current;
     dispatchTimelineBootstrap({
       type: "loading",
@@ -6713,7 +6702,6 @@ function ChatPane({
       epoch: refreshEpoch,
     });
     const refresh = refreshSdkRunHistoryResult(
-      showHint,
       clearRealtime,
       run?.id,
       source,
@@ -6759,21 +6747,6 @@ function ChatPane({
   // should not resubscribe an in-flight bootstrap.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, session.mode, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
-
-  useEffect(() => {
-    const previous = previousSessionStatusRef.current;
-    previousSessionStatusRef.current = session.status;
-    if (previous === session.status) return;
-    if (!visible || !historyBootstrapped) return;
-    if (session.status !== "Active" && session.status !== "Failed") return;
-    resetSdkTimelineBootstrapState("session-status-transition", {
-      source: "history",
-      clearRealtime: false,
-    });
-  // resetSdkTimelineBootstrapState closes over current refs and must run with
-  // the latest session id/status when this effect fires.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyBootstrapped, session.status, visible]);
 
   useEffect(() => {
     if (activeTab !== "files" || filesAvailable) return;
@@ -7065,7 +7038,6 @@ function ChatPane({
     currentRunRef.current = null;
     activeInterruptTargetRef.current = null;
     setQueuedMessages([]);
-    setContinueHintVisible(false);
     setRunStatus("idle");
     setRunning(false);
   // resetSdkTimelineBootstrapState intentionally closes over current session
@@ -7703,7 +7675,7 @@ function ChatPane({
     setRunning(false);
     setSdkConnectionState("idle");
     if (options.refreshHistory ?? false) {
-      void refreshSdkRunHistory(false, options.clearRealtime ?? false, "terminal-refresh");
+      void refreshSdkRunHistory(options.clearRealtime ?? false, "terminal-refresh");
     }
   }
 
@@ -7762,7 +7734,7 @@ function ChatPane({
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
-      void refreshSdkRunHistoryResult(false, true, undefined, "resync").finally(() => {
+      void refreshSdkRunHistoryResult(true, undefined, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
         sdkEventSourceRef.current = null;
@@ -8470,24 +8442,7 @@ function ChatPane({
               >
                 {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
               </button>
-            ) : sdkFoundOldest && renderedEntries.length > 0 ? (
-              <div
-                className="run-transcript-beginning"
-                role="status"
-                aria-label="Beginning of conversation"
-              >
-                <span className="run-transcript-beginning-rule" aria-hidden="true" />
-                <span className="run-transcript-beginning-label">
-                  Beginning of conversation
-                </span>
-                <span className="run-transcript-beginning-rule" aria-hidden="true" />
-              </div>
             ) : null}
-            {continueHintVisible && (
-              <div className="run-continue-hint" role="status">
-                Continuing previous conversation
-              </div>
-            )}
             <RunMessages
               entries={renderedEntries}
               avatar={sessionAvatar}
