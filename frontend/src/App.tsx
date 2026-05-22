@@ -3158,7 +3158,7 @@ function conversationEntriesToTranscript(
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "activity"; id: string; turnId: string; entries: TranscriptEntry[] };
+  | { kind: "activity"; id: string; turnId: string; entries: TranscriptEntry[]; active?: boolean };
 type FlatEntryGroup = Exclude<EntryGroup, { kind: "activity" }>;
 
 function entryGroupKey(g: EntryGroup): string {
@@ -3215,11 +3215,12 @@ function groupFlatTranscriptEntries(entries: TranscriptEntry[]): FlatEntryGroup[
 function groupTranscriptEntries(
   entries: TranscriptEntry[],
   condenseCompletedTurns = true,
+  activeTurnId: string | null = null,
 ): EntryGroup[] {
   if (!condenseCompletedTurns) return groupFlatTranscriptEntries(entries);
   const groups: EntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
-  for (const group of compactCompletedTurnEntries(entries, true)) {
+  for (const group of compactCompletedTurnEntries(entries, true, activeTurnId)) {
     if (group.kind === "activity") {
       flushTranscriptToolBucket(groups, bucket);
       groups.push(group);
@@ -4923,7 +4924,11 @@ function RunTurnActivityGroup({
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   return (
-    <div className="run-turn-activity" data-state={open ? "open" : "closed"}>
+    <div
+      className="run-turn-activity"
+      data-state={open ? "open" : "closed"}
+      data-active={group.active === true ? "true" : undefined}
+    >
       <button
         type="button"
         className="run-turn-activity-header"
@@ -4947,7 +4952,7 @@ function RunTurnActivityGroup({
               completedAt?.turnTerminalAt ??
               completedAt?.time
             }
-            running={false}
+            running={group.active === true}
           />
         )}
         <span className="run-turn-activity-chevron">
@@ -5051,6 +5056,7 @@ export function RunMessages({
   showThinking,
   autoExpandTools,
   condenseCompletedTurns = true,
+  activeTurnId = null,
   showTimestamps,
   showDuration,
   onQuote,
@@ -5082,6 +5088,7 @@ export function RunMessages({
   showThinking: boolean;
   autoExpandTools: boolean;
   condenseCompletedTurns?: boolean;
+  activeTurnId?: string | null;
   showTimestamps: boolean;
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
@@ -5097,8 +5104,8 @@ export function RunMessages({
   scrollToOldestSignal?: number;
 }) {
   const groups = useMemo(
-    () => groupTranscriptEntries(entries, condenseCompletedTurns),
-    [condenseCompletedTurns, entries],
+    () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId),
+    [activeTurnId, condenseCompletedTurns, entries],
   );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
@@ -5656,6 +5663,7 @@ function ChatPane({
   playTurnCompleteSound: () => void;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerEventsRef = useRef<TankConversationEvent[]>([]);
@@ -5991,6 +5999,7 @@ function ChatPane({
       projection.runStatus === "streaming" ||
       projection.runStatus === "needs_input" ||
       projection.runStatus === "stopping";
+    setRenderedActiveTurnId(sdkActive ? projection.activeTurnId : null);
     activeInterruptTargetRef.current = sdkActive
       ? projection.activeClientNonce ?? projection.activeTurnId
       : null;
@@ -6080,6 +6089,7 @@ function ChatPane({
     sdkServerEventsRef.current = [];
     sdkRealtimeEventsRef.current = [];
     sdkConversationStateRef.current = initialConversationState;
+    setRenderedActiveTurnId(null);
     sdkTimelineCursorRef.current = null;
     sdkOldestLoadedOrderKeyRef.current = null;
     sdkFoundOldestRef.current = false;
@@ -8632,6 +8642,7 @@ function ChatPane({
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               condenseCompletedTurns={runPrefs.condenseCompletedTurns}
+              activeTurnId={renderedActiveTurnId}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
               onQuote={appendQuotedMessage}
