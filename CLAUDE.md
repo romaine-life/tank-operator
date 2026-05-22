@@ -42,6 +42,20 @@ or cleanup work. Read
 [docs/product-inspirations.md](docs/product-inspirations.md) when making
 product or architecture decisions.
 
+Read [docs/features/README.md](docs/features/README.md) and the relevant
+feature contract before substantial work on a core feature. The policy docs set
+the repo-wide quality bar; the feature contracts translate that bar into
+feature-specific invariants and acceptance evidence. A PR that changes a core
+feature should name the affected contract and explain how the implementation
+proves the contract still holds.
+
+Before opening a PR, fill out the Feature Contracts section from the PR
+template. If the PR touches a contracted feature, name the affected contracts
+and provide concrete evidence for each one. "Tests pass" is not enough unless
+the test directly proves the contract invariant. Do not mark a PR ready, ask
+for merge, or merge it yourself when the Feature Contracts section is missing
+or incomplete.
+
 Read [docs/diagnostic-discipline.md](docs/diagnostic-discipline.md) before
 investigating any bug or incident on this repo. The other three docs above
 describe the quality bar for *writing* code; this one describes how to
