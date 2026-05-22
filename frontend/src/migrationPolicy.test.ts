@@ -264,6 +264,15 @@ test("chat back-pagination keeps the focused load button mounted while loading",
   assert.equal(appSource.includes("run-transcript-load-older-passive"), false);
 });
 
+test("workspace scroll container keeps the right scrollbar affordance stable", () => {
+  const runMainMatch = indexCssSource.match(/\.run-main \{[\s\S]*?\n\}/);
+  assert.ok(runMainMatch, "run-main styles should be present");
+  const runMainCss = runMainMatch[0]!;
+  assert.equal(runMainCss.includes("overflow-y: scroll;"), true);
+  assert.equal(runMainCss.includes("scrollbar-gutter: stable;"), true);
+  assert.equal(indexCssSource.includes(".run-main::-webkit-scrollbar-track"), true);
+});
+
 test("session-event SSE stream emits browser-side observability", () => {
   // The candidate-B (zombie SSE) + candidate-C (reducer-drop)
   // stethoscope on the browser side. If a future refactor silently
