@@ -199,7 +199,7 @@ test("files tab is gated until the session container is available", () => {
   assert.match(appSource, /disabled=\{!filesAvailable\}/);
 });
 
-test("shell tasks page uses stacked full-width sections instead of a side pane", () => {
+test("background page uses stacked full-width sections instead of a side pane", () => {
   assert.match(indexCssSource, /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/);
   assert.equal(
     indexCssSource.includes("grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)"),
@@ -208,17 +208,30 @@ test("shell tasks page uses stacked full-width sections instead of a side pane",
   assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
 });
 
-test("shell tasks tab stays discoverable before shell task entries exist", () => {
-  const shellTaskLedgerMatch = appSource.match(
-    /function ShellTaskLedger\([\s\S]*?\n}\n\nfunction ShellTaskMeta/,
+test("background tab stays discoverable before background entries exist", () => {
+  const backgroundLedgerMatch = appSource.match(
+    /function BackgroundLedger\([\s\S]*?\n}\n\nfunction BackgroundMeta/,
   );
-  assert.ok(shellTaskLedgerMatch, "ShellTaskLedger body should be present");
-  assert.equal(shellTaskLedgerMatch[0]!.includes("entries.length === 0"), false);
+  assert.ok(backgroundLedgerMatch, "BackgroundLedger body should be present");
+  assert.equal(backgroundLedgerMatch[0]!.includes("entries.length === 0"), false);
+  assert.match(appSource, /<span>Background<\/span>/);
   assert.match(appSource, /disabled\?: boolean;/);
   assert.match(
     appSource,
-    /<ShellTaskLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Shell tasks are available once the session starts"/,
+    /<BackgroundLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Background activity is available once the session starts"/,
   );
+});
+
+test("background page includes active shell invocations alongside managed tasks", () => {
+  assert.match(
+    appSource,
+    /function isRunningShellInvocationEntry\([\s\S]*?entry\.toolKind === "shell"[\s\S]*?normalizeToolState\(entry\.toolStatus\) === "running"/,
+  );
+  assert.match(
+    appSource,
+    /const activeBackgroundEntries = useMemo\([\s\S]*?backgroundTaskEntries\.filter\(isBackgroundTaskRunning\)[\s\S]*?runningShellInvocationEntries/,
+  );
+  assert.match(appSource, /<BackgroundScreen\n\s+entries=\{activeBackgroundEntries\}/);
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
