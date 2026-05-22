@@ -51,6 +51,7 @@ import {
   SessionCommandBus,
   isInputReplyCommand,
   isInterruptCommand,
+  isStopBackgroundTaskCommand,
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
@@ -788,6 +789,14 @@ export class Runner {
         }
         if (isInputReplyCommand(record)) {
           await this.acceptInputReply(record);
+          return;
+        }
+        if (isStopBackgroundTaskCommand(record)) {
+          commandsConsumedTotal.labels("stop_background_task", "unsupported").inc();
+          await this.commandBus.markFailed(
+            record,
+            new Error("background task stop is not supported by the Claude runner"),
+          );
           return;
         }
         // Unknown control command type. Ack to clear the slot; log so

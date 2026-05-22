@@ -913,6 +913,50 @@ func TestInterruptIsIdempotentByEventID(t *testing.T) {
 	}
 }
 
+func TestStopBackgroundTaskPublishesControlCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedBackgroundStopRequest(t, "64", "proc:123", `{"turn_id":"turn-abc","timeline_id":"turn-abc:shell_task:proc-123","provider_item_id":"item-123","process_id":"proc:123"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleStopBackgroundTask(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandStopBackgroundTask || got.Source != "background-stop" || got.Provider != "codex" || got.TargetTurnID != "turn-abc" || got.TargetTaskID != "proc:123" || got.TargetProcessID != "proc:123" {
+		t.Fatalf("background stop record = %#v", got)
+	}
+	if got.TargetTimelineID != "turn-abc:shell_task:proc-123" || got.TargetProviderItemID != "item-123" {
+		t.Fatalf("background stop target = %#v", got)
+	}
+	subject := sessionbus.SubjectForCommand(got)
+	if subject != sessionbus.ControlSubject(got.SessionStorageKey, got.Provider) {
+		t.Fatalf("background stop subject = %q, want control subject for storage=%q provider=%q",
+			subject, got.SessionStorageKey, got.Provider)
+	}
+}
+
+func TestStopBackgroundTaskRejectsClaudeSession(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedBackgroundStopRequest(t, "64", "task-123", `{"turn_id":"turn-abc"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleStopBackgroundTask(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
 func testTurnsApp(t *testing.T, bus sessionCommandBus, pods ...*corev1.Pod) *appServer {
 	t.Helper()
 	clientObjects := make([]runtime.Object, 0, len(pods))
@@ -975,6 +1019,16 @@ func authedInterruptRequest(t *testing.T, sessionID, turnID string) *http.Reques
 	req.SetPathValue("session_id", sessionID)
 	req.SetPathValue("turn_id", turnID)
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	return req
+}
+
+func authedBackgroundStopRequest(t *testing.T, sessionID, taskID, body string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/background-tasks/"+taskID+"/stop", strings.NewReader(body))
+	req.SetPathValue("session_id", sessionID)
+	req.SetPathValue("task_id", taskID)
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
 	return req
 }
 

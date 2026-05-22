@@ -33,7 +33,7 @@ export interface InputReplyAnnotation {
 export interface SessionCommand {
   id: string;
   command_id: string;
-  type: "submit_turn" | "interrupt_turn" | "input_reply" | string;
+  type: "submit_turn" | "interrupt_turn" | "input_reply" | "stop_background_task" | string;
   session_id: string;
   session_storage_key?: string;
   email: string;
@@ -43,6 +43,8 @@ export interface SessionCommand {
   target_turn_id?: string;
   target_timeline_id?: string;
   target_provider_item_id?: string;
+  target_task_id?: string;
+  target_process_id?: string;
   // answers carries the user's AskUserQuestion selections keyed by
   // question text. Values are arrays so single-select and multi-select
   // questions share one shape; runners join multi-element arrays at the
@@ -148,6 +150,7 @@ export function buildWakeupSubmitTurnCommand(args: {
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
 export function controlSubject(sessionStorageKey: string, provider: string): string;
 export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
+export function isStopBackgroundTaskCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;
 

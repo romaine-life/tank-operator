@@ -3,6 +3,7 @@ import {
   commandClientNonce,
   isInputReplyCommand,
   isInterruptCommand,
+  isStopBackgroundTaskCommand,
   type SessionBusConfig,
   type SessionCommandRecord,
 } from "./sessionBus.js";
@@ -10,7 +11,7 @@ import {
 export type { SessionCommandRecord };
 export type SessionCommandBusConfig = SessionBusConfig;
 
-export { commandClientNonce, isInputReplyCommand, isInterruptCommand };
+export { commandClientNonce, isInputReplyCommand, isInterruptCommand, isStopBackgroundTaskCommand };
 
 export class SessionCommandBus extends SessionBus {
   constructor(cfg: SessionCommandBusConfig, provider: "claude" | "codex" | string) {

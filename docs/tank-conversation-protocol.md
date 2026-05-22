@@ -357,6 +357,13 @@ History reads:
   `GET /api/sessions/{session_id}/timeline?timeline_id=<timeline_id>&num_before=100&num_after=100`
 - Manual upward pagination reads older events:
   `GET /api/sessions/{session_id}/timeline?before_order_key=<cursor>&limit=100`
+- Managed Codex background terminal stop:
+  `POST /api/sessions/{session_id}/background-tasks/{task_id}/stop`
+  publishes a `stop_background_task` control-plane command. The Codex
+  app-server runner maps that to `thread/backgroundTerminals/clean` and emits
+  `shell_task.exited{status:"stopped"}` for the selected task so the Background
+  page drops it from the active list. Detached shell candidates remain
+  observational because Tank does not own their PID lifecycle.
 
 Returns:
 

@@ -251,6 +251,16 @@ test("background page separates tracked shells from detached shell candidates", 
   );
 });
 
+test("background stop controls exclude untracked detached shells", () => {
+  assert.match(
+    appSource,
+    /function canStopBackgroundActivity\([\s\S]*?isDetachedShellCandidateEntry\(entry\)\) return false[\s\S]*?isRunningShellInvocationEntry\(entry\)[\s\S]*?isBackgroundTaskEntry\(entry\)[\s\S]*?codexBackgroundStopAvailable/,
+  );
+  assert.match(appSource, /<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/);
+  assert.match(appSource, /className="run-shell-task-stop"/);
+  assert.match(appSource, /\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/);
+});
+
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);

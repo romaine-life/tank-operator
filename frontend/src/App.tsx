@@ -4046,6 +4046,31 @@ function backgroundActivityStatusLabel(entry: TranscriptEntry): string {
     : normalizeToolState(entry.toolStatus);
 }
 
+function canStopBackgroundActivity(
+  entry: TranscriptEntry,
+  codexBackgroundStopAvailable: boolean,
+): boolean {
+  if (isDetachedShellCandidateEntry(entry)) return false;
+  if (isRunningShellInvocationEntry(entry)) return Boolean(entry.turnId?.trim());
+  return (
+    isBackgroundTaskEntry(entry) &&
+    isBackgroundTaskRunning(entry) &&
+    codexBackgroundStopAvailable &&
+    Boolean(entry.turnId?.trim() && entry.taskId?.trim())
+  );
+}
+
+function backgroundStopLabel(entry: TranscriptEntry): string {
+  return isBackgroundTaskEntry(entry) ? "Stop all" : "Stop";
+}
+
+function backgroundStopTitle(entry: TranscriptEntry): string {
+  if (isBackgroundTaskEntry(entry)) {
+    return "Stop all Codex background terminals for this session";
+  }
+  return "Stop the turn running this shell command";
+}
+
 function backgroundActivityCommand(entry: TranscriptEntry): string | undefined {
   return isBackgroundTaskEntry(entry) ? entry.taskCommand : shellInvocationCommand(entry);
 }
@@ -4207,6 +4232,8 @@ function BackgroundScreen({
   onViewChange,
   selectedId,
   onSelect,
+  canStopEntry,
+  onStop,
 }: {
   shellEntries: TranscriptEntry[];
   detachedEntries: TranscriptEntry[];
@@ -4214,6 +4241,8 @@ function BackgroundScreen({
   onViewChange: (view: BackgroundView) => void;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  canStopEntry: (entry: TranscriptEntry) => boolean;
+  onStop: (entry: TranscriptEntry) => void;
 }) {
   const displayEntries = view === "shells" ? shellEntries : detachedEntries;
   const managedTaskCount = shellEntries.filter(isBackgroundTaskEntry).length;
@@ -4224,6 +4253,7 @@ function BackgroundScreen({
     null;
   const listLabel = view === "shells" ? "Active" : "Detected";
   const emptyText = view === "shells" ? "No active shells." : "No detached process candidates.";
+  const selectedStopAvailable = selected ? canStopEntry(selected) : false;
   return (
     <div className="run-shell-tasks-page">
       <div className="run-shell-tasks-list">
@@ -4305,18 +4335,31 @@ function BackgroundScreen({
                 )}
                 <span>{backgroundActivityTitle(selected)}</span>
               </div>
-              <span
-                className="run-shell-task-detail-status"
-                data-state={
-                  isDetachedShellCandidateEntry(selected)
-                    ? "unknown"
-                    : isBackgroundTaskEntry(selected)
-                      ? selected.taskStatus ?? "unknown"
-                      : "running"
-                }
-              >
-                {backgroundActivityStatusLabel(selected)}
-              </span>
+              <div className="run-shell-task-detail-actions">
+                {selectedStopAvailable && (
+                  <button
+                    type="button"
+                    className="run-shell-task-stop"
+                    onClick={() => onStop(selected)}
+                    title={backgroundStopTitle(selected)}
+                  >
+                    <SquareIcon size={13} aria-hidden="true" />
+                    <span>{backgroundStopLabel(selected)}</span>
+                  </button>
+                )}
+                <span
+                  className="run-shell-task-detail-status"
+                  data-state={
+                    isDetachedShellCandidateEntry(selected)
+                      ? "unknown"
+                      : isBackgroundTaskEntry(selected)
+                        ? selected.taskStatus ?? "unknown"
+                        : "running"
+                  }
+                >
+                  {backgroundActivityStatusLabel(selected)}
+                </span>
+              </div>
             </div>
             <div className="run-shell-task-meta">
               <BackgroundMeta label="Type" value={backgroundActivityKindLabel(selected)} />
@@ -7693,6 +7736,75 @@ function ChatPane({
     }
   }
 
+  async function stopBackgroundTask(entry: TranscriptEntry): Promise<void> {
+    const taskID = entry.taskId?.trim();
+    const turnID = entry.turnId?.trim();
+    if (!taskID || !turnID) {
+      throw new Error("background task stop target is not available");
+    }
+    const body = {
+      turn_id: turnID,
+      timeline_id: entry.id,
+      provider_item_id: entry.providerItemId,
+      process_id: entry.taskProcessId ?? entry.taskId,
+    };
+    const res = await authedFetch(
+      `/api/sessions/${encodeURIComponent(session.id)}/background-tasks/${encodeURIComponent(taskID)}/stop`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    if (!res.ok) {
+      let detail = `background task stop failed: ${res.status}`;
+      try {
+        const data = await res.json();
+        if (typeof data?.detail === "string") detail = data.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+  }
+
+  async function requestBackgroundTaskStop(entry: TranscriptEntry): Promise<void> {
+    try {
+      await stopBackgroundTask(entry);
+    } catch (err) {
+      setLastStatusText("Stop failed");
+      const id = nextEntryId("background-stop-error");
+      appendSdkRealtimeEntries(
+        markLocalEntries(
+          appendMeta([], id, "Stop failed", err instanceof Error ? err.message : String(err), "error"),
+          id,
+        ),
+      );
+    }
+  }
+
+  function stopBackgroundActivity(entry: TranscriptEntry) {
+    if (isDetachedShellCandidateEntry(entry)) return;
+    if (isRunningShellInvocationEntry(entry)) {
+      const turnID = entry.turnId?.trim();
+      if (!turnID) {
+        const id = nextEntryId("background-stop-error");
+        appendSdkRealtimeEntries(
+          markLocalEntries(
+            appendMeta([], id, "Stop failed", "No active turn is available to stop.", "error"),
+            id,
+          ),
+        );
+        return;
+      }
+      void requestSdkInterrupt(turnID);
+      return;
+    }
+    if (isBackgroundTaskEntry(entry)) {
+      void requestBackgroundTaskStop(entry);
+    }
+  }
+
   function handleSubmit(message: PromptInputMessage) {
     const trimmed = message.text.trim();
     if (!trimmed || session.status !== "Active") return;
@@ -8123,6 +8235,12 @@ function ChatPane({
       ...detachedShellEntries,
     ],
     [activeBackgroundEntries, detachedShellEntries],
+  );
+  const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
+  const canStopBackgroundEntry = useCallback(
+    (entry: TranscriptEntry) =>
+      canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
+    [codexBackgroundStopAvailable],
   );
   const openBackgroundPage = useCallback((entry?: TranscriptEntry) => {
     if (entry?.id) setSelectedBackgroundId(entry.id);
@@ -8757,6 +8875,8 @@ function ChatPane({
             onViewChange={setBackgroundView}
             selectedId={selectedBackgroundId}
             onSelect={setSelectedBackgroundId}
+            canStopEntry={canStopBackgroundEntry}
+            onStop={stopBackgroundActivity}
           />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
