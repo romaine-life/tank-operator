@@ -19,6 +19,7 @@ runtime observation, depending on the risk.
 ## Contracts
 
 - [Agent Runners](agent-runners/contract.md)
+- [App Chrome](app-chrome/contract.md)
 - [Artifacts And Files](artifacts-and-files/contract.md)
 - [Auth And Streams](auth-and-streams/contract.md)
 - [Observability](observability/contract.md)
@@ -40,11 +41,34 @@ Add or expand a feature contract when a feature:
 Small static UI, isolated copy changes, and one-off internal helpers usually do
 not need their own contract. They inherit the global policy docs.
 
+## Capability Ledgers
+
+Contracts describe the durable invariants for a feature area. Capability
+ledgers give named product behavior a stable handle before and after it ships.
+
+Use a `capabilities.md` file inside the relevant feature folder when a new
+behavior is complex enough that future agents should not have to reconstruct
+the intent from chat history or PR archaeology. Each capability entry should
+include:
+
+- a stable name;
+- status such as `proposed`, `in progress`, `active`, `shipped`, or `retired`;
+- intent;
+- affected contracts;
+- required or shipped evidence.
+
+Do not use capability ledgers as a backlog for every small idea. Add an entry
+when the behavior affects user trust, navigation, durability, lifecycle,
+cross-feature coordination, or a top-level product surface. When a capability
+settles into a permanent invariant, fold the invariant into `contract.md` and
+keep the capability entry as the named history of why it exists.
+
 ## PR Review Rule
 
 For any contracted feature, reviewers should ask:
 
 - Which contract does this PR touch?
+- Does this PR add or change a named capability?
 - Which invariant could the PR break?
 - What evidence proves the invariant still holds?
 - Does refresh, reconnect, restart, or rollout reveal state the live UI missed?

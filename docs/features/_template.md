@@ -3,6 +3,11 @@
 This contract translates the repo-wide policy docs into feature-specific rules
 for this feature.
 
+If the feature area contains named user-facing behavior that is still evolving,
+track it in a sibling `capabilities.md` file. The contract owns permanent
+invariants; the capability ledger owns named behavior, status, intent, and
+evidence history.
+
 ## Product Model
 
 Describe what the feature is for, what user trust depends on, and which product

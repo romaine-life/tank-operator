@@ -56,6 +56,11 @@ the test directly proves the contract invariant. Do not mark a PR ready, ask
 for merge, or merge it yourself when the Feature Contracts section is missing
 or incomplete.
 
+When adding or substantially changing named product behavior, check whether the
+relevant feature folder needs a `capabilities.md` entry. Capability ledgers are
+for behavior a future agent should be able to name, audit, or retire without
+reconstructing the intent from chat history.
+
 Read [docs/diagnostic-discipline.md](docs/diagnostic-discipline.md) before
 investigating any bug or incident on this repo. The other three docs above
 describe the quality bar for *writing* code; this one describes how to
