@@ -3,9 +3,10 @@ package sessionbus
 import "strings"
 
 const (
-	CommandSubmitTurn = "submit_turn"
-	CommandInterrupt  = "interrupt_turn"
-	CommandInputReply = "input_reply"
+	CommandSubmitTurn         = "submit_turn"
+	CommandInterrupt          = "interrupt_turn"
+	CommandInputReply         = "input_reply"
+	CommandStopBackgroundTask = "stop_background_task"
 )
 
 // InputReplyAnnotation mirrors the Claude Agent SDK AskUserQuestion
@@ -55,6 +56,8 @@ type Command struct {
 	// preserved on the wire for audit/debug visibility.
 	TargetTimelineID     string `json:"target_timeline_id,omitempty"`
 	TargetProviderItemID string `json:"target_provider_item_id,omitempty"`
+	TargetTaskID         string `json:"target_task_id,omitempty"`
+	TargetProcessID      string `json:"target_process_id,omitempty"`
 	// Answers carries the user's AskUserQuestion selections keyed by
 	// question text. Each value is the list of chosen option labels:
 	// single-select questions emit a one-element slice, multi-select
@@ -90,6 +93,8 @@ func (c Command) Normalize() Command {
 	c.TargetTurnID = strings.TrimSpace(c.TargetTurnID)
 	c.TargetTimelineID = strings.TrimSpace(c.TargetTimelineID)
 	c.TargetProviderItemID = strings.TrimSpace(c.TargetProviderItemID)
+	c.TargetTaskID = strings.TrimSpace(c.TargetTaskID)
+	c.TargetProcessID = strings.TrimSpace(c.TargetProcessID)
 	if len(c.Answers) > 0 {
 		normalized := make(map[string][]string, len(c.Answers))
 		for question, labels := range c.Answers {

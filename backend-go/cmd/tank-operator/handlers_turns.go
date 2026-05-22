@@ -230,6 +230,97 @@ type inputReplyRequest struct {
 	Annotations    map[string]sessionbus.InputReplyAnnotation `json:"annotations,omitempty"`
 }
 
+type stopBackgroundTaskRequest struct {
+	TurnID         string `json:"turn_id"`
+	TimelineID     string `json:"timeline_id"`
+	ProviderItemID string `json:"provider_item_id"`
+	ProcessID      string `json:"process_id"`
+}
+
+func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	taskID := strings.TrimSpace(r.PathValue("task_id"))
+	if sessionID == "" || taskID == "" || !backgroundTaskIDPattern.MatchString(taskID) {
+		writeError(w, http.StatusBadRequest, "task_id is required and must match task id syntax")
+		return
+	}
+
+	var body stopBackgroundTaskRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+	}
+	targetTurnID := strings.TrimSpace(body.TurnID)
+	if targetTurnID == "" || !turnIDPattern.MatchString(targetTurnID) {
+		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
+		return
+	}
+
+	owner := user.OwnerEmail()
+	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	normalizedMode := sessionmodel.NormalizeSessionMode(info.Mode)
+	if normalizedMode != sessionmodel.CodexGUIMode && normalizedMode != sessionmodel.CodexAppServerMode {
+		writeError(w, http.StatusBadRequest, "background task stop is only supported for Codex app-server transport sessions")
+		return
+	}
+	if s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
+		return
+	}
+
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	stopTurnID := "stop_background_" + auth.RandomHex(12)
+	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
+		CommandID:            "stop-background:" + taskID + ":" + auth.RandomHex(12),
+		Type:                 sessionbus.CommandStopBackgroundTask,
+		SessionID:            sessionID,
+		SessionStorageKey:    storageKey,
+		Email:                owner,
+		Provider:             "codex",
+		Source:               "background-stop",
+		TurnID:               stopTurnID,
+		ClientNonce:          targetTurnID,
+		TargetTurnID:         targetTurnID,
+		TargetTimelineID:     strings.TrimSpace(body.TimelineID),
+		TargetProviderItemID: strings.TrimSpace(body.ProviderItemID),
+		TargetTaskID:         taskID,
+		TargetProcessID:      strings.TrimSpace(body.ProcessID),
+		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+			SessionID:         sessionID,
+			SessionStorageKey: storageKey,
+			Email:             owner,
+			TurnID:            stopTurnID,
+			ClientNonce:       targetTurnID,
+			Runtime:           "codex",
+			Reason:            "publish_background_stop_failed: " + err.Error(),
+			Now:               time.Now().UTC(),
+		})
+		if writeErr := s.persistBackendEvent(r.Context(), storageKey, failedEvent); writeErr != nil {
+			slog.Warn("persist turn.command_failed for background stop",
+				"session_id", sessionID, "target_turn_id", targetTurnID, "task_id", taskID, "error", writeErr)
+		}
+		writeError(w, http.StatusInternalServerError, "publish background stop: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{
+		"status":         "accepted",
+		"target_turn_id": targetTurnID,
+		"target_task_id": taskID,
+	})
+}
+
 func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {

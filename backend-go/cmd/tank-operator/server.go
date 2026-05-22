@@ -31,17 +31,17 @@ const designSelectionConfigMapName = "tank-design-selection"
 
 // appServer holds shared application state for all handlers.
 type appServer struct {
-	k8s                      kubernetes.Interface
-	restCfg                  *rest.Config
-	mgr                      *sessions.Manager
-	profiles                 profilesStore
-	sessionEvents            store.SessionEventStore
-	pgPool                   *pgxpool.Pool
-	sessionBus               sessionCommandBus
-	readStates               store.ConversationReadStateStore
-	verifier                 *auth.Verifier
-	gitHubInstallStates      gitHubInstallStateStore
-	streamAuthTickets        streamAuthTicketStore
+	k8s                 kubernetes.Interface
+	restCfg             *rest.Config
+	mgr                 *sessions.Manager
+	profiles            profilesStore
+	sessionEvents       store.SessionEventStore
+	pgPool              *pgxpool.Pool
+	sessionBus          sessionCommandBus
+	readStates          store.ConversationReadStateStore
+	verifier            *auth.Verifier
+	gitHubInstallStates gitHubInstallStateStore
+	streamAuthTickets   streamAuthTicketStore
 	// streamRegistry tracks every open /api/sessions/{id}/events SSE
 	// handler so the /api/debug/session-event-streams admin endpoint
 	// can surface per-stream wake/page/emit state for diagnosis.
@@ -179,6 +179,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns/{turn_id}/interrupt", s.handleInterruptSessionTurn)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns/{turn_id}/input-reply", s.handleInputReplySessionTurn)
+	mux.HandleFunc("POST /api/sessions/{session_id}/background-tasks/{task_id}/stop", s.handleStopBackgroundTask)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)

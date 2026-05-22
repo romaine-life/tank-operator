@@ -253,6 +253,24 @@ func TestSubjectForCommandRoutesInputReplyToControlPlane(t *testing.T) {
 	}
 }
 
+func TestSubjectForCommandRoutesBackgroundStopToControlPlane(t *testing.T) {
+	storage := "session-storage-key"
+	provider := "codex"
+	stop := Command{
+		Type:              CommandStopBackgroundTask,
+		SessionStorageKey: storage,
+		Provider:          provider,
+	}
+	got := SubjectForCommand(stop)
+	want := ControlSubject(storage, provider)
+	if got != want {
+		t.Fatalf("stop_background_task subject = %q, want %q (control-plane)", got, want)
+	}
+	if got == CommandSubject(storage, provider) {
+		t.Fatalf("stop_background_task MUST NOT publish to the command subject %q", got)
+	}
+}
+
 // TestControlSubjectShape pins the wire format so the runner-shared JS
 // helper (which builds the same shape independently) is mechanically
 // comparable. The shape token order is: subjectRoot, storageToken,
