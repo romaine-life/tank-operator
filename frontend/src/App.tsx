@@ -6057,6 +6057,19 @@ function ChatPane({
       ...chatScrollElementSnapshot(node),
     });
   }, [session.id, session.mode]);
+  const focusComposerTextarea = useCallback((): boolean => {
+    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+  const focusTranscriptSection = useCallback((): boolean => {
+    if (!transcriptScrollEl) return false;
+    transcriptScrollEl.focus({ preventScroll: true });
+    return document.activeElement === transcriptScrollEl;
+  }, [transcriptScrollEl]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const sdkEventReconnectTimerRef = useRef<number | null>(null);
@@ -7407,21 +7420,50 @@ function ChatPane({
     return () => wrap.removeEventListener("keydown", onKey, true);
   }, [runPrefs.sendByCtrlEnter, slashOpen]);
 
+  // Escape leaves the composer and returns keyboard focus to the transcript.
+  // The transcript can then own its own shortcuts without competing with
+  // normal textarea editing.
+  useEffect(() => {
+    if (!visible || activeTab !== "chat") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.key !== "Escape" ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.isComposing ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (!textarea || e.target !== textarea) return;
+      if (!focusTranscriptSection()) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [activeTab, focusTranscriptSection, mcpOpen, mentionOpen, slashOpen, visible]);
+
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
-  // Stop pill. Capture phase so it fires even if focus is on the textarea.
-  // Skips when the slash palette is open — Esc closes the palette in that
-  // case (handled below).
+  // Stop pill. Capture phase so it fires outside the composer. Skips when a
+  // palette is open — Esc closes the palette in those cases (handled below).
   useEffect(() => {
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !slashOpen) {
+      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen && e.target !== textarea) {
         e.preventDefault();
         cancelRun();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [running, slashOpen, visible]);
+  }, [mcpOpen, mentionOpen, running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -8288,15 +8330,6 @@ function ChatPane({
     : selectedModelId;
   const contextWindow = getContextWindow(modelForContext);
 
-  const focusComposerTextarea = useCallback((): boolean => {
-    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
-    if (!textarea) return false;
-    textarea.focus();
-    const cursor = textarea.value.length;
-    textarea.setSelectionRange(cursor, cursor);
-    return true;
-  }, []);
-
   useEffect(() => {
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
     const activeElement = document.activeElement;
@@ -8468,6 +8501,7 @@ function ChatPane({
       style={chatFontScaleStyle}
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
+      bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
       composerVisible={activeTab === "chat"}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}

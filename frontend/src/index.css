@@ -3215,6 +3215,11 @@ button:disabled {
   background-clip: padding-box;
 }
 
+.run-main:focus {
+  outline: 2px solid rgba(96, 165, 250, 0.7);
+  outline-offset: -2px;
+}
+
 .run-shell {
   flex: 1 1 auto;
   min-height: 0;
