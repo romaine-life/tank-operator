@@ -21,6 +21,7 @@ runtime observation, depending on the risk.
 - [Agent Runners](agent-runners/contract.md)
 - [Artifacts And Files](artifacts-and-files/contract.md)
 - [Auth And Streams](auth-and-streams/contract.md)
+- [Observability](observability/contract.md)
 - [Session Bar](session-bar/contract.md)
 - [Session Lifecycle](session-lifecycle/contract.md)
 - [Transcript](transcript/contract.md)
