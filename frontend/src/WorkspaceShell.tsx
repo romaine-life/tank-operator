@@ -116,7 +116,11 @@ export function WorkspaceShell({
         {body}
       </main>
 
-      {floatingBetweenBodyAndComposer}
+      {floatingBetweenBodyAndComposer != null && (
+        <div className="run-floating-between">
+          {floatingBetweenBodyAndComposer}
+        </div>
+      )}
 
       {composerVisible && (
         <footer
