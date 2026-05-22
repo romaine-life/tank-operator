@@ -4060,20 +4060,24 @@ function ShellTaskLedger({
   entries,
   active,
   onOpen,
+  disabled = false,
+  title = "Shell tasks",
 }: {
   entries: TranscriptEntry[];
   active: boolean;
   onOpen: () => void;
+  disabled?: boolean;
+  title?: string;
 }) {
-  if (entries.length === 0) return null;
   const activeCount = entries.filter(isBackgroundTaskRunning).length;
   return (
     <button
       type="button"
       className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
-      onClick={onOpen}
+      onClick={disabled ? undefined : onOpen}
       aria-pressed={active}
-      title="Shell tasks"
+      disabled={disabled}
+      title={title}
     >
       <SquareTerminalIcon className="run-tab-icon" aria-hidden="true" />
       <span>Shell tasks</span>
@@ -10965,6 +10969,13 @@ export function App() {
                   <span>Back</span>
                 </button>
               )}
+              <ShellTaskLedger
+                entries={[]}
+                active={false}
+                onOpen={() => undefined}
+                disabled
+                title="Shell tasks are available once the session starts"
+              />
               <button
                 type="button"
                 className="run-tab"

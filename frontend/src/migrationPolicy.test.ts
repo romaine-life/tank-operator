@@ -208,6 +208,19 @@ test("shell tasks page uses stacked full-width sections instead of a side pane",
   assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
 });
 
+test("shell tasks tab stays discoverable before shell task entries exist", () => {
+  const shellTaskLedgerMatch = appSource.match(
+    /function ShellTaskLedger\([\s\S]*?\n}\n\nfunction ShellTaskMeta/,
+  );
+  assert.ok(shellTaskLedgerMatch, "ShellTaskLedger body should be present");
+  assert.equal(shellTaskLedgerMatch[0]!.includes("entries.length === 0"), false);
+  assert.match(appSource, /disabled\?: boolean;/);
+  assert.match(
+    appSource,
+    /<ShellTaskLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Shell tasks are available once the session starts"/,
+  );
+});
+
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
