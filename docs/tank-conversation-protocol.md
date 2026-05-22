@@ -283,13 +283,17 @@ The durable ledger remains fully replayable. Transcript compaction is a
 frontend projection concern layered on top of `session_events`, not a producer
 or storage behavior.
 
-For a turn that ended with `turn.completed` and produced at least one final
-assistant message, the client may condense pre-final assistant progress notes,
+For an active turn, the client may condense current assistant progress notes,
 tool rows, reasoning blocks, background-task rows, and meta rows into a single
-Turn activity disclosure row. The final assistant message remains visible in the
-main transcript. Active turns, failed turns, interrupted turns, and turns that
-never produce a final assistant message stay expanded so failure and stop
-context is not hidden.
+Turn activity disclosure row as they arrive. A trailing run of assistant text
+stays visible in the main transcript as the candidate final answer; if later
+work arrives after it, that assistant text moves into the activity row.
+
+For a turn that ended with `turn.completed` and produced at least one final
+assistant message, the client may condense pre-final activity into the same Turn
+activity row. The final assistant message remains visible in the main
+transcript. Failed turns, interrupted turns, and turns that never produce a
+final assistant message stay expanded so failure and stop context is not hidden.
 
 Deep links still target the original `timeline_id`; opening a link to a
 compacted item expands the Turn activity row around that item.

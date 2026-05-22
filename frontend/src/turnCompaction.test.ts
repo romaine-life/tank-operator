@@ -34,6 +34,66 @@ test("leaves active turns expanded", () => {
   assert.deepEqual(groups.map((group) => group.kind), ["entry", "entry", "entry"]);
 });
 
+test("groups active turn activity before a final-answer candidate exists", () => {
+  const groups = compactCompletedTurnEntries([
+    entry("user", "message", { role: "user" }),
+    entry("tool", "tool"),
+  ], true, "turn-1");
+
+  assert.deepEqual(
+    groups.map((group) =>
+      group.kind === "activity"
+        ? ["activity", group.active, group.entries.map((activityEntry) => activityEntry.id)]
+        : ["entry", group.entry.id],
+    ),
+    [
+      ["entry", "user"],
+      ["activity", true, ["tool"]],
+    ],
+  );
+});
+
+test("keeps trailing active assistant text visible as the final-answer candidate", () => {
+  const groups = compactCompletedTurnEntries([
+    entry("user", "message", { role: "user" }),
+    entry("tool", "tool"),
+    entry("final", "message", { role: "assistant" }),
+  ], true, "turn-1");
+
+  assert.deepEqual(
+    groups.map((group) =>
+      group.kind === "activity"
+        ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
+        : ["entry", group.entry.id],
+    ),
+    [
+      ["entry", "user"],
+      ["activity", ["tool"]],
+      ["entry", "final"],
+    ],
+  );
+});
+
+test("moves active assistant text into activity when later work arrives", () => {
+  const groups = compactCompletedTurnEntries([
+    entry("user", "message", { role: "user" }),
+    entry("note", "message", { role: "assistant" }),
+    entry("tool", "tool"),
+  ], true, "turn-1");
+
+  assert.deepEqual(
+    groups.map((group) =>
+      group.kind === "activity"
+        ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
+        : ["entry", group.entry.id],
+    ),
+    [
+      ["entry", "user"],
+      ["activity", ["note", "tool"]],
+    ],
+  );
+});
+
 test("folds completed turn activity before the final assistant answer", () => {
   const groups = compactCompletedTurnEntries([
     entry("user", "message", { role: "user", turnTerminalStatus: "completed" }),
