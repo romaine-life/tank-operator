@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
@@ -36,6 +37,75 @@ func repoSelectionBucket(count int) string {
 	}
 }
 
+type createSessionInitialTurnRequest struct {
+	ClientNonce    string `json:"client_nonce"`
+	Prompt         string `json:"prompt"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	SkillName      string `json:"skill_name,omitempty"`
+	Deferred       bool   `json:"deferred,omitempty"`
+}
+
+func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTurnRequest) (createSessionInitialTurnRequest, int, string) {
+	if turn == nil {
+		return createSessionInitialTurnRequest{}, 0, ""
+	}
+	runtime, ok := turnRuntimeForSessionMode(mode)
+	if !ok {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn is only supported for durable chat sessions"
+	}
+	if turn.Deferred && sessionmodel.IsNoPodMode(mode) {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.deferred requires a session workspace"
+	}
+	clientNonce := strings.TrimSpace(turn.ClientNonce)
+	if clientNonce == "" || !turnIDPattern.MatchString(clientNonce) {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.client_nonce is required and must match turn id syntax"
+	}
+	prompt := strings.TrimSpace(turn.Prompt)
+	if prompt == "" {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.prompt is required"
+	}
+	if len([]byte(prompt)) > maxSDKTurnPromptBytes {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.prompt too large"
+	}
+	skillName := validateSkillName(turn.SkillName)
+	if strings.TrimSpace(turn.SkillName) != "" && skillName == "" {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.skill_name is invalid"
+	}
+	if skillName != "" && !promptMatchesSkillTrigger(runtime, skillName, prompt) {
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.skill_name does not match prompt trigger"
+	}
+	effort := validateEffort(runtime, strings.TrimSpace(turn.Effort))
+	if strings.TrimSpace(turn.Effort) != "" && effort == "" {
+		if runtime == "codex" {
+			return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.effort is invalid; want one of low|medium|high|xhigh"
+		}
+		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.effort is invalid; want one of low|medium|high|xhigh|max"
+	}
+	return createSessionInitialTurnRequest{
+		ClientNonce:    clientNonce,
+		Prompt:         prompt,
+		Model:          strings.TrimSpace(turn.Model),
+		Effort:         effort,
+		PermissionMode: strings.TrimSpace(turn.PermissionMode),
+		SkillName:      skillName,
+		Deferred:       turn.Deferred,
+	}, 0, ""
+}
+
+func turnRuntimeForSessionMode(mode string) (string, bool) {
+	if sessionmodel.IsNoPodMode(mode) {
+		switch sessionmodel.NormalizeSessionMode(mode) {
+		case sessionmodel.HermesGUIMode:
+			return "hermes", true
+		default:
+			return "", false
+		}
+	}
+	return sdkProviderForMode(mode)
+}
+
 // handleCreateSession creates a new session pod. Accepts the optional
 // `repos[]` selection from the splash picker; the slugs are validated
 // at this boundary (validateRepoSlugs / sessionModeSupportsRepos),
@@ -48,12 +118,14 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		Mode  string   `json:"mode"`
-		Repos []string `json:"repos"`
+		Mode        string                           `json:"mode"`
+		Repos       []string                         `json:"repos"`
+		InitialTurn *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 		body.Repos = nil
+		body.InitialTurn = nil
 	}
 	repos, err := validateRepoSlugs(body.Repos)
 	if err != nil {
@@ -64,18 +136,118 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
+	initialTurn, status, detail := validateCreateSessionInitialTurn(body.Mode, body.InitialTurn)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
+	if body.InitialTurn != nil && s.sessionEvents == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
+		return
+	}
+	if body.InitialTurn != nil && !initialTurn.Deferred && !sessionmodel.IsNoPodMode(body.Mode) && s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
+		return
+	}
 	owner := user.OwnerEmail()
+	launchTurnAt := time.Time{}
+	requestedAt := ""
+	if body.InitialTurn != nil {
+		launchTurnAt = time.Now().UTC()
+		requestedAt = launchTurnAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
+	}
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
-		Owner: owner,
-		Mode:  body.Mode,
-		Repos: repos,
+		Owner:       owner,
+		Mode:        body.Mode,
+		Repos:       repos,
+		RequestedAt: requestedAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if body.InitialTurn != nil {
+		if initialTurn.Deferred {
+			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt); status != 0 {
+				s.rollbackCreatedSession(r.Context(), owner, info.ID, "persist deferred initial turn", detail)
+				writeError(w, status, detail)
+				return
+			}
+		} else {
+			if _, status, detail := s.enqueueSDKTurn(r.Context(), owner, info.ID, sdkTurnRequest{
+				ClientNonce:      initialTurn.ClientNonce,
+				RequireNonce:     true,
+				Prompt:           initialTurn.Prompt,
+				Model:            initialTurn.Model,
+				Effort:           initialTurn.Effort,
+				PermissionMode:   initialTurn.PermissionMode,
+				SkillName:        initialTurn.SkillName,
+				FollowUp:         false,
+				AllowBeforeReady: true,
+				SessionMode:      info.Mode,
+				CreatedAt:        launchTurnAt,
+				OrderBase:        launchTurnAt,
+			}); status != 0 {
+				s.rollbackCreatedSession(r.Context(), owner, info.ID, "submit initial turn", detail)
+				writeError(w, status, detail)
+				return
+			}
+		}
+	}
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time) (int, string) {
+	info, err := s.mgr.GetByOwner(ctx, owner, sessionID)
+	if err != nil {
+		return http.StatusNotFound, "session not found"
+	}
+	runtime, ok := turnRuntimeForSessionMode(info.Mode)
+	if !ok {
+		return http.StatusBadRequest, "session mode does not support durable initial turns"
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	_, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             owner,
+		ClientNonce:       turn.ClientNonce,
+		Text:              turn.Prompt,
+		Message:           map[string]any{"role": "user", "content": turn.Prompt},
+		Runtime:           runtime,
+		SkillName:         turn.SkillName,
+		Now:               createdAt.UTC(),
+	})
+	if err != nil {
+		return http.StatusBadRequest, err.Error()
+	}
+	retimeTurnBoundaryEvents(events, createdAt)
+	for _, event := range events {
+		if event["type"] != string(conversation.EventUserMessageCreated) {
+			continue
+		}
+		if writeErr := s.persistBackendEvent(ctx, storageKey, event); writeErr != nil {
+			return http.StatusInternalServerError, "persist initial user message: " + writeErr.Error()
+		}
+		return 0, ""
+	}
+	return http.StatusInternalServerError, "initial user message event missing"
+}
+
+func (s *appServer) rollbackCreatedSession(ctx context.Context, owner, sessionID, action, detail string) {
+	if s == nil || s.mgr == nil {
+		return
+	}
+	if err := s.mgr.Delete(ctx, owner, sessionID); err != nil {
+		slog.Warn("create session rollback failed",
+			"session_id", sessionID,
+			"owner", owner,
+			"action", action,
+			"detail", detail,
+			"error", err,
+		)
+	}
 }
 
 // stampSnapshotCursorHeader writes Tank-Sessions-Snapshot-Cursor on

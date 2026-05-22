@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -71,14 +72,15 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		ClientNonce     string `json:"client_nonce"`
-		Prompt          string `json:"prompt"`
-		Model           string `json:"model"`
-		Effort          string `json:"effort"`
-		PermissionMode  string `json:"permission_mode"`
-		SkillName       string `json:"skill_name"`
-		FollowUp        bool   `json:"follow_up"`
-		OriginSessionID string `json:"origin_session_id"`
+		ClientNonce         string `json:"client_nonce"`
+		Prompt              string `json:"prompt"`
+		Model               string `json:"model"`
+		Effort              string `json:"effort"`
+		PermissionMode      string `json:"permission_mode"`
+		SkillName           string `json:"skill_name"`
+		FollowUp            bool   `json:"follow_up"`
+		OriginSessionID     string `json:"origin_session_id"`
+		ExistingUserMessage bool   `json:"existing_user_message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -95,6 +97,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		PermissionMode:  body.PermissionMode,
 		SkillName:       body.SkillName,
 		FollowUp:        body.FollowUp,
+		OmitUserMessage: body.ExistingUserMessage,
 		OriginSessionID: body.OriginSessionID,
 	})
 	if detail != "" {
@@ -403,14 +406,19 @@ func inputReplyPayloadSize(answers map[string][]string, annotations map[string]s
 }
 
 type sdkTurnRequest struct {
-	ClientNonce    string
-	RequireNonce   bool
-	Prompt         string
-	Model          string
-	Effort         string
-	PermissionMode string
-	SkillName      string
-	FollowUp       bool
+	ClientNonce      string
+	RequireNonce     bool
+	Prompt           string
+	Model            string
+	Effort           string
+	PermissionMode   string
+	SkillName        string
+	FollowUp         bool
+	AllowBeforeReady bool
+	OmitUserMessage  bool
+	SessionMode      string
+	CreatedAt        time.Time
+	OrderBase        time.Time
 	// OriginSessionID identifies the sibling tank-operator session that
 	// authored this turn via an MCP handoff, or the source session for a
 	// browser-created fork. Human-typed browser turns leave it empty.
@@ -420,6 +428,12 @@ type sdkTurnRequest struct {
 }
 
 func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]string, int, string) {
+	createdAt := req.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	} else {
+		createdAt = createdAt.UTC()
+	}
 	clientNonce := strings.TrimSpace(req.ClientNonce)
 	if clientNonce == "" {
 		if req.RequireNonce {
@@ -439,32 +453,44 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		return nil, http.StatusBadRequest, "prompt too large"
 	}
 
-	info, err := s.mgr.GetByOwner(ctx, email, sessionID)
-	if err != nil {
-		return nil, http.StatusNotFound, "session not found"
+	sessionMode := strings.TrimSpace(req.SessionMode)
+	var podName *string
+	if sessionMode == "" {
+		info, err := s.mgr.GetByOwner(ctx, email, sessionID)
+		if err != nil {
+			return nil, http.StatusNotFound, "session not found"
+		}
+		sessionMode = info.Mode
+		podName = info.PodName
+	} else {
+		sessionMode = sessionmodel.NormalizeSessionMode(sessionMode)
 	}
 
 	// hermes_gui short-circuits the NATS / pod path entirely. The bridge
 	// owns the durable boundary events, the /v1/runs POST, and the
 	// SSE-tailing goroutine that writes translated events into
 	// session_events. See nelsong6/tank-operator#540.
-	if sessionmodel.IsNoPodMode(info.Mode) {
+	if sessionmodel.IsNoPodMode(sessionMode) {
 		if s.hermesBridge == nil {
 			return nil, http.StatusServiceUnavailable, "hermes bridge not configured (HERMES_API_URL / HERMES_API_BEARER missing on the orchestrator)"
 		}
 		result, err := s.hermesBridge.SubmitTurn(ctx, hermes.SubmitArgs{
-			SessionID:   sessionID,
-			Email:       email,
-			ClientNonce: clientNonce,
-			Text:        prompt,
+			SessionID:       sessionID,
+			Email:           email,
+			ClientNonce:     clientNonce,
+			Text:            prompt,
+			SkillName:       validateSkillName(req.SkillName),
+			OmitUserMessage: req.OmitUserMessage,
+			Now:             createdAt,
+			OrderBase:       req.OrderBase,
 		})
 		if err != nil {
 			return nil, http.StatusBadGateway, "hermes submit: " + err.Error()
 		}
-		return map[string]string{"turn_id": result.TurnID, "run_id": result.RunID}, http.StatusAccepted, ""
+		return map[string]string{"turn_id": result.TurnID, "run_id": result.RunID}, 0, ""
 	}
 
-	provider, ok := sdkProviderForMode(info.Mode)
+	provider, ok := sdkProviderForMode(sessionMode)
 	if !ok {
 		return nil, http.StatusBadRequest, "session mode does not support app chat turns"
 	}
@@ -487,15 +513,17 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		}
 		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
 	}
-	if info.PodName == nil {
-		return nil, http.StatusServiceUnavailable, "session pod not ready"
-	}
-	pod, err := s.k8s.CoreV1().Pods(s.namespace).Get(ctx, *info.PodName, metav1.GetOptions{})
-	if err != nil {
-		return nil, http.StatusServiceUnavailable, "pod fetch failed: " + err.Error()
-	}
-	if !podHasSDKRunner(pod) {
-		return nil, http.StatusBadRequest, "session pod has no SDK runner container"
+	if !req.AllowBeforeReady {
+		if podName == nil {
+			return nil, http.StatusServiceUnavailable, "session pod not ready"
+		}
+		pod, err := s.k8s.CoreV1().Pods(s.namespace).Get(ctx, *podName, metav1.GetOptions{})
+		if err != nil {
+			return nil, http.StatusServiceUnavailable, "pod fetch failed: " + err.Error()
+		}
+		if !podHasSDKRunner(pod) {
+			return nil, http.StatusBadRequest, "session pod has no SDK runner container"
+		}
 	}
 
 	if s.sessionBus == nil {
@@ -512,10 +540,19 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Runtime:           provider,
 		SkillName:         skillName,
 		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
-		Now:               time.Now().UTC(),
+		Now:               createdAt,
 	})
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
+	}
+	if req.OmitUserMessage {
+		if status, detail := s.requireExistingUserMessage(ctx, sessionID, turnID); status != 0 {
+			return nil, status, detail
+		}
+	}
+	retimeTurnBoundaryEvents(events, req.OrderBase)
+	if req.OmitUserMessage {
+		events = omitUserMessageEvents(events)
 	}
 	command := sessionbus.Command{
 		CommandID:         "turn:" + clientNonce,
@@ -533,7 +570,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
 		FollowUp:          req.FollowUp,
-		CreatedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		CreatedAt:         createdAt.Format(time.RFC3339Nano),
 	}
 	// Boundary events are backend-owned: the orchestrator accepted the turn,
 	// the orchestrator persists user_message.created + turn.submitted to
@@ -578,13 +615,64 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	}, 0, ""
 }
 
+func (s *appServer) requireExistingUserMessage(ctx context.Context, sessionID, turnID string) (int, string) {
+	if s.sessionEvents == nil {
+		return http.StatusServiceUnavailable, "session event store unavailable"
+	}
+	orderKey, err := s.sessionEvents.OrderKeyForTimelineID(ctx, sessionID, turnID+":user")
+	if err != nil {
+		return http.StatusInternalServerError, "lookup existing user message: " + err.Error()
+	}
+	if strings.TrimSpace(orderKey) == "" {
+		return http.StatusBadRequest, "existing_user_message requires a durable launch user message"
+	}
+	return 0, ""
+}
+
+func omitUserMessageEvents(events []map[string]any) []map[string]any {
+	out := events[:0]
+	for _, event := range events {
+		if event["type"] == string(conversation.EventUserMessageCreated) {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+func retimeTurnBoundaryEvents(events []map[string]any, base time.Time) {
+	if base.IsZero() {
+		return
+	}
+	base = base.UTC()
+	for i, event := range events {
+		eventTime := base.Add(time.Duration(i) * time.Millisecond)
+		event["created_at"] = eventTime.Format(time.RFC3339Nano)
+		event["written_at"] = eventTime.Format(time.RFC3339Nano)
+		event["order_key"] = orderKeyForEventTime(eventTime, i, eventIDForOrderKey(event))
+	}
+}
+
+func orderKeyForEventTime(eventTime time.Time, sequence int, eventID string) string {
+	return fmt.Sprintf("%013d-%08d-%s", eventTime.UTC().UnixMilli(), sequence, eventID)
+}
+
+func eventIDForOrderKey(event map[string]any) string {
+	for _, key := range []string{"event_id", "id", "uuid"} {
+		if value, ok := event[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return auth.RandomHex(12)
+}
+
 func promptMatchesSkillTrigger(provider, skillName, prompt string) bool {
 	trigger := skillPromptTrigger(provider, skillName)
 	return prompt == trigger || strings.HasPrefix(prompt, trigger+" ") || strings.HasPrefix(prompt, trigger+"\n")
 }
 
 func skillPromptTrigger(provider, skillName string) string {
-	if provider == "codex" {
+	if provider == "codex" || provider == "hermes" {
 		return "$" + skillName
 	}
 	return "/" + skillName

@@ -828,6 +828,8 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
+const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
 const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
@@ -2043,6 +2045,14 @@ function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: strin
   const trigger = skillTrigger(MODE_MENU_ICONS[mode] === "anthropic", name);
   const trimmed = text.trim();
   return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
+}
+
+function composeLaunchUserPrompt(text: string, attachments: { name: string }[]): string {
+  const trimmed = text.trim();
+  if (attachments.length === 0) return trimmed;
+  const attachmentList = attachments.map((attachment) => `- ${attachment.name}`).join("\n");
+  const attachmentText = `Attachments:\n${attachmentList}`;
+  return trimmed ? `${trimmed}\n\n${attachmentText}` : attachmentText;
 }
 
 function initialMessageModeDirective(mode: InitialMessageMode): string {
@@ -7735,7 +7745,7 @@ function ChatPane({
   }
 
   useEffect(() => {
-    if (!visible || session.status !== "Active" || !historyBootstrapped) return;
+    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = openSdkEventStream();
     return () => {
@@ -7744,7 +7754,7 @@ function ChatPane({
     };
   // openSdkEventStream closes over the current session cursor and reducer state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyBootstrapped, visible, session.id, session.status]);
+  }, [historyBootstrapped, visible, session.id, session.mode]);
 
   const submitStatus =
     runStatus === "running" || runStatus === "stopping"
@@ -10060,11 +10070,43 @@ export function App() {
       (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
+    const seedModel =
+      selectedProvider === "anthropic" || selectedProvider === "codex"
+        ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
+        : "";
+    const seedEffort =
+      selectedProvider === "anthropic" || selectedProvider === "codex"
+        ? selectedHomeEffortId
+        : "";
+    const seedInitialTurnAtCreate =
+      seedTurnRequested && CREATE_TIME_INITIAL_TURN_MODES.has(mode);
+    const seedTurnDeferredAtCreate =
+      seedInitialTurnAtCreate && SDK_CHAT_MODES.has(mode) && pendingHomeAttachments.length > 0;
+    const seedTurnSubmittedAtCreate = seedInitialTurnAtCreate && !seedTurnDeferredAtCreate;
+    const launchUserPrompt = composeLaunchUserPrompt(seedPrompt, pendingHomeAttachments);
+    const createTimeTurnPrompt = requestedInitialSkillName
+      ? composeSkillPrompt(mode, requestedInitialSkillName, launchUserPrompt)
+      : launchUserPrompt;
+    const initialTurnPayload = seedInitialTurnAtCreate
+      ? {
+          client_nonce: seedClientNonce,
+          prompt: createTimeTurnPrompt,
+          ...(seedTurnDeferredAtCreate ? { deferred: true } : {}),
+          model: seedModel,
+          ...(seedEffort ? { effort: seedEffort } : {}),
+          permission_mode: initialPermissionMode,
+          ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
+        }
+      : undefined;
     try {
       const res = await authedFetch("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, repos }),
+        body: JSON.stringify({
+          mode,
+          repos,
+          ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
+        }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       let created: Session = normalizeSession(await res.json());
@@ -10107,23 +10149,19 @@ export function App() {
         setHomeSessionName("");
         setHomeEditingTitle(false);
       }
+      if (seedInitialTurnAtCreate && requestedInitialSkillName === "test") {
+        void markCreatedSessionTestState(created.id).catch((e) => {
+          setError(String(e));
+        });
+      }
       // Belt-and-braces reconcile in the background — the lifecycle SSE
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
-      // If the caller seeded an initial prompt from the home composer, wait
-      // for the pod to become ready and submit it as the first turn. Only
-      // chat modes have a turn endpoint; non-chat modes ignore the prompt
-      // because the home composer would not have surfaced a sensible target.
-      if (seedTurnRequested) {
-        const model =
-          selectedProvider === "anthropic" || selectedProvider === "codex"
-            ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
-            : "";
-        const effort =
-          selectedProvider === "anthropic" || selectedProvider === "codex"
-            ? selectedHomeEffortId
-            : "";
+      // Create-time submitted launch turns are already durable. Deferred
+      // launch turns already have their user row; after readiness this path
+      // uploads files and writes only the turn.submitted boundary.
+      if (seedTurnRequested && !seedTurnSubmittedAtCreate) {
         try {
           const readySession = await waitForSessionReady(created.id);
           setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
@@ -10175,10 +10213,11 @@ export function App() {
             body: JSON.stringify({
               client_nonce: seedClientNonce,
               prompt: turnPrompt,
-              model,
-              ...(effort ? { effort } : {}),
+              model: seedModel,
+              ...(seedEffort ? { effort: seedEffort } : {}),
               permission_mode: initialPermissionMode,
               ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
+              ...(seedTurnDeferredAtCreate ? { existing_user_message: true } : {}),
               follow_up: false,
             }),
           });

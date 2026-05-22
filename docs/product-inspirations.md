@@ -38,6 +38,11 @@ state is separate from work state.
   sidebar/session state, but transcript rows are rendered only from the
   conversation ledger; browser-local startup drafts are not a transcript
   source.
+- A first prompt typed on the splash screen is written to the durable
+  conversation ledger before startup status, so the visible transcript begins
+  with the user's message instead of client-only optimism. If attachments need
+  pod-local paths, the user row is still written at creation time and the
+  executable turn submission reuses that durable row after upload.
 - Provider-specific event streams are adapter inputs. The frontend renders the
   Tank conversation protocol, not raw provider wire formats.
 - Transcript deep links resolve through the durable conversation ledger. A

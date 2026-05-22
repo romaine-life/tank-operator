@@ -36,6 +36,8 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 		"WHEN 'ready' THEN '00000001'",
 		"WHEN 'failed' THEN '00000002'",
 		"se.event_id = v_event_id",
+		"coalesce(NEW.requested_at, NEW.created_at)",
+		"coalesce(NEW.ready_at, NEW.created_at, NEW.requested_at)",
 		"FROM sessions",
 	} {
 		if !strings.Contains(migrations, want) {

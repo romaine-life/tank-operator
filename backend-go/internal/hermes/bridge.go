@@ -26,7 +26,7 @@ type EventStore interface {
 type Recorder interface {
 	RunCreated()
 	RunCreateFailed()
-	RunTerminal(terminal string) // "completed" | "failed" | "interrupted" | "command_failed" | "lost"
+	RunTerminal(terminal string)   // "completed" | "failed" | "interrupted" | "command_failed" | "lost"
 	TranslatorError(reason string) // "decode" | "unhandled_type"
 }
 
@@ -102,11 +102,15 @@ func (b *Bridge) record(fn func(Recorder)) {
 // turn id and the run id; the run id is opaque to callers but recorded on
 // the activeTurns map for Stop.
 type SubmitArgs struct {
-	SessionID    string
-	Email        string
-	ClientNonce  string
-	Text         string
-	Instructions string // optional; layered on top of Hermes' core prompt
+	SessionID       string
+	Email           string
+	ClientNonce     string
+	Text            string
+	Instructions    string // optional; layered on top of Hermes' core prompt
+	SkillName       string
+	OmitUserMessage bool
+	Now             time.Time
+	OrderBase       time.Time
 }
 
 type SubmitResult struct {
@@ -127,6 +131,12 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 	if args.Text == "" {
 		return SubmitResult{}, errors.New("text is required")
 	}
+	now := args.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
 	storageKey := sessionmodel.SessionStorageKey(b.scope, args.SessionID)
 
 	// 1. Land the user_message + turn.submitted pair. These are Tank-origin
@@ -139,9 +149,15 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 		Text:              args.Text,
 		ClientNonce:       args.ClientNonce,
 		Runtime:           "hermes",
+		SkillName:         args.SkillName,
+		Now:               now,
 	})
 	if err != nil {
 		return SubmitResult{}, fmt.Errorf("user submission events: %w", err)
+	}
+	retimeTurnBoundaryEvents(userEvents, args.OrderBase)
+	if args.OmitUserMessage {
+		userEvents = omitUserMessageEvents(userEvents)
 	}
 	for _, evt := range userEvents {
 		if upErr := b.store.Upsert(ctx, evt); upErr != nil {
@@ -188,6 +204,43 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 	}, at)
 
 	return SubmitResult{TurnID: turnID, RunID: runResp.RunID}, nil
+}
+
+func omitUserMessageEvents(events []map[string]any) []map[string]any {
+	out := events[:0]
+	for _, event := range events {
+		if event["type"] == string(conversation.EventUserMessageCreated) {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+func retimeTurnBoundaryEvents(events []map[string]any, base time.Time) {
+	if base.IsZero() {
+		return
+	}
+	base = base.UTC()
+	for i, event := range events {
+		eventTime := base.Add(time.Duration(i) * time.Millisecond)
+		event["created_at"] = eventTime.Format(time.RFC3339Nano)
+		event["written_at"] = eventTime.Format(time.RFC3339Nano)
+		event["order_key"] = orderKeyForEventTime(eventTime, i, eventIDForOrderKey(event))
+	}
+}
+
+func orderKeyForEventTime(eventTime time.Time, sequence int, eventID string) string {
+	return fmt.Sprintf("%013d-%08d-%s", eventTime.UTC().UnixMilli(), sequence, eventID)
+}
+
+func eventIDForOrderKey(event map[string]any) string {
+	for _, key := range []string{"event_id", "id", "uuid"} {
+		if value, ok := event[key].(string); ok && value != "" {
+			return value
+		}
+	}
+	return "missing-event-id"
 }
 
 type runStreamArgs struct {
@@ -338,4 +391,3 @@ func (b *Bridge) statsSnapshot() map[string]int {
 		"active_turns": len(b.activeTurns),
 	}
 }
-

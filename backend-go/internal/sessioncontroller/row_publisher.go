@@ -37,6 +37,14 @@ type RowUpdatePublisher interface {
 	PublishSessionRowUpdate(ctx context.Context, email, scope string, payload []byte) error
 }
 
+// SessionEventWakePublisher is the optional per-session transcript
+// wake surface. sessions status DB triggers write durable
+// session.status rows as part of registry updates; this wake lets an
+// already-open transcript SSE read those rows immediately.
+type SessionEventWakePublisher interface {
+	PublishSessionEventWake(ctx context.Context, storageKey string) error
+}
+
 // RowPublisher fans a single row's post-write state out on NATS.
 // Stateless beyond its dependencies; safe for concurrent use.
 type RowPublisher struct {
@@ -68,6 +76,7 @@ func (p *RowPublisher) PublishCurrentRow(ctx context.Context, owner, sessionID s
 	if !ok {
 		return
 	}
+	defer p.publishSessionEventWake(ctx, sessionID)
 	payload, err := MarshalRowUpdate(record)
 	if err != nil {
 		slog.Warn("sessioncontroller: row marshal for publish failed",
@@ -77,6 +86,18 @@ func (p *RowPublisher) PublishCurrentRow(ctx context.Context, owner, sessionID s
 	if err := p.Publisher.PublishSessionRowUpdate(ctx, owner, p.Scope, payload); err != nil {
 		slog.Warn("sessioncontroller: row update publish failed",
 			"owner", owner, "scope", p.Scope, "session_id", sessionID, "error", err)
+	}
+}
+
+func (p *RowPublisher) publishSessionEventWake(ctx context.Context, sessionID string) {
+	waker, ok := p.Publisher.(SessionEventWakePublisher)
+	if !ok {
+		return
+	}
+	storageKey := sessionmodel.SessionStorageKey(p.Scope, sessionID)
+	if err := waker.PublishSessionEventWake(ctx, storageKey); err != nil {
+		slog.Warn("sessioncontroller: session event wake publish failed",
+			"scope", p.Scope, "session_id", sessionID, "storage_key", storageKey, "error", err)
 	}
 }
 
