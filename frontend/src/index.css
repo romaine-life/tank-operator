@@ -2658,6 +2658,43 @@ button:disabled {
   line-height: 1.2;
 }
 
+.run-background-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-2);
+}
+
+.run-background-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 1.75rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.run-background-tab:hover,
+.run-background-tab-active {
+  border-color: rgba(96, 165, 250, 0.2);
+  background: rgba(96, 165, 250, 0.08);
+  color: var(--text-primary);
+}
+
+.run-background-tab span:last-child {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
 .run-shell-tasks-empty,
 .run-shell-task-detail-empty {
   display: flex;

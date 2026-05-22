@@ -225,13 +225,30 @@ test("background tab stays discoverable before background entries exist", () => 
 test("background page includes active shell invocations alongside managed tasks", () => {
   assert.match(
     appSource,
-    /function isRunningShellInvocationEntry\([\s\S]*?entry\.toolKind === "shell"[\s\S]*?normalizeToolState\(entry\.toolStatus\) === "running"/,
+    /function isShellToolEntry\([\s\S]*?entry\.toolKind === "shell"[\s\S]*?function isRunningShellInvocationEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?normalizeToolState\(entry\.toolStatus\) === "running"/,
   );
   assert.match(
     appSource,
     /const activeBackgroundEntries = useMemo\([\s\S]*?backgroundTaskEntries\.filter\(isBackgroundTaskRunning\)[\s\S]*?runningShellInvocationEntries/,
   );
-  assert.match(appSource, /<BackgroundScreen\n\s+entries=\{activeBackgroundEntries\}/);
+  assert.match(appSource, /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/);
+});
+
+test("background page separates tracked shells from detached shell candidates", () => {
+  assert.match(appSource, /type BackgroundView = "shells" \| "detached"/);
+  assert.match(
+    appSource,
+    /function isDetachedShellCandidateEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?detachedShellLaunchReason\(entry\)/,
+  );
+  assert.match(appSource, /<span>Shells<\/span>[\s\S]*?<span>Detached<\/span>/);
+  assert.match(
+    appSource,
+    /const detachedShellEntries = useMemo\([\s\S]*?renderedEntries\.filter\(isDetachedShellCandidateEntry\)/,
+  );
+  assert.match(
+    appSource,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
+  );
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
