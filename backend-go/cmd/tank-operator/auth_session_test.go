@@ -188,6 +188,34 @@ func TestHandleCreateStreamTicketScopesSessionEventTicket(t *testing.T) {
 	}
 }
 
+func TestHandleCreateStreamTicketAllowsServiceActor(t *testing.T) {
+	app := adminTestServer(t)
+	tickets := &fakeStreamAuthTicketStore{}
+	app.streamAuthTickets = tickets
+	app.sessionScope = "default"
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/stream-ticket", strings.NewReader(`{
+		"stream": "session-list"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+signedServiceToken(
+		t,
+		"pod-orchestrator@service.tank-operator.romaine.life",
+		otherUser,
+	))
+	response := httptest.NewRecorder()
+
+	app.handleCreateStreamTicket(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if tickets.created.Email != "pod-orchestrator@service.tank-operator.romaine.life" ||
+		tickets.created.ActorEmail != otherUser ||
+		tickets.created.Role != auth.RoleService ||
+		tickets.created.StreamKind != streamKindSessionList ||
+		tickets.created.SessionID != "" {
+		t.Fatalf("created ticket = %#v", tickets.created)
+	}
+}
+
 type testSessionRegistry struct {
 	records map[string]map[string]sessionmodel.SessionRecord
 }

@@ -1,4 +1,4 @@
-import { getStoredToken } from "./auth";
+import { authedFetch } from "./auth";
 
 // Chat transcript scroll telemetry. Console logging is opt-in per browser with
 // `localStorage.tankDebug = "chat-scroll"` or a comma-separated list that
@@ -122,18 +122,10 @@ function scheduleFlush(): void {
 function flushChatScrollMetrics(): void {
   if (typeof window === "undefined" || pendingMetrics.length === 0) return;
   const events = pendingMetrics.splice(0, MAX_BATCH_EVENTS);
-  let token: string | null = null;
-  try {
-    token = getStoredToken();
-  } catch {
-    return;
-  }
-  if (!token) return;
   if (typeof fetch !== "function") return;
-  fetch(METRICS_ENDPOINT, {
+  authedFetch(METRICS_ENDPOINT, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ events }),

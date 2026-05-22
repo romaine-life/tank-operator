@@ -72,7 +72,7 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { AUTH_TOKEN_UPDATED_EVENT, authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
@@ -5704,6 +5704,9 @@ function ChatPane({
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
+  const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
+  const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
+  const [fileRawImageError, setFileRawImageError] = useState<string | null>(null);
   // Edit-mode bookkeeping for the file viewer.
   const [fileDraft, setFileDraft] = useState<string | null>(null);
   const [fileSaving, setFileSaving] = useState(false);
@@ -6811,6 +6814,40 @@ function ChatPane({
       cancelled = true;
     };
   }, [filesAvailable, selectedFile, session.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setFileRawImageUrl(null);
+    setFileRawImageError(null);
+    setFileRawImageLoading(false);
+    if (!filesAvailable || !selectedFile?.binary || !isImagePath(selectedFile.path)) {
+      return () => undefined;
+    }
+    setFileRawImageLoading(true);
+    void authedFetch(
+      `/api/sessions/${session.id}/files/raw?path=${encodeURIComponent(selectedFile.path)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setFileRawImageUrl(objectUrl);
+        setFileRawImageLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setFileRawImageError(String((err as Error).message ?? err));
+        setFileRawImageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [filesAvailable, selectedFile?.binary, selectedFile?.path, session.id]);
 
   useEffect(() => {
     if (session.status !== "Active") {
@@ -8237,11 +8274,23 @@ function ChatPane({
                   </div>
                 ) : selectedFile.binary && isImagePath(selectedFile.path) ? (
                   <div className="run-files-viewer-image-wrap">
-                    <img
-                      className="run-files-viewer-image"
-                      alt={selectedFile.path}
-                      src={`/api/sessions/${session.id}/files/raw?path=${encodeURIComponent(selectedFile.path)}`}
-                    />
+                    {fileRawImageLoading ? (
+                      <div className="run-files-status">
+                        <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                        <span>Loading image...</span>
+                      </div>
+                    ) : fileRawImageError ? (
+                      <div className="run-files-status">
+                        <AlertCircleIcon size={14} aria-hidden="true" />
+                        <span>Image preview failed.</span>
+                      </div>
+                    ) : fileRawImageUrl ? (
+                      <img
+                        className="run-files-viewer-image"
+                        alt={selectedFile.path}
+                        src={fileRawImageUrl}
+                      />
+                    ) : null}
                   </div>
                 ) : selectedFile.binary ? (
                   <div className="run-files-status">
@@ -8921,15 +8970,23 @@ function CliProcessTerminal({
 }) {
   const [processId, setProcessId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [clientToken, setClientToken] = useState<string | undefined>(() => getStoredToken() ?? undefined);
   const client = useMemo(
     () =>
       new SandboxAgent({
         baseUrl: `${location.origin}/api/sessions/${session.id}/sandbox-agent`,
-        token: getStoredToken() ?? undefined,
+        token: clientToken,
         skipHealthCheck: true,
       }),
-    [session.id],
+    [clientToken, session.id],
   );
+
+  useEffect(() => {
+    const syncToken = () => setClientToken(getStoredToken() ?? undefined);
+    syncToken();
+    window.addEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
+    return () => window.removeEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
+  }, [session.id]);
 
   useEffect(() => {
     if (!visible) return;
@@ -8941,7 +8998,10 @@ function CliProcessTerminal({
         return (await res.json()) as { process_id: string };
       })
       .then((body) => {
-        if (!cancelled) setProcessId(body.process_id);
+        if (!cancelled) {
+          setClientToken(getStoredToken() ?? undefined);
+          setProcessId(body.process_id);
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(String((err as Error).message ?? err));

@@ -22,8 +22,10 @@ interface SessionUser {
 }
 
 const TOKEN_KEY = "auth-romaine-jwt";
+export const AUTH_TOKEN_UPDATED_EVENT = "tank-auth-token-updated";
 
 let cachedConfig: AppConfig | null = null;
+let tokenRefreshInFlight: Promise<string | null> | null = null;
 
 async function fetchConfig(): Promise<AppConfig> {
   if (cachedConfig) return cachedConfig;
@@ -61,6 +63,7 @@ async function fetchMe(token: string): Promise<SessionUser> {
 function storeToken(token: string): void {
   try {
     localStorage.setItem(TOKEN_KEY, token);
+    dispatchTokenUpdated();
     return;
   } catch (err) {
     if (!isQuotaExceeded(err)) throw err;
@@ -75,6 +78,7 @@ function storeToken(token: string): void {
     }
   }
   localStorage.setItem(TOKEN_KEY, token);
+  dispatchTokenUpdated();
 }
 
 function isQuotaExceeded(err: unknown): boolean {
@@ -88,6 +92,34 @@ export function getStoredToken(): string | null {
 
 export function clearStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  dispatchTokenUpdated();
+}
+
+function dispatchTokenUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(AUTH_TOKEN_UPDATED_EVENT));
+}
+
+async function refreshStoredToken(): Promise<string | null> {
+  if (tokenRefreshInFlight) return tokenRefreshInFlight;
+  tokenRefreshInFlight = (async () => {
+    let config: AppConfig;
+    try {
+      config = await fetchConfig();
+    } catch {
+      return null;
+    }
+    const upstreamJWT = await fetchUpstreamJWT(config.auth_url);
+    if (!upstreamJWT) {
+      clearStoredToken();
+      return null;
+    }
+    storeToken(upstreamJWT);
+    return upstreamJWT;
+  })().finally(() => {
+    tokenRefreshInFlight = null;
+  });
+  return tokenRefreshInFlight;
 }
 
 export type StreamTicketRequest =
@@ -188,10 +220,37 @@ export async function logout(): Promise<void> {
   window.location.assign("/");
 }
 
-/** fetch wrapper that adds the Bearer token. */
+function authedInit(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  token: string | null,
+): RequestInit {
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  } else {
+    headers.delete("Authorization");
+  }
+  return { ...init, headers };
+}
+
+/** fetch wrapper that adds the Bearer token and refreshes it once on 401. */
 export async function authedFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
-  const token = getStoredToken();
-  const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(input, { ...init, headers });
+  let token = getStoredToken();
+  if (!token) {
+    token = await refreshStoredToken();
+  }
+  const first = await fetch(input, authedInit(input, init, token));
+  if (first.status !== 401) return first;
+
+  const latest = getStoredToken();
+  const refreshed = latest && latest !== token ? latest : await refreshStoredToken();
+  if (!refreshed) return first;
+
+  const retry = await fetch(input, authedInit(input, init, refreshed));
+  if (retry.status === 401 && getStoredToken() === refreshed) {
+    clearStoredToken();
+  }
+  return retry;
 }

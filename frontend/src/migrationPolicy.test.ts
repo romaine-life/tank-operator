@@ -129,6 +129,12 @@ test("browser EventSource streams use opaque stream tickets, not bearer query st
   assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-list"/);
 });
 
+test("browser-native protected resources are not loaded with raw API URLs", () => {
+  assert.equal(appSource.includes('src={`/api/sessions/${session.id}/files/raw'), false);
+  assert.equal(appSource.includes("URL.createObjectURL(blob)"), true);
+  assert.match(appSource, /authedFetch\([\s\S]{0,120}\/files\/raw\?path=/);
+});
+
 test("startup transcript rows come from durable conversation events", () => {
   assert.equal(appSource.includes("startupTranscript"), false);
   assert.equal(appSource.includes("sessionStartupDrafts"), false);
