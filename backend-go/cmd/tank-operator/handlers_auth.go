@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
@@ -15,7 +16,13 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 )
 
-const gitHubInstallStateTTL = 10 * time.Minute
+const (
+	gitHubInstallStateTTL = 10 * time.Minute
+	streamAuthTicketTTL   = 2 * time.Minute
+
+	streamKindSessionList   = "session-list"
+	streamKindSessionEvents = "session-events"
+)
 
 type gitHubInstallStateStore interface {
 	Create(ctx context.Context, state, email string, expiresAt time.Time) error
@@ -89,6 +96,78 @@ func (s *appServer) handleUpdatePrefs(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"run_prefs": profile.RunPrefs,
+	})
+}
+
+func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !user.IsHuman() {
+		recordStreamAuthTicket("create", "", "denied")
+		writeError(w, http.StatusForbidden, "human user required")
+		return
+	}
+	if s.streamAuthTickets == nil {
+		recordStreamAuthTicket("create", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "stream auth ticket store not configured")
+		return
+	}
+
+	var body struct {
+		Stream    string `json:"stream"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		recordStreamAuthTicket("create", "", "invalid")
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	streamKind := strings.TrimSpace(body.Stream)
+	sessionID := strings.TrimSpace(body.SessionID)
+	switch streamKind {
+	case streamKindSessionList:
+		sessionID = ""
+	case streamKindSessionEvents:
+		if sessionID == "" {
+			recordStreamAuthTicket("create", streamKind, "invalid")
+			writeError(w, http.StatusBadRequest, "session_id is required for session event streams")
+			return
+		}
+		if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+			recordStreamAuthTicket("create", streamKind, "denied")
+			writeError(w, status, err.Error())
+			return
+		}
+	default:
+		recordStreamAuthTicket("create", streamKind, "invalid")
+		writeError(w, http.StatusBadRequest, "unknown stream")
+		return
+	}
+
+	expiresAt := time.Now().Add(streamAuthTicketTTL)
+	ticket := auth.RandomHex(32)
+	if err := s.streamAuthTickets.Create(r.Context(), pgstore.StreamAuthTicket{
+		Ticket:       ticket,
+		Sub:          user.Sub,
+		Email:        user.Email,
+		Name:         user.Name,
+		Role:         user.Role,
+		ActorEmail:   user.ActorEmail,
+		StreamKind:   streamKind,
+		SessionScope: s.sessionScope,
+		SessionID:    sessionID,
+		ExpiresAt:    expiresAt,
+	}); err != nil {
+		recordStreamAuthTicket("create", streamKind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordStreamAuthTicket("create", streamKind, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"ticket":     ticket,
+		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }
 

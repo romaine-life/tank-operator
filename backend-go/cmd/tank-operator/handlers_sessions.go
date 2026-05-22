@@ -332,7 +332,7 @@ func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 // The SPA's SessionStore is a row cache that replaces-by-id on each
 // delivery — no event-type switch, no placeholder synthesis.
 func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
+	user, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionList, "")
 	if !ok {
 		return
 	}

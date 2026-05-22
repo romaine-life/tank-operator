@@ -40,6 +40,11 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_session_event_stream_lag_seconds` histogram. Same names as the
   prior expvar counters (`_total` suffix added where missing per Prom
   convention).
+- `tank_stream_auth_ticket_total` — browser EventSource stream-ticket
+  create/validate attempts. Labels: `operation` (`create`, `validate`),
+  `stream` (`session-list`, `session-events`), and bounded `result`.
+  Store failures are the signature where REST timeline reads still work
+  but live SSE streams never open.
 - `tank_chat_scroll_client_*` - browser-reported transcript scroll
   diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
   Labels are server-bucketed only: `event`, `surface`, `session_mode`,
@@ -115,10 +120,11 @@ the middleware extracts).
 declares one rule group per subsystem:
 
 - **HTTP**: 5xx rate, Postgres p99 latency, unmapped operations.
-- **Session bus**: schema-rejected events (steady-state must be zero),
-  wake-publish failures, `turn.interrupt_requested` persist/publish
-  failures (the durable stop boundary; non-zero rate means stops are
-  losing durability or never reaching the runner).
+- **Session bus / live transport**: schema-rejected events (steady-state
+  must be zero), wake-publish failures, stream auth ticket store failures,
+  and `turn.interrupt_requested` persist/publish failures (the durable
+  stop boundary; non-zero rate means stops are losing durability or never
+  reaching the runner).
 - **Stop chain self-telling**: `TankStopNotDelivered` fires if the
   backend persists Stop requests faster than runners' control-plane
   consumer claims `interrupt_turn` commands (the data/control plane

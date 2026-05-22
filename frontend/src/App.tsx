@@ -72,7 +72,7 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
@@ -5770,6 +5770,7 @@ function ChatPane({
   }, [session.id, session.mode]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
+  const sdkEventReconnectTimerRef = useRef<number | null>(null);
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
   const sdkWindowEpochRef = useRef(0);
   const wasVisibleRef = useRef(visible);
@@ -5992,6 +5993,10 @@ function ChatPane({
     historyRefreshRef.current = null;
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
+    if (sdkEventReconnectTimerRef.current !== null) {
+      window.clearTimeout(sdkEventReconnectTimerRef.current);
+      sdkEventReconnectTimerRef.current = null;
+    }
     sdkServerEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
     sdkServerEventsRef.current = [];
@@ -6201,6 +6206,10 @@ function ChatPane({
     return () => {
       sdkEventSourceRef.current?.close();
       sdkEventSourceRef.current = null;
+      if (sdkEventReconnectTimerRef.current !== null) {
+        window.clearTimeout(sdkEventReconnectTimerRef.current);
+        sdkEventReconnectTimerRef.current = null;
+      }
       if (sdkReadStateTimerRef.current !== null) {
         window.clearTimeout(sdkReadStateTimerRef.current);
         sdkReadStateTimerRef.current = null;
@@ -7698,17 +7707,41 @@ function ChatPane({
     }
   }
 
-  function openSdkEventStream(): EventSource {
+  function scheduleSdkEventStreamReconnect(): void {
+    if (sdkEventReconnectTimerRef.current !== null) {
+      window.clearTimeout(sdkEventReconnectTimerRef.current);
+    }
+    sdkEventReconnectTimerRef.current = window.setTimeout(() => {
+      sdkEventReconnectTimerRef.current = null;
+      if (!visibleRef.current) return;
+      sdkEventSourceRef.current?.close();
+      sdkEventSourceRef.current = null;
+      void openSdkEventStream();
+    }, 1000);
+  }
+
+  async function openSdkEventStream(): Promise<EventSource | null> {
     setSdkConnectionState("connecting");
     const params = new URLSearchParams();
     if (sdkTimelineCursorRef.current) {
       params.set("last_order_key", sdkTimelineCursorRef.current);
     }
     const query = params.toString();
-    const source = new EventSource(
-      `/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`,
-      { withCredentials: true },
-    );
+    let source: EventSource;
+    try {
+      source = await authedEventSource(
+        `/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`,
+        { stream: "session-events", sessionId: session.id },
+      );
+    } catch {
+      setSdkConnectionState("connection_lost");
+      scheduleSdkEventStreamReconnect();
+      return null;
+    }
+    if (sessionIdRef.current !== session.id || !visibleRef.current) {
+      source.close();
+      return null;
+    }
     sdkEventSourceRef.current = source;
     source.addEventListener("ready", () => {
       setSdkConnectionState("connected");
@@ -7732,14 +7765,21 @@ function ChatPane({
       void refreshSdkRunHistoryResult(false, true, undefined, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
-        sdkEventSourceRef.current = openSdkEventStream();
+        sdkEventSourceRef.current = null;
+        void openSdkEventStream();
       });
     });
     source.addEventListener("stream-error", () => {
+      source.close();
+      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
+      scheduleSdkEventStreamReconnect();
     });
     source.onerror = () => {
+      source.close();
+      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
+      scheduleSdkEventStreamReconnect();
     };
     return source;
   }
@@ -7747,8 +7787,13 @@ function ChatPane({
   useEffect(() => {
     if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
     sdkEventSourceRef.current?.close();
-    sdkEventSourceRef.current = openSdkEventStream();
+    sdkEventSourceRef.current = null;
+    void openSdkEventStream();
     return () => {
+      if (sdkEventReconnectTimerRef.current !== null) {
+        window.clearTimeout(sdkEventReconnectTimerRef.current);
+        sdkEventReconnectTimerRef.current = null;
+      }
       sdkEventSourceRef.current?.close();
       sdkEventSourceRef.current = null;
     };
@@ -9630,7 +9675,7 @@ export function App() {
     let cancelled = false;
     let reopenTimer: number | null = null;
 
-    const open = () => {
+    const open = async () => {
       if (cancelled) return;
       // Cold open: seed the cursor from the SessionStore (which was
       // primed by the snapshot's Tank-Sessions-Snapshot-Cursor
@@ -9646,10 +9691,23 @@ export function App() {
       if (cursorRef.current) params.set("after_row_version", cursorRef.current);
       logSessionListSseOpen(cursorRef.current);
       const query = params.toString();
-      source = new EventSource(`/api/sessions/events${query ? `?${query}` : ""}`, {
-        withCredentials: true,
-      });
-      source.addEventListener("session-row", (event) => {
+      let nextSource: EventSource;
+      try {
+        nextSource = await authedEventSource(
+          `/api/sessions/events${query ? `?${query}` : ""}`,
+          { stream: "session-list" },
+        );
+      } catch {
+        if (cancelled) return;
+        reopenTimer = window.setTimeout(() => void open(), 1000);
+        return;
+      }
+      if (cancelled) {
+        nextSource.close();
+        return;
+      }
+      source = nextSource;
+      nextSource.addEventListener("session-row", (event) => {
         const message = event as MessageEvent;
         let parsed: unknown;
         try {
@@ -9723,7 +9781,7 @@ export function App() {
           }
         }
       });
-      source.addEventListener("ready", (event) => {
+      nextSource.addEventListener("ready", (event) => {
         const message = event as MessageEvent;
         let parsed: Record<string, unknown> | undefined;
         try {
@@ -9733,7 +9791,7 @@ export function App() {
         }
         logSessionListStreamSignal({ signal: "ready", detail: parsed });
       });
-      source.addEventListener("resync_required", (event) => {
+      nextSource.addEventListener("resync_required", (event) => {
         const message = event as MessageEvent;
         let parsed: Record<string, unknown> | undefined;
         try {
@@ -9748,14 +9806,14 @@ export function App() {
         // during the disconnect window. refresh() re-seeds the dedup
         // map + flips the flag back on once the fresh snapshot lands.
         activitySnapshotAppliedRef.current = false;
-        source?.close();
-        source = null;
+        nextSource.close();
+        if (source === nextSource) source = null;
         void refresh();
         // Refresh hydrates the snapshot; open() resumes the stream
         // from a fresh cursor on the next tick.
-        reopenTimer = window.setTimeout(open, 250);
+        reopenTimer = window.setTimeout(() => void open(), 250);
       });
-      source.addEventListener("stream-error", (event) => {
+      nextSource.addEventListener("stream-error", (event) => {
         const message = event as MessageEvent;
         let parsed: Record<string, unknown> | undefined;
         try {
@@ -9764,19 +9822,20 @@ export function App() {
           parsed = undefined;
         }
         logSessionListStreamSignal({ signal: "stream-error", detail: parsed });
-        // Server-acknowledged error; close and let onerror restart.
-        source?.close();
-        source = null;
-      });
-      source.onerror = () => {
-        source?.close();
-        source = null;
+        nextSource.close();
+        if (source === nextSource) source = null;
         if (cancelled) return;
-        reopenTimer = window.setTimeout(open, 1000);
+        reopenTimer = window.setTimeout(() => void open(), 1000);
+      });
+      nextSource.onerror = () => {
+        nextSource.close();
+        if (source === nextSource) source = null;
+        if (cancelled) return;
+        reopenTimer = window.setTimeout(() => void open(), 1000);
       };
     };
 
-    open();
+    void open();
     return () => {
       cancelled = true;
       if (reopenTimer != null) window.clearTimeout(reopenTimer);

@@ -159,6 +159,21 @@ spec:
             summary: "tank-operator wake/event publishes to NATS are failing"
             runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
 
+        - alert: TankStreamAuthTicketStoreFailures
+          expr: rate(tank_stream_auth_ticket_total{result=~"store_unavailable|store_error"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "browser SSE stream auth ticket storage is failing"
+            runbook: |
+              Native EventSource cannot send Authorization headers. The
+              browser must mint a short-lived stream ticket via
+              POST /api/auth/stream-ticket before opening the transcript or
+              sidebar SSE stream. Store failures here mean REST timeline
+              reads can still work while live delivery never opens. Check
+              Postgres connectivity and the stream_auth_tickets migration.
+
     - name: tank-operator.session-list
       rules:
         # K8s-watch producer is leader-elected. The lease should be

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { bootstrapAuth, clearStoredToken, getStoredToken } from "./auth";
+import {
+  authedEventSourceURL,
+  bootstrapAuth,
+  clearStoredToken,
+  getStoredToken,
+} from "./auth";
 
 test("bootstrapAuth stores and presents the upstream auth.romaine.life JWT directly", async () => {
   const storage = new Map<string, string>();
@@ -58,6 +63,52 @@ test("bootstrapAuth stores and presents the upstream auth.romaine.life JWT direc
     assert.equal(user?.email, "user@example.test");
     assert.equal(getStoredToken(), "upstream.jwt");
     assert.deepEqual(calls, ["/api/config", "https://auth.test/api/auth/token", "/api/auth/me"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
+  }
+});
+
+test("authedEventSourceURL mints a short-lived stream ticket", async () => {
+  const originalLocalStorage = (globalThis as { localStorage?: Storage }).localStorage;
+  const originalFetch = globalThis.fetch;
+  const storage = new Map<string, string>([
+    ["auth-romaine-jwt", "jwt.with+/chars"],
+  ]);
+
+  (globalThis as { localStorage?: Storage }).localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  } as Storage;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(String(input), "/api/auth/stream-ticket");
+    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer jwt.with+/chars");
+    assert.equal(init?.method, "POST");
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      stream: "session-events",
+      session_id: "152",
+    });
+    return jsonResponse({ ticket: "ticket.with+/chars" });
+  }) as typeof fetch;
+
+  try {
+    assert.equal(
+      await authedEventSourceURL("/api/sessions/152/events?last_order_key=7", {
+        stream: "session-events",
+        sessionId: "152",
+      }),
+      "/api/sessions/152/events?last_order_key=7&stream_ticket=ticket.with%2B%2Fchars",
+    );
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;

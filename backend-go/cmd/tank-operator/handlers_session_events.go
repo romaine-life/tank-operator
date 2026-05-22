@@ -120,11 +120,11 @@ func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request
 // Each browser event id is the Tank order_key, so native EventSource reconnects
 // resume from Last-Event-ID without relying on runner-local websocket state.
 func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	user, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionEvents, sessionID)
 	if !ok {
 		return
 	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
 		writeError(w, status, err.Error())
 		return

@@ -78,7 +78,11 @@ func (t *QueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.T
 //	select_session_events, insert_session_events, update_session_events,
 //	delete_session_events, select_profiles, insert_profiles,
 //	update_profiles, select_sessions, insert_sessions, update_sessions,
-//	delete_sessions, select_session_counters, upsert_session_counters,
+//	delete_sessions, select_github_install_states,
+//	insert_github_install_states, update_github_install_states,
+//	delete_github_install_states, select_stream_auth_tickets,
+//	insert_stream_auth_tickets, update_stream_auth_tickets,
+//	delete_stream_auth_tickets, select_session_counters, upsert_session_counters,
 //	select_conversation_read_state, upsert_conversation_read_state,
 //	migration, advisory_lock, advisory_unlock, ping, other.
 //
@@ -141,6 +145,8 @@ func firstWord(s string) string {
 var knownTables = []string{
 	"session_events",
 	"profiles",
+	"github_install_states",
+	"stream_auth_tickets",
 	"sessions",
 	"session_counters",
 	"conversation_read_state",

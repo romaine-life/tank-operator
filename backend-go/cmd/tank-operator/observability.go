@@ -236,6 +236,57 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// --- Browser stream auth metrics ---
+//
+// Native EventSource cannot attach Authorization headers, so the SPA mints
+// short-lived opaque stream tickets through POST /api/auth/stream-ticket and
+// presents those to the SSE handlers. This counter tells on the auth boundary
+// that broke live delivery in the auth.romaine.life JWT cutover: if create or
+// validate store failures rise, EventSource connections will never become open
+// streams, even though ordinary REST timeline reads keep working.
+var streamAuthTicketTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_stream_auth_ticket_total",
+		Help: "Stream auth ticket create/validate attempts, labeled by bounded operation, stream, and result.",
+	},
+	[]string{"operation", "stream", "result"},
+)
+
+func recordStreamAuthTicket(operation, stream, result string) {
+	streamAuthTicketTotal.WithLabelValues(
+		streamAuthTicketOperationLabel(operation),
+		streamAuthTicketStreamLabel(stream),
+		streamAuthTicketResultLabel(result),
+	).Inc()
+}
+
+func streamAuthTicketOperationLabel(operation string) string {
+	switch operation {
+	case "create", "validate":
+		return operation
+	default:
+		return "unknown"
+	}
+}
+
+func streamAuthTicketStreamLabel(stream string) string {
+	switch stream {
+	case streamKindSessionList, streamKindSessionEvents:
+		return stream
+	default:
+		return "unknown"
+	}
+}
+
+func streamAuthTicketResultLabel(result string) string {
+	switch result {
+	case "ok", "invalid", "denied", "store_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
 // --- Browser chat-scroll metrics ---
 //
 // The SPA reports semantic scroll decisions here; the orchestrator owns

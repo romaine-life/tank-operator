@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -93,6 +95,96 @@ func adminTestServer(t *testing.T) *appServer {
 		),
 		sessionEvents: store.StubSessionEventStore{},
 		readStates:    store.NewStubConversationReadStateStore(),
+	}
+}
+
+type fakeStreamAuthTicketStore struct {
+	created          pgstore.StreamAuthTicket
+	validateToken    string
+	validateKind     string
+	validateScope    string
+	validateSession  string
+	validateResponse pgstore.StreamAuthTicket
+}
+
+func (s *fakeStreamAuthTicketStore) Create(_ context.Context, ticket pgstore.StreamAuthTicket) error {
+	s.created = ticket
+	return nil
+}
+
+func (s *fakeStreamAuthTicketStore) Validate(_ context.Context, token, streamKind, sessionScope, sessionID string) (pgstore.StreamAuthTicket, error) {
+	s.validateToken = token
+	s.validateKind = streamKind
+	s.validateScope = sessionScope
+	s.validateSession = sessionID
+	return s.validateResponse, nil
+}
+
+func TestRequireBrowserStreamAuthAcceptsStreamTicket(t *testing.T) {
+	tickets := &fakeStreamAuthTicketStore{
+		validateResponse: pgstore.StreamAuthTicket{
+			Sub:          "sub-user@example.com",
+			Email:        "user@example.com",
+			Name:         "User",
+			Role:         auth.RoleUser,
+			StreamKind:   streamKindSessionEvents,
+			SessionScope: "default",
+			SessionID:    "63",
+		},
+	}
+	app := &appServer{streamAuthTickets: tickets, sessionScope: "default"}
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/63/events?stream_ticket=ticket-123", nil)
+	response := httptest.NewRecorder()
+
+	user, ok := app.requireBrowserStreamAuth(response, request, streamKindSessionEvents, "63")
+	if !ok {
+		t.Fatalf("requireBrowserStreamAuth rejected stream ticket: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if user.Email != "user@example.com" {
+		t.Fatalf("user email = %q, want user@example.com", user.Email)
+	}
+	if tickets.validateToken != "ticket-123" || tickets.validateKind != streamKindSessionEvents || tickets.validateScope != "default" || tickets.validateSession != "63" {
+		t.Fatalf("validate args = (%q,%q,%q,%q)", tickets.validateToken, tickets.validateKind, tickets.validateScope, tickets.validateSession)
+	}
+}
+
+func TestRequireAuthRejectsStreamTicketQuery(t *testing.T) {
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions?stream_ticket=ticket-123", nil)
+	response := httptest.NewRecorder()
+
+	if _, ok := app.requireAuth(response, request); ok {
+		t.Fatal("requireAuth accepted stream_ticket query; only browser stream handlers should allow it")
+	}
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.Code)
+	}
+}
+
+func TestHandleCreateStreamTicketScopesSessionEventTicket(t *testing.T) {
+	app := adminTestServer(t)
+	tickets := &fakeStreamAuthTicketStore{}
+	app.streamAuthTickets = tickets
+	app.sessionScope = "default"
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/stream-ticket", strings.NewReader(`{
+		"stream": "session-events",
+		"session_id": "63"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	response := httptest.NewRecorder()
+
+	app.handleCreateStreamTicket(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if tickets.created.Ticket == "" {
+		t.Fatal("created ticket is empty")
+	}
+	if tickets.created.Email != otherUser || tickets.created.StreamKind != streamKindSessionEvents || tickets.created.SessionID != "63" || tickets.created.SessionScope != "default" {
+		t.Fatalf("created ticket = %#v", tickets.created)
+	}
+	if time.Until(tickets.created.ExpiresAt) <= 0 || time.Until(tickets.created.ExpiresAt) > streamAuthTicketTTL+time.Second {
+		t.Fatalf("expiresAt = %s, want short-lived ticket", tickets.created.ExpiresAt)
 	}
 }
 

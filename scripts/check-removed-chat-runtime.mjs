@@ -251,6 +251,12 @@ const blocked = [
   { name: "removed Tank auth cookie", pattern: /\bauth_token\b/ },
   { name: "removed Tank JWT signing config", pattern: /\btank-operator-jwt-signing\b|\bJWT_KV_(?:VAULT|KEY_NAME)\b/ },
   { name: "removed Tank JWT minter", pattern: /\bNewMinter\b|\bMintSession\b|\bMintInstallState\b|\bVerifyInstallState\b|\bKeyVaultJWT\b|\bhandleAuthExchange\b|\bhandleK8sAuth\b/ },
+  // Browser EventSource cannot send Authorization headers. The retired
+  // interim fix placed the full auth.romaine.life JWT in SSE query strings;
+  // the durable path is POST /api/auth/stream-ticket + opaque stream_ticket.
+  // WebSocket upgrades still use access_token, so block only the EventSource
+  // helper names and frontend authedEventSourceURL query-JWT shape.
+  { name: "removed EventSource access_token carrier", pattern: /\bTokenForBrowserStream\b|\bCurrentUserFromBrowserStream\b|\bauthedEventSourceURL\b[\s\S]{0,500}\baccess_token\b/ },
   // ALLOWED_EMAILS allowlist retired in favor of the auth.romaine.life
   // role claim. Block reintroduction of the env var, KV mount, and
   // emails-list constructor signature so a future PR can't quietly bring

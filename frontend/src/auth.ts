@@ -90,6 +90,43 @@ export function clearStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+export type StreamTicketRequest =
+  | { stream: "session-list" }
+  | { stream: "session-events"; sessionId: string };
+
+export async function authedEventSourceURL(
+  path: string,
+  request: StreamTicketRequest,
+): Promise<string> {
+  const res = await authedFetch("/api/auth/stream-ticket", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stream: request.stream,
+      ...(request.stream === "session-events" ? { session_id: request.sessionId } : {}),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`stream ticket request failed: ${res.status}`);
+  }
+  const body = (await res.json()) as { ticket?: unknown };
+  const ticket = typeof body.ticket === "string" ? body.ticket : "";
+  if (!ticket) {
+    throw new Error("stream ticket response did not include a ticket");
+  }
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}stream_ticket=${encodeURIComponent(ticket)}`;
+}
+
+export async function authedEventSource(
+  path: string,
+  request: StreamTicketRequest,
+): Promise<EventSource> {
+  return new EventSource(await authedEventSourceURL(path, request), {
+    withCredentials: true,
+  });
+}
+
 /**
  * Boot-time auth check. Resolves to the signed-in user, or null. Does NOT
  * trigger a redirect on its own; the SPA shows a Sign-in button for that.
