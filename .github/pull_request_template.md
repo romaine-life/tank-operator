@@ -12,6 +12,7 @@ Affected contracts:
 - [ ] Agent Runners
 - [ ] Auth And Streams
 - [ ] Artifacts And Files
+- [ ] Observability
 - [ ] None
 
 Evidence:
