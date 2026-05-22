@@ -7420,18 +7420,17 @@ function ChatPane({
     return () => wrap.removeEventListener("keydown", onKey, true);
   }, [runPrefs.sendByCtrlEnter, slashOpen]);
 
-  // Escape leaves the composer and returns keyboard focus to the transcript.
-  // The transcript can then own its own shortcuts without competing with
-  // normal textarea editing.
+  // Tab toggles focus between the two primary chat surfaces: composer and
+  // transcript. Leave native tab order alone for message buttons, header tabs,
+  // Stop, and every other control.
   useEffect(() => {
     if (!visible || activeTab !== "chat") return;
     const onKey = (e: KeyboardEvent) => {
       if (
-        e.key !== "Escape" ||
+        e.key !== "Tab" ||
         e.altKey ||
         e.ctrlKey ||
         e.metaKey ||
-        e.shiftKey ||
         e.isComposing ||
         slashOpen ||
         mentionOpen ||
@@ -7440,23 +7439,38 @@ function ChatPane({
         return;
       }
       const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
-      if (!textarea || e.target !== textarea) return;
-      if (!focusTranscriptSection()) return;
+      if (!textarea) return;
+      if (e.target === textarea) {
+        if (!focusTranscriptSection()) return;
+      } else if (transcriptScrollEl && e.target === transcriptScrollEl) {
+        if (!focusComposerTextarea()) return;
+      } else {
+        return;
+      }
       e.preventDefault();
       e.stopImmediatePropagation();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [activeTab, focusTranscriptSection, mcpOpen, mentionOpen, slashOpen, visible]);
+  }, [
+    activeTab,
+    focusComposerTextarea,
+    focusTranscriptSection,
+    mcpOpen,
+    mentionOpen,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
 
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
-  // Stop pill. Capture phase so it fires outside the composer. Skips when a
-  // palette is open — Esc closes the palette in those cases (handled below).
+  // Stop pill. Capture phase so it fires even if focus is in the textarea.
+  // Skips when a palette is open — Esc closes the palette in those cases
+  // (handled below).
   useEffect(() => {
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
-      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
-      if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen && e.target !== textarea) {
+      if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
         e.preventDefault();
         cancelRun();
       }
@@ -9759,6 +9773,7 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
   const pendingHomeComposerFocusRef = useRef(false);
   // Files picked / dropped / pasted onto the home composer before the
@@ -9802,6 +9817,11 @@ export function App() {
     const cursor = textarea.value.length;
     textarea.setSelectionRange(cursor, cursor);
     return true;
+  }, []);
+  const focusHomeSetupSection = useCallback((): boolean => {
+    if (!homeBodyRef.current) return false;
+    homeBodyRef.current.focus({ preventScroll: true });
+    return document.activeElement === homeBodyRef.current;
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
   useEffect(() => {
@@ -10449,6 +10469,39 @@ export function App() {
       focusHomeComposerTextarea();
     });
   }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  // Match the run pane's two-surface Tab toggle on the pre-session splash:
+  // textarea ⇄ setup body. Other controls keep the browser's native tab order.
+  useEffect(() => {
+    if (active !== null || homeActiveTab !== "chat") return;
+    const toggleHomeFocus = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Tab" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      const body = homeBodyRef.current;
+      if (!textarea || !body) return;
+      if (event.target === textarea) {
+        if (!focusHomeSetupSection()) return;
+      } else if (event.target === body) {
+        if (!focusHomeComposerTextarea()) return;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", toggleHomeFocus, { capture: true });
+    return () => window.removeEventListener("keydown", toggleHomeFocus, { capture: true });
+  }, [active, focusHomeComposerTextarea, focusHomeSetupSection, homeActiveTab]);
 
   useEffect(() => {
     if (active !== null) return;
@@ -11291,6 +11344,8 @@ export function App() {
           <WorkspaceShell
             className="run-panel-home"
             bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
+            bodyRef={homeBodyRef}
+            bodyAriaLabel={homeActiveTab === "chat" ? "New session setup" : "Workspace panel"}
             title={(<>
               {homeEditingTitle ? (
                 <input
