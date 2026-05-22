@@ -3192,6 +3192,21 @@ button:disabled {
   position: relative;
 }
 
+/* Floating UI that belongs between the transcript scroller and composer.
+   The wrapper is the positioning context for jump controls, while normal-flow
+   children such as the streaming status pill still reserve their own height. */
+.run-floating-between {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 15;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.run-floating-between > * {
+  pointer-events: auto;
+}
+
 /* Drag-active outline + overlay on the composer wrap. */
 .run-composer-wrap-drag .run-composer {
   outline: 2px dashed rgba(96, 165, 250, 0.6);
@@ -3606,13 +3621,14 @@ button:disabled {
   color: var(--text-primary);
 }
 
-/* Floating "scroll to latest" button — pinned bottom-right of the chat
-   pane while the user is scrolled away from the bottom. Uses opacity +
-   translate transition so it fades in/out instead of snapping. */
+/* Floating "scroll to latest" button — pinned bottom-right at the boundary
+   between the transcript scroller and composer while the user is scrolled
+   away from the bottom. Uses opacity + translate transition so it fades
+   in/out instead of snapping. */
 .run-scroll-to-bottom {
   position: absolute;
   right: calc(var(--space-5) + 0.5rem);
-  bottom: 6.5rem;
+  bottom: calc(100% + var(--space-2));
   width: 2.25rem;
   height: 2.25rem;
   display: inline-flex;
@@ -3674,14 +3690,11 @@ button:disabled {
 /* Floating scroll-to-top button — sibling of .run-scroll-to-bottom,
    stacked above it. Visual treatment matches so the pair reads as one
    control. Slack-style: ↑ jumps to the very first message of the
-   session (anchor=oldest); ↓ jumps to the live tail. The two buttons
-   are siblings under <ChatPane>'s root so they share absolute
-   positioning context (the <main> transcript element). */
+   session (anchor=oldest); ↓ jumps to the live tail. */
 .run-scroll-to-top {
   position: absolute;
   right: calc(var(--space-5) + 0.5rem);
-  /* Stack above .run-scroll-to-bottom (bottom: 6.5rem + 2.25rem + 0.5rem gap). */
-  bottom: 9.25rem;
+  bottom: calc(100% + var(--space-2) + 2.25rem + 0.5rem);
   width: 2.25rem;
   height: 2.25rem;
   display: inline-flex;
