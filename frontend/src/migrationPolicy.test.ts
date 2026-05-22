@@ -10,6 +10,7 @@ const appSource = readSource("./App.tsx");
 const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
+const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -261,6 +262,34 @@ test("chat back-pagination keeps the focused load button mounted while loading",
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("run-transcript-load-older-passive"), false);
+});
+
+test("session-event SSE stream emits browser-side observability", () => {
+  // The candidate-B (zombie SSE) + candidate-C (reducer-drop)
+  // stethoscope on the browser side. If a future refactor silently
+  // removes the telemetry hooks, this guard breaks before the
+  // diagnostic-only observability metric quietly stops shipping.
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes("/api/client-metrics/session-events-stream"),
+    true,
+  );
+  assert.equal(sessionEventStreamTelemetrySource.includes("createSilenceWatchdog"), true);
+  assert.equal(sessionEventStreamTelemetrySource.includes("stream_silent_while_running"), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("tank_event_received"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("resync_required"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("stream_error"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("closed_error"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("closed_unmount"'), true);
+  assert.equal(appSource.includes("silenceWatchdogRef"), true);
+  // The receipt-count telemetry MUST observe before the reducer
+  // filter; if a future change swaps the order, the candidate-C
+  // signature would be invisible (server-emit vs client-receive
+  // delta would be measured at the wrong layer).
+  assert.match(
+    appSource,
+    /logSessionEventStreamEvent\("tank_event_received"[\s\S]{0,200}applySdkDurableEvent/,
+  );
 });
 
 test("chat scroll diagnostics are prometheus backed", () => {

@@ -90,20 +90,48 @@ type noopPersisterMetrics struct{}
 func (noopPersisterMetrics) RecordSchemaRejected()   {}
 func (noopPersisterMetrics) RecordTransientFailure() {}
 
-// WakeMetrics receives counters for wake/event publish failures. The bus
+// WakeMetrics receives counters for wake/event publish failures, the
+// success path, and the end-to-end persist→wake latency. The bus
 // records here before returning the error to the caller; callers that
 // silently drop the error (Manager mutations that just want
 // fire-and-forget) still get visibility into "NATS is down". Wired to
 // prometheus in cmd/tank-operator/observability.go.
+//
+// The published/received split is the stethoscope for the candidate-A
+// wake-key-mismatch failure mode (per the diagnosis in
+// memory/feedback_no_devtools_build_surfaces_instead.md context): when
+// published >> received over the same window for the same SSE stream's
+// lifetime, the persister is firing wakes on a subject the subscriber
+// is not listening for. Both counters are unlabeled aggregates — the
+// per-session subject lives in the slog line and the admin endpoint's
+// stream snapshot, not in metric labels.
 type WakeMetrics interface {
 	RecordSessionEventWakePublishFailed()
 	RecordSessionListEventPublishFailed()
+	RecordSessionEventWakePublished()
+	RecordSessionEventWakeReceived()
+	RecordSessionEventPersistToWakeDuration(seconds float64)
 }
 
 type noopWakeMetrics struct{}
 
-func (noopWakeMetrics) RecordSessionEventWakePublishFailed()  {}
-func (noopWakeMetrics) RecordSessionListEventPublishFailed() {}
+func (noopWakeMetrics) RecordSessionEventWakePublishFailed()           {}
+func (noopWakeMetrics) RecordSessionListEventPublishFailed()           {}
+func (noopWakeMetrics) RecordSessionEventWakePublished()               {}
+func (noopWakeMetrics) RecordSessionEventWakeReceived()                {}
+func (noopWakeMetrics) RecordSessionEventPersistToWakeDuration(float64) {}
+
+// WakeRecorder is the optional per-stream hook SubscribeWakes calls
+// from the NATS message callback. The SSE handler passes its
+// sessionstream.StreamState, which records the wake's wall-clock
+// timestamp + the subject the NATS payload arrived on. This is what
+// powers the admin endpoint's per-stream `last_wake_at` /
+// `last_wake_subject` fields — the only way to distinguish "no wake
+// ever fired for this session" from "a wake fired but the page read
+// returned nothing" without browser devtools.
+type WakeRecorder interface {
+	RecordWake(at time.Time, subject string)
+}
 
 type Bus struct {
 	nc          *nats.Conn
@@ -343,12 +371,35 @@ func (b *Bus) SubscribeSessionRowUpdates(ctx context.Context, email, scope strin
 }
 
 func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan struct{}, func(), error) {
+	return b.SubscribeWakesWithRecorder(ctx, sessionID, nil)
+}
+
+// SubscribeWakesWithRecorder is the per-stream-aware variant of
+// SubscribeWakes. The optional recorder is invoked from the NATS
+// message callback so the per-session SSE stream's last_wake_at /
+// last_wake_subject / wakes_received state stays accurate even when
+// the buffered notify channel is already full. The metrics counter
+// fires once per NATS delivery (not once per noticed wake) so the
+// published-vs-received delta in observability stays correct under
+// burst.
+//
+// SubscribeWakes (no recorder) is preserved for tests and any
+// caller that doesn't need per-stream attribution.
+func (b *Bus) SubscribeWakesWithRecorder(ctx context.Context, sessionID string, recorder WakeRecorder) (<-chan struct{}, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
 	storageKey := sessionmodel.SessionStorageKey(b.scope, sessionID)
 	ch := make(chan struct{}, 1)
-	sub, err := b.nc.Subscribe(WakeSubject(storageKey), func(*nats.Msg) {
+	sub, err := b.nc.Subscribe(WakeSubject(storageKey), func(msg *nats.Msg) {
+		b.wakeMetrics.RecordSessionEventWakeReceived()
+		if recorder != nil {
+			subject := ""
+			if msg != nil {
+				subject = msg.Subject
+			}
+			recorder.RecordWake(time.Now(), subject)
+		}
 		select {
 		case ch <- struct{}{}:
 		default:
@@ -470,15 +521,33 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 	if err := store.Upsert(ctx, event); err != nil {
 		return err
 	}
+	upsertedAt := time.Now()
 	storageKey, _ := event["tank_session_id"].(string)
 	if storageKey == "" {
 		sessionID, _ := event["session_id"].(string)
 		storageKey = sessionmodel.SessionStorageKey(b.scope, sessionID)
 	}
 	if storageKey != "" && b.nc != nil {
-		if err := b.nc.Publish(WakeSubject(storageKey), nil); err != nil {
+		subject := WakeSubject(storageKey)
+		if err := b.nc.Publish(subject, nil); err != nil {
 			return err
 		}
+		// Success path: record both the published counter and the
+		// persist→wake latency. The published vs received delta in
+		// observability is the candidate-A stethoscope; the latency
+		// histogram catches the "we publish but something between
+		// Upsert and Publish is slow" tail (cancelled context, slow
+		// NATS flush) that would otherwise be invisible to the
+		// existing failure counter.
+		b.wakeMetrics.RecordSessionEventWakePublished()
+		b.wakeMetrics.RecordSessionEventPersistToWakeDuration(time.Since(upsertedAt).Seconds())
+		slog.Info("session event persister wake published",
+			"subject", subject,
+			"storage_key", storageKey,
+			"event_type", stringField(event, "type"),
+			"order_key", stringField(event, "order_key"),
+			"tank_session_id", stringField(event, "tank_session_id"),
+		)
 	}
 	if b.lifecycle != nil {
 		if err := b.lifecycle.EmitChatActivityDelta(ctx, event); err != nil {
@@ -489,6 +558,18 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 		}
 	}
 	return nil
+}
+
+// stringField is a defensive accessor for the persister's slog lines.
+// Returns "" instead of panicking when the field is missing or not a
+// string — the persister already validates schema, so this is purely
+// for the diagnostic log boundary.
+func stringField(event map[string]any, key string) string {
+	if event == nil {
+		return ""
+	}
+	v, _ := event[key].(string)
+	return v
 }
 
 func eventTypeForLog(data []byte) string {

@@ -73,6 +73,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AUTH_TOKEN_UPDATED_EVENT, authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import {
+  createSilenceWatchdog,
+  logSessionEventStreamEvent,
+  type SilenceWatchdog,
+} from "./sessionEventStreamTelemetry";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
@@ -5880,6 +5885,15 @@ function ChatPane({
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
+  // runningRef is read from the SSE silence watchdog so we can tell
+  // whether a silent stream was silent *during a turn* (the
+  // candidate-B signature) or just idle. Mirrors the visibleRef
+  // pattern — kept in sync on every render.
+  const runningRef = useRef(false);
+  runningRef.current = running;
+  // silenceWatchdogRef holds the per-open-stream SilenceWatchdog
+  // instance; the SSE open path arms it, the cleanup path stops it.
+  const silenceWatchdogRef = useRef<SilenceWatchdog | null>(null);
   const [sdkConnectionState, setSdkConnectionState] =
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
@@ -7805,6 +7819,7 @@ function ChatPane({
       );
     } catch {
       setSdkConnectionState("connection_lost");
+      logSessionEventStreamEvent("reconnect_scheduled", { sessionMode: session.mode });
       scheduleSdkEventStreamReconnect();
       return null;
     }
@@ -7813,8 +7828,20 @@ function ChatPane({
       return null;
     }
     sdkEventSourceRef.current = source;
+    logSessionEventStreamEvent("opened", { sessionMode: session.mode });
+    // Build a fresh silence watchdog for this stream. Per-open
+    // lifecycle so a reconnect produces independent histogram
+    // observations.
+    silenceWatchdogRef.current?.stop();
+    silenceWatchdogRef.current = createSilenceWatchdog({
+      sessionMode: session.mode,
+      isRunning: () => runningRef.current,
+    });
+    silenceWatchdogRef.current.reset();
     source.addEventListener("ready", () => {
       setSdkConnectionState("connected");
+      silenceWatchdogRef.current?.reset();
+      logSessionEventStreamEvent("ready", { sessionMode: session.mode });
     });
     source.addEventListener("tank-event", (event) => {
       const message = event as MessageEvent;
@@ -7825,6 +7852,16 @@ function ChatPane({
         return;
       }
       if (!isJsonObject(parsed)) return;
+      // Telemetry first: even if applySdkDurableEvent's filter
+      // would drop this event (the candidate-C reducer-drop case),
+      // the receipt counter must still increment so the
+      // server-emit vs client-receive divergence is observable.
+      const eventType = typeof parsed.type === "string" ? parsed.type : "";
+      logSessionEventStreamEvent("tank_event_received", {
+        sessionMode: session.mode,
+        eventType,
+      });
+      silenceWatchdogRef.current?.reset();
       applySdkDurableEvent(parsed);
     });
     source.addEventListener("resync_required", () => {
@@ -7832,6 +7869,7 @@ function ChatPane({
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
+      logSessionEventStreamEvent("resync_required", { sessionMode: session.mode });
       void refreshSdkRunHistoryResult(true, undefined, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
@@ -7843,12 +7881,14 @@ function ChatPane({
       source.close();
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
+      logSessionEventStreamEvent("stream_error", { sessionMode: session.mode });
       scheduleSdkEventStreamReconnect();
     });
     source.onerror = () => {
       source.close();
       if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
+      logSessionEventStreamEvent("closed_error", { sessionMode: session.mode });
       scheduleSdkEventStreamReconnect();
     };
     return source;
@@ -7866,6 +7906,15 @@ function ChatPane({
       }
       sdkEventSourceRef.current?.close();
       sdkEventSourceRef.current = null;
+      // Telemetry: closed by effect cleanup (session change, pane
+      // hidden, history reset). Pairs with closed_error from
+      // source.onerror so an operator can distinguish "we tore
+      // down" from "the socket died."
+      if (silenceWatchdogRef.current) {
+        silenceWatchdogRef.current.stop();
+        silenceWatchdogRef.current = null;
+        logSessionEventStreamEvent("closed_unmount", { sessionMode: session.mode });
+      }
     };
   // openSdkEventStream closes over the current session cursor and reducer state.
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -281,6 +281,102 @@ data:
           ]
         },
         {
+          "id": 18,
+          "title": "SSE wake fabric: published vs received (5m rate)",
+          "description": "Candidate-A wake-key-mismatch stethoscope. Published (persister + direct writers) should track received (orchestrator-side NATS subscribers) closely. A sustained gap means wakes are firing on subjects nobody is subscribed to — typically the storage_key shape drifted between producer and SSE handler in a non-default scope. Aggregate-only; per-stream resolution lives at GET /api/debug/session-event-streams (admin only).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_session_event_wake_published_total[5m]))",
+              "legendFormat": "published"
+            },
+            {
+              "expr": "sum(rate(tank_session_event_wake_received_total[5m]))",
+              "legendFormat": "received"
+            },
+            {
+              "expr": "sum(rate(tank_session_event_wake_publish_failure_total[5m]))",
+              "legendFormat": "publish_failed"
+            }
+          ]
+        },
+        {
+          "id": 19,
+          "title": "Persist→wake latency p50 / p95 / p99",
+          "description": "Histogram tail of the time between session_events Upsert returning and the NATS wake publish completing. Steady-state should be single-digit milliseconds. A growing p95 is the early indicator of NATS slowness that the wake-publish failure counter only catches once the publish actually errors out.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 72 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(tank_session_event_persist_to_wake_seconds_bucket[5m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(tank_session_event_persist_to_wake_seconds_bucket[5m])))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(tank_session_event_persist_to_wake_seconds_bucket[5m])))",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "title": "Server emit vs browser receive by event type (5m rate)",
+          "description": "Candidate-C reducer-drop stethoscope. Server-side emit-by-type from the SSE handler, plotted alongside the browser-side receive-by-type from POST /api/client-metrics/session-events-stream. A persistent gap on a specific event_type means the SPA reducer is dropping that type silently — the server sent it, the browser didn't render it. Network batching introduces a small lag; sustained >5% divergence is the signal.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 80 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (event_type) (rate(tank_session_event_stream_emitted_by_type_total[5m]))",
+              "legendFormat": "server emit {{`{{ event_type }}`}}"
+            },
+            {
+              "expr": "sum by (event_type) (rate(tank_session_event_client_received_total[5m]))",
+              "legendFormat": "client receive {{`{{ event_type }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "title": "Browser SSE silent-while-running (p95 over 30m)",
+          "description": "Candidate-B zombie-SSE stethoscope. The browser's silence watchdog observes the idle interval whenever a connected stream has gone >30s without a tank-event while a turn is in flight. p95 climbing into the minute-range is the canonical signature: TCP socket is alive (browser thinks connected), no events flowing, no error fires. Pair with id 18 — if wake_received is healthy but this histogram climbs, the failure is between the orchestrator and the browser (proxy / LB idle timeout), not inside the wake fabric.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 80 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, session_mode) (rate(tank_session_event_client_stream_silent_seconds_bucket[30m])))",
+              "legendFormat": "p95 {{`{{ session_mode }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, session_mode) (rate(tank_session_event_client_stream_silent_seconds_bucket[30m])))",
+              "legendFormat": "p99 {{`{{ session_mode }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "title": "Browser SSE lifecycle events (5m rate)",
+          "description": "Browser-reported SSE lifecycle, labeled by event. Climbing closed_error / reconnect_scheduled rates correlate with a proxy / LB / network instability layer the server-side wake counters cannot see. opened, ready, tank_event_received are the healthy-volume baseline.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 88 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (event) (rate(tank_session_event_client_events_total[5m]))",
+              "legendFormat": "{{`{{ event }}`}}"
+            }
+          ]
+        },
+        {
           "id": 17,
           "title": "Inferred warm-spawn ratio (24h)",
           "description": "Fraction of session pods spawned in the last 24h (across the production sessions namespace and every test-slot sessions namespace) that completed in under 10s. Bimodal-distribution proxy for cache hits: warm pulls cluster at 2-3s, cold pulls at 27-33s, the 10s threshold sits in the empty middle. Drift downward suggests nodes are losing the image cache more often OR FailedScheduling is delaying spawns beyond 10s. Drift upward suggests cache distribution is improving (e.g. after a pre-pull DaemonSet ships).",

@@ -29,6 +29,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -328,6 +329,7 @@ func main() {
 		verifier:                 verifier,
 		gitHubInstallStates:      gitHubInstallStates,
 		streamAuthTickets:        streamAuthTickets,
+		streamRegistry:           sessionstream.NewRegistry(),
 		namespace:                namespace,
 		sessionScope:             sessionScope,
 		sessionServiceAccount:    sessionServiceAccount,
