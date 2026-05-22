@@ -41,6 +41,27 @@ var schemaMigrations = []string{
 		ON github_install_states (expires_at)`,
 	// `sessions` â€” the session registry. One row per (email, scope, session_id).
 	// `visible` is the soft-delete flag the SPA's "delete session" toggles.
+	// stream_auth_tickets stores short-lived opaque tickets for browser-native
+	// streaming transports. The SPA mints these through a normal
+	// Authorization-bearing fetch, then EventSource uses only the opaque
+	// ticket in its URL because native EventSource cannot attach
+	// Authorization headers.
+	`CREATE TABLE IF NOT EXISTS stream_auth_tickets (
+		ticket        text PRIMARY KEY,
+		sub           text NOT NULL,
+		email         text NOT NULL,
+		name          text NOT NULL DEFAULT '',
+		role          text NOT NULL,
+		actor_email   text NOT NULL DEFAULT '',
+		stream_kind   text NOT NULL,
+		session_scope text NOT NULL,
+		session_id    text NOT NULL DEFAULT '',
+		created_at    timestamptz NOT NULL DEFAULT now(),
+		expires_at    timestamptz NOT NULL,
+		last_used_at  timestamptz
+	)`,
+	`CREATE INDEX IF NOT EXISTS stream_auth_tickets_expires_at
+		ON stream_auth_tickets (expires_at)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,

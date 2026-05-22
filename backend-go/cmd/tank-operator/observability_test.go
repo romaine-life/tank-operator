@@ -112,6 +112,25 @@ func TestHTTPMetricsRecordsRequest(t *testing.T) {
 	}
 }
 
+func TestStreamAuthTicketMetricsUseBoundedLabels(t *testing.T) {
+	recordStreamAuthTicket("custom-op", "custom-stream", "custom-result")
+
+	rr := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body, _ := io.ReadAll(rr.Body)
+	got := string(body)
+	for _, want := range []string{
+		"tank_stream_auth_ticket_total",
+		`operation="unknown"`,
+		`stream="unknown"`,
+		`result="other"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metrics scrape missing %s; got: %s", want, got)
+		}
+	}
+}
+
 // TestStatusClass covers the bucket boundaries the HTTP middleware uses
 // when labeling the request counter.
 func TestStatusClass(t *testing.T) {

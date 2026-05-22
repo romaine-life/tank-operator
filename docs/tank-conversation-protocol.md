@@ -487,9 +487,15 @@ The UI consumes durable transcript delivery from
 `order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
 produce `resync_required`; clients reload `/timeline` instead of silently
 skipping a gap. Open SSE streams do not poll any side endpoint for
-indicator state. The backend event persister wakes SSE streams through
-NATS only after the Postgres `session_events` write commits. There is no
-ledger sweep or browser polling fallback for live transcript delivery.
+indicator state. Because browser-native EventSource cannot attach an
+`Authorization` header, the SPA first calls `POST /api/auth/stream-ticket`
+with its auth.romaine.life bearer JWT and then opens EventSource with the
+short-lived opaque `stream_ticket` query carrier. The ticket is scoped to
+stream kind, session scope, and session id, stored in Postgres so replica
+rollouts do not strand reconnects, and accepted only by SSE handlers. The
+backend event persister wakes SSE streams through NATS only after the
+Postgres `session_events` write commits. There is no ledger sweep or browser
+polling fallback for live transcript delivery.
 
 Copied transcript links are also machine-readable. A browser link such as
 `/?session=<id>&message=<timeline_id>` still serves the SPA for humans, but
@@ -761,6 +767,9 @@ Operational counters:
   failures, emitted events, heartbeats, wake-subscribe failures) and the
   `tank_session_event_stream_lag_seconds` histogram. See
   `docs/observability.md` for the full taxonomy and the Grafana panels.
+- `tank_stream_auth_ticket_total` covers the EventSource auth boundary; store
+  failures there explain the failure mode where `/timeline` refresh works but
+  live transcript or sidebar SSE never opens.
 - Missing-message investigations should start from those metrics and the
   durable Postgres `session_events` ledger cursor, not from browser-local state.
 

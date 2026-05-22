@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 )
 
 const workspaceRoot = "/workspace"
@@ -107,6 +109,40 @@ func (s *appServer) requireAuth(w http.ResponseWriter, r *http.Request) (user au
 	if err != nil {
 		writeError(w, auth.ErrorStatus(err), err.Error())
 		return auth.User{}, false
+	}
+	attachAuthToRequest(r, user)
+	return user, true
+}
+
+// requireBrowserStreamAuth extracts the user from a browser-native streaming
+// request. Native EventSource callers cannot attach Authorization headers, so
+// only these handlers accept a short-lived opaque stream_ticket minted through
+// a normal Authorization-bearing fetch.
+func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Request, streamKind, sessionID string) (user auth.User, ok bool) {
+	if s.streamAuthTickets == nil {
+		recordStreamAuthTicket("validate", streamKind, "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "stream auth ticket store not configured")
+		return auth.User{}, false
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("stream_ticket"))
+	ticket, err := s.streamAuthTickets.Validate(r.Context(), token, streamKind, s.sessionScope, sessionID)
+	if err != nil {
+		if errors.Is(err, pgstore.ErrStreamAuthTicketInvalid) {
+			recordStreamAuthTicket("validate", streamKind, "invalid")
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return auth.User{}, false
+		}
+		recordStreamAuthTicket("validate", streamKind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return auth.User{}, false
+	}
+	recordStreamAuthTicket("validate", streamKind, "ok")
+	user = auth.User{
+		Sub:        ticket.Sub,
+		Email:      ticket.Email,
+		Name:       ticket.Name,
+		Role:       ticket.Role,
+		ActorEmail: ticket.ActorEmail,
 	}
 	attachAuthToRequest(r, user)
 	return user, true

@@ -20,6 +20,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
@@ -39,6 +40,7 @@ type appServer struct {
 	readStates               store.ConversationReadStateStore
 	verifier                 *auth.Verifier
 	gitHubInstallStates      gitHubInstallStateStore
+	streamAuthTickets        streamAuthTicketStore
 	namespace                string
 	sessionScope             string
 	sessionServiceAccount    string
@@ -79,6 +81,11 @@ type sessionCommandBus interface {
 	SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
 }
 
+type streamAuthTicketStore interface {
+	Create(context.Context, pgstore.StreamAuthTicket) error
+	Validate(ctx context.Context, token, streamKind, sessionScope, sessionID string) (pgstore.StreamAuthTicket, error)
+}
+
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Health / config / metrics.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -91,6 +98,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Auth.
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
 	mux.HandleFunc("PUT /api/auth/prefs", s.handleUpdatePrefs)
+	mux.HandleFunc("POST /api/auth/stream-ticket", s.handleCreateStreamTicket)
 
 	// GitHub install.
 	mux.HandleFunc("GET /api/github/install/url", s.handleGitHubInstallURL)

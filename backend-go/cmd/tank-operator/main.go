@@ -240,6 +240,7 @@ func main() {
 	// directly; it does not mint a service-local session token.
 	verifier := auth.NewVerifier(auth.NewRomaineLifeKeyResolver())
 	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
+	streamAuthTickets := buildStreamAuthTicketStore(pgPool)
 
 	// 11. Start reaper.
 	ctx := context.Background()
@@ -326,6 +327,7 @@ func main() {
 		readStates:               readStateStore,
 		verifier:                 verifier,
 		gitHubInstallStates:      gitHubInstallStates,
+		streamAuthTickets:        streamAuthTickets,
 		namespace:                namespace,
 		sessionScope:             sessionScope,
 		sessionServiceAccount:    sessionServiceAccount,
@@ -414,6 +416,14 @@ func buildGitHubInstallStateStore(pool *pgxpool.Pool) gitHubInstallStateStore {
 		return nil
 	}
 	return pgstore.NewGitHubInstallStateStore(pool)
+}
+
+func buildStreamAuthTicketStore(pool *pgxpool.Pool) streamAuthTicketStore {
+	if pool == nil {
+		slog.Warn("stream auth ticket store disabled; POSTGRES_HOST is unset")
+		return nil
+	}
+	return pgstore.NewStreamAuthTicketStore(pool)
 }
 
 func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {

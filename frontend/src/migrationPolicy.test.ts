@@ -7,6 +7,7 @@ function readSource(path: string): string {
 }
 
 const appSource = readSource("./App.tsx");
+const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
@@ -118,6 +119,14 @@ test("chat live stream waits for timeline bootstrap", () => {
     appSource,
     /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\) \|\| !historyBootstrapped\) return;/,
   );
+});
+
+test("browser EventSource streams use opaque stream tickets, not bearer query strings", () => {
+  assert.equal(authSource.includes("/api/auth/stream-ticket"), true);
+  assert.equal(authSource.includes("stream_ticket"), true);
+  assert.equal(authSource.includes("access_token"), false);
+  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-events"/);
+  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-list"/);
 });
 
 test("startup transcript rows come from durable conversation events", () => {
