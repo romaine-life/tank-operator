@@ -69,6 +69,11 @@ export interface SessionRow {
   // until the cloner writes back; null/missing means
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
+  model?: string;
+  effort?: string;
+  runtime_model?: string;
+  runtime_effort?: string;
+  runtime_configured_at?: string;
   // Durable user-facing order for the sidebar. Larger values render
   // earlier. This is intentionally separate from row_version so
   // status/test/rollout/activity updates do not reshuffle rows.
@@ -339,6 +344,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       clone_state: isRecord(rowRaw.clone_state)
         ? (rowRaw.clone_state as Record<string, unknown>)
         : undefined,
+      model: stringField(rowRaw, "model") ?? undefined,
+      effort: stringField(rowRaw, "effort") ?? undefined,
+      runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,
+      runtime_effort: stringField(rowRaw, "runtime_effort") ?? undefined,
+      runtime_configured_at: stringField(rowRaw, "runtime_configured_at") ?? undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     },

@@ -181,6 +181,40 @@ func TestMarshalRowUpdateIncludesSidebarPosition(t *testing.T) {
 	}
 }
 
+func TestMarshalRowUpdateIncludesSessionRunConfig(t *testing.T) {
+	payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:                  "8",
+		Email:               "u@example.com",
+		Scope:               "default",
+		Visible:             true,
+		Status:              "Active",
+		Model:               "gpt-5.5",
+		Effort:              "xhigh",
+		RuntimeModel:        "gpt-5.5",
+		RuntimeEffort:       "xhigh",
+		RuntimeConfiguredAt: "2026-05-21T00:00:00Z",
+		RowVersion:          99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Row struct {
+			Model               string `json:"model"`
+			Effort              string `json:"effort"`
+			RuntimeModel        string `json:"runtime_model"`
+			RuntimeEffort       string `json:"runtime_effort"`
+			RuntimeConfiguredAt string `json:"runtime_configured_at"`
+		} `json:"row"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Row.Model != "gpt-5.5" || probe.Row.Effort != "xhigh" || probe.Row.RuntimeModel != "gpt-5.5" || probe.Row.RuntimeEffort != "xhigh" || probe.Row.RuntimeConfiguredAt == "" {
+		t.Fatalf("run config row = %#v", probe.Row)
+	}
+}
+
 // TestMarshalRowUpdateRepos pins the SSE wire contract for the
 // repo-selection field: always an array, never absent, even when
 // the row has no repos picked. The SPA reads this directly into the

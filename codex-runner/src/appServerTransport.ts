@@ -37,6 +37,7 @@ type AppServerTransportOptions = {
     request: AppServerUserInputRequest,
     signal?: AbortSignal,
   ) => Promise<AppServerUserInputResponse>;
+  onRuntimeConfigApplied?: (threadOptions: ThreadOptions) => void;
 };
 
 type PendingRequest = {
@@ -253,6 +254,7 @@ export class CodexAppServerTransport {
     const id = typeof thread?.id === "string" ? thread.id : undefined;
     if (!id) throw new Error("codex app-server thread/start response did not include thread.id");
     this.threadID = id;
+    this.opts.onRuntimeConfigApplied?.(threadOptions);
     this.activeQueue?.push({ kind: "event", event: { type: "thread.started", thread_id: id } });
     return id;
   }

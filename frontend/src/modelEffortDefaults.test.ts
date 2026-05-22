@@ -98,3 +98,21 @@ test("enqueueSdkTurn forwards effort on the POST body so the runner sees the use
   // the property MUST be present when run.effort is set.
   assert.match(appSource, /\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/);
 });
+
+test("createSession forwards model and effort as session-owned config", () => {
+  assert.match(appSource, /const sessionModel = SDK_CHAT_MODES\.has\(mode\) \? seedModel : "";/);
+  assert.match(appSource, /const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/);
+  assert.match(
+    appSource,
+    /\.\.\.\(sessionModel \|\| sessionEffort \? \{ model: sessionModel, effort: sessionEffort \} : \{\}\)/,
+  );
+  assert.doesNotMatch(appSource, /initialTurnPayload[\s\S]{0,400}model: seedModel/);
+});
+
+test("forkSessionFromMessage forwards model and effort on create, not the first turn", () => {
+  assert.match(
+    appSource,
+    /SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/,
+  );
+  assert.doesNotMatch(appSource, /client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/);
+});

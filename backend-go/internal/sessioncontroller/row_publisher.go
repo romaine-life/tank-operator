@@ -140,10 +140,15 @@ type rowWireShape struct {
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
 	// the SPA never has to special-case "absent vs. empty"; clone
 	// state is omitted until the repo-cloner init container writes back.
-	Repos           []string       `json:"repos"`
-	CloneState      map[string]any `json:"clone_state,omitempty"`
-	SidebarPosition int64          `json:"sidebar_position"`
-	RowVersion      int64          `json:"row_version"`
+	Repos               []string       `json:"repos"`
+	CloneState          map[string]any `json:"clone_state,omitempty"`
+	Model               string         `json:"model,omitempty"`
+	Effort              string         `json:"effort,omitempty"`
+	RuntimeModel        string         `json:"runtime_model,omitempty"`
+	RuntimeEffort       string         `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt string         `json:"runtime_configured_at,omitempty"`
+	SidebarPosition     int64          `json:"sidebar_position"`
+	RowVersion          int64          `json:"row_version"`
 }
 
 // MarshalRowUpdate produces the JSON wire payload for a single row.
@@ -162,26 +167,31 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 	}
 	wire := RowUpdatePayload{
 		Row: rowWireShape{
-			ID:              record.ID,
-			Owner:           record.Email,
-			Mode:            record.Mode,
-			Scope:           record.Scope,
-			PodName:         record.PodName,
-			Name:            record.Name,
-			Visible:         record.Visible,
-			Status:          record.Status,
-			RequestedAt:     record.RequestedAt,
-			CreatedAt:       record.CreatedAt,
-			UpdatedAt:       record.UpdatedAt,
-			ReadyAt:         record.ReadyAt,
-			TerminatingAt:   record.TerminatingAt,
-			ActivitySummary: activity,
-			TestState:       record.TestState,
-			RolloutState:    record.RolloutState,
-			Repos:           repos,
-			CloneState:      record.CloneState,
-			SidebarPosition: record.SidebarPosition,
-			RowVersion:      record.RowVersion,
+			ID:                  record.ID,
+			Owner:               record.Email,
+			Mode:                record.Mode,
+			Scope:               record.Scope,
+			PodName:             record.PodName,
+			Name:                record.Name,
+			Visible:             record.Visible,
+			Status:              record.Status,
+			RequestedAt:         record.RequestedAt,
+			CreatedAt:           record.CreatedAt,
+			UpdatedAt:           record.UpdatedAt,
+			ReadyAt:             record.ReadyAt,
+			TerminatingAt:       record.TerminatingAt,
+			ActivitySummary:     activity,
+			TestState:           record.TestState,
+			RolloutState:        record.RolloutState,
+			Repos:               repos,
+			CloneState:          record.CloneState,
+			Model:               record.Model,
+			Effort:              record.Effort,
+			RuntimeModel:        record.RuntimeModel,
+			RuntimeEffort:       record.RuntimeEffort,
+			RuntimeConfiguredAt: record.RuntimeConfiguredAt,
+			SidebarPosition:     record.SidebarPosition,
+			RowVersion:          record.RowVersion,
 		},
 		Cursor: fmt.Sprintf("%d", record.RowVersion),
 	}

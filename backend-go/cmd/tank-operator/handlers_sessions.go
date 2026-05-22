@@ -119,24 +119,34 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	var body struct {
 		Mode        string                           `json:"mode"`
+		Model       string                           `json:"model,omitempty"`
+		Effort      string                           `json:"effort,omitempty"`
 		Repos       []string                         `json:"repos"`
 		InitialTurn *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
+		body.Model = ""
+		body.Effort = ""
 		body.Repos = nil
 		body.InitialTurn = nil
 	}
+	mode := sessionmodel.NormalizeSessionMode(body.Mode)
 	repos, err := validateRepoSlugs(body.Repos)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	initialTurn, status, detail := validateCreateSessionInitialTurn(body.Mode, body.InitialTurn)
+	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
+	initialTurn, status, detail := validateCreateSessionInitialTurn(mode, body.InitialTurn)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -145,7 +155,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
 		return
 	}
-	if body.InitialTurn != nil && !initialTurn.Deferred && !sessionmodel.IsNoPodMode(body.Mode) && s.sessionBus == nil {
+	if body.InitialTurn != nil && !initialTurn.Deferred && !sessionmodel.IsNoPodMode(mode) && s.sessionBus == nil {
 		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
 		return
 	}
@@ -158,8 +168,10 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:       owner,
-		Mode:        body.Mode,
+		Mode:        mode,
 		Repos:       repos,
+		Model:       runConfig.Model,
+		Effort:      runConfig.Effort,
 		RequestedAt: requestedAt,
 	})
 	if err != nil {
@@ -763,6 +775,8 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		ValidationURL         string   `json:"validation_url"`
 		CallerEmail           string   `json:"caller_email"`
 		Mode                  string   `json:"mode"`
+		Model                 string   `json:"model,omitempty"`
+		Effort                string   `json:"effort,omitempty"`
 		Repos                 []string `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -774,6 +788,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 	if body.CallerEmail != "" {
 		email = body.CallerEmail
 	}
+	mode := sessionmodel.NormalizeSessionMode(body.Mode)
 
 	glimmungContext := map[string]any{}
 	if body.GlimmungRunRef != "" {
@@ -794,16 +809,23 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(repos) > 0 && !sessionModeSupportsRepos(body.Mode) {
+	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	if status != 0 {
+		writeError(w, status, detail)
 		return
 	}
 
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           email,
-		Mode:            body.Mode,
+		Mode:            mode,
 		GlimmungContext: glimmungContext,
 		Repos:           repos,
+		Model:           runConfig.Model,
+		Effort:          runConfig.Effort,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

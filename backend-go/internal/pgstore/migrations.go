@@ -195,6 +195,24 @@ var schemaMigrations = []string{
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS clone_state jsonb`,
 
+	// Session-owned model configuration. `model`/`effort` are the
+	// durable run options requested at session creation and used for
+	// every SDK submit_turn; per-turn model overrides are ignored once
+	// these are present. `runtime_*` is written back by the pod-side
+	// runner after it has handed the options to the executable/SDK,
+	// giving the UI an applied-config surface instead of echoing the
+	// launch picker.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS model text NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS effort text NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_model text NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_effort text NOT NULL DEFAULT ''`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`,
+
 	// `session_events` â€” the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.

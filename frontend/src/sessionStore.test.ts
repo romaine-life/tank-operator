@@ -229,12 +229,22 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       session_scope: "default",
       visible: true,
       status: "Active",
+      model: "gpt-5.5",
+      effort: "xhigh",
+      runtime_model: "gpt-5.5",
+      runtime_effort: "xhigh",
+      runtime_configured_at: "2026-05-21T00:00:00Z",
       sidebar_position: 7,
       row_version: 1,
     },
   });
   assert.ok(good, "valid payload must parse");
   assert.equal(good!.row.id, "8");
+  assert.equal(good!.row.model, "gpt-5.5");
+  assert.equal(good!.row.effort, "xhigh");
+  assert.equal(good!.row.runtime_model, "gpt-5.5");
+  assert.equal(good!.row.runtime_effort, "xhigh");
+  assert.equal(good!.row.runtime_configured_at, "2026-05-21T00:00:00Z");
   assert.equal(good!.row.sidebar_position, 7);
   assert.equal(good!.row.row_version, 1);
 });

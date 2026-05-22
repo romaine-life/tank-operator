@@ -144,6 +144,19 @@ type SessionRecord struct {
 	// until the init container writes back the first state.
 	CloneState map[string]any
 
+	// Model/Effort are the session-owned run configuration accepted at
+	// create time. Runners consume these values through submit_turn
+	// commands rather than trusting per-turn browser state.
+	Model  string
+	Effort string
+
+	// RuntimeModel/RuntimeEffort are written by the runner after it
+	// hands options to the provider executable/SDK. This is the applied
+	// configuration surface the UI renders in the composer footer.
+	RuntimeModel        string
+	RuntimeEffort       string
+	RuntimeConfiguredAt string
+
 	// SidebarPosition is the durable user-facing sort key for the
 	// session list. Larger values render earlier. It is intentionally
 	// separate from RowVersion: row_version is the live-update cursor

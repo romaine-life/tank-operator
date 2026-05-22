@@ -236,6 +236,39 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_runtime_config_update_total",
+		Help: "Session runtime config reports from pod-side runners, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+func recordSessionRuntimeConfigUpdate(provider, result string) {
+	sessionRuntimeConfigUpdateTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		sessionRuntimeConfigResultLabel(result),
+	).Inc()
+}
+
+func sessionRuntimeConfigProviderLabel(provider string) string {
+	switch provider {
+	case "claude", "codex":
+		return provider
+	default:
+		return "unknown"
+	}
+}
+
+func sessionRuntimeConfigResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "forbidden", "not_found", "manager_unavailable", "update_failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
 // --- Browser stream auth metrics ---
 //
 // Native EventSource cannot attach Authorization headers, so the SPA mints

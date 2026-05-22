@@ -69,6 +69,9 @@ All metric names are prefixed `tank_`. The full namespace:
   `execution_failed`. `tank_runner_provider_control_total{action,outcome}`
   counts bounded provider control calls, including Claude foreground-task
   backgrounding before interrupt and the interrupt signal itself.
+- `tank_session_runtime_config_update_total` - pod-side runner reports of
+  the model/effort actually applied to the provider runtime. Labels:
+  `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
