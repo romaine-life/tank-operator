@@ -23,6 +23,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -41,6 +42,11 @@ type appServer struct {
 	verifier                 *auth.Verifier
 	gitHubInstallStates      gitHubInstallStateStore
 	streamAuthTickets        streamAuthTicketStore
+	// streamRegistry tracks every open /api/sessions/{id}/events SSE
+	// handler so the /api/debug/session-event-streams admin endpoint
+	// can surface per-stream wake/page/emit state for diagnosis.
+	// Wired at boot in main.go.
+	streamRegistry           *sessionstream.Registry
 	namespace                string
 	sessionScope             string
 	sessionServiceAccount    string
@@ -77,6 +83,11 @@ type sessionCommandBus interface {
 	PublishCommand(context.Context, sessionbus.Command) error
 	PublishSessionEventWake(context.Context, string) error
 	SubscribeWakes(context.Context, string) (<-chan struct{}, func(), error)
+	// SubscribeWakesWithRecorder is the per-stream-aware variant of
+	// SubscribeWakes used by the session event SSE handler so the
+	// admin endpoint can answer "did a wake arrive on the subject I
+	// expected, for this specific browser?" without devtools.
+	SubscribeWakesWithRecorder(ctx context.Context, sessionID string, recorder sessionbus.WakeRecorder) (<-chan struct{}, func(), error)
 	PublishSessionRowUpdate(ctx context.Context, email, scope string, payload []byte) error
 	SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
 }
@@ -94,6 +105,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/design/selection/latest", s.handleGetLatestDesignSelection)
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)
 	mux.HandleFunc("POST /api/client-metrics/chat-scroll", s.handleChatScrollMetrics)
+	// Browser-side SSE event stream telemetry — the candidate-B
+	// (zombie SSE) and candidate-C (reducer drop) stethoscope on the
+	// client side. Pairs with server-side counters in observability.go.
+	mux.HandleFunc("POST /api/client-metrics/session-events-stream", s.handleSessionEventStreamMetrics)
 
 	// Auth.
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
@@ -131,6 +146,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// able server-side observability that replaces "share a Network
 	// tab screenshot."
 	mux.HandleFunc("GET /api/debug/session-list-state", s.handleDebugSessionListState)
+	// Admin-only debug surface for the chat-side SSE stream registry.
+	// Returns per-open-stream state (wakes/pages/emits/cursor) so an
+	// operator can distinguish wake-key-mismatch from zombie-SSE from
+	// reducer-drop without browser devtools. Per
+	// memory/feedback_no_devtools_build_surfaces_instead.md.
+	mux.HandleFunc("GET /api/debug/session-event-streams", s.handleDebugSessionEventStreams)
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)

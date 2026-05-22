@@ -79,6 +79,14 @@ func (*recordingSessionBus) SubscribeWakes(context.Context, string) (<-chan stru
 	return make(chan struct{}), func() {}, nil
 }
 
+// SubscribeWakesWithRecorder is the per-stream-aware variant. Tests
+// that drive the SSE handler observe the recorder through the
+// registry surface; for the existing turns/list tests the recorder
+// argument is unused.
+func (*recordingSessionBus) SubscribeWakesWithRecorder(context.Context, string, sessionbus.WakeRecorder) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
 // PublishSessionRowUpdate + SubscribeSessionRowUpdates are the row-
 // update wire surface (Phase 3 of docs/session-list-redesign.md).
 // Tests don't drive the sidebar SSE so the recorder no-ops both.

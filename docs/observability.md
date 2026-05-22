@@ -51,6 +51,35 @@ All metric names are prefixed `tank_`. The full namespace:
   `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
   `session_id`, email, raw route paths, or user-supplied event names as
   labels; unknown values collapse to `other` / `unknown`.
+- `tank_session_event_wake_published_total` /
+  `tank_session_event_wake_received_total` /
+  `tank_session_event_persist_to_wake_seconds` — the per-session SSE
+  wake fabric stethoscope. Published vs received delta over the same
+  window is the candidate-A wake-key-mismatch signature (the persister
+  is publishing to a subject the SSE subscriber is not listening for).
+  All unlabeled aggregates per the cardinality rules below; per-stream
+  resolution lives in `GET /api/debug/session-event-streams`
+  (admin-only) and in the persister's `slog.Info("session event
+  persister wake published", subject=..., storage_key=...,
+  event_type=..., order_key=..., tank_session_id=...)` line.
+- `tank_session_event_stream_emitted_by_type_total{event_type}` —
+  per-Tank-event-type counter paired with
+  `tank_session_event_client_received_total{event_type, session_mode}`.
+  Divergence is the candidate-C reducer-drop signature (server emitted,
+  browser didn't render). `event_type` is the closed enum from
+  `internal/conversation/types.go`; unknown shapes collapse to
+  `other`.
+- `tank_session_event_client_*` — browser-reported per-session SSE
+  stream diagnostics ingested through
+  `POST /api/client-metrics/session-events-stream`. Bounded labels:
+  `event` (opened, ready, tank_event_received,
+  stream_silent_while_running, resync_required, stream_error,
+  closed_unmount, closed_error, reconnect_scheduled),
+  `session_mode`, and on the `_received_total` variant `event_type`.
+  The `_stream_silent_seconds{session_mode}` histogram is the
+  candidate-B zombie-SSE detector: the browser's silence watchdog
+  observes the idle interval whenever a connected stream has gone
+  >30 s without emitting events while a turn is in flight.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
   to `/interrupt`. Single label `outcome` with three bounded values:
   `persisted`, `persist_failed`, `publish_failed`. Steady-state
@@ -76,6 +105,27 @@ All metric names are prefixed `tank_`. The full namespace:
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
+
+## Per-stream debug surface
+
+`GET /api/debug/session-event-streams` (admin-only) returns the
+in-memory snapshot of every open `/api/sessions/{id}/events` SSE
+handler on the queried orchestrator replica. Each stream row carries
+`opened_at`, `last_wake_at`, `last_wake_subject`, `last_page_read_at`,
+`last_emit_at`, `last_emit_order_key`, `last_emit_event_type`,
+`cursor_after_order_key`, `wakes_received`, `pages_read_empty`,
+`pages_read_non_empty`, `emits_total`, and `heartbeats_sent`. The
+endpoint accepts a `?session_id=<id>` filter for focused diagnosis.
+
+Pair it with the Prometheus counters above: if the durable ledger has
+new rows for a session but the matching stream's `wakes_received`
+counter stays at 0, the persister is publishing to a subject the
+subscriber is not listening for (candidate A); if `wakes_received`
+climbs but `emits_total` stays flat, the page read returned nothing
+(candidate B for read-replica visibility lag, or the cursor jumped
+past pending rows); if `emits_total` climbs on the server but the
+matching browser's `tank_session_event_client_received_total` stays
+flat, the SPA reducer is dropping (candidate C).
 
 ## Cardinality rules
 

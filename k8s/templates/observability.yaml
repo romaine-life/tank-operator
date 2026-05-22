@@ -159,6 +159,130 @@ spec:
             summary: "tank-operator wake/event publishes to NATS are failing"
             runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
 
+        # ----- Per-session SSE wake-fabric stethoscope -----
+        #
+        # The three alerts below correspond to the candidate-A / B / C
+        # failure shapes catalogued in docs/observability.md →
+        # "Per-stream debug surface" and the persister's slog.Info
+        # "session event persister wake published" line.
+        #
+        # Candidate A — wake-key mismatch. The persister fires wakes on
+        # a subject the SSE handler is not subscribed for. Symptom:
+        # wakes_published climbs, wakes_received does not. Threshold:
+        # 5% sustained divergence over 10m, severity warning (user-
+        # visible only when an actual wake is lost; SSE clients catch
+        # up on next heartbeat or reconnect).
+        - alert: TankSessionEventWakeDeliveryGap
+          expr: |
+            (
+              sum(rate(tank_session_event_wake_published_total[10m]))
+                - sum(rate(tank_session_event_wake_received_total[10m]))
+            )
+              / clamp_min(sum(rate(tank_session_event_wake_published_total[10m])), 0.001)
+              > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session-event wakes are being published faster than they are received"
+            runbook: |
+              The persister (or a direct-writer call site) is publishing
+              to a per-session wake subject that no SSE handler is
+              subscribed for. The most common cause is a storage_key
+              shape drift between producer and subscriber in a
+              non-default scope. Resolve per-session via
+              GET /api/debug/session-event-streams (admin only): if a
+              specific stream shows wakes_received=0 while
+              tank_session_event_wake_published_total is climbing for
+              the same window, last_wake_subject will be empty and
+              storage_key will show what the handler expected to
+              receive on. Check
+              backend-go/internal/sessionmodel.SessionStorageKey and
+              the runner's TANK_SESSION_STORAGE_KEY env vs.
+              cmd/tank-operator's sessionScope.
+
+        # Candidate B — zombie SSE. The browser's silence watchdog
+        # observes long idle intervals while a turn is in flight.
+        # Threshold: p95 > 60s for 30m. The watchdog re-arms after
+        # firing so a continuous stall produces multiple histogram
+        # points; the 30m window keeps a single bad session from
+        # paging.
+        - alert: TankSessionEventBrowserStreamSilent
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le, session_mode) (rate(tank_session_event_client_stream_silent_seconds_bucket[30m]))
+            ) > 60
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "p95 browser SSE silent-while-running > 60s on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser's silence watchdog is observing SSE streams
+              that stay TCP-alive (no onerror fires) but receive no
+              tank events for >30s while a turn is in flight.
+              Canonical zombie-connection signature: proxy / LB has
+              dropped the data path without sending FIN. Compare with
+              TankSessionEventWakeDeliveryGap — if wake_published vs
+              wake_received are healthy, the failure is between the
+              orchestrator and the browser, not in the wake fabric.
+              Likely surface: ingress / load balancer idle timeout.
+
+        # Candidate C — reducer drop. Server emits a Tank event the
+        # browser never confirms receiving. Threshold: 5% sustained
+        # divergence on the same event_type for 10m. Sum across
+        # session_mode on both sides so a mode-specific reducer bug
+        # doesn't get hidden by a healthy mode.
+        - alert: TankSessionEventClientEmitDivergence
+          expr: |
+            (
+              sum by (event_type) (rate(tank_session_event_stream_emitted_by_type_total[10m]))
+                - sum by (event_type) (rate(tank_session_event_client_received_total[10m]))
+            )
+              / clamp_min(sum by (event_type) (rate(tank_session_event_stream_emitted_by_type_total[10m])), 0.001)
+              > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "server emits of event_type={{`{{ $labels.event_type }}`}} exceed browser receipts by >5%"
+            runbook: |
+              The SSE handler is emitting Tank events the SPA reducer
+              is filtering out before rendering. Inspect
+              frontend/src/App.tsx → applySdkDurableEvent +
+              isTankConversationEvent for the failing event_type; the
+              counters increment from the SSE onmessage listener
+              before the reducer filter, so any drop here is purely
+              a frontend rendering concern.
+
+        # Persist→wake latency tail. Catches "the publish is slow but
+        # not failing" — the existing wake_publish_failure_total only
+        # increments on outright errors. p99 > 100ms for 10m is the
+        # signal that NATS is degraded enough to be user-visible on
+        # the live-render path even though SSE clients still get the
+        # events eventually.
+        - alert: TankSessionEventPersistToWakeSlow
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(tank_session_event_persist_to_wake_seconds_bucket[10m]))
+            ) > 0.1
+          for: 10m
+          labels:
+            severity: info
+          annotations:
+            summary: "session-event persist→wake p99 > 100ms for 10m"
+            runbook: |
+              NATS publish from the persister is taking longer than
+              expected. SSE clients will see the events but with
+              user-perceptible lag. Compare with tank_nats_disconnect_total
+              and tank_nats_async_error_total — sustained publish
+              latency tail with no connection flaps points at NATS
+              server load (memory pressure on the JetStream stream,
+              slow consumer warnings). Diagnostic only — does not
+              page.
+
         - alert: TankStreamAuthTicketStoreFailures
           expr: rate(tank_stream_auth_ticket_total{result=~"store_unavailable|store_error"}[10m]) > 0
           for: 5m

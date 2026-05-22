@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -175,11 +177,29 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		sessionEventStreamReconnectTotal.Add(1)
 	}
 
+	// Per-stream diagnostic state. The registry is the source of
+	// truth for the /api/debug/session-event-streams admin endpoint;
+	// it has to be registered before SubscribeWakesWithRecorder fires
+	// any callbacks so the first wake (which can race the subscribe
+	// in low-latency clusters) lands on a registered state object.
+	streamID := auth.RandomHex(16)
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	state := sessionstream.NewStreamState(
+		streamID,
+		sessionID,
+		storageKey,
+		user.Email,
+		time.Now(),
+		cursor.AfterOrderKey,
+	)
+	s.streamRegistry.Register(state)
+	defer s.streamRegistry.Deregister(streamID)
+
 	notify := make(<-chan struct{})
 	unsubscribe := func() {}
 	if s.sessionBus != nil {
 		var err error
-		notify, unsubscribe, err = s.sessionBus.SubscribeWakes(r.Context(), sessionID)
+		notify, unsubscribe, err = s.sessionBus.SubscribeWakesWithRecorder(r.Context(), sessionID, state)
 		if err != nil {
 			sessionEventWakeSubscribeFailures.Add(1)
 			recordSessionEventStreamError()
@@ -202,24 +222,29 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	slog.Info("session event stream open",
 		"session_id", sessionID,
 		"email", user.Email,
+		"stream_id", streamID,
+		"storage_key", storageKey,
 		"last_order_key", cursor.AfterOrderKey,
 		"resumed", cursor.AfterOrderKey != "",
 	)
 	defer slog.Info("session event stream close",
 		"session_id", sessionID,
 		"email", user.Email,
+		"stream_id", streamID,
 	)
 
 	heartbeat := time.NewTicker(sessionEventStreamHeartbeat)
 	defer heartbeat.Stop()
 
 	for {
-		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor)
+		cursorBefore := cursor.AfterOrderKey
+		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor, state)
 		if err != nil {
 			recordSessionEventStreamError()
 			slog.Warn("session event stream page failed",
 				"session_id", sessionID,
 				"email", user.Email,
+				"stream_id", streamID,
 				"last_order_key", cursor.AfterOrderKey,
 				"error", err,
 			)
@@ -231,11 +256,14 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		flusher.Flush()
+		state.RecordPageRead(time.Now(), count)
 		if count > 0 {
-			slog.Debug("session event stream emitted events",
+			slog.Info("session event stream emitted events",
 				"session_id", sessionID,
+				"stream_id", streamID,
 				"count", count,
-				"last_order_key", cursor.AfterOrderKey,
+				"cursor_before", cursorBefore,
+				"cursor_after", cursor.AfterOrderKey,
 				"has_more", hasMore,
 			)
 		}
@@ -249,13 +277,14 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		case <-notify:
 		case <-heartbeat.C:
 			sessionEventStreamHeartbeatTotal.Add(1)
+			state.RecordHeartbeat(time.Now())
 			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
 	}
 }
 
-func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, sessionID string, cursor *store.SessionEventCursor) (bool, int, error) {
+func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
 	eventStore := s.sessionEvents
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
@@ -275,6 +304,9 @@ func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.Resp
 		cursor.AfterOrderKey = orderKey
 		count++
 		sessionEventStreamEmittedTotal.Add(1)
+		eventType, _ := event["type"].(string)
+		recordSessionEventStreamEmittedByType(eventType)
+		state.RecordEmit(time.Now(), orderKey, eventType, orderKey)
 	}
 	if page.NextOrderKey != "" {
 		cursor.AfterOrderKey = page.NextOrderKey

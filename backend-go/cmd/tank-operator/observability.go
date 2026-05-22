@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -139,6 +140,40 @@ var (
 		Name: "tank_session_list_event_publish_failure_total",
 		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
+	// Wake success counters + persist→wake latency. The published vs
+	// received delta is the candidate-A stethoscope (see
+	// docs/quality-timeframes.md observability requirement and the
+	// /api/debug/session-event-streams admin endpoint for per-session
+	// resolution). Unlabeled aggregates per docs/observability.md
+	// cardinality rules; per-storage-key resolution lives in the slog
+	// line and the admin endpoint's stream snapshot, not in labels.
+	sessionEventWakePublishedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_wake_published_total",
+		Help: "Per-session SSE wakes successfully published to NATS by the persister or direct-writer call sites.",
+	})
+	sessionEventWakeReceivedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_wake_received_total",
+		Help: "Per-session SSE wakes received by orchestrator-side NATS subscribers (the SSE handler's notify path).",
+	})
+	sessionEventPersistToWakeSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_session_event_persist_to_wake_seconds",
+		Help:    "Duration from session_events row Upsert returning to the NATS wake publish completing.",
+		Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+	})
+	// Per-event-type emit counter — the candidate-C stethoscope. When
+	// the server's emit-by-type vs the client's receive-by-type
+	// (tank_session_event_client_received_total, ingested through
+	// POST /api/client-metrics/session-events-stream) diverge for a
+	// specific event_type, the SPA reducer is dropping events
+	// silently. Event types are a closed enum at
+	// internal/conversation/types.go — bounded cardinality.
+	sessionEventStreamEmittedByTypeTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_event_stream_emitted_by_type_total",
+			Help: "Events emitted to a connected SSE consumer, labeled by Tank event type.",
+		},
+		[]string{"event_type"},
+	)
 
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
@@ -315,6 +350,85 @@ func streamAuthTicketResultLabel(result string) string {
 	switch result {
 	case "ok", "invalid", "denied", "store_unavailable", "store_error":
 		return result
+	default:
+		return "other"
+	}
+}
+
+// --- Browser session-event stream telemetry ---
+//
+// The candidate-B and candidate-C stethoscope on the browser side. The
+// SPA's sessionEventStreamTelemetry.ts emits one event per opened /
+// received / silent / closed / error transition; the orchestrator
+// buckets the labels server-side. Cardinality budget: 10 events ×
+// 13 modes = 130 base + 15 event_types × 13 modes = 195 receive +
+// 13 mode × 10 silent histogram buckets = 130 → ~455 series.
+
+var (
+	sessionEventStreamClientReportsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_event_client_reports_total",
+			Help: "Browser session-event stream metric report requests, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
+	sessionEventStreamClientEventsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_event_client_events_total",
+			Help: "Semantic browser-side SSE stream events reported by the SPA, labeled by event + session_mode.",
+		},
+		[]string{"event", "session_mode"},
+	)
+	// sessionEventStreamClientReceivedTotal is the candidate-C
+	// stethoscope: divergence between this counter and the
+	// server-side tank_session_event_stream_emitted_by_type_total
+	// for the same event_type means the SPA reducer is dropping
+	// events the SSE handler emitted.
+	sessionEventStreamClientReceivedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_event_client_received_total",
+			Help: "Tank conversation events the SPA observed via the per-session SSE stream, labeled by event type + session_mode.",
+		},
+		[]string{"event_type", "session_mode"},
+	)
+	// sessionEventStreamClientSilentSeconds is the candidate-B
+	// histogram. When the SPA sits with a connected SSE but receives
+	// no tank events for N seconds while a turn is running, it
+	// observes the idle duration here. p95 climbing into the
+	// minutes is the zombie-connection signature.
+	sessionEventStreamClientSilentSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "tank_session_event_client_stream_silent_seconds",
+			Help:    "Browser-observed duration the per-session SSE remained silent while a turn was in flight.",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600, 1800},
+		},
+		[]string{"session_mode"},
+	)
+)
+
+func recordSessionEventStreamClientReport(result string) {
+	sessionEventStreamClientReportsTotal.WithLabelValues(sessionEventStreamClientResultLabel(result)).Inc()
+}
+
+func recordSessionEventStreamClientEvent(event sessionEventStreamMetricEvent) {
+	mode := chatScrollSessionModeLabel(event.SessionMode)
+	eventLabel := sessionEventStreamClientEventLabel(event.Event)
+	sessionEventStreamClientEventsTotal.WithLabelValues(eventLabel, mode).Inc()
+	if eventLabel == "tank_event_received" {
+		sessionEventStreamClientReceivedTotal.WithLabelValues(
+			sessionEventTypeLabel(event.EventType),
+			mode,
+		).Inc()
+	}
+	if eventLabel == "stream_silent_while_running" && event.IdleSeconds != nil {
+		sessionEventStreamClientSilentSeconds.WithLabelValues(mode).Observe(*event.IdleSeconds)
+	}
+}
+
+func sessionEventStreamClientResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "invalid_json", "invalid_value", "too_many_events", "denied_role":
+		return raw
 	default:
 		return "other"
 	}
@@ -721,6 +835,9 @@ func (promPersisterMetrics) RecordTransientFailure() {
 
 // promWakeMetrics satisfies sessionbus.WakeMetrics so the bus can increment
 // wake/event-publish failure counters without importing prometheus directly.
+// The published/received pair powers the candidate-A wake-key-mismatch
+// stethoscope; the persist→wake duration histogram catches a slow-publish
+// tail the simple failure counter cannot.
 type promWakeMetrics struct{}
 
 func (promWakeMetrics) RecordSessionEventWakePublishFailed() {
@@ -729,6 +846,52 @@ func (promWakeMetrics) RecordSessionEventWakePublishFailed() {
 
 func (promWakeMetrics) RecordSessionListEventPublishFailed() {
 	sessionListEventPublishFailureTotal.Inc()
+}
+
+func (promWakeMetrics) RecordSessionEventWakePublished() {
+	sessionEventWakePublishedTotal.Inc()
+}
+
+func (promWakeMetrics) RecordSessionEventWakeReceived() {
+	sessionEventWakeReceivedTotal.Inc()
+}
+
+func (promWakeMetrics) RecordSessionEventPersistToWakeDuration(seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+	sessionEventPersistToWakeSeconds.Observe(seconds)
+}
+
+// recordSessionEventStreamEmittedByType is the per-event-type bump that
+// pairs with the existing unlabeled tank_session_event_stream_emitted_total.
+// Event type is bucketed against the closed enum in
+// internal/conversation/types.go; unknown shapes collapse to "other" so
+// label cardinality stays bounded if a producer regresses.
+func recordSessionEventStreamEmittedByType(eventType string) {
+	sessionEventStreamEmittedByTypeTotal.WithLabelValues(sessionEventTypeLabel(eventType)).Inc()
+}
+
+func sessionEventTypeLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "user_message.created",
+		"turn.submitted",
+		"turn.started",
+		"turn.completed",
+		"turn.failed",
+		"turn.command_failed",
+		"turn.interrupt_requested",
+		"turn.interrupted",
+		"session.status",
+		"item.started",
+		"item.completed",
+		"item.failed",
+		"tool.approval_requested",
+		"tool.approval_resolved":
+		return raw
+	default:
+		return "other"
+	}
 }
 
 // promNATSConnectionMetrics satisfies sessionbus.ConnectionMetrics so the
