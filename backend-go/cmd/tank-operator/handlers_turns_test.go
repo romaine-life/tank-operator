@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
@@ -35,12 +38,28 @@ type recordingSessionEventStore struct {
 	err     error
 }
 
+type staticHermesTokenSource struct{}
+
+func (staticHermesTokenSource) Token(context.Context) (string, error) {
+	return "test-token", nil
+}
+
 func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) error {
 	if r.err != nil {
 		return r.err
 	}
 	r.upserts = append(r.upserts, event)
 	return nil
+}
+
+func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _, timelineID string) (string, error) {
+	for i := len(r.upserts) - 1; i >= 0; i-- {
+		if got, _ := r.upserts[i]["timeline_id"].(string); got == timelineID {
+			orderKey, _ := r.upserts[i]["order_key"].(string)
+			return orderKey, nil
+		}
+	}
+	return "", nil
 }
 
 func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionbus.Command) error {
@@ -121,6 +140,242 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	// command. Mirror of the model/permission_mode assertion above.
 	if got.Effort != "xhigh" {
 		t.Fatalf("effort = %q, want xhigh", got.Effort)
+	}
+}
+
+func TestCreateSessionInitialTurnPersistsBeforeStartupStatus(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"initial_turn":{
+			"client_nonce":"turn-launch_123",
+			"prompt":"  /test\n\nlaunch prompt  ",
+			"model":"claude-sonnet-4-6",
+			"effort":"xhigh",
+			"permission_mode":"bypassPermissions",
+			"skill_name":"test"
+		}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.RequestedAt == nil || *created.RequestedAt == "" {
+		t.Fatalf("created session missing requested_at: %#v", created)
+	}
+	requestedAt, err := time.Parse(time.RFC3339Nano, *created.RequestedAt)
+	if err != nil {
+		t.Fatalf("parse requested_at %q: %v", *created.RequestedAt, err)
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2 (user_message.created + turn.submitted)", len(es.upserts))
+	}
+	for i, want := range []string{"user_message.created", "turn.submitted"} {
+		if got, _ := es.upserts[i]["type"].(string); got != want {
+			t.Fatalf("upsert[%d].type = %q, want %q", i, got, want)
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, es.upserts[i]["created_at"].(string))
+		if err != nil {
+			t.Fatalf("parse upsert[%d].created_at: %v", i, err)
+		}
+		if !createdAt.Before(requestedAt) {
+			t.Fatalf("upsert[%d].created_at = %s, want before session requested_at %s", i, createdAt, requestedAt)
+		}
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandSubmitTurn || got.ClientNonce != "turn-launch_123" {
+		t.Fatalf("command type/client nonce = %q/%q", got.Type, got.ClientNonce)
+	}
+	if got.SessionID != created.ID || got.Provider != "claude" || got.Prompt != "/test\n\nlaunch prompt" {
+		t.Fatalf("command routing/prompt = %#v", got)
+	}
+	if got.Model != "claude-sonnet-4-6" || got.Effort != "xhigh" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" {
+		t.Fatalf("command payload fields = %#v", got)
+	}
+}
+
+func TestCreateSessionInitialTurnDeferredReusesUserMessage(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"initial_turn":{
+			"client_nonce":"turn-launch_attach",
+			"prompt":"launch prompt\n\nAttachments:\n- notes.txt",
+			"deferred":true
+		}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 1 {
+		t.Fatalf("session-event upserts after create = %d, want 1 deferred user message", len(es.upserts))
+	}
+	if got, _ := es.upserts[0]["type"].(string); got != "user_message.created" {
+		t.Fatalf("create upsert type = %q, want user_message.created", got)
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("commands after deferred create = %d, want 0", len(bus.commands))
+	}
+
+	turnReq := authedTurnRequest(t, created.ID, `{
+		"client_nonce":"turn-launch_attach",
+		"prompt":"launch prompt\n\nAttachments (use the Read tool to load):\n- /workspace/.attachments/123-notes.txt",
+		"existing_user_message":true
+	}`)
+	turnResp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(turnResp, turnReq)
+
+	if turnResp.Code != http.StatusAccepted {
+		t.Fatalf("turn status = %d body = %s", turnResp.Code, turnResp.Body.String())
+	}
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts after turn = %d, want 2 total", len(es.upserts))
+	}
+	if got, _ := es.upserts[1]["type"].(string); got != "turn.submitted" {
+		t.Fatalf("second upsert type = %q, want turn.submitted", got)
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("commands after deferred submit = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Prompt; got != "launch prompt\n\nAttachments (use the Read tool to load):\n- /workspace/.attachments/123-notes.txt" {
+		t.Fatalf("command prompt = %q", got)
+	}
+}
+
+func TestEnqueueSessionTurnRejectsExistingUserMessageWithoutLaunchRow(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	req := authedTurnRequest(t, "63", `{
+		"client_nonce":"turn-missing-user",
+		"prompt":"hello",
+		"existing_user_message":true
+	}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("commands = %d, want 0", len(bus.commands))
+	}
+}
+
+func TestCreateSessionInitialTurnFailureRollsBackCreatedPod(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	app.sessionEvents = &recordingSessionEventStore{err: errors.New("postgres unavailable")}
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"initial_turn":{"client_nonce":"turn-launch_fail","prompt":"hello"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	pods, err := app.k8s.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("pods after rollback = %d, want 0", len(pods.Items))
+	}
+}
+
+func TestCreateHermesSessionInitialTurnSubmitsAtCreate(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	var createRun hermes.CreateRunRequest
+	hermesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
+			if err := json.NewDecoder(r.Body).Decode(&createRun); err != nil {
+				t.Errorf("decode create run: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, hermes.CreateRunResponse{RunID: "run-1", Status: "started"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run-1/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer hermesServer.Close()
+	app.hermesBridge = hermes.NewBridge(hermes.BridgeOptions{
+		Client: hermes.NewClient(hermes.Options{
+			BaseURL: hermesServer.URL,
+			Tokens:  staticHermesTokenSource{},
+			Timeout: time.Second,
+		}),
+		Store: app.sessionEvents.(*recordingSessionEventStore),
+		Scope: "default",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"hermes_gui",
+		"initial_turn":{"client_nonce":"turn-hermes_launch","prompt":"hello hermes"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Mode != sessionmodel.HermesGUIMode || created.Status != "Active" {
+		t.Fatalf("created hermes session = %#v", created)
+	}
+	if createRun.Input != "hello hermes" || createRun.SessionID != created.ID {
+		t.Fatalf("hermes create run request = %#v", createRun)
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("hermes upserts = %d, want 2", len(es.upserts))
+	}
+	for i, want := range []string{"user_message.created", "turn.submitted"} {
+		if got, _ := es.upserts[i]["type"].(string); got != want {
+			t.Fatalf("upsert[%d].type = %q, want %q", i, got, want)
+		}
 	}
 }
 

@@ -402,6 +402,51 @@ Body:
 { "last_read_order_key": "001..." }
 ```
 
+Launch-time durable chat turn submission:
+
+`POST /api/sessions`
+
+Body:
+
+```json
+{
+  "mode": "claude_gui",
+  "repos": ["owner/repo"],
+  "initial_turn": {
+    "client_nonce": "turn_abc123",
+    "prompt": "Implement the change",
+    "model": "claude-sonnet-4-6",
+    "permission_mode": "bypassPermissions",
+    "skill_name": "test"
+  }
+}
+```
+
+When `initial_turn` is present for an SDK chat session, the backend validates
+the turn before creating the session. After `manager.Create` returns, the
+backend writes the `user_message.created` and `turn.submitted` boundary events
+directly to `session_events` with timestamps that sort before the session
+startup `session.status` row, then publishes the durable JetStream
+`submit_turn` command without waiting for the pod to become Ready. JetStream is
+the readiness buffer; the runner consumes the command after it starts. This is
+the only path for a no-attachment first prompt from the splash composer, so the
+first visible transcript row is the user's launch message, followed by durable
+startup status and then runner output.
+
+Hermes/no-pod chat sessions use the same `initial_turn` create boundary, but
+the bridge writes the boundary events and starts the Hermes run directly rather
+than publishing a JetStream command.
+
+Attachment-backed SDK launches set `initial_turn.deferred=true`. The create
+request still writes `user_message.created` before startup status, using the
+user's text plus attachment names as the durable display text. After the pod is
+ready and files are uploaded into the workspace, the SPA submits the same
+`client_nonce` to `POST /api/sessions/{session_id}/turns` with
+`existing_user_message=true`; the backend writes only `turn.submitted` and
+publishes the runnable command whose prompt contains the pod-local attachment
+paths. This preserves one user bubble and one turn id while keeping file bytes
+on the existing workspace upload path.
+
 Durable SDK turn submission:
 
 `POST /api/sessions/{session_id}/turns`
@@ -415,15 +460,20 @@ Body:
   "model": "claude-sonnet-4-6",
   "permission_mode": "bypassPermissions",
   "skill_name": "test",
+  "existing_user_message": false,
   "follow_up": true
 }
 ```
 
-The backend validates session ownership and SDK runtime, publishes
-`user_message.created` and `turn.submitted` events to the session bus, then
-publishes a durable JetStream `submit_turn` command keyed by `client_nonce`.
-The runner consumes commands through a durable per-session/per-provider
-consumer and calls JetStream `working()` while a long turn is in flight.
+The backend validates session ownership and SDK runtime, requires the session
+pod to be ready, writes `user_message.created` and `turn.submitted` boundary
+events directly to `session_events`, then publishes a durable JetStream
+`submit_turn` command keyed by `client_nonce`. The runner consumes commands
+through a durable per-session/per-provider consumer and calls JetStream
+`working()` while a long turn is in flight.
+When `existing_user_message=true`, the user row must already have been written
+by the launch-time create boundary, so this endpoint writes `turn.submitted`
+only.
 Command ack happens only after the corresponding durable terminal event is
 published. Claude `ScheduleWakeup` is handled pod-side: the agent-runner extracts
 the tool_use, holds a `setTimeout` for `delaySeconds`, and at fire time publishes

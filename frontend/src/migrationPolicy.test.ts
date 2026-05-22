@@ -116,7 +116,7 @@ test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
     appSource,
-    /if \(!visible \|\| session\.status !== "Active" \|\| !historyBootstrapped\) return;/,
+    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\) \|\| !historyBootstrapped\) return;/,
   );
 });
 
@@ -124,6 +124,12 @@ test("startup transcript rows come from durable conversation events", () => {
   assert.equal(appSource.includes("startupTranscript"), false);
   assert.equal(appSource.includes("sessionStartupDrafts"), false);
   assert.equal(appSource.includes("startupDraft"), false);
+  assert.equal(appSource.includes("initial_turn"), true);
+  assert.equal(appSource.includes("CREATE_TIME_INITIAL_TURN_MODES"), true);
+  assert.equal(appSource.includes("composeLaunchUserPrompt"), true);
+  assert.equal(appSource.includes("seedTurnDeferredAtCreate"), true);
+  assert.match(appSource, /existing_user_message: true/);
+  assert.match(appSource, /if \(seedTurnRequested && !seedTurnSubmittedAtCreate\) \{/);
   assert.equal(conversationReducerSource.includes('"session.status"'), true);
   assert.match(
     appSource,
