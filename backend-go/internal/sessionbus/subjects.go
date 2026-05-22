@@ -62,7 +62,7 @@ func ControlSubject(sessionStorageKey, provider string) string {
 // (control plane). Pinned by TestSubjectForCommandRoutesInputReplyToControlPlane
 // in bus_test.go.
 func SubjectForCommand(command Command) string {
-	if command.Type == CommandInterrupt || command.Type == CommandInputReply {
+	if command.Type == CommandInterrupt || command.Type == CommandInputReply || command.Type == CommandStopBackgroundTask {
 		return ControlSubject(command.SessionStorageKey, command.Provider)
 	}
 	return CommandSubject(command.SessionStorageKey, command.Provider)

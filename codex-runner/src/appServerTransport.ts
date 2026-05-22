@@ -148,6 +148,22 @@ export class CodexAppServerTransport {
     if (child && !child.killed) child.kill();
   }
 
+  async cleanBackgroundTerminals(): Promise<void> {
+    await this.start();
+    const threadID = this.threadID;
+    if (!threadID) throw new Error("codex app-server thread is not available");
+    try {
+      await this.request("thread/backgroundTerminals/clean", {
+        threadId: threadID,
+      });
+      providerControlTotal.labels("background_terminals_clean", "sent").inc();
+    } catch (err) {
+      providerControlTotal.labels("background_terminals_clean", "failed").inc();
+      providerErrorTotal.labels("background_terminals_clean").inc();
+      throw err;
+    }
+  }
+
   async *runTurn(
     input: string,
     threadOptions: ThreadOptions,

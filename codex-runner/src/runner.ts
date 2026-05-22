@@ -43,6 +43,7 @@ import {
 import {
   stampTankEvent,
   itemEvent,
+  shellTaskEvent,
   turnEvent,
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
@@ -50,6 +51,7 @@ import {
   SessionCommandBus,
   isInputReplyCommand,
   isInterruptCommand,
+  isStopBackgroundTaskCommand,
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
@@ -730,10 +732,66 @@ export class Runner {
     }
   }
 
+  private async acceptStopBackgroundTask(record: SessionCommandRecord): Promise<void> {
+    if (!this.appServerTransport) {
+      commandsConsumedTotal.labels("stop_background_task", "unsupported").inc();
+      await this.commandBus.markFailed(
+        record,
+        new Error("background task stop is only supported by codex app-server transport"),
+      );
+      return;
+    }
+    commandsConsumedTotal.labels("stop_background_task", "accepted").inc();
+    const taskID = String(
+      record.target_task_id ??
+        record.target_process_id ??
+        record.target_provider_item_id ??
+        "",
+    ).trim();
+    const turnID = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    if (!taskID || !turnID) {
+      commandsConsumedTotal.labels("stop_background_task", "invalid").inc();
+      await this.commandBus.markFailed(record, new Error("background task stop missing target task or turn"));
+      return;
+    }
+    const providerItemID = String(record.target_provider_item_id ?? taskID).trim() || taskID;
+    try {
+      await this.appServerTransport.cleanBackgroundTerminals();
+      const dispatched = await dispatch(
+        this.sink,
+        shellTaskEvent({
+          sessionID: this.cfg.sessionId,
+          turnID,
+          source: "codex",
+          type: "shell_task.exited",
+          taskID,
+          status: "stopped",
+          providerItemID,
+          providerEventID: record.command_id,
+          payload: {
+            status: "stopped",
+            stop_reason: "client_request",
+            provider_item_id: providerItemID,
+            process_id: String(record.target_process_id ?? taskID).trim() || taskID,
+          },
+        }),
+      );
+      if (!dispatched) {
+        await this.commandBus.markFailed(
+          record,
+          new Error("background task stop terminal publish failed"),
+        );
+        return;
+      }
+      await this.commandBus.markCompleted(record);
+    } catch (err) {
+      await this.commandBus.markFailed(record, err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
   // startControlConsumer drives the control-plane JetStream consumer.
-  // Today: interrupt_turn (and only interrupt_turn — codex doesn't
-  // support input_reply). Future control signals land here as added
-  // branches, never on the data-plane consumer.
+  // Today: interrupt_turn, input_reply, and background task stop. Future
+  // control signals land here as added branches, never on the data-plane consumer.
   private startControlConsumer(signal: AbortSignal): () => void {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
@@ -745,6 +803,10 @@ export class Runner {
         if (isInterruptCommand(record)) {
           commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
           await this.acceptInterrupt(record);
+          return;
+        }
+        if (isStopBackgroundTaskCommand(record)) {
+          await this.acceptStopBackgroundTask(record);
           return;
         }
         commandsConsumedTotal.labels("control_unknown", "dropped").inc();

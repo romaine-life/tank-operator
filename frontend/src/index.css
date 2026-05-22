@@ -2623,7 +2623,7 @@ button:disabled {
 
 .run-shell-tasks-list {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   align-content: start;
   gap: var(--space-2);
   overflow: auto;
@@ -2639,6 +2639,60 @@ button:disabled {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   text-transform: uppercase;
+}
+
+.run-background-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-background-breakdown span {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-secondary);
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+
+.run-background-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: var(--space-2);
+}
+
+.run-background-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 1.75rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.run-background-tab:hover,
+.run-background-tab-active {
+  border-color: rgba(96, 165, 250, 0.2);
+  background: rgba(96, 165, 250, 0.08);
+  color: var(--text-primary);
+}
+
+.run-background-tab span:last-child {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 .run-shell-tasks-empty,
@@ -2734,6 +2788,7 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 
@@ -2752,6 +2807,34 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.run-shell-task-detail-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-shell-task-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  border-radius: var(--radius-sm);
+  background: rgba(248, 113, 113, 0.09);
+  color: #fecaca;
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.run-shell-task-stop:hover {
+  border-color: rgba(248, 113, 113, 0.58);
+  background: rgba(248, 113, 113, 0.16);
+  color: #fee2e2;
 }
 
 .run-shell-task-detail-status {

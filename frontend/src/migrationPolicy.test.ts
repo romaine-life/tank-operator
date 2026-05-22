@@ -199,13 +199,66 @@ test("files tab is gated until the session container is available", () => {
   assert.match(appSource, /disabled=\{!filesAvailable\}/);
 });
 
-test("shell tasks page uses stacked full-width sections instead of a side pane", () => {
+test("background page uses stacked full-width sections instead of a side pane", () => {
   assert.match(indexCssSource, /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/);
   assert.equal(
     indexCssSource.includes("grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)"),
     false,
   );
   assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
+});
+
+test("background tab stays discoverable before background entries exist", () => {
+  const backgroundLedgerMatch = appSource.match(
+    /function BackgroundLedger\([\s\S]*?\n}\n\nfunction BackgroundMeta/,
+  );
+  assert.ok(backgroundLedgerMatch, "BackgroundLedger body should be present");
+  assert.equal(backgroundLedgerMatch[0]!.includes("entries.length === 0"), false);
+  assert.match(appSource, /<span>Background<\/span>/);
+  assert.match(appSource, /disabled\?: boolean;/);
+  assert.match(
+    appSource,
+    /<BackgroundLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Background activity is available once the session starts"/,
+  );
+});
+
+test("background page includes active shell invocations alongside managed tasks", () => {
+  assert.match(
+    appSource,
+    /function isShellToolEntry\([\s\S]*?entry\.toolKind === "shell"[\s\S]*?function isRunningShellInvocationEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?normalizeToolState\(entry\.toolStatus\) === "running"/,
+  );
+  assert.match(
+    appSource,
+    /const activeBackgroundEntries = useMemo\([\s\S]*?backgroundTaskEntries\.filter\(isBackgroundTaskRunning\)[\s\S]*?runningShellInvocationEntries/,
+  );
+  assert.match(appSource, /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/);
+});
+
+test("background page separates tracked shells from detached shell candidates", () => {
+  assert.match(appSource, /type BackgroundView = "shells" \| "detached"/);
+  assert.match(
+    appSource,
+    /function isDetachedShellCandidateEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?detachedShellLaunchReason\(entry\)/,
+  );
+  assert.match(appSource, /<span>Shells<\/span>[\s\S]*?<span>Detached<\/span>/);
+  assert.match(
+    appSource,
+    /const detachedShellEntries = useMemo\([\s\S]*?renderedEntries\.filter\(isDetachedShellCandidateEntry\)/,
+  );
+  assert.match(
+    appSource,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
+  );
+});
+
+test("background stop controls exclude untracked detached shells", () => {
+  assert.match(
+    appSource,
+    /function canStopBackgroundActivity\([\s\S]*?isDetachedShellCandidateEntry\(entry\)\) return false[\s\S]*?isRunningShellInvocationEntry\(entry\)[\s\S]*?isBackgroundTaskEntry\(entry\)[\s\S]*?codexBackgroundStopAvailable/,
+  );
+  assert.match(appSource, /<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/);
+  assert.match(appSource, /className="run-shell-task-stop"/);
+  assert.match(appSource, /\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/);
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
