@@ -16,17 +16,46 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
-// cliProcess* describe the long-lived in-pod shell the
-// /api/sessions/{id}/cli-process endpoint hands the SPA. Bash login shell in
-// /workspace, TTY+interactive so the sandbox-agent terminal WebSocket carries
-// keystrokes (codex login --device-auth lives behind this). The orchestrator
-// owns the command — not the SPA — so a browser can't pick what binary runs
-// inside the pod.
-var (
-	cliProcessCommand = "bash"
-	cliProcessArgs    = []string{"-l"}
-	cliProcessCwd     = "/workspace"
-)
+// cliProcessLaunchForMode picks the sandbox-agent process shape for the
+// in-browser CLI shell. The orchestrator owns this — not the SPA — so the
+// browser can't dictate what binary runs inside the pod.
+//
+// The "config" modes are credential-refresh wizards: the shell boots already
+// running the right `login` invocation, then drops to interactive bash so the
+// user can poke around or rerun the login if it fails. Any other mode gets a
+// plain login bash. See session-pod-bootstrap.sh for the matching per-mode
+// on-disk seeding (~/.codex/config.toml, ~/.claude/settings.json, etc.) that
+// these login commands depend on.
+func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
+	base := sandboxProcessCreate{
+		Command:     "bash",
+		Cwd:         "/workspace",
+		Interactive: true,
+		TTY:         true,
+	}
+	switch mode {
+	case sessionmodel.CodexConfigMode:
+		// codex login --device-auth is the headless-friendly OAuth
+		// flow — prints a URL + one-time code instead of trying to
+		// open a localhost callback unreachable from a pod. The auth
+		// blob lands at $HOME/.codex/auth.json once the user completes
+		// the device flow; the save-credentials button harvests it.
+		base.Args = []string{"-lc", "codex login --device-auth; exec bash"}
+	case sessionmodel.ConfigMode:
+		// claude /login walks through OAuth; the resulting blob lands
+		// at $HOME/.claude/.credentials.json for the save-credentials
+		// button.
+		base.Args = []string{"-lc", "claude /login; exec bash"}
+	case sessionmodel.PiConfigMode:
+		// Pi's /login is a slash command inside the interactive `pi`
+		// REPL, not a CLI subcommand. Drop into pi, let the user
+		// /login, then back to bash on exit.
+		base.Args = []string{"-lc", `printf "Run /login in Pi to authenticate.\n\n"; pi; exec bash`}
+	default:
+		base.Args = []string{"-l"}
+	}
+	return base
+}
 
 // sandboxAgentBootWait bounds the wait for the in-pod sandbox-agent HTTP
 // server to start accepting connections after the pod is Ready. The kubelet
@@ -64,6 +93,12 @@ func (s *appServer) handleCLIProcess(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := r.PathValue("session_id")
 
+	info, err := s.mgr.GetByOwner(r.Context(), user.Email, sessionID)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "session not ready: "+err.Error())
+		return
+	}
+
 	podIP, _, err := s.mgr.GetTerminalEndpoint(r.Context(), user.Email, sessionID)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "session not ready: "+err.Error())
@@ -71,7 +106,8 @@ func (s *appServer) handleCLIProcess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseURL := fmt.Sprintf("http://%s:%d", podIP, sessionmodel.SandboxAgentPort)
-	processID, err := findOrCreateSandboxCLIProcess(r.Context(), http.DefaultClient, baseURL)
+	launch := cliProcessLaunchForMode(info.Mode)
+	processID, err := findOrCreateSandboxCLIProcess(r.Context(), http.DefaultClient, baseURL, launch)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -80,16 +116,21 @@ func (s *appServer) handleCLIProcess(w http.ResponseWriter, r *http.Request) {
 }
 
 // findOrCreateSandboxCLIProcess looks for an already-running shell matching
-// the canonical CLI-process shape and returns its id; otherwise it asks
+// the requested launch shape and returns its id; otherwise it asks
 // sandbox-agent to spawn one. The GET is retried on transport errors during
 // sandbox-agent's boot window — the readiness probe sits on the container,
 // not the HTTP server, so podReady can race the listener.
-func findOrCreateSandboxCLIProcess(ctx context.Context, client *http.Client, baseURL string) (string, error) {
+//
+// The matching predicate uses the same (command, args) tuple the launch
+// carries, so opening the codex_config panel a second time after a fresh
+// reload reattaches to the same codex-login shell instead of spawning a
+// second device-auth flow against the same auth.json.
+func findOrCreateSandboxCLIProcess(ctx context.Context, client *http.Client, baseURL string, launch sandboxProcessCreate) (string, error) {
 	processesURL := baseURL + "/v1/processes"
 
 	deadline := time.Now().Add(sandboxAgentBootWait)
 	var (
-		list   sandboxProcessList
+		list    sandboxProcessList
 		lastErr error
 	)
 	for {
@@ -115,20 +156,14 @@ func findOrCreateSandboxCLIProcess(ctx context.Context, client *http.Client, bas
 	}
 
 	for _, p := range list.Processes {
-		if p.Command == cliProcessCommand &&
-			slices.Equal(p.Args, cliProcessArgs) &&
+		if p.Command == launch.Command &&
+			slices.Equal(p.Args, launch.Args) &&
 			p.Status == "running" {
 			return p.ID, nil
 		}
 	}
 
-	body, err := json.Marshal(sandboxProcessCreate{
-		Command:     cliProcessCommand,
-		Args:        cliProcessArgs,
-		Cwd:         cliProcessCwd,
-		Interactive: true,
-		TTY:         true,
-	})
+	body, err := json.Marshal(launch)
 	if err != nil {
 		return "", fmt.Errorf("marshal sandbox-agent request: %w", err)
 	}

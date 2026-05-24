@@ -9516,19 +9516,12 @@ function CliProcessTerminal({
 }
 
 function CliSession({ session, visible }: { session: Session; visible: boolean }) {
+  // The sidebar already shows the session title, mode badge, and status —
+  // a duplicate header inside the pane is wasted vertical space and made
+  // the un-sized provider icon render at intrinsic SVG dimensions
+  // (the giant cloud). Let the terminal fill the pane.
   return (
     <section className="run-panel">
-      <header className="run-header">
-        <div className="run-title-block">
-          <div className="run-title-row">
-            <span className="run-provider-mark">
-              <ProviderIcon provider={MODE_MENU_ICONS[session.mode]} className="run-provider-icon" />
-            </span>
-            <h2 className="run-title">{sessionDisplayName(session)}</h2>
-          </div>
-          <p className="run-subtitle">{MODE_LABELS[session.mode]}</p>
-        </div>
-      </header>
       <main className="run-main">
         <div className="run-shell">
           <CliProcessTerminal session={session} visible={visible} />
