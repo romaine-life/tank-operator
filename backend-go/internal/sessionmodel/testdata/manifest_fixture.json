@@ -13,7 +13,7 @@
     "claude_command": [
       "bash",
       "-lc",
-      "if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry"
+      "if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; if [ -f /opt/tank/session-pod-bootstrap.sh ]; then bash /opt/tank/session-pod-bootstrap.sh || true; fi; if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port 2468 --no-token --no-telemetry"
     ],
     "claude_env": {
       "CLAUDE_CODE_NO_FLICKER": "1",
@@ -23,7 +23,8 @@
       "TANK_GLIMMUNG_ISSUE_REF": "",
       "TANK_GLIMMUNG_RUN_REF": "",
       "TANK_GLIMMUNG_TOUCHPOINT_REF": "",
-      "TANK_GLIMMUNG_VALIDATION_URL": ""
+      "TANK_GLIMMUNG_VALIDATION_URL": "",
+      "TANK_SESSION_MODE": "codex_gui"
     },
     "container_images": {
       "claude": "romainecr.azurecr.io/codex-container:latest",

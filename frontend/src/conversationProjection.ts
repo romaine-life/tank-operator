@@ -192,6 +192,11 @@ export function projectConversationState(
         orderKey: request.orderKey,
       },
     })),
+    // Per-turn terminal failures and interruptions become durable transcript
+    // meta lines, replacing the floating run-status pill. turn.completed
+    // emits no meta entry — successful completion speaks through the
+    // assistant bubble itself.
+    ...turnTerminalMetaEntries(state),
   ]), state.turnTerminals);
 
   const activeItem = activeToolItem(state);
@@ -360,6 +365,46 @@ function annotateTurnTerminals(
       turnTerminalEventId: terminal.sourceEventId,
     };
   });
+}
+
+function turnTerminalMetaEntries(
+  state: ConversationReducerState,
+): Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> {
+  const baseIndex =
+    state.messages.length +
+    state.items.length +
+    state.backgroundTasks.length +
+    state.interruptRequests.length;
+  const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
+  let offset = 0;
+  for (const terminal of Object.values(state.turnTerminals)) {
+    if (terminal.status === "completed") continue;
+    const isFailed = terminal.status === "failed";
+    const title = isFailed ? "Turn failed" : "Stopped";
+    const detail = isFailed
+      ? terminal.detail ?? "The provider returned an error."
+      : "Turn stopped by user.";
+    out.push({
+      index: baseIndex + offset,
+      orderKey: terminal.orderKey,
+      entry: {
+        id: `turn-terminal:${terminal.sourceEventId}`,
+        kind: "meta",
+        meta: {
+          title,
+          detail,
+          severity: isFailed ? "error" : "info",
+        },
+        turnId: terminal.turnId,
+        clientNonce: terminal.clientNonce,
+        time: terminal.time,
+        sourceEventId: terminal.sourceEventId,
+        orderKey: terminal.orderKey,
+      },
+    });
+    offset += 1;
+  }
+  return out;
 }
 
 function compareNullableString(a: string | undefined, b: string | undefined): number {

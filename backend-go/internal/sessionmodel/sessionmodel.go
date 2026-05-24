@@ -177,6 +177,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
 	{"repo-cloner.sh", "/opt/tank/repo-cloner.sh"},
+	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
 
 // noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
@@ -325,6 +326,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Environment variables for the claude container.
 	env := []any{
 		map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
+		// TANK_SESSION_MODE drives session-pod-bootstrap.sh's per-mode
+		// seeding (~/.codex/config.toml, ~/.claude/settings.json, etc.).
+		// Also surfaced inside the user's shell, so `echo $TANK_SESSION_MODE`
+		// works when debugging in-pod.
+		map[string]any{"name": "TANK_SESSION_MODE", "value": mode},
 		map[string]any{"name": "TANK_GLIMMUNG_CONTEXT_JSON", "value": opts.GlimmungContextJSON},
 		map[string]any{"name": "TANK_GLIMMUNG_RUN_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_run_ref")},
 		map[string]any{"name": "TANK_GLIMMUNG_ISSUE_REF", "value": glimmungField(opts.GlimmungContextJSON, "glimmung_issue_ref")},
@@ -505,7 +511,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"imagePullPolicy": "Always",
 		"command": []any{
 			"bash", "-lc",
-			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
+			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; " +
+				"if [ -f /opt/tank/session-pod-bootstrap.sh ]; then bash /opt/tank/session-pod-bootstrap.sh || true; fi; " +
+				"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; " +
+				"exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
 		},
 		"ports":        []any{map[string]any{"name": "sandbox-agent", "containerPort": opts.SandboxAgentPort}},
 		"env":          env,
