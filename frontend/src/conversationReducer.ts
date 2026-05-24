@@ -70,6 +70,10 @@ export interface ConversationTurnTerminal {
   orderKey?: string;
   time: string;
   sourceEventId: string;
+  // Unwrapped error text for failed/command_failed turns. Drives the
+  // transcript meta line that renders at the turn's terminal order_key.
+  // Undefined on completed/interrupted turns.
+  detail?: string;
 }
 
 export interface ConversationBackgroundTask {
@@ -281,6 +285,7 @@ function applyTurnTerminal(
   status: ConversationTurnTerminalStatus,
 ): ConversationReducerState {
   if (!event.turn_id) return state;
+  const detail = status === "failed" ? errorText(event) ?? undefined : undefined;
   return {
     ...state,
     turnTerminals: {
@@ -292,6 +297,7 @@ function applyTurnTerminal(
         orderKey: event.order_key,
         time: event.created_at,
         sourceEventId: event.event_id,
+        ...(detail ? { detail } : {}),
       },
     },
   };

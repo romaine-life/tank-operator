@@ -83,12 +83,22 @@ func (noopLifecycleEmitter) EmitChatActivityDelta(_ context.Context, _ map[strin
 type PersisterMetrics interface {
 	RecordSchemaRejected()
 	RecordTransientFailure()
+	// RecordTurnFailurePersisted increments when a durable turn-terminal
+	// failure event (turn.failed / turn.command_failed) lands in the
+	// session_events ledger. Labels carry the producer source ("claude",
+	// "codex", "tank") and the failure reason from payload.reason (e.g.
+	// "provider_failure", "command_failed"). Replaces the SPA pill as the
+	// user-trust-failure observability surface: with the pill gone, this
+	// counter is how we notice "every session is failing" without browser
+	// devtools. Steady-state expectation: low and bursty.
+	RecordTurnFailurePersisted(source string, reason string)
 }
 
 type noopPersisterMetrics struct{}
 
-func (noopPersisterMetrics) RecordSchemaRejected()   {}
-func (noopPersisterMetrics) RecordTransientFailure() {}
+func (noopPersisterMetrics) RecordSchemaRejected()                      {}
+func (noopPersisterMetrics) RecordTransientFailure()                    {}
+func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string)  {}
 
 // WakeMetrics receives counters for wake/event publish failures, the
 // success path, and the end-to-end persist→wake latency. The bus
@@ -465,7 +475,7 @@ type persistableMessage interface {
 // handlePersistMessage routes one bus message through the store and acks /
 // NAKs / terminates based on the outcome.
 func (b *Bus) handlePersistMessage(ctx context.Context, store EventStore, metrics PersisterMetrics, msg persistableMessage) {
-	err := b.persistOneEvent(ctx, store, msg)
+	err := b.persistOneEvent(ctx, store, metrics, msg)
 	if err == nil {
 		if ackErr := msg.Ack(); ackErr != nil {
 			slog.Warn("session bus event ack failed", "subject", msg.Subject(), "error", ackErr)
@@ -505,7 +515,7 @@ func (b *Bus) handlePersistMessage(ctx context.Context, store EventStore, metric
 // does not cause the persister to NAK — the chat event is already
 // durable, and the sidebar will catch up via cursor-resume on the next
 // SSE reconnect.
-func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persistableMessage) error {
+func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics PersisterMetrics, msg persistableMessage) error {
 	var event map[string]any
 	if err := json.Unmarshal(msg.Data(), &event); err != nil {
 		// Invalid JSON is a producer-side bug that can never succeed on
@@ -520,6 +530,28 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, msg persist
 	}
 	if err := store.Upsert(ctx, event); err != nil {
 		return err
+	}
+	// Record turn-failure persistence right after the durable write
+	// commits. This is the observability surface that replaced the SPA
+	// run-status pill: with the pill gone, "every codex_gui session is
+	// failing" must be visible from outside the browser (Grafana / alert
+	// rules), not by looking at the pill turn red. The reason label comes
+	// from payload.reason so a Codex auth storm vs a generic
+	// provider_failure spike are distinguishable; the source label
+	// (claude/codex/tank) lets per-provider alerts fire independently.
+	if eventType, _ := event["type"].(string); eventType == string(conversation.EventTurnFailed) || eventType == string(conversation.EventTurnCommandFailed) {
+		source, _ := event["source"].(string)
+		reason := ""
+		if payload, ok := event["payload"].(map[string]any); ok {
+			reason, _ = payload["reason"].(string)
+		}
+		if source == "" {
+			source = "unknown"
+		}
+		if reason == "" {
+			reason = "unknown"
+		}
+		metrics.RecordTurnFailurePersisted(source, reason)
 	}
 	upsertedAt := time.Now()
 	storageKey, _ := event["tank_session_id"].(string)

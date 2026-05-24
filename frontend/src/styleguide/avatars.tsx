@@ -7,9 +7,8 @@
 // Contract (see also docs/styleguide-contract.md in the glimmung repo):
 // when you change AGENT_AVATARS, the .session-avatar render contract,
 // or how avatars get assigned to sessions, update this page in the same
-// PR. The avatar pool's other render contexts (.run-msg-ai-icon,
-// .run-status-avatar) live here too because the picker drives all three
-// at once.
+// PR. The avatar pool's other render context (.run-msg-ai-icon) lives
+// here too because the picker drives both at once.
 
 import { useState } from "react";
 import { ProviderIcon } from "../providerIcons";
@@ -57,13 +56,11 @@ export function StyleguideAvatars() {
           (<code>getSessionAvatar</code>). Sources live under{" "}
           <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
           render contexts ship: <code>.session-avatar</code> in the sidebar
-          (42px, circle-cropped, edge-to-edge — no backdrop or padding),{" "}
+          (42px, circle-cropped, edge-to-edge — no backdrop or padding) and{" "}
           <code>.run-msg-ai-icon</code> on transcript messages (also 42px,
           matching the sidebar so the avatar reads the same in both
-          surfaces), <code>.run-status-avatar</code> in the run-status pill
-          (~22px, circle-cropped, edge-to-edge). All three are the source
-          PNG clipped to a circle with no chrome, so the picker drives
-          every surface at once.
+          surfaces). Both are the source PNG clipped to a circle with no
+          chrome, so the picker drives every surface at once.
         </p>
 
         {selectedAvatar && (
@@ -261,33 +258,6 @@ export function StyleguideAvatars() {
                 </div>
               </div>
 
-              {/* run-status pill — square */}
-              <div style={{ flex: "0 0 auto" }}>
-                <div
-                  style={{
-                    fontSize: "var(--text-xs)",
-                    color: "var(--text-muted)",
-                    marginBottom: 6,
-                  }}
-                >
-                  status pill · <code>.run-status-avatar</code> · ~22px · circle
-                </div>
-                <div
-                  className="run-status-bar run-status-bar-idle"
-                  role="status"
-                  style={{ display: "inline-flex", alignItems: "center" }}
-                >
-                  <span className="run-status-icon">
-                    <AgentAvatarIcon
-                      avatar={selectedAvatar}
-                      className="run-status-avatar"
-                    />
-                  </span>
-                  <span className="run-status-text">
-                    <span className="run-status-verb">Done</span>
-                  </span>
-                </div>
-              </div>
             </div>
           </section>
         )}

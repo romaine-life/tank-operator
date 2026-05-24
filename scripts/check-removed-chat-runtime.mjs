@@ -643,6 +643,40 @@ const blocked = [
   // (cutover hygiene for in-flight stragglers); the pattern below
   // matches only the dispatch-to-acceptInterrupt shape, not the
   // defensive drop.
+  // Run-status pill retired in favor of routing per-turn status through
+  // the durable transcript + composer (docs/features/transcript/contract.md
+  // names session_events as the source of truth; quality-timeframes.md's
+  // review heuristic "local UI state that can contradict durable state"
+  // describes the pill exactly). Per-turn failures now produce
+  // ConversationViewEntry meta entries from the reducer's turn.failed /
+  // turn.command_failed / turn.interrupted cases; the composer's
+  // PromptInputSubmit handles Submit↔Stop. Block reintroduction of the
+  // pill JSX, its state machinery, and the helper functions that only
+  // existed to fill the pill's rotating verb / elapsed counter slots.
+  {
+    name: "removed run-status-bar CSS class",
+    pattern: /\brun-status-bar\b/,
+  },
+  {
+    name: "removed run-status-avatar CSS class",
+    pattern: /\brun-status-avatar\b/,
+  },
+  {
+    name: "removed lastStatusText pill mirror state",
+    pattern: /\b(?:setLastStatusText|lastStatusText)\b/,
+  },
+  {
+    name: "removed STREAM_VERBS pill verb cycle",
+    pattern: /\bSTREAM_VERBS\b/,
+  },
+  {
+    name: "removed formatStreamElapsed pill elapsed helper",
+    pattern: /\bformatStreamElapsed\b/,
+  },
+  {
+    name: "removed formatToolLabel pill verb helper",
+    pattern: /\bformatToolLabel\b/,
+  },
   {
     name: "retired interrupt-on-data-plane dispatch",
     // Anchored on `.startCommandConsumer(...)` so the control-plane

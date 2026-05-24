@@ -25,12 +25,21 @@ func (r *recordingStore) Upsert(_ context.Context, event map[string]any) error {
 }
 
 type recordingMetrics struct {
-	schemaRejected   int
-	transientFailure int
+	schemaRejected      int
+	transientFailure    int
+	turnFailureRecorded []turnFailureRecord
+}
+
+type turnFailureRecord struct {
+	source string
+	reason string
 }
 
 func (m *recordingMetrics) RecordSchemaRejected()   { m.schemaRejected++ }
 func (m *recordingMetrics) RecordTransientFailure() { m.transientFailure++ }
+func (m *recordingMetrics) RecordTurnFailurePersisted(source string, reason string) {
+	m.turnFailureRecorded = append(m.turnFailureRecorded, turnFailureRecord{source: source, reason: reason})
+}
 
 type stubMsg struct {
 	subject  string
@@ -177,6 +186,106 @@ func TestPersistMessageTerminatesInvalidJSON(t *testing.T) {
 	if metrics.transientFailure != 0 {
 		t.Fatalf("transient counter = %d, want 0 — invalid JSON is permanent not transient",
 			metrics.transientFailure)
+	}
+}
+
+// TestPersistMessageRecordsTurnFailureCounter pins the user-trust observability
+// surface that replaced the SPA run-status pill. With the pill removed, the
+// tank_transcript_turn_failure_total counter is how Grafana / alert rules
+// detect "every codex_gui session is failing" (e.g. the Codex auth
+// refresh_token_reused storm that motivated the pill removal). The counter
+// must label by source (claude/codex/tank) and reason (payload.reason) so
+// per-provider alerts fire independently.
+func TestPersistMessageRecordsTurnFailureCounter(t *testing.T) {
+	bus := &Bus{scope: "default"}
+	store := &recordingStore{}
+	metrics := &recordingMetrics{}
+	raw, _ := json.Marshal(map[string]any{
+		"event_id":   "evt-fail-1",
+		"session_id": "63",
+		"actor":      "runner",
+		"source":     "codex",
+		"type":       "turn.failed",
+		"created_at": "2026-05-12T00:00:00.000Z",
+		"order_key":  "order-fail-1",
+		"visibility": "durable",
+		"turn_id":    "turn-1",
+		"payload": map[string]any{
+			"reason": "provider_failure",
+			"error":  "rate limit exceeded",
+		},
+	})
+	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+
+	bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+	if msg.acked != 1 {
+		t.Fatalf("acked = %d, want 1", msg.acked)
+	}
+	if len(metrics.turnFailureRecorded) != 1 {
+		t.Fatalf("turn-failure counter recorded %d times, want 1", len(metrics.turnFailureRecorded))
+	}
+	got := metrics.turnFailureRecorded[0]
+	if got.source != "codex" {
+		t.Fatalf("source label = %q, want %q", got.source, "codex")
+	}
+	if got.reason != "provider_failure" {
+		t.Fatalf("reason label = %q, want %q", got.reason, "provider_failure")
+	}
+}
+
+func TestPersistMessageRecordsCommandFailedCounter(t *testing.T) {
+	bus := &Bus{scope: "default"}
+	store := &recordingStore{}
+	metrics := &recordingMetrics{}
+	raw, _ := json.Marshal(map[string]any{
+		"event_id":   "evt-cmdfail-1",
+		"session_id": "63",
+		"actor":      "system",
+		"source":     "tank",
+		"type":       "turn.command_failed",
+		"created_at": "2026-05-12T00:00:00.000Z",
+		"order_key":  "order-cmdfail-1",
+		"visibility": "durable",
+		"turn_id":    "turn-1",
+		"payload": map[string]any{
+			"reason": "command_failed",
+		},
+	})
+	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+
+	bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+	if len(metrics.turnFailureRecorded) != 1 {
+		t.Fatalf("turn-failure counter recorded %d times, want 1 for turn.command_failed", len(metrics.turnFailureRecorded))
+	}
+	got := metrics.turnFailureRecorded[0]
+	if got.source != "tank" || got.reason != "command_failed" {
+		t.Fatalf("label tuple = (%q, %q), want (tank, command_failed)", got.source, got.reason)
+	}
+}
+
+func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
+	bus := &Bus{scope: "default"}
+	store := &recordingStore{}
+	metrics := &recordingMetrics{}
+	raw, _ := json.Marshal(map[string]any{
+		"event_id":   "evt-ok-1",
+		"session_id": "63",
+		"actor":      "runner",
+		"source":     "codex",
+		"type":       "turn.completed",
+		"created_at": "2026-05-12T00:00:00.000Z",
+		"order_key":  "order-ok-1",
+		"visibility": "durable",
+		"turn_id":    "turn-1",
+	})
+	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+
+	bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+	if len(metrics.turnFailureRecorded) != 0 {
+		t.Fatalf("turn-failure counter fired on turn.completed (%d times); the counter is for failures only", len(metrics.turnFailureRecorded))
 	}
 }
 

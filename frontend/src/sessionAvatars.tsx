@@ -12,11 +12,10 @@ export type AgentAvatar = {
 // frontend/public/assets/avatars/ and are served at /assets/avatars/<file>.
 // See ATTRIBUTION.md in that directory for sourcing/licensing notes.
 //
-// Render contract (see index.css .session-avatar / .run-status-avatar /
-// .run-msg-ai-icon): square frame, object-fit: contain, 22-42px display
-// size. All three surfaces are circle-cropped and run edge-to-edge with
-// no backdrop or padding, so the source image itself is the visible
-// shape. The JP1 sources are scene stills (not transparent silhouettes),
+// Render contract (see index.css .session-avatar / .run-msg-ai-icon):
+// square frame, object-fit: contain, 42px display size. Both surfaces are
+// circle-cropped and run edge-to-edge with no backdrop or padding, so the
+// source image itself is the visible shape. The JP1 sources are scene stills (not transparent silhouettes),
 // so the per-slug CROPS in scripts/normalize-jp1-avatars.py are tuned to
 // put the dark subject in the circle and push bright sky / clothing out
 // of frame — anything brighter than the sidebar bg reads as a filled
