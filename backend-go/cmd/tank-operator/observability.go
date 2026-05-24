@@ -125,6 +125,17 @@ var (
 		Help: "Persister failures the persister chose to NAK for retry (infrastructure-side, retryable).",
 	})
 
+	// Durable per-turn failure surface (turn.failed / turn.command_failed).
+	// Replaces the SPA run-status pill as the "every session is failing"
+	// observability surface: with the pill removed, this counter is how
+	// Grafana / alert rules detect provider-credential storms and other
+	// session-affecting failures. Labels: source (claude/codex/tank) and
+	// reason from payload.reason (e.g. provider_failure, command_failed).
+	transcriptTurnFailureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_transcript_turn_failure_total",
+		Help: "Durable turn.failed / turn.command_failed events persisted to session_events, partitioned by producer source and payload reason.",
+	}, []string{"source", "reason"})
+
 	// Wake-publish failures. The bus records here before returning the
 	// error to the caller. Per-session wakes drive the chat-window SSE;
 	// per-owner session-list events drive the sidebar SSE (replaced
@@ -831,6 +842,10 @@ func (promPersisterMetrics) RecordSchemaRejected() {
 
 func (promPersisterMetrics) RecordTransientFailure() {
 	recordSessionEventPersistTransientFailure()
+}
+
+func (promPersisterMetrics) RecordTurnFailurePersisted(source string, reason string) {
+	transcriptTurnFailureTotal.WithLabelValues(source, reason).Inc()
 }
 
 // promWakeMetrics satisfies sessionbus.WakeMetrics so the bus can increment

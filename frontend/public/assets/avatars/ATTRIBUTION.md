@@ -16,11 +16,11 @@ Asset notes:
 - Subject-centred crop per `HINTS` in the normalize script — wide scene
   stills (e.g. Muldoon's "clever girl" or Nedry on the dock) get a
   positional hint so the focal point survives the square crop.
-- Rendered through `.session-avatar` / `.run-msg-ai-icon` /
-  `.run-status-avatar` (see `frontend/src/index.css`) at 22–42px,
-  `object-fit: contain`, circle-clipped, no backdrop or padding — the
-  source PNG itself is the visible shape, so subjects that don't fill
-  the square frame read as floating silhouettes at the small sizes.
+- Rendered through `.session-avatar` and `.run-msg-ai-icon` (see
+  `frontend/src/index.css`) at 42px, `object-fit: contain`, circle-clipped,
+  no backdrop or padding — the source PNG itself is the visible shape, so
+  subjects that don't fill the square frame read as floating silhouettes at
+  the small sizes.
 
 Reproducing the asset set:
 

@@ -70,6 +70,107 @@ test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order
   }
 });
 
+test("turn.failed projects as an error meta line at its order_key", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "hi" },
+      }),
+      ev("2", "turn.submitted", { client_nonce: "run-1" }),
+      ev("3", "turn.started", { source: "codex" }),
+      ev("4", "turn.failed", {
+        source: "codex",
+        payload: { reason: "provider_failure", error: "rate limit exceeded" },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.runStatus, "error");
+  assert.equal(projection.failed, true);
+  const metas = projection.entries.filter((entry) => entry.kind === "meta");
+  assert.equal(metas.length, 1, "turn.failed should produce one meta entry");
+  const meta = metas[0];
+  if (meta.kind === "meta") {
+    assert.equal(meta.meta.title, "Turn failed");
+    assert.equal(meta.meta.detail, "rate limit exceeded");
+    assert.equal(meta.meta.severity, "error");
+    assert.equal(meta.turnId, "turn-1");
+    assert.equal(meta.orderKey, "0004");
+  }
+});
+
+test("turn.failed with structured-error object unwraps .message into the meta detail", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "hi" },
+      }),
+      ev("2", "turn.failed", {
+        source: "codex",
+        payload: {
+          reason: "provider_failure",
+          error: { code: "token_expired", message: "auth token expired" },
+        },
+      }),
+    ]),
+  );
+
+  const meta = projection.entries.find((entry) => entry.kind === "meta");
+  assert.ok(meta, "turn.failed should produce a meta entry");
+  if (meta?.kind === "meta") {
+    assert.equal(meta.meta.detail, "auth token expired");
+  }
+});
+
+test("turn.interrupted projects as an info 'Stopped' meta line; not 'failed'", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "long task" },
+      }),
+      ev("2", "turn.submitted", { client_nonce: "run-1" }),
+      ev("3", "turn.started", { source: "codex" }),
+      ev("4", "turn.interrupted", {
+        source: "codex",
+        payload: { reason: "client_interrupt" },
+      }),
+    ]),
+  );
+
+  assert.equal(projection.failed, false);
+  const metas = projection.entries.filter((entry) => entry.kind === "meta");
+  assert.equal(metas.length, 1);
+  const meta = metas[0];
+  if (meta.kind === "meta") {
+    assert.equal(meta.meta.title, "Stopped");
+    assert.equal(meta.meta.severity, "info");
+  }
+});
+
+test("turn.completed produces no meta entry — success speaks through the bubble", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "hi" },
+      }),
+      ev("2", "turn.submitted", { client_nonce: "run-1" }),
+      ev("3", "turn.started", { source: "codex" }),
+      ev("4", "turn.completed", { source: "codex" }),
+    ]),
+  );
+
+  const metas = projection.entries.filter((entry) => entry.kind === "meta");
+  assert.equal(metas.length, 0);
+});
+
 test("session.status projects as a system transcript message", () => {
   const projection = projectConversationState(
     reduceConversationEvents([
@@ -442,7 +543,13 @@ test("canonical duplicate delivery converges before projection", () => {
     reduceConversationEvents([...events, ...events]),
   );
 
-  assert.equal(projection.entries.length, 1);
+  // Two entries: the user message + the "Stopped" transcript meta line
+  // derived from turn.interrupted. Duplicate delivery must not double either.
+  assert.equal(projection.entries.length, 2);
+  const messageEntries = projection.entries.filter((e) => e.kind === "message");
+  const metaEntries = projection.entries.filter((e) => e.kind === "meta");
+  assert.equal(messageEntries.length, 1);
+  assert.equal(metaEntries.length, 1);
   assert.equal(projection.stopped, true);
   assert.equal(projection.failed, false);
 });
