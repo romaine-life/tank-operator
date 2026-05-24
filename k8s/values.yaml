@@ -233,6 +233,20 @@ hermes:
   # downstream API target — they could conceivably move independently.
   authRomaineExchangeURL: "https://auth.romaine.life/api/auth/exchange/k8s"
 
+# Provider-credential health poller — drives the transcript-surfaced
+# "<provider> sign-in expired" banner. The orchestrator polls
+# codexProxyHealthURL every 30s, debounces sustained failures, writes
+# Layer 1 rows (provider_credential_health), and fans session.status
+# banner events into every active codex_gui session whose transcript
+# would otherwise show only a cryptic "Error" line. Leave
+# codexProxyHealthURL empty to disable the banner — useful in test
+# environments that lack a real Codex sign-in. The re-auth URL is the
+# affordance the SPA renders as a button on the banner; point at the
+# canonical Codex sign-in flow on auth.romaine.life.
+providerHealth:
+  codexProxyHealthURL: "http://codex-api-proxy.tank-operator.svc.cluster.local:9100/health/codex"
+  codexReauthURL: "https://auth.romaine.life"
+
 externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore

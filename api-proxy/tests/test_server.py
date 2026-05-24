@@ -49,7 +49,12 @@ def install_proto_stubs() -> None:
 
 install_proto_stubs()
 
-from tank_api_proxy.server import AuthInjector, ProxyConfig, _patch_blob
+from tank_api_proxy.server import (
+    AuthInjector,
+    ProxyConfig,
+    _classify_refresh_failure,
+    _patch_blob,
+)
 
 
 def jwt_with_claims(claims: dict) -> str:
@@ -163,6 +168,116 @@ class ServerTests(unittest.TestCase):
 
             self.assertEqual(injector._cached_access, "new-access")
             self.assertEqual(injector._cached_refresh, "new-refresh")
+
+
+class HealthSnapshotTests(unittest.TestCase):
+    """Pins the contract the orchestrator's provider-health poller depends on.
+
+    See docs/features/transcript/contract.md (the session.status surface
+    that consumes this snapshot) and the orchestrator's poller in
+    backend-go/internal/providerhealth/. The poller reads /health/<provider>
+    every 30s, debounces sustained failures, and writes
+    provider_credential_health rows that drive the transcript banner.
+    A regression in the snapshot fields would silently break the banner.
+    """
+
+    def _fresh_injector(self) -> AuthInjector:
+        with tempfile.TemporaryDirectory() as tmp:
+            return AuthInjector(codex_config(str(Path(tmp) / "auth.json")))
+
+    def test_snapshot_default_state_is_unknown(self) -> None:
+        # Before any refresh attempt, the snapshot's result is "unknown"
+        # — the orchestrator treats this as "no data yet, do not flip
+        # Layer 1." The proxy intentionally does not infer healthy from
+        # the bare absence of a failure; the cached blob may still be
+        # serving a long-lived access token whose refresh has never been
+        # exercised.
+        injector = self._fresh_injector()
+        snapshot = injector.health_snapshot()
+        self.assertEqual(snapshot["provider"], "codex")
+        self.assertEqual(snapshot["result"], "unknown")
+        self.assertEqual(snapshot["reason"], "")
+        self.assertEqual(snapshot["text"], "")
+        self.assertIsNone(snapshot["last_attempted_at"])
+        self.assertIsNone(snapshot["last_succeeded_at"])
+        self.assertEqual(snapshot["attempt_id"], 0)
+
+    def test_snapshot_after_success_records_success_state(self) -> None:
+        injector = self._fresh_injector()
+        injector._record_health_result("success", "", "")
+        injector._health_attempt_id = 1
+        injector._health_last_succeeded_at = 1700000000.0
+        injector._health_last_attempted_at = 1700000000.0
+        snapshot = injector.health_snapshot()
+        self.assertEqual(snapshot["result"], "success")
+        self.assertEqual(snapshot["last_succeeded_at"], 1700000000.0)
+
+    def test_snapshot_after_failure_carries_reason_and_text(self) -> None:
+        injector = self._fresh_injector()
+        injector._record_health_result(
+            "http_error",
+            "refresh_token_reused",
+            "Sign-in expired. The refresh token has already been used; re-authenticate to restore service.",
+        )
+        injector._health_attempt_id = 2
+        injector._health_last_attempted_at = 1700000100.0
+        snapshot = injector.health_snapshot()
+        self.assertEqual(snapshot["result"], "http_error")
+        self.assertEqual(snapshot["reason"], "refresh_token_reused")
+        self.assertIn("Re-authenticate", snapshot["text"])
+        # last_succeeded_at must remain None — a later failure does not
+        # invalidate a never-observed success.
+        self.assertIsNone(snapshot["last_succeeded_at"])
+
+
+class ClassifyRefreshFailureTests(unittest.TestCase):
+    """Pins how upstream OAuth /token error bodies become (reason, text).
+
+    The refresh_token_reused incident that motivated the transcript
+    banner: upstream returns {"error":{"code":"refresh_token_reused",
+    "message":"Your refresh token has already been used..."}} and the
+    SPA sees a banner explaining what to do. If this classifier drifts,
+    the banner becomes content-free again.
+    """
+
+    class _StubResponse:
+        def __init__(self, status_code: int, body: object) -> None:
+            self.status_code = status_code
+            self._body = body
+            self.text = json.dumps(body) if isinstance(body, dict) else str(body)
+
+        def json(self) -> object:
+            if isinstance(self._body, dict):
+                return self._body
+            raise ValueError("non-json body")
+
+    def test_classify_refresh_token_reused_returns_canonical_text(self) -> None:
+        resp = self._StubResponse(
+            401,
+            {
+                "error": {
+                    "code": "refresh_token_reused",
+                    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+                }
+            },
+        )
+        reason, text = _classify_refresh_failure(resp)  # type: ignore[arg-type]
+        self.assertEqual(reason, "refresh_token_reused")
+        # Canonical copy preferred over the upstream message — the
+        # upstream "Please try signing in again." reads awkwardly in
+        # the SPA banner.
+        self.assertIn("re-authenticate", text.lower())
+
+    def test_classify_unknown_code_falls_back_to_status(self) -> None:
+        resp = self._StubResponse(401, {"error": "bad_things"})
+        reason, _ = _classify_refresh_failure(resp)  # type: ignore[arg-type]
+        self.assertEqual(reason, "bad_things")
+
+    def test_classify_non_json_body_uses_http_status(self) -> None:
+        resp = self._StubResponse(500, "Internal Server Error")
+        reason, text = _classify_refresh_failure(resp)  # type: ignore[arg-type]
+        self.assertEqual(reason, "http_500")
+        self.assertTrue(text)
 
 
 if __name__ == "__main__":

@@ -424,6 +424,41 @@ spec:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot rotate its OAuth refresh chain"
             runbook: "All inbound requests will eventually 401. Inspect ext-proc logs for `refresh failed` / `refresh request crashed`."
 
+    - name: tank-operator.provider-credential-health
+      rules:
+        # Layer 1 has been "failed" for >5m. The transcript banner is
+        # already surfacing the failure to every active session in the
+        # affected mode; this alert is for the on-call to act on the
+        # operational side (re-sign-in flow, KV rotation, etc.). Steady-
+        # state expectation is zero. Sibling to
+        # TankApiProxyRefreshFailures: the proxy alert fires on raw
+        # refresh-rate; this alert fires on the orchestrator's debounced
+        # Layer 1 status (which is what the user actually sees).
+        - alert: TankProviderCredentialFailed
+          expr: tank_provider_credential_health_status{status="failed"} == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "provider credential {{`{{ $labels.provider }}`}} ({{`{{ $labels.scope }}`}}) in failed state for 5m"
+            runbook: "Every active session whose mode requires this provider is currently rendering a session.status:failed banner in its transcript. Inspect tank_api_proxy_token_refresh_total{result!=\"success\"} to confirm the proxy-side cause, then run the re-sign-in flow / rotate the KV refresh blob."
+
+        # The poller itself is broken — we're not getting fresh data
+        # from the proxy. The transcript banner state is therefore
+        # frozen at whatever it last observed. Sub-alerts on
+        # TankApiProxyRefreshFailures cover proxy-internal issues; this
+        # alert covers the orchestrator-side wire (DNS, TCP, JSON
+        # decode, etc.).
+        - alert: TankProviderHealthPollerStuck
+          expr: rate(tank_provider_credential_poll_total{outcome="ok"}[10m]) == 0
+            and rate(tank_provider_credential_poll_total{outcome="error"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "providerhealth poller ({{`{{ $labels.provider }}`}}) is erroring on every poll for 10m"
+            runbook: "Layer 1 row is stale and the transcript banner state cannot update. Inspect orchestrator slog for `providerhealth poll failed` and the proxy's /health/<provider> response."
+
     - name: tank-operator.mcp-auth-proxy
       rules:
         - alert: TankMCPAuthProxySATokenReadFailures

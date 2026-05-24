@@ -171,6 +171,82 @@ test("turn.completed produces no meta entry — success speaks through the bubbl
   assert.equal(metas.length, 0);
 });
 
+test("session.status:failed with provider extension carries severity + action onto the system message", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("session:63:provider:codex:status", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:provider:codex:status",
+        created_at: "2026-05-24T18:48:30.000Z",
+        payload: {
+          status: "failed",
+          text: "Codex sign-in expired. Re-authenticate to continue.",
+          failure_scope: "provider",
+          failure_subject: "codex",
+          failure_reason: "refresh_token_reused",
+          action: {
+            label: "Re-sign-in to Codex",
+            href: "https://auth.romaine.life/codex",
+          },
+        },
+      }),
+    ]),
+  );
+  const msg = projection.entries.find((entry) => entry.kind === "message");
+  assert.ok(msg, "session.status:failed should produce a message entry");
+  if (msg?.kind === "message") {
+    assert.equal(msg.role, "system");
+    assert.equal(msg.severity, "error");
+    assert.deepEqual(msg.action, {
+      label: "Re-sign-in to Codex",
+      href: "https://auth.romaine.life/codex",
+    });
+  }
+});
+
+test("session.status:ready replaces a prior failed banner with the same timeline_id", () => {
+  // Recovery contract: when a provider's auth comes back online, the
+  // poller writes a session.status event with status="ready" on the
+  // SAME timeline_id as the prior failed banner. The reducer must
+  // replace the failed entry rather than appending a second message
+  // — otherwise scrollback shows the stale error indefinitely.
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("session:63:provider:codex:status", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:provider:codex:status",
+        created_at: "2026-05-24T18:48:30.000Z",
+        payload: {
+          status: "failed",
+          text: "Codex sign-in expired.",
+          failure_scope: "provider",
+          failure_subject: "codex",
+          failure_reason: "refresh_token_reused",
+        },
+      }),
+      ev("session:63:provider:codex:status:ready", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:provider:codex:status",
+        created_at: "2026-05-24T19:10:00.000Z",
+        payload: {
+          status: "ready",
+          text: "Codex sign-in is back online.",
+        },
+      }),
+    ]),
+  );
+  const messages = projection.entries.filter(
+    (entry) => entry.kind === "message" && entry.role === "system",
+  );
+  assert.equal(messages.length, 1, "recovery must replace, not append");
+  const msg = messages[0];
+  if (msg.kind === "message") {
+    assert.equal(msg.text, "Codex sign-in is back online.");
+    assert.equal(msg.severity, "info");
+    assert.equal(msg.action, undefined);
+  }
+});
+
 test("session.status projects as a system transcript message", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

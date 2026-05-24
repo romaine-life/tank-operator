@@ -21,8 +21,8 @@ def main() -> None:
 async def _run() -> None:
     port = int(os.environ.get("EXT_PROC_PORT", "9000"))
     metrics_port = int(os.environ.get("METRICS_PORT", "9100"))
-    server = await serve(port)
-    metrics_runner = await start_metrics_server(metrics_port)
+    server, injector = await serve(port)
+    metrics_runner = await start_metrics_server(metrics_port, injector.health_snapshot)
     stop = asyncio.Event()
 
     def _shutdown(*_: object) -> None:

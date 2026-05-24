@@ -136,6 +136,35 @@ var (
 		Help: "Durable turn.failed / turn.command_failed events persisted to session_events, partitioned by producer source and payload reason.",
 	}, []string{"source", "reason"})
 
+	// Provider-credential health: the durable Layer 1 surface for
+	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
+	// as the user-trust observability surface for sustained
+	// provider-auth failures. Steady-state expectation: poll counters
+	// climb at one tick per provider per interval; status gauge stays
+	// 1 on healthy and flips to 0 only during an actual outage;
+	// transition counter and failure-duration histogram are quiet.
+	providerHealthPollTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_provider_credential_poll_total",
+		Help: "Provider-health poll attempts, partitioned by provider and outcome.",
+	}, []string{"provider", "outcome"})
+	providerHealthStatusGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "tank_provider_credential_health_status",
+		Help: "Current provider credential health (1 when status == label, else 0).",
+	}, []string{"provider", "scope", "status"})
+	providerHealthTransitionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_provider_credential_transitions_total",
+		Help: "Provider credential health transitions (healthy↔failed etc), partitioned by provider, scope, from, to, reason.",
+	}, []string{"provider", "scope", "from", "to", "reason"})
+	providerHealthFailureDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "tank_provider_credential_failure_duration_seconds",
+		Help:    "How long a provider's credential was in the failed state, observed on recovery.",
+		Buckets: []float64{30, 60, 300, 900, 3600, 14400, 86400},
+	}, []string{"provider", "scope"})
+	providerHealthFanoutSessionsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_provider_credential_fanout_sessions_total",
+		Help: "Sessions that received a session.status banner event on a provider-credential transition.",
+	}, []string{"provider", "scope"})
+
 	// Wake-publish failures. The bus records here before returning the
 	// error to the caller. Per-session wakes drive the chat-window SSE;
 	// per-owner session-list events drive the sidebar SSE (replaced
@@ -846,6 +875,49 @@ func (promPersisterMetrics) RecordTransientFailure() {
 
 func (promPersisterMetrics) RecordTurnFailurePersisted(source string, reason string) {
 	transcriptTurnFailureTotal.WithLabelValues(source, reason).Inc()
+}
+
+// promProviderHealthMetrics satisfies providerhealth.Metrics so the
+// transcript-banner poller can increment counters without importing
+// prometheus directly. The gauge flips between status labels rather
+// than zero/one to match the multi-status enum (healthy/degraded/failed)
+// without making PromQL queries guess at the "off" state.
+type promProviderHealthMetrics struct{}
+
+func (promProviderHealthMetrics) RecordPoll(provider string, ok bool) {
+	outcome := "ok"
+	if !ok {
+		outcome = "error"
+	}
+	providerHealthPollTotal.WithLabelValues(provider, outcome).Inc()
+}
+
+func (promProviderHealthMetrics) RecordHealthStatus(provider, scope, status string) {
+	for _, candidate := range []string{"healthy", "degraded", "failed"} {
+		value := 0.0
+		if candidate == status {
+			value = 1.0
+		}
+		providerHealthStatusGauge.WithLabelValues(provider, scope, candidate).Set(value)
+	}
+}
+
+func (promProviderHealthMetrics) RecordTransition(provider, scope, from, to, reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	providerHealthTransitionsTotal.WithLabelValues(provider, scope, from, to, reason).Inc()
+}
+
+func (promProviderHealthMetrics) RecordFailureDuration(provider, scope string, seconds float64) {
+	providerHealthFailureDurationSeconds.WithLabelValues(provider, scope).Observe(seconds)
+}
+
+func (promProviderHealthMetrics) RecordFanout(provider, scope string, sessions int) {
+	if sessions <= 0 {
+		return
+	}
+	providerHealthFanoutSessionsTotal.WithLabelValues(provider, scope).Add(float64(sessions))
 }
 
 // promWakeMetrics satisfies sessionbus.WakeMetrics so the bus can increment
