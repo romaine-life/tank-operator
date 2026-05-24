@@ -62,6 +62,30 @@ var schemaMigrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS stream_auth_tickets_expires_at
 		ON stream_auth_tickets (expires_at)`,
+
+	// `avatar_assets` stores administrator-curated avatar images. The
+	// small circular crop (`avatar_bytes`) drives compact UI surfaces;
+	// the original backing image is what the browser reveals in the
+	// lightbox when a user clicks the avatar. Assets are private to
+	// authenticated Tank callers, so bytes stay in Postgres instead of
+	// being emitted as unauthenticated static files.
+	`CREATE TABLE IF NOT EXISTS avatar_assets (
+		id            text PRIMARY KEY,
+		kind          text NOT NULL CHECK (kind IN ('agent', 'system')),
+		name          text NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+		avatar_mime   text NOT NULL,
+		avatar_bytes  bytea NOT NULL CHECK (octet_length(avatar_bytes) <= 1048576),
+		backing_mime  text NOT NULL,
+		backing_bytes bytea NOT NULL CHECK (octet_length(backing_bytes) <= 8388608),
+		crop          jsonb NOT NULL DEFAULT '{}'::jsonb,
+		created_by    text NOT NULL,
+		created_at    timestamptz NOT NULL DEFAULT now(),
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		deleted_at    timestamptz
+	)`,
+	`CREATE INDEX IF NOT EXISTS avatar_assets_kind_active_created
+		ON avatar_assets (kind, created_at DESC)
+		WHERE deleted_at IS NULL`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,

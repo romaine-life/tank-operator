@@ -286,6 +286,49 @@ func recordSessionRuntimeConfigUpdate(provider, result string) {
 	).Inc()
 }
 
+var avatarAssetRequestsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_avatar_asset_requests_total",
+		Help: "Avatar asset API requests labeled by bounded operation, kind, and result.",
+	},
+	[]string{"operation", "kind", "result"},
+)
+
+func recordAvatarAssetRequest(operation, kind, result string) {
+	avatarAssetRequestsTotal.WithLabelValues(
+		avatarAssetOperationLabel(operation),
+		avatarAssetKindLabel(kind),
+		avatarAssetResultLabel(result),
+	).Inc()
+}
+
+func avatarAssetOperationLabel(operation string) string {
+	switch operation {
+	case "list", "read_image", "create", "delete":
+		return operation
+	default:
+		return "unknown"
+	}
+}
+
+func avatarAssetKindLabel(kind string) string {
+	switch kind {
+	case "agent", "system":
+		return kind
+	default:
+		return "unknown"
+	}
+}
+
+func avatarAssetResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
 func sessionRuntimeConfigProviderLabel(provider string) string {
 	switch provider {
 	case "claude", "codex":

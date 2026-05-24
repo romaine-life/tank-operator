@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
@@ -155,6 +156,7 @@ func main() {
 
 	// 4. Init profile store.
 	profileStore := buildProfileStore(pgPool)
+	avatarStore := buildAvatarAssetStore(pgPool)
 
 	sessionScope := envDefault("SESSION_REGISTRY_SCOPE", "default")
 
@@ -323,6 +325,7 @@ func main() {
 		mgr:                      mgr,
 		profiles:                 profileStore,
 		sessionEvents:            sessionEventsStore,
+		avatars:                  avatarStore,
 		pgPool:                   pgPool,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
@@ -410,6 +413,14 @@ func buildProfileStore(pool *pgxpool.Pool) profilesStore {
 		return profiles.StubStore{}
 	}
 	return profiles.NewPostgresStore(pool)
+}
+
+func buildAvatarAssetStore(pool *pgxpool.Pool) avatarassets.Store {
+	if pool == nil {
+		slog.Warn("avatar asset store using in-memory stub; POSTGRES_HOST is unset")
+		return avatarassets.NewMemoryStore()
+	}
+	return pgstore.NewAvatarAssetStore(pool)
 }
 
 func buildGitHubInstallStateStore(pool *pgxpool.Pool) gitHubInstallStateStore {
