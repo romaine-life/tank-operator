@@ -237,6 +237,131 @@ func TestValidateEventMapAcceptsSessionStatus(t *testing.T) {
 	}
 }
 
+func TestValidateEventMapAcceptsSessionStatusFailedExtension(t *testing.T) {
+	event := map[string]any{
+		"event_id":    "session:63:provider:codex:status",
+		"order_key":   "1768179848000-00000003-session:63:provider:codex:status",
+		"session_id":  "63",
+		"timeline_id": "session:63:provider:codex:status",
+		"actor":       "system",
+		"source":      "tank",
+		"type":        "session.status",
+		"created_at":  "2026-05-24T18:48:30.000Z",
+		"visibility":  "durable",
+		"payload": map[string]any{
+			"status":           "failed",
+			"text":             "Codex sign-in expired. Re-authenticate to continue.",
+			"failure_scope":    "provider",
+			"failure_subject":  "codex",
+			"failure_reason":   "refresh_token_reused",
+			"action": map[string]any{
+				"label": "Re-sign-in to Codex",
+				"href":  "/api/auth/codex/login",
+			},
+		},
+	}
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateEventMapRejectsContentFreeSessionStatusFailed(t *testing.T) {
+	// failure_scope is set so the extension shape kicks in, but no
+	// subject is provided. A future writer could not produce a
+	// content-free banner: the contract forces (subject + (reason OR
+	// action)) once any extension field is set. This pins the
+	// "designed and visible" line from docs/quality-timeframes.md.
+	tests := []struct {
+		name  string
+		edit  func(payload map[string]any)
+		error string
+	}{
+		{
+			name: "missing failure_subject",
+			edit: func(p map[string]any) {
+				p["failure_scope"] = "provider"
+			},
+			error: "failure_subject is required",
+		},
+		{
+			name: "invalid failure_scope",
+			edit: func(p map[string]any) {
+				p["failure_scope"] = "everything"
+				p["failure_subject"] = "codex"
+				p["failure_reason"] = "broken"
+			},
+			error: "failure_scope must be provider, session, or pod",
+		},
+		{
+			name: "no reason and no action",
+			edit: func(p map[string]any) {
+				p["failure_scope"] = "provider"
+				p["failure_subject"] = "codex"
+			},
+			error: "failure_reason or payload.action is required",
+		},
+		{
+			name: "action missing href",
+			edit: func(p map[string]any) {
+				p["failure_scope"] = "provider"
+				p["failure_subject"] = "codex"
+				p["action"] = map[string]any{"label": "Re-sign-in"}
+			},
+			error: "action.label and payload.action.href are required",
+		},
+	}
+	base := map[string]any{
+		"event_id":    "session:63:provider:codex:status",
+		"order_key":   "k",
+		"session_id":  "63",
+		"timeline_id": "session:63:provider:codex:status",
+		"actor":       "system",
+		"source":      "tank",
+		"type":        "session.status",
+		"created_at":  "2026-05-24T18:48:30.000Z",
+		"visibility":  "durable",
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := map[string]any{"status": "failed", "text": "broken"}
+			tt.edit(payload)
+			event := cloneMap(base)
+			event["payload"] = payload
+			err := ValidateEventMap(event)
+			if err == nil {
+				t.Fatalf("ValidateEventMap succeeded, want error containing %q", tt.error)
+			}
+			if !strings.Contains(err.Error(), tt.error) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.error)
+			}
+		})
+	}
+}
+
+func TestValidateEventMapAcceptsBareSessionStatusFailed(t *testing.T) {
+	// Legacy bare failed (no extension fields). Pod-lifecycle writers
+	// may emit this shape; only when extension fields are present does
+	// the stricter contract kick in.
+	event := map[string]any{
+		"event_id":    "session:63:status:failed",
+		"order_key":   "k",
+		"session_id":  "63",
+		"timeline_id": "session:63:status:failed",
+		"actor":       "system",
+		"source":      "tank",
+		"type":        "session.status",
+		"created_at":  "2026-05-24T18:48:30.000Z",
+		"visibility":  "durable",
+		"payload": map[string]any{
+			"status": "failed",
+			"text":   "Session failed.",
+		},
+	}
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateEventMapRejectsUnknownSessionStatus(t *testing.T) {
 	event := map[string]any{
 		"event_id":    "session:63:status:booting",

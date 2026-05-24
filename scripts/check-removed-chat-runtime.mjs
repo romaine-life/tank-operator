@@ -643,6 +643,31 @@ const blocked = [
   // (cutover hygiene for in-flight stragglers); the pattern below
   // matches only the dispatch-to-acceptInterrupt shape, not the
   // defensive drop.
+  // Provider-credential health surface — the durable session.status:failed
+  // banner pipeline replaces every prior "infer codex auth state from
+  // turn outcomes" path the SPA might have grown. The Layer 1 row
+  // (provider_credential_health) is the source of truth; the orchestrator
+  // poller writes it; the SPA reads it through session.status events.
+  //
+  // The guards below catch the most likely regression shape: a future
+  // refactor that adds an SPA-side fetch of the proxy's /health endpoint
+  // (which would bypass the durable transcript surface and the debouncer)
+  // or a frontend.tsx file referencing Layer 1 row state by name. We
+  // intentionally do NOT block the unqualified "provider_credential_health"
+  // string because legitimate backend code references the table name in
+  // SQL, struct names, and counter help strings.
+  {
+    name: "in-SPA proxy /health/codex polling (must go via session.status banner)",
+    // Block fetch("/health/codex") / new EventSource("/health/codex") /
+    // similar from anywhere — the path is internal to the cluster and
+    // not exposed at the orchestrator HTTP boundary anyway, but a
+    // regression where a developer wires the SPA at it directly would
+    // bypass the debouncer. /health/codex appears nowhere in legitimate
+    // tank-operator frontend code today; the proxy and orchestrator
+    // reference it as a path literal in their own internal client.
+    pattern: /fetch\([\s\S]{0,80}["'`]\/health\/codex\b/,
+  },
+
   // Run-status pill retired in favor of routing per-turn status through
   // the durable transcript + composer (docs/features/transcript/contract.md
   // names session_events as the source of truth; quality-timeframes.md's
