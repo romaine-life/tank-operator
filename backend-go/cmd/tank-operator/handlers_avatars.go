@@ -333,6 +333,56 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *appServer) handleUpdateAvatarKind(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.requireAdmin(w, r, "update_kind")
+	if !ok {
+		return
+	}
+	if s.avatars == nil {
+		recordAvatarAssetRequest("update_kind", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("avatar_id"))
+	if id == "" {
+		recordAvatarAssetRequest("update_kind", "", "bad_request")
+		writeError(w, http.StatusBadRequest, "missing avatar id")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var body struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		recordAvatarAssetRequest("update_kind", "", "bad_request")
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	newKind, ok := avatarassets.NormalizeKind(body.Kind)
+	if !ok {
+		recordAvatarAssetRequest("update_kind", "", "bad_request")
+		writeError(w, http.StatusBadRequest, "kind must be agent or system")
+		return
+	}
+	meta, err := s.avatars.UpdateKind(r.Context(), id, newKind)
+	if err != nil {
+		switch {
+		case errors.Is(err, avatarassets.ErrNotFound):
+			recordAvatarAssetRequest("update_kind", "", "not_found")
+			writeError(w, http.StatusNotFound, "avatar not found")
+		case errors.Is(err, avatarassets.ErrKindUnchanged):
+			recordAvatarAssetRequest("update_kind", newKind, "bad_request")
+			writeError(w, http.StatusConflict, "avatar already has the requested kind")
+		default:
+			recordAvatarAssetRequest("update_kind", newKind, "store_error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	recordAvatarAssetRequest("update_kind", meta.Kind, "ok")
+	writeJSON(w, http.StatusOK, avatarAssetResponseFromMeta(meta))
+}
+
 func (s *appServer) handleDeleteAvatar(w http.ResponseWriter, r *http.Request) {
 	_, ok := s.requireAdmin(w, r, "delete")
 	if !ok {

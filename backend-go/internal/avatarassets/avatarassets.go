@@ -18,6 +18,7 @@ const (
 var (
 	ErrNotFound       = errors.New("avatar asset not found")
 	ErrInvalidVariant = errors.New("invalid avatar image variant")
+	ErrKindUnchanged  = errors.New("avatar kind already matches")
 )
 
 type Crop struct {
@@ -65,6 +66,13 @@ type Store interface {
 	Create(ctx context.Context, asset NewAsset) (Metadata, error)
 	Ensure(ctx context.Context, asset NewAsset) error
 	Delete(ctx context.Context, id string) (Metadata, error)
+	// UpdateKind flips an avatar's kind between "agent" and "system".
+	// Implementations that own a per-owner shuffled deck (pgstore) MUST
+	// also remove the avatar's *unused* entries from the OLD kind's deck
+	// cycles in the same transaction — used entries are historical and
+	// stay. The new kind picks the avatar up on its next cycle by the
+	// same "new additions wait" rule that applies to fresh uploads.
+	UpdateKind(ctx context.Context, id, newKind string) (Metadata, error)
 }
 
 type ImageStore interface {
@@ -167,6 +175,26 @@ func (s *MemoryStore) Delete(_ context.Context, id string) (Metadata, error) {
 		return Metadata{}, ErrNotFound
 	}
 	delete(s.records, id)
+	return meta, nil
+}
+
+func (s *MemoryStore) UpdateKind(_ context.Context, id, newKind string) (Metadata, error) {
+	normalized, ok := NormalizeKind(newKind)
+	if !ok {
+		return Metadata{}, errors.New("kind must be agent or system")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, ok := s.records[id]
+	if !ok {
+		return Metadata{}, ErrNotFound
+	}
+	if meta.Kind == normalized {
+		return Metadata{}, ErrKindUnchanged
+	}
+	meta.Kind = normalized
+	meta.UpdatedAt = time.Now().UTC()
+	s.records[id] = meta
 	return meta, nil
 }
 

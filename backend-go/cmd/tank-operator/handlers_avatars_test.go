@@ -195,6 +195,143 @@ func TestDefaultAvatarImageFallsBackToBundledStatic(t *testing.T) {
 	}
 }
 
+func TestAvatarUpdateKindFlipsBetweenAgentAndSystem(t *testing.T) {
+	app := newAvatarTestServer(t)
+	createReq := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	})
+	createReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	createResp := httptest.NewRecorder()
+	app.handleCreateAvatar(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	flipReq := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/"+created.ID+"/kind", strings.NewReader(`{"kind":"system"}`))
+	flipReq.SetPathValue("avatar_id", created.ID)
+	flipReq.Header.Set("Content-Type", "application/json")
+	flipReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	flipResp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(flipResp, flipReq)
+	if flipResp.Code != http.StatusOK {
+		t.Fatalf("flip status = %d body = %s", flipResp.Code, flipResp.Body.String())
+	}
+	var flipped avatarAssetResponse
+	if err := json.Unmarshal(flipResp.Body.Bytes(), &flipped); err != nil {
+		t.Fatal(err)
+	}
+	if flipped.Kind != "system" || flipped.ID != created.ID {
+		t.Fatalf("flipped = %#v", flipped)
+	}
+
+	backReq := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/"+created.ID+"/kind", strings.NewReader(`{"kind":"agent"}`))
+	backReq.SetPathValue("avatar_id", created.ID)
+	backReq.Header.Set("Content-Type", "application/json")
+	backReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	backResp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(backResp, backReq)
+	if backResp.Code != http.StatusOK {
+		t.Fatalf("back status = %d body = %s", backResp.Code, backResp.Body.String())
+	}
+	var roundTripped avatarAssetResponse
+	if err := json.Unmarshal(backResp.Body.Bytes(), &roundTripped); err != nil {
+		t.Fatal(err)
+	}
+	if roundTripped.Kind != "agent" {
+		t.Fatalf("round-trip = %#v", roundTripped)
+	}
+}
+
+func TestAvatarUpdateKindRejectsNonAdmin(t *testing.T) {
+	app := newAvatarTestServer(t)
+	createReq := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	})
+	createReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	createResp := httptest.NewRecorder()
+	app.handleCreateAvatar(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/"+created.ID+"/kind", strings.NewReader(`{"kind":"system"}`))
+	req.SetPathValue("avatar_id", created.ID)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	resp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(resp, req)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAvatarUpdateKindRejectsInvalidKind(t *testing.T) {
+	app := newAvatarTestServer(t)
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/av_missing/kind", strings.NewReader(`{"kind":"personal"}`))
+	req.SetPathValue("avatar_id", "av_missing")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	resp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(resp, req)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "kind must be agent or system") {
+		t.Fatalf("body = %s", resp.Body.String())
+	}
+}
+
+func TestAvatarUpdateKindReturnsConflictWhenUnchanged(t *testing.T) {
+	app := newAvatarTestServer(t)
+	createReq := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	})
+	createReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	createResp := httptest.NewRecorder()
+	app.handleCreateAvatar(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/"+created.ID+"/kind", strings.NewReader(`{"kind":"agent"}`))
+	req.SetPathValue("avatar_id", created.ID)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	resp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(resp, req)
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAvatarUpdateKindReturnsNotFoundForUnknownID(t *testing.T) {
+	app := newAvatarTestServer(t)
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/av_missing/kind", strings.NewReader(`{"kind":"system"}`))
+	req.SetPathValue("avatar_id", "av_missing")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	resp := httptest.NewRecorder()
+	app.handleUpdateAvatarKind(resp, req)
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestAvatarCreateRejectsInvalidKind(t *testing.T) {
 	app := newAvatarTestServer(t)
 	req := avatarCreateRequest(t, map[string]string{

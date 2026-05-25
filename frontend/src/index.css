@@ -717,10 +717,10 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
+.admin-avatar-swap,
 .admin-avatar-delete {
   position: absolute;
   top: 0.45rem;
-  right: 0.45rem;
   width: 1.7rem;
   height: 1.7rem;
   border-radius: 6px;
@@ -728,6 +728,19 @@ button:disabled {
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
+}
+
+.admin-avatar-delete {
+  right: 0.45rem;
+}
+
+.admin-avatar-swap {
+  right: 2.3rem;
+}
+
+.admin-avatar-swap:hover {
+  color: var(--text-bright);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .admin-avatar-delete:hover {

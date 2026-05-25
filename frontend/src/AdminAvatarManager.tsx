@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
+  ArrowLeftRightIcon,
   ImagePlusIcon,
   Loader2Icon,
   Trash2Icon,
@@ -185,6 +186,29 @@ export function avatarSaveErrorMessage(status: number, body: AvatarUploadErrorBo
     ? body.attempt_id.trim()
     : "";
   return attemptID ? `${detail} Reference ${attemptID}.` : detail;
+}
+
+export type AvatarKindChangeResult =
+  | { ok: true }
+  | { ok: false; detail: string };
+
+export async function requestAvatarKindChange(
+  id: string,
+  nextKind: AvatarKind,
+): Promise<AvatarKindChangeResult> {
+  const res = await authedFetch(`/api/admin/avatars/${encodeURIComponent(id)}/kind`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: nextKind }),
+  });
+  if (res.ok) {
+    return { ok: true };
+  }
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = typeof body.detail === "string" && body.detail.trim()
+    ? body.detail.trim()
+    : `kind change failed: ${res.status}`;
+  return { ok: false, detail };
 }
 
 async function fetchAvatarDecks(): Promise<AvatarDeckKind[]> {
@@ -578,6 +602,18 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     await notifyCatalogChanged(setListError, "Avatar deleted");
   }
 
+  async function swapAvatarKind(entry: AvatarView) {
+    const nextKind: AvatarKind = entry.kind === "agent" ? "system" : "agent";
+    const result = await requestAvatarKindChange(entry.id, nextKind);
+    if (!result.ok) {
+      setListError(result.detail);
+      return;
+    }
+    await reloadEntries();
+    await reloadDecks();
+    await notifyCatalogChanged(setListError, "Avatar kind changed");
+  }
+
   const visibleDeck = decks.find((deck) => deck.kind === kind);
   const deckEntries = visibleDeck?.entries ?? [];
   const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
@@ -784,6 +820,18 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                           {entry.imageError ? "image unavailable" : entry.created_by}
                         </span>
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-avatar-swap"
+                      title={`Move to ${entry.kind === "agent" ? "system" : "agent"} avatars`}
+                      aria-label={`Move ${entry.name} to ${entry.kind === "agent" ? "system" : "agent"} avatars`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void swapAvatarKind(entry);
+                      }}
+                    >
+                      <ArrowLeftRightIcon size={15} aria-hidden="true" />
                     </button>
                     <button
                       type="button"
