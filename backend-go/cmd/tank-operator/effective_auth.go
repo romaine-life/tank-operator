@@ -1,0 +1,34 @@
+package main
+
+import (
+	"os"
+	"strings"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+)
+
+func hostAdminEmail() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("HOST_EMAIL")))
+}
+
+func configuredSuperAdmins() map[string]bool {
+	return parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostAdminEmail()))
+}
+
+func isEffectiveAdmin(user auth.User) bool {
+	if user.Role == auth.RoleAdmin {
+		return true
+	}
+	if user.Role != auth.RoleService {
+		return false
+	}
+	actorEmail := strings.ToLower(strings.TrimSpace(user.ActorEmail))
+	return actorEmail != "" && configuredSuperAdmins()[actorEmail]
+}
+
+func effectiveRole(user auth.User) string {
+	if isEffectiveAdmin(user) {
+		return auth.RoleAdmin
+	}
+	return user.Role
+}

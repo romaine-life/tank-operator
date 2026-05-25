@@ -37,13 +37,15 @@ type gitHubInstallStateStore interface {
 // `role` rides along so the SPA's OnboardingWall can skip itself for callers
 // that do not need a user-facing GitHub installation: admins (covered by the
 // host installation) and service principals (platform-internal test/session
-// automation).
-func userResponseBody(sub, email, name, role string, profile profiles.Profile) map[string]any {
+// automation). `effective_role` is the UI authorization role after local
+// tank-operator policy such as service-principal actor admin checks.
+func userResponseBody(sub, email, name, role, effectiveRole string, profile profiles.Profile) map[string]any {
 	return map[string]any{
 		"sub":             sub,
 		"email":           email,
 		"name":            name,
 		"role":            role,
+		"effective_role":  effectiveRole,
 		"avatar_url":      auth.GravatarURL(email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
@@ -63,7 +65,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, profile))
+	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, effectiveRole(user), profile))
 }
 
 // handleUpdatePrefs persists the SPA's run-pane preferences (chat font
@@ -288,6 +290,6 @@ func (s *appServer) handleGitHubInstallComplete(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": userResponseBody(user.Sub, user.Email, user.Name, user.Role, profile),
+		"user": userResponseBody(user.Sub, user.Email, user.Name, user.Role, effectiveRole(user), profile),
 	})
 }

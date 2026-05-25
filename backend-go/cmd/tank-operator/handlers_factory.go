@@ -83,6 +83,6 @@ func me(verifier *auth.Verifier, store profileGetter) http.HandlerFunc {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, profile))
+		writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, effectiveRole(user), profile))
 	}
 }
