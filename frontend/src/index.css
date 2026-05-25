@@ -3938,6 +3938,14 @@ button:disabled {
   --styleguide-surface-accent: rgba(96, 165, 250, 0.72);
   --styleguide-surface-accent-soft: rgba(96, 165, 250, 0.16);
   --styleguide-surface-accent-fill: rgba(96, 165, 250, 0.045);
+  --styleguide-surface-active-wash: linear-gradient(
+    90deg,
+    var(--styleguide-surface-accent-fill),
+    rgba(10, 10, 10, 0) 8.5rem
+  );
+  --styleguide-surface-active-shadow:
+    inset 0 0 0 1px var(--styleguide-surface-accent-soft),
+    inset 0 1px 0 rgba(147, 197, 253, 0.12);
 }
 
 .styleguide-transcript-focus-shell .styleguide-surface-active {
@@ -3967,11 +3975,9 @@ button:disabled {
 
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
   background:
-    linear-gradient(90deg, var(--styleguide-surface-accent-fill), rgba(10, 10, 10, 0) 8rem),
+    var(--styleguide-surface-active-wash),
     var(--bg-base, #0a0a0a);
-  box-shadow:
-    inset 0 0 0 1px var(--styleguide-surface-accent-soft),
-    inset 0 1px 0 rgba(147, 197, 253, 0.12);
+  box-shadow: var(--styleguide-surface-active-shadow);
 }
 
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active:focus {
@@ -3982,14 +3988,13 @@ button:disabled {
 }
 
 .styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active {
-  border-color: rgba(96, 165, 250, 0.58);
+  border-color: var(--styleguide-surface-accent-soft);
   background:
-    linear-gradient(90deg, var(--styleguide-surface-accent-fill), rgba(255, 255, 255, 0.025) 9rem),
+    var(--styleguide-surface-active-wash),
     rgba(255, 255, 255, 0.025);
   box-shadow:
-    0 0 0 1px rgba(96, 165, 250, 0.18),
-    0 16px 36px rgba(0, 0, 0, 0.26),
-    0 0 28px -18px rgba(96, 165, 250, 0.9);
+    var(--styleguide-surface-active-shadow),
+    0 16px 36px rgba(0, 0, 0, 0.24);
 }
 
 .styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within {
