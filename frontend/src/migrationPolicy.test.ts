@@ -216,6 +216,19 @@ test("files tab is gated until the session container is available", () => {
   assert.match(appSource, /disabled=\{!filesAvailable\}/);
 });
 
+test("read-only cross-scope sessions keep an explicit composer affordance", () => {
+  assert.match(appSource, /composerVisible=\{activeTab === "chat"\}/);
+  assert.equal(
+    appSource.includes("Production sessions are read-only in this test slot"),
+    true,
+  );
+  assert.equal(
+    appSource.includes("Read-only production view. Switch back to this slot's sessions in Settings to send messages."),
+    true,
+  );
+  assert.equal(indexCssSource.includes(".run-composer.run-composer-readonly"), true);
+});
+
 test("background page uses stacked full-width sections instead of a side pane", () => {
   assert.match(indexCssSource, /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/);
   assert.equal(

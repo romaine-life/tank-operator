@@ -9051,7 +9051,7 @@ function ChatPane({
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
       bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
-      composerVisible={!readOnly && activeTab === "chat"}
+      composerVisible={activeTab === "chat"}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}
       composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
@@ -9883,15 +9883,28 @@ function ChatPane({
       </>)}
       composer={(
         <ChatComposer
-          className="run-composer-runpane run-composer-interactive"
-          placeholder={RUN_COMPOSER_PLACEHOLDER}
-          onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
+          className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
+          placeholder={
+            readOnly
+              ? "Production sessions are read-only in this test slot"
+              : RUN_COMPOSER_PLACEHOLDER
+          }
+          onSubmit={(args) => {
+            if (readOnly) return;
+            handleSubmit({ text: args.text, files: [] });
+          }}
           permissionMode={composerMode}
           onPermissionModeChange={setComposerMode}
           sendByCtrlEnter={runPrefs.sendByCtrlEnter}
           hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-          canSubmit={ready}
-          controlsDisabled={!ready}
+          hintOverride={
+            readOnly
+              ? "Read-only production view. Switch back to this slot's sessions in Settings to send messages."
+              : undefined
+          }
+          disabled={readOnly}
+          canSubmit={!readOnly && ready}
+          controlsDisabled={readOnly || !ready}
           submitStatus={submitStatus}
           onStop={cancelRun}
           isStopping={runStatus === "stopping"}

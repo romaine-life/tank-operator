@@ -90,6 +90,8 @@ export interface ChatComposerProps {
   sendByCtrlEnter: boolean;
   /** Appended after the Enter/Shift hint, e.g. " · / for slash commands". */
   hintSuffix?: string;
+  /** Replaces the default send/newline hint when the composer is informational. */
+  hintOverride?: string;
   /** Disables the textarea and submit (and stop) interactions. */
   disabled?: boolean;
   /**
@@ -127,6 +129,7 @@ export function ChatComposer({
   onPermissionModeChange,
   sendByCtrlEnter,
   hintSuffix,
+  hintOverride,
   disabled,
   canSubmit = true,
   controlsDisabled,
@@ -210,9 +213,10 @@ export function ChatComposer({
     ta.focus();
   }, [onTextChange]);
 
-  const hintText = sendByCtrlEnter
-    ? `⌘/Ctrl+Enter to send · Enter for new line${hintSuffix ?? ""}`
-    : `Enter to send · Shift+Enter for new line${hintSuffix ?? ""}`;
+  const hintText = hintOverride
+    ?? (sendByCtrlEnter
+      ? `⌘/Ctrl+Enter to send · Enter for new line${hintSuffix ?? ""}`
+      : `Enter to send · Shift+Enter for new line${hintSuffix ?? ""}`);
 
   return (
     <div
