@@ -40,6 +40,10 @@ type SessionEventStore interface {
 	// `num_after`. Used for explicit transcript deep links. Two indexed
 	// seeks; no full scan.
 	EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error)
+	// EventsForTurn returns a bounded ASC slice for one turn. Transcript
+	// projection uses this to build primary Turn activity shells and lazy
+	// expansion bodies without relying on a browser-local raw-event window.
+	EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
 	// (turn.*, tool.approval_*) for a session in ascending order_key.
@@ -320,6 +324,47 @@ func (s *postgresSessionEventStore) EventsAround(ctx context.Context, tankSessio
 		page.NextOrderKey = eventOrderKey(events[len(events)-1])
 	}
 	return page, nil
+}
+
+func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
+	limit = normalizeSessionEventLimit(limit)
+	queryLimit := limit + 1
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND turn_id = $2
+			AND order_key <> ''
+		ORDER BY order_key ASC
+		LIMIT $3
+	`
+	rows, err := s.pool.Query(ctx, q, storageKey, strings.TrimSpace(turnID), queryLimit)
+	if err != nil {
+		return SessionEventPage{}, err
+	}
+	defer rows.Close()
+
+	out := make([]map[string]any, 0, queryLimit)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return SessionEventPage{}, err
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
+		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		doc["tank_session_id"] = tankSessionID
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return SessionEventPage{}, err
+	}
+	return sessionEventPageFromAscendingScan(out, limit, SessionEventCursor{}), nil
 }
 
 // fetchBeforeSlice reads up to `limit` events with order_key <= anchor (when
@@ -730,6 +775,14 @@ func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (S
 }
 
 func (StubSessionEventStore) EventsAround(_ context.Context, _, _ string, _, _ int) (SessionEventPage, error) {
+	return SessionEventPage{
+		Events:      []map[string]any{},
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
+}
+
+func (StubSessionEventStore) EventsForTurn(_ context.Context, _, _ string, _ int) (SessionEventPage, error) {
 	return SessionEventPage{
 		Events:      []map[string]any{},
 		FoundOldest: true,
