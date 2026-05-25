@@ -7,6 +7,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -102,6 +104,53 @@ func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 	app.handleGetAvatarImage(missingResp, missingReq)
 	if missingResp.Code != http.StatusNotFound {
 		t.Fatalf("post-delete image status = %d body = %s", missingResp.Code, missingResp.Body.String())
+	}
+}
+
+func TestDefaultAvatarImageFallsBackToBundledStatic(t *testing.T) {
+	root := t.TempDir()
+	avatarDir := filepath.Join(root, "assets", "avatars")
+	if err := os.MkdirAll(avatarDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staticBody := []byte("bundled-default-avatar")
+	if err := os.WriteFile(filepath.Join(avatarDir, "jp1-raptor.png"), staticBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TANK_OPERATOR_STATIC_DIR", root)
+	t.Setenv("TANK_OPERATOR_STATIC_OVERRIDE_DIR", "")
+
+	store := avatarassets.NewMemoryStore()
+	if err := store.Ensure(t.Context(), avatarassets.NewAsset{
+		ID:             "jp1-raptor",
+		Kind:           avatarassets.KindAgent,
+		Name:           "Velociraptor",
+		Crop:           avatarassets.Crop{CenterX: 0.5, CenterY: 0.5, Size: 1},
+		AvatarMIME:     "image/png",
+		AvatarBlobKey:  "avatars/legacy/jp1-raptor/avatar.png",
+		BackingMIME:    "image/png",
+		BackingBlobKey: "avatars/legacy/jp1-raptor/avatar.png",
+		CreatedBy:      "tank-operator",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app := &appServer{
+		verifier:     auth.NewVerifier(testJWT(t)),
+		avatars:      store,
+		avatarImages: avatarassets.NewMemoryImageStore(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/avatars/jp1-raptor/image", nil)
+	req.SetPathValue("avatar_id", "jp1-raptor")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	resp := httptest.NewRecorder()
+
+	app.handleGetAvatarImage(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !bytes.Equal(resp.Body.Bytes(), staticBody) {
+		t.Fatalf("body = %q, want %q", resp.Body.Bytes(), staticBody)
 	}
 }
 

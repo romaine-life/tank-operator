@@ -70,3 +70,25 @@ func TestMigrationsPrepareAvatarBlobStorage(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrationsPersistAvatarDeckAssignments(t *testing.T) {
+	migrations := strings.Join(schemaMigrations, "\n")
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS agent_avatar_id text",
+		"ADD COLUMN IF NOT EXISTS system_avatar_id text",
+		"CREATE TABLE IF NOT EXISTS avatar_deck_entries",
+		"used_session_id text",
+		"avatar_deck_entries_avatar_once_per_cycle",
+		"avatar_deck_entries_current",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS avatar_assets") > strings.Index(migrations, "CREATE TABLE IF NOT EXISTS avatar_deck_entries") {
+		t.Fatal("avatar assets must exist before avatar deck entries")
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") > strings.Index(migrations, "ADD COLUMN IF NOT EXISTS agent_avatar_id text") {
+		t.Fatal("sessions table must exist before avatar assignment columns")
+	}
+}

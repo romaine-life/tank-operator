@@ -85,12 +85,12 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			mode, pod_name, name, visible,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos, model, effort, sidebar_position
+			repos, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, COALESCE($9, now()), $10,
 			COALESCE(NULLIF($11, ''), 'Pending'), $12,
-			$13, $14, $15, COALESCE(NULLIF($16, 0), nextval('sessions_row_version_seq'))
+			$13, $14, $15, NULLIF($16, ''), NULLIF($17, ''), COALESCE(NULLIF($18, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -103,6 +103,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 				ELSE EXCLUDED.status
 			END,
 			ready_at     = COALESCE(EXCLUDED.ready_at, sessions.ready_at),
+			agent_avatar_id = COALESCE(EXCLUDED.agent_avatar_id, sessions.agent_avatar_id),
+			system_avatar_id = COALESCE(EXCLUDED.system_avatar_id, sessions.system_avatar_id),
 			updated_at   = EXCLUDED.updated_at,
 			row_version  = nextval('sessions_row_version_seq')
 	`
@@ -122,6 +124,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		repos,
 		strings.TrimSpace(record.Model),
 		strings.TrimSpace(record.Effort),
+		strings.TrimSpace(record.AgentAvatarID),
+		strings.TrimSpace(record.SystemAvatarID),
 		sidebarPosition,
 	)
 	return err
@@ -264,6 +268,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			runtime_model,
 			runtime_effort,
 			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+			COALESCE(agent_avatar_id, ''),
+			COALESCE(system_avatar_id, ''),
 			sidebar_position,
 			row_version
 		FROM sessions
@@ -277,6 +283,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		activitySummary, testState, rolloutState, cloneState  []byte
 		repos                                                 []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt string
+		agentAvatarID, systemAvatarID                         string
 		sidebarPosition, rowVersion                           int64
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
@@ -286,6 +293,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&activitySummary, &testState, &rolloutState,
 		&repos, &cloneState, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
+		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
 		&rowVersion,
 	)
@@ -322,6 +330,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RuntimeModel:        runtimeModel,
 		RuntimeEffort:       runtimeEffort,
 		RuntimeConfiguredAt: runtimeAt,
+		AgentAvatarID:       agentAvatarID,
+		SystemAvatarID:      systemAvatarID,
 		SidebarPosition:     sidebarPosition,
 		RowVersion:          rowVersion,
 	}

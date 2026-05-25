@@ -147,6 +147,8 @@ type rowWireShape struct {
 	RuntimeModel        string         `json:"runtime_model,omitempty"`
 	RuntimeEffort       string         `json:"runtime_effort,omitempty"`
 	RuntimeConfiguredAt string         `json:"runtime_configured_at,omitempty"`
+	AgentAvatarID       string         `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID      string         `json:"system_avatar_id,omitempty"`
 	SidebarPosition     int64          `json:"sidebar_position"`
 	RowVersion          int64          `json:"row_version"`
 }
@@ -190,6 +192,8 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			RuntimeModel:        record.RuntimeModel,
 			RuntimeEffort:       record.RuntimeEffort,
 			RuntimeConfiguredAt: record.RuntimeConfiguredAt,
+			AgentAvatarID:       record.AgentAvatarID,
+			SystemAvatarID:      record.SystemAvatarID,
 			SidebarPosition:     record.SidebarPosition,
 			RowVersion:          record.RowVersion,
 		},
