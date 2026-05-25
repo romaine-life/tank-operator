@@ -110,10 +110,35 @@ needs a blocker report per `docs/migration-policy.md`.
   a completion requirement, not a follow-up.
 - Confirm the cutover is atomic: no fallback layer, no parallel path that
   "works for now," no read-side silent skip on old data shapes.
+- For wire-format changes affecting **durable JetStream consumers**
+  (`filter_subject`, `filter_subjects`, consumer name, or any other
+  server-immutable `ConsumerConfig` field), confirm the cutover includes
+  an explicit remediation for existing consumers — a deploy alone cannot
+  repair them. The runner's `ensureConsumer` at
+  `runner-shared/sessionBus.js` only mutates `ack_wait`, `max_deliver`,
+  `max_ack_pending`, `inactive_threshold` on existing durables, and
+  pre-existing session pods do not auto-recreate per the session
+  lifecycle contract. Cutover options: (a) ship an orchestrator-startup
+  step that updates each existing durable to the new shape, or (b)
+  delete the OLD session pods before the new producer publishes a
+  single message in the new shape. Verify by enumerating durables on a
+  staging deploy and confirming filter/name parity with the new code.
+- Validation MUST exercise a **pre-deploy session pod**, not only a
+  freshly-created one. "Live new-session SSE smoke" passes when only the
+  producer side of the new wire format is exercised; it cannot detect a
+  regression where existing pods still emit on the OLD subject shape or
+  subscribe on the OLD filter. Both the SDK migration cutover and
+  nelsong6/tank-operator#652 (the `ea70777` "Fix sidebar activity
+  readiness indicators" change) shipped with new-session-only validation
+  and silently broke chat for every pre-deploy session — the exact
+  Agent Runners contract violation ("orchestrator rollout must not
+  cancel runner work while the session pod and runner remain alive" /
+  "silent strandings are a counted bug class").
 
 Skipping this checklist is the failure mode that left dual-path debt in
-the SDK migration. The checklist takes ~10 minutes and runs *before*
-ExitPlanMode, not after merge.
+the SDK migration and that broke chat delivery for every pre-`ea70777`
+session pod in 2026-05-25. The checklist takes ~10 minutes and runs
+*before* ExitPlanMode, not after merge.
 
 ## Agentic flows ship as multi-stage LLM splits
 
