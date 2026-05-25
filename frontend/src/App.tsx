@@ -104,6 +104,7 @@ import {
 } from "./homeRepos";
 import { ProviderIcon } from "./providerIcons";
 import {
+  SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
   sessionActivityChips,
@@ -6294,6 +6295,31 @@ function RunHelpScreen() {
             <span className="run-help-key">MCP</span>
             <span>Inspect available MCP servers from the lower toolbar.</span>
           </div>
+        </div>
+      </section>
+      <section className="run-help-section" aria-labelledby="run-help-sidebar-status-title">
+        <h2 className="run-help-title" id="run-help-sidebar-status-title">Sidebar Status</h2>
+        <div className="run-help-status-list">
+          {SESSION_ACTIVITY_STATUS_LEGEND.map((item) => (
+            <div className="run-help-status-row" key={item.key}>
+              <div className="run-help-status-sample" aria-hidden="true">
+                {item.dotStatus ? (
+                  <span className={`status-dot status-${item.dotStatus}`} />
+                ) : (
+                  <span className="run-help-status-spacer" />
+                )}
+                {item.chip ? (
+                  <span className={`session-activity-chip is-${item.chip.tone}`}>
+                    {item.chip.label}
+                  </span>
+                ) : null}
+              </div>
+              <div className="run-help-status-copy">
+                <span className="run-help-status-label">{item.label}</span>
+                <span className="run-help-status-detail">{item.detail}</span>
+              </div>
+            </div>
+          ))}
         </div>
       </section>
     </div>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
   sessionActivityChips,
@@ -80,6 +81,48 @@ test("stopping status drives Stopping label, agent-stopping dot, and stopping ch
   assert.deepEqual(
     sessionActivityChips(stopping ?? undefined).map((chip) => ({ label: chip.label, tone: chip.tone })),
     [{ label: "stopping", tone: "stopping" }],
+  );
+});
+
+test("session activity legend mirrors sidebar dot and chip mappings", () => {
+  const byKey = new Map(SESSION_ACTIVITY_STATUS_LEGEND.map((item) => [item.key, item]));
+  const cases: Array<{
+    key: string;
+    activity: SessionActivitySummary;
+    dot: string | null;
+    chip: { label: string; tone: string } | null;
+  }> = [
+    { key: "ready", activity: summary("ready"), dot: "agent-waiting", chip: null },
+    { key: "running", activity: summary("streaming"), dot: "agent-working", chip: { label: "running", tone: "running" } },
+    { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input", chip: { label: "input", tone: "input" } },
+    { key: "stopping", activity: summary("stopping"), dot: "agent-stopping", chip: { label: "stopping", tone: "stopping" } },
+    { key: "stopped", activity: summary("stopped"), dot: "agent-waiting", chip: { label: "stopped", tone: "stopped" } },
+    { key: "failed", activity: summary("error"), dot: "agent-error", chip: { label: "failed", tone: "failed" } },
+    { key: "unread", activity: summary("ready", { unread_count: 3 }), dot: null, chip: { label: "3 new", tone: "unread" } },
+  ];
+
+  assert.equal(byKey.size, cases.length);
+  for (const item of cases) {
+    const legend = byKey.get(item.key);
+    assert.ok(legend, `missing legend item for ${item.key}`);
+    if (item.dot) {
+      assert.equal(
+        legend.dotStatus,
+        sessionActivityDotStatus("Active", true, item.activity),
+      );
+    } else {
+      assert.equal(legend.dotStatus, null);
+    }
+    assert.deepEqual(legend.chip, item.chip);
+  }
+
+  assert.deepEqual(
+    sessionActivityChips(summary("ready", { unread_count: 3 })).map((chip) => chip.label),
+    ["3 new"],
+  );
+  assert.deepEqual(
+    sessionActivityChips(summary("ready", { unread_count: 3 })).map((chip) => chip.tone),
+    ["unread"],
   );
 });
 

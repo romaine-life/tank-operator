@@ -25,6 +25,66 @@ export interface SessionActivityChip {
   tone: "failed" | "input" | "running" | "stopping" | "stopped" | "unread";
 }
 
+export interface SessionActivityLegendItem {
+  key: string;
+  label: string;
+  detail: string;
+  dotStatus: string | null;
+  chip: Pick<SessionActivityChip, "label" | "tone"> | null;
+}
+
+export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
+  {
+    key: "ready",
+    label: "Ready / waiting",
+    detail: "No active turn is running.",
+    dotStatus: "agent-waiting",
+    chip: null,
+  },
+  {
+    key: "running",
+    label: "Submitted / running",
+    detail: "The agent has queued or active work.",
+    dotStatus: "agent-working",
+    chip: { label: "running", tone: "running" },
+  },
+  {
+    key: "needs-input",
+    label: "Needs input",
+    detail: "The session is waiting for your response.",
+    dotStatus: "agent-needs-input",
+    chip: { label: "input", tone: "input" },
+  },
+  {
+    key: "stopping",
+    label: "Stopping",
+    detail: "A stop request is being applied.",
+    dotStatus: "agent-stopping",
+    chip: { label: "stopping", tone: "stopping" },
+  },
+  {
+    key: "stopped",
+    label: "Stopped",
+    detail: "The latest turn was stopped.",
+    dotStatus: "agent-waiting",
+    chip: { label: "stopped", tone: "stopped" },
+  },
+  {
+    key: "failed",
+    label: "Failed",
+    detail: "The latest turn ended with an error.",
+    dotStatus: "agent-error",
+    chip: { label: "failed", tone: "failed" },
+  },
+  {
+    key: "unread",
+    label: "Unread updates",
+    detail: "New activity since you last viewed that session.",
+    dotStatus: null,
+    chip: { label: "3 new", tone: "unread" },
+  },
+];
+
 export function normalizeSessionActivity(value: unknown): SessionActivitySummary | null {
   if (!isRecord(value)) return null;
   const sessionId = stringField(value, "session_id");
