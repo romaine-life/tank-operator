@@ -65,6 +65,14 @@ type activeTurn struct {
 	cancel    context.CancelFunc
 	terminal  string // set on goroutine exit
 	startedAt time.Time
+	// done closes when the bridge's runStream goroutine for this turn
+	// returns — after the durable terminal event (translated terminal
+	// or the hermes_stream_lost safety net) has landed in
+	// session_events. WaitForTurn / WaitForActiveTurnsToSettle read
+	// from this channel; production callers use the latter as the
+	// graceful-shutdown drain, tests use the former to assert on the
+	// post-goroutine ledger state without timing-based sleeps.
+	done chan struct{}
 }
 
 // BridgeOptions configures NewBridge. Scope defaults to "default".
@@ -188,6 +196,7 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 		runID:     runResp.RunID,
 		cancel:    cancel,
 		startedAt: time.Now(),
+		done:      make(chan struct{}),
 	}
 	b.mu.Lock()
 	b.activeTurns[args.SessionID+":"+turnID] = at
@@ -261,6 +270,15 @@ func (b *Bridge) runStream(ctx context.Context, args runStreamArgs, at *activeTu
 		if b.rows != nil {
 			b.rows.PublishCurrentRow(context.Background(), args.owner, args.sessionID)
 		}
+		// Signal completion AFTER the activeTurns delete + row publish
+		// so a caller awaiting on `done` sees a consistent post-state:
+		// the map no longer lists the turn, the row publisher has
+		// fired, and any durable terminal event the goroutine emitted
+		// (translated terminal or hermes_stream_lost safety net) has
+		// already landed via b.store.Upsert above. The close is the
+		// only operation that happens after publish so it's safe even
+		// if rows.PublishCurrentRow blocks briefly.
+		close(at.done)
 	}()
 
 	translator := NewTranslator(TranslatorConfig{
@@ -324,6 +342,81 @@ func (b *Bridge) runStream(ctx context.Context, args runStreamArgs, at *activeTu
 // agent-runner / codex-runner contract: the call is non-blocking — Hermes
 // returns {"status": "stopping"} immediately and the run's terminal SSE
 // event is what actually resolves the UI. If no active turn matches, a
+// WaitForTurn blocks until the streaming goroutine for (sessionID, turnID)
+// returns — which happens after the durable terminal event has landed
+// in session_events (translated terminal from the upstream Hermes
+// stream, or the hermes_stream_lost safety net the bridge emits when
+// no upstream terminal arrived). Returns immediately when the turn is
+// not (or no longer) active; returns ctx.Err() when the caller's
+// context completes before the goroutine.
+//
+// Used by tests to assert on the post-goroutine ledger state without
+// timing-based sleeps. The previous pattern — assert.Equal(len(upserts),
+// 2) right after SubmitTurn — was a race against this same goroutine
+// and was the cause of the intermittent TestCreateHermesSessionInitial
+// TurnSubmitsAtCreate flake on nelsong6/tank-operator#638.
+func (b *Bridge) WaitForTurn(ctx context.Context, sessionID, turnID string) error {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	at, ok := b.activeTurns[sessionID+":"+turnID]
+	b.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	select {
+	case <-at.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// WaitForActiveTurnsToSettle blocks until every in-flight bridge
+// goroutine returns. This is the graceful-shutdown drain — call it
+// from the orchestrator's shutdown hook with a bounded context (e.g.
+// 30s) so a rolling pod gives in-flight Hermes turns time to emit
+// their terminal events to session_events instead of getting killed
+// mid-emit and leaving the SPA's projection stuck on "running" until
+// the next stop/restart.
+//
+// Returns ctx.Err() when the deadline hits with turns still active.
+// Returns nil when every goroutine has signaled completion (the
+// activeTurns map will also be empty at that point, since the
+// goroutine's defer deletes its entry before closing done).
+func (b *Bridge) WaitForActiveTurnsToSettle(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	for {
+		b.mu.Lock()
+		// Snapshot the in-flight goroutines' done channels so we can
+		// wait without holding the bridge mutex (which a returning
+		// goroutine's defer needs to delete its activeTurns entry).
+		channels := make([]chan struct{}, 0, len(b.activeTurns))
+		for _, at := range b.activeTurns {
+			channels = append(channels, at.done)
+		}
+		b.mu.Unlock()
+		if len(channels) == 0 {
+			return nil
+		}
+		for _, ch := range channels {
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// Loop: a NEW turn may have started while we were waiting on
+		// the snapshot's channels. Drain those too. Steady-state
+		// shutdown has no new SubmitTurn callers (the HTTP server
+		// already stopped accepting), so this terminates after one
+		// or two iterations in practice.
+	}
+}
+
 // turn.command_failed is emitted directly so the UI's "stopping" state
 // still resolves (durable-terminal contract from #532).
 func (b *Bridge) StopTurn(ctx context.Context, sessionID, owner, turnID, clientNonce string) error {
