@@ -107,6 +107,55 @@ func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 	}
 }
 
+func TestAvatarCreateAllowsSuperAdminServiceActor(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	app := &appServer{
+		verifier:     auth.NewVerifier(testJWT(t)),
+		avatars:      avatarassets.NewMemoryStore(),
+		avatarImages: avatarassets.NewMemoryImageStore(),
+	}
+	req := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	})
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", adminEmail))
+	resp := httptest.NewRecorder()
+
+	app.handleCreateAvatar(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.CreatedBy != adminEmail {
+		t.Fatalf("created_by = %q, want actor email %q", created.CreatedBy, adminEmail)
+	}
+}
+
+func TestAvatarCreateRejectsRegularServiceActor(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	app := &appServer{
+		verifier:     auth.NewVerifier(testJWT(t)),
+		avatars:      avatarassets.NewMemoryStore(),
+		avatarImages: avatarassets.NewMemoryImageStore(),
+	}
+	req := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	})
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", otherUser))
+	resp := httptest.NewRecorder()
+
+	app.handleCreateAvatar(resp, req)
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestDefaultAvatarImageFallsBackToBundledStatic(t *testing.T) {
 	root := t.TempDir()
 	avatarDir := filepath.Join(root, "assets", "avatars")

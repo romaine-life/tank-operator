@@ -55,7 +55,7 @@ export function LongChatDebugPage() {
       .then((user) => {
         if (cancelled) return;
         if (!user) setAccess("signed-out");
-        else setAccess(user.role === "admin" ? "admin" : "denied");
+        else setAccess((user.effective_role ?? user.role) === "admin" ? "admin" : "denied");
       })
       .catch(() => {
         if (!cancelled) setAccess("signed-out");

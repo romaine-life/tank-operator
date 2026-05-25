@@ -445,6 +445,6 @@ test("long-chat scroll lab route is admin gated and uses prometheus metrics", ()
   assert.equal(mainSource.includes("LongChatDebugPage"), true);
   assert.equal(mainSource.includes("tank.chatScrollEvents"), false);
   assert.equal(longChatDebugSource.includes("bootstrapAuth"), true);
-  assert.equal(longChatDebugSource.includes('user.role === "admin"'), true);
+  assert.equal(longChatDebugSource.includes('(user.effective_role ?? user.role) === "admin"'), true);
   assert.equal(longChatDebugSource.includes("readChatScrollEvents"), false);
 });

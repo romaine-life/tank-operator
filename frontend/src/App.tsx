@@ -4,6 +4,7 @@ import type {
   ComponentProps,
   CSSProperties,
   DragEvent as ReactDragEvent,
+  FocusEvent as ReactFocusEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -969,6 +970,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function effectiveUserRole(user: SessionUser | null | undefined): SessionRole | undefined {
+  return user?.effective_role ?? user?.role;
+}
+
 interface SessionUser {
   sub: string;
   email: string;
@@ -978,6 +983,7 @@ interface SessionUser {
   // caller. auth.romaine.life mints `pending` by default; tank-operator
   // rejects that role on direct JWT verification.
   role: SessionRole;
+  effective_role?: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -1113,6 +1119,15 @@ function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
 
 function sessionDisplayName(session: Session): string {
   return session.name ?? defaultSessionName(session);
+}
+
+function selectTitleInputText(event: ReactFocusEvent<HTMLInputElement>): void {
+  const input = event.currentTarget;
+  const select = () => {
+    if (document.activeElement === input) input.select();
+  };
+  select();
+  window.requestAnimationFrame(select);
 }
 
 function formatRuntime(ms: number): string {
@@ -1317,6 +1332,7 @@ function clearGlimmungLaunchContext(): void {
 //     hours, so a slow tick is enough to catch minute boundaries.
 const SESSION_BOOT_TICK_MS = 1_000;
 const SESSION_RUNTIME_TICK_MS = 30_000;
+const HOME_DEFAULT_SESSION_TITLE = "New session";
 
 function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
   if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return null;
@@ -6422,6 +6438,8 @@ function ChatPane({
   const [running, setRunning] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
+  const editingTitleFromFallbackRef = useRef(false);
+  const editingTitleClosingRef = useRef(false);
 
   // Parent-driven auto-rename. When App sets autoRenameSessionId to this
   // session's id after F2, the chat-pane title input opens with the
@@ -6429,10 +6447,12 @@ function ChatPane({
   // is single-shot and re-runs cleanly on a subsequent F2.
   useEffect(() => {
     if (!autoRename || readOnly) return;
-    setEditingTitleValue(session.name ?? "");
+    editingTitleFromFallbackRef.current = session.name == null;
+    editingTitleClosingRef.current = false;
+    setEditingTitleValue(sessionDisplayName(session));
     setEditingTitle(true);
     onAutoRenameConsumed();
-  }, [autoRename, readOnly, session.id, session.name, onAutoRenameConsumed]);
+  }, [autoRename, readOnly, session.id, session.name, session.pod_name, onAutoRenameConsumed]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
@@ -8207,6 +8227,7 @@ function ChatPane({
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
+        if (e.target instanceof Element && e.target.closest(".run-header-name-input")) return;
         e.preventDefault();
         cancelRun();
       }
@@ -9234,6 +9255,31 @@ function ChatPane({
     if (tab === "files" && !filesAvailable) return;
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
+  const beginEditingTitle = () => {
+    editingTitleFromFallbackRef.current = session.name == null;
+    editingTitleClosingRef.current = false;
+    setEditingTitleValue(sessionDisplayName(session));
+    setEditingTitle(true);
+  };
+  const cancelEditingTitle = () => {
+    editingTitleClosingRef.current = true;
+    editingTitleFromFallbackRef.current = false;
+    setEditingTitle(false);
+  };
+  const commitEditingTitle = () => {
+    if (editingTitleClosingRef.current) return;
+    editingTitleClosingRef.current = true;
+    const trimmed = editingTitleValue.trim();
+    const fallbackName = defaultSessionName(session);
+    const nextName =
+      trimmed === "" ||
+      (editingTitleFromFallbackRef.current && trimmed === fallbackName)
+        ? null
+        : trimmed;
+    onRename(session.id, nextName);
+    editingTitleFromFallbackRef.current = false;
+    setEditingTitle(false);
+  };
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
@@ -9302,26 +9348,23 @@ function ChatPane({
           {editingTitle ? (
             <input
               className="run-header-name-input"
+              aria-label="Session name"
               value={editingTitleValue}
               autoFocus
+              onFocus={selectTitleInputText}
               onChange={(e) => setEditingTitleValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
-                  const trimmed = editingTitleValue.trim();
-                  const nextName = trimmed === "" ? null : trimmed;
-                  onRename(session.id, nextName);
-                  setEditingTitle(false);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitEditingTitle();
                 } else if (e.key === "Escape") {
-                  setEditingTitle(false);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelEditingTitle();
                 }
               }}
-              onBlur={() => {
-                const trimmed = editingTitleValue.trim();
-                const nextName = trimmed === "" ? null : trimmed;
-                onRename(session.id, nextName);
-                setEditingTitle(false);
-              }}
-              placeholder={defaultSessionName(session)}
+              onBlur={commitEditingTitle}
               maxLength={80}
             />
           ) : (
@@ -9337,8 +9380,7 @@ function ChatPane({
               disabled={readOnly}
               onClick={() => {
                 if (readOnly) return;
-                setEditingTitleValue(session.name ?? "");
-                setEditingTitle(true);
+                beginEditingTitle();
               }}
             >
               {sessionDisplayName(session)}
@@ -10525,6 +10567,7 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeEditingDefaultTitleRef = useRef(false);
   const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
   const pendingHomeComposerFocusRef = useRef(false);
@@ -10649,6 +10692,7 @@ export function App() {
     readGlimmungLaunchContext()
   );
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
+  const userEffectiveRole = effectiveUserRole(user);
   const canViewProdSessions =
     user?.role === "admin" && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -10663,7 +10707,7 @@ export function App() {
     [effectiveSessionScope],
   );
   const adminSettingsControls =
-    user?.role === "admin"
+    userEffectiveRole === "admin"
       ? {
           visible: true,
           canViewProdSessions,
@@ -11468,7 +11512,8 @@ export function App() {
         if (active == null) {
           event.preventDefault();
           event.stopPropagation();
-          setHomeEditingTitle(true);
+          event.stopImmediatePropagation();
+          beginHomeTitleEdit();
         }
         return;
       }
@@ -11477,6 +11522,7 @@ export function App() {
       if (!session) return;
       event.preventDefault();
       event.stopPropagation();
+      event.stopImmediatePropagation();
       // Rename now lives in the chat-pane header. Make sure the pane is
       // active (so the header is mounted) and ask it to enter edit mode.
       activate(session.id);
@@ -11485,7 +11531,7 @@ export function App() {
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
     return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
-  }, [sessions, active, closingIds]);
+  }, [sessions, active, closingIds, homeSessionName]);
 
   function activate(id: string) {
     // Treat the sidebar click as the user gesture that unlocks audio
@@ -11907,6 +11953,27 @@ export function App() {
     writeDefaultSessionMode(mode);
   }
 
+  function beginHomeTitleEdit() {
+    const usingDefaultTitle = homeSessionName.trim() === "";
+    homeEditingDefaultTitleRef.current = usingDefaultTitle;
+    if (usingDefaultTitle) {
+      setHomeSessionName(HOME_DEFAULT_SESSION_TITLE);
+    }
+    setHomeEditingTitle(true);
+  }
+
+  function finishHomeTitleEdit() {
+    const trimmed = homeSessionName.trim();
+    if (
+      homeEditingDefaultTitleRef.current &&
+      (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)
+    ) {
+      setHomeSessionName("");
+    }
+    homeEditingDefaultTitleRef.current = false;
+    setHomeEditingTitle(false);
+  }
+
   async function renameSession(id: string, nextName: string | null) {
     try {
       const res = await authedFetch(`/api/sessions/${id}`, {
@@ -12038,7 +12105,7 @@ export function App() {
   const selectedInitialMessageMode =
     INITIAL_MESSAGE_MODE_OPTIONS.find((option) => option.id === runPrefs.initialMessageMode) ??
     INITIAL_MESSAGE_MODE_OPTIONS[0];
-  const homeSessionTitle = homeSessionName.trim() || "New session";
+  const homeSessionTitle = homeSessionName.trim() || HOME_DEFAULT_SESSION_TITLE;
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
   const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
@@ -12241,16 +12308,20 @@ export function App() {
                   aria-label="Session name"
                   value={homeSessionName}
                   autoFocus
+                  onFocus={selectTitleInputText}
                   onChange={(e) => setHomeSessionName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      setHomeEditingTitle(false);
+                      e.preventDefault();
+                      e.stopPropagation();
+                      finishHomeTitleEdit();
                     } else if (e.key === "Escape") {
-                      setHomeEditingTitle(false);
+                      e.preventDefault();
+                      e.stopPropagation();
+                      finishHomeTitleEdit();
                     }
                   }}
-                  onBlur={() => setHomeEditingTitle(false)}
-                  placeholder="New session"
+                  onBlur={finishHomeTitleEdit}
                   maxLength={80}
                 />
               ) : (
@@ -12258,7 +12329,7 @@ export function App() {
                   type="button"
                   className="run-header-name-btn"
                   title="Name this session before creating it"
-                  onClick={() => setHomeEditingTitle(true)}
+                  onClick={beginHomeTitleEdit}
                 >
                   {homeSessionTitle}
                 </button>

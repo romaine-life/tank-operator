@@ -202,8 +202,53 @@ func TestMe(t *testing.T) {
 	if body["email"] != "user@example.com" || body["github_login"] != login || body["installation_id"] != float64(123) {
 		t.Fatalf("body = %#v", body)
 	}
+	if body["role"] != "user" || body["effective_role"] != "user" {
+		t.Fatalf("roles = %#v/%#v, want user/user", body["role"], body["effective_role"])
+	}
 	if body["avatar_url"] != "https://www.gravatar.com/avatar/b58996c504c5638798eb6b511e6f49af?s=64&d=mp" {
 		t.Fatalf("avatar_url = %q", body["avatar_url"])
+	}
+}
+
+func TestMeReturnsEffectiveAdminForSuperAdminServiceActor(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	handler := me(auth.NewVerifier(testJWT(t)), profiles.StubStore{})
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	request.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", adminEmail))
+	response := httptest.NewRecorder()
+
+	handler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["role"] != auth.RoleService || body["effective_role"] != auth.RoleAdmin {
+		t.Fatalf("roles = %#v/%#v, want service/admin", body["role"], body["effective_role"])
+	}
+}
+
+func TestMeKeepsRegularServiceActorNonAdmin(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	handler := me(auth.NewVerifier(testJWT(t)), profiles.StubStore{})
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	request.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", otherUser))
+	response := httptest.NewRecorder()
+
+	handler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["role"] != auth.RoleService || body["effective_role"] != auth.RoleService {
+		t.Fatalf("roles = %#v/%#v, want service/service", body["role"], body["effective_role"])
 	}
 }
 
@@ -246,7 +291,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	installationID := int64(42)
 	prefs := map[string]any{"chatFontScale": 1.25}
 
-	body := userResponseBody("sub-1", "user@example.com", "User Name", "admin", profiles.Profile{
+	body := userResponseBody("sub-1", "user@example.com", "User Name", "admin", "admin", profiles.Profile{
 		Email:          "user@example.com",
 		GitHubLogin:    &login,
 		InstallationID: &installationID,
@@ -267,6 +312,9 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" || body["role"] != "admin" {
 		t.Fatalf("body = %#v", body)
 	}
+	if body["effective_role"] != "admin" {
+		t.Fatalf("effective_role = %#v, want admin", body["effective_role"])
+	}
 	if got, _ := body["avatar_url"].(string); got == "" {
 		t.Fatalf("avatar_url empty: %#v", body["avatar_url"])
 	}
@@ -281,7 +329,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 // semantics make (*int64)(nil) != nil for `==` purposes, but both
 // marshal to JSON null. The SPA only sees the JSON.
 func TestUserResponseBodyEmptyProfileNullsOutFields(t *testing.T) {
-	body := userResponseBody("sub-1", "user@example.com", "User Name", "user", profiles.Profile{})
+	body := userResponseBody("sub-1", "user@example.com", "User Name", "user", "user", profiles.Profile{})
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)

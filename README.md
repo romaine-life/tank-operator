@@ -174,6 +174,10 @@ Project metadata for Glimmung:
       "target": "/var/run/tank-operator-hot/tank-operator-go",
       "health_path": "/healthz"
     },
+    "fidelity_classifier": {
+      "enabled": true,
+      "command": "node scripts/classify-tank-test-fidelity.mjs"
+    },
     "agent_runner": {
       "enabled": true,
       "strategy": "supervisor",

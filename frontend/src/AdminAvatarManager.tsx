@@ -16,6 +16,9 @@ import {
 import { authedFetch } from "./auth";
 import {
   type AvatarCrop,
+  type AvatarCropDragOffset,
+  avatarCropDragOffset,
+  avatarCropFromImagePoint,
   clampAvatarCrop,
   cropToSourceRect,
 } from "./adminAvatarCrop";
@@ -209,6 +212,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const avatarObjectURLsRef = useRef<string[]>([]);
+  const cropDragOffsetRef = useRef<AvatarCropDragOffset>({ x: 0, y: 0 });
 
   const revokeAvatarObjectURLs = useCallback(() => {
     for (const url of avatarObjectURLsRef.current) URL.revokeObjectURL(url);
@@ -288,7 +292,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
 
   const cropStyle = useMemo(() => {
     if (!imageRect) return null;
-    const clamped = clampAvatarCrop(crop);
+    const clamped = clampAvatarCrop(crop, imageRect.width, imageRect.height);
     const side = clamped.size * Math.min(imageRect.width, imageRect.height);
     return {
       width: `${side}px`,
@@ -303,19 +307,64 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     [entries, kind],
   );
 
-  const updateCropFromPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const imagePointFromPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!imageRect || !stageRef.current) return;
     const bounds = stageRef.current.getBoundingClientRect();
-    const x = event.clientX - bounds.left - imageRect.left;
-    const y = event.clientY - bounds.top - imageRect.top;
-    setCrop((current) =>
-      clampAvatarCrop({
-        ...current,
-        center_x: x / imageRect.width,
-        center_y: y / imageRect.height,
-      }),
-    );
+    return {
+      x: event.clientX - bounds.left - imageRect.left,
+      y: event.clientY - bounds.top - imageRect.top,
+    };
   }, [imageRect]);
+
+  const updateCropFromPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!imageRect) return;
+    const point = imagePointFromPointer(event);
+    if (!point) return;
+    setCrop((current) =>
+      avatarCropFromImagePoint(
+        current,
+        imageRect.width,
+        imageRect.height,
+        point.x,
+        point.y,
+        cropDragOffsetRef.current,
+      ),
+    );
+  }, [imagePointFromPointer, imageRect]);
+
+  const startCropDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!imageRect) return;
+    const point = imagePointFromPointer(event);
+    if (!point) return;
+    event.preventDefault();
+    cropDragOffsetRef.current = avatarCropDragOffset(
+      crop,
+      imageRect.width,
+      imageRect.height,
+      point.x,
+      point.y,
+    );
+    setDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCrop((current) =>
+      avatarCropFromImagePoint(
+        current,
+        imageRect.width,
+        imageRect.height,
+        point.x,
+        point.y,
+        cropDragOffsetRef.current,
+      ),
+    );
+  }, [crop, imagePointFromPointer, imageRect]);
+
+  const endCropDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    setDragging(false);
+    cropDragOffsetRef.current = { x: 0, y: 0 };
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, []);
 
   const selectPhoto = useCallback((file: File | null) => {
     setFormError(null);
@@ -393,7 +442,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
       payload.set("kind", kind);
       payload.set("name", trimmedName);
       payload.set("crop", JSON.stringify({
-        ...clampAvatarCrop(crop),
+        ...clampAvatarCrop(crop, imageRef.current?.naturalWidth, imageRef.current?.naturalHeight),
         source_width: imageRef.current?.naturalWidth ?? 0,
         source_height: imageRef.current?.naturalHeight ?? 0,
       }));
@@ -483,19 +532,14 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                 ref={stageRef}
                 className="admin-avatar-crop-stage"
                 data-dragging={dragging ? "true" : undefined}
-                onPointerDown={(event) => {
-                  setDragging(true);
-                  event.currentTarget.setPointerCapture(event.pointerId);
+                onPointerDown={startCropDrag}
+                onPointerMove={(event) => {
+                  if (!dragging) return;
+                  event.preventDefault();
                   updateCropFromPointer(event);
                 }}
-                onPointerMove={(event) => {
-                  if (dragging) updateCropFromPointer(event);
-                }}
-                onPointerUp={(event) => {
-                  setDragging(false);
-                  event.currentTarget.releasePointerCapture(event.pointerId);
-                }}
-                onPointerCancel={() => setDragging(false)}
+                onPointerUp={endCropDrag}
+                onPointerCancel={endCropDrag}
               >
                 <img
                   ref={imageRef}
@@ -508,6 +552,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                     });
                   }}
                   draggable={false}
+                  onDragStart={(event) => event.preventDefault()}
                 />
                 {cropStyle && <span className="admin-avatar-crop-ring" style={cropStyle} />}
               </div>
@@ -520,10 +565,16 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                   step="0.01"
                   value={crop.size}
                   onChange={(event) =>
-                    setCrop((current) => clampAvatarCrop({
-                      ...current,
-                      size: Number(event.target.value),
-                    }))
+                    setCrop((current) =>
+                      clampAvatarCrop(
+                        {
+                          ...current,
+                          size: Number(event.target.value),
+                        },
+                        imageRect?.width,
+                        imageRect?.height,
+                      ),
+                    )
                   }
                 />
               </label>

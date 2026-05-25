@@ -298,7 +298,7 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 		AvatarBlobKey:  avatarKey,
 		BackingMIME:    backingMIME,
 		BackingBlobKey: backingKey,
-		CreatedBy:      user.Email,
+		CreatedBy:      user.OwnerEmail(),
 	})
 	if err != nil {
 		cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, avatarKey, backingKey)
@@ -347,9 +347,9 @@ func (s *appServer) requireAdmin(w http.ResponseWriter, r *http.Request, operati
 	if !ok {
 		return auth.User{}, false
 	}
-	if user.Role != auth.RoleAdmin {
+	if !isEffectiveAdmin(user) {
 		recordAvatarAssetRequest(operation, "", "forbidden")
-		writeError(w, http.StatusForbidden, "route requires role=admin")
+		writeError(w, http.StatusForbidden, "route requires admin access")
 		return auth.User{}, false
 	}
 	return user, true
