@@ -95,6 +95,7 @@ import {
   REPO_SUPPORTED_MODES,
   addRepoSlug,
   isValidRepoSlug,
+  recentRepoShortcutSlugs,
   removeRepoSlug,
 } from "./repos";
 import {
@@ -10391,6 +10392,10 @@ export function App() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
+  const recentRepoShortcuts = useMemo(
+    () => recentRepoShortcutSlugs(recentRepos),
+    [recentRepos],
+  );
   // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
@@ -10595,6 +10600,55 @@ export function App() {
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
+
+  const selectExclusiveRepo = useCallback((rawSlug: string) => {
+    const result = addRepoSlug([], rawSlug);
+    if (result.ok) {
+      setSelectedRepos(result.next);
+      setRepoInput("");
+      setRepoError(null);
+    } else {
+      setRepoError(result.error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      active !== null ||
+      homeActiveTab !== "chat" ||
+      !REPO_SUPPORTED_MODES.has(defaultSessionMode)
+    ) {
+      return;
+    }
+    const selectRecentRepoByNumber = (event: KeyboardEvent) => {
+      if (
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.isComposing ||
+        event.target !== homeBodyRef.current ||
+        !/^[1-9]$/.test(event.key)
+      ) {
+        return;
+      }
+      const slug = recentRepoShortcuts[Number(event.key) - 1];
+      if (!slug) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectExclusiveRepo(slug);
+    };
+    window.addEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+    };
+  }, [
+    active,
+    defaultSessionMode,
+    homeActiveTab,
+    recentRepoShortcuts,
+    selectExclusiveRepo,
+  ]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
@@ -12303,6 +12357,7 @@ export function App() {
                           setRepoError(result.error);
                         }
                       }}
+                      onSelectExclusive={selectExclusiveRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);

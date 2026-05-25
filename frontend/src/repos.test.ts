@@ -11,6 +11,7 @@ import {
   modeSupportsRepos,
   normalizeRepoSlugs,
   recentRepoPreviewSlugs,
+  recentRepoShortcutSlugs,
   removeRepoSlug,
 } from "./repos";
 
@@ -176,4 +177,24 @@ test("recentRepoPreviewSlugs hides suggestions once the session repo cap is reac
   const selected = ["a/1", "b/2", "c/3", "d/4", "e/5"];
 
   assert.deepEqual(recentRepoPreviewSlugs(["f/6"], selected), []);
+});
+
+test("recentRepoShortcutSlugs keeps stable numbered recent choices", () => {
+  assert.deepEqual(
+    recentRepoShortcutSlugs([
+      "nelsong6/tank-operator",
+      "  bad slug  ",
+      "NelsonG6/Tank-Operator",
+      "nelsong6/infra-bootstrap",
+      "nelsong6/mcp-tank-operator",
+      "openai/codex",
+      "example/fifth",
+    ]),
+    [
+      "nelsong6/tank-operator",
+      "nelsong6/infra-bootstrap",
+      "nelsong6/mcp-tank-operator",
+      "openai/codex",
+    ],
+  );
 });
