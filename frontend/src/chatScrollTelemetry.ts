@@ -25,8 +25,15 @@ interface ChatScrollMetricPayload {
   pageSearch?: string;
   source?: string;
   anchor?: string;
+  requestId?: string;
+  beforeCursor?: string;
+  afterCursor?: string;
   reason?: string;
   key?: string;
+  firstGroupKey?: string;
+  lastGroupKey?: string;
+  previousFirstGroupKey?: string;
+  previousLastGroupKey?: string;
   targetEdge?: string;
   navInFlight?: string;
   signal?: number;
@@ -46,9 +53,23 @@ interface ChatScrollMetricPayload {
   clientHeight?: number;
   bottomDistance?: number;
   entries?: number;
+  previousEntries?: number;
+  entriesDelta?: number;
   groups?: number;
+  previousGroups?: number;
+  groupsDelta?: number;
+  visibleRowsAdded?: number;
+  visibleRowsRemoved?: number;
   messages?: number;
+  previousMessages?: number;
+  messagesDelta?: number;
+  reasoning?: number;
+  meta?: number;
+  backgroundTasks?: number;
   toolGroups?: number;
+  toolEntries?: number;
+  activityGroups?: number;
+  activityEntries?: number;
 }
 
 let pendingMetrics: ChatScrollMetricPayload[] = [];
@@ -116,8 +137,15 @@ function enqueueChatScrollMetric(
     pageSearch: currentPageSearch(),
     source: metricString(detail.source),
     anchor: metricString(detail.anchor),
+    requestId: metricString(detail.requestId),
+    beforeCursor: metricString(detail.beforeCursor),
+    afterCursor: metricString(detail.afterCursor),
     reason: metricString(detail.reason),
     key: metricString(detail.key),
+    firstGroupKey: metricString(detail.firstGroupKey),
+    lastGroupKey: metricString(detail.lastGroupKey),
+    previousFirstGroupKey: metricString(detail.previousFirstGroupKey),
+    previousLastGroupKey: metricString(detail.previousLastGroupKey),
     targetEdge: metricString(detail.targetEdge),
     navInFlight: metricString(detail.navInFlight),
     signal: metricNumber(detail.signal),
@@ -143,9 +171,23 @@ function enqueueChatScrollMetric(
     clientHeight: metricNumber(detail.clientHeight),
     bottomDistance: metricNumber(detail.bottomDistance),
     entries: metricNumber(detail.entries),
+    previousEntries: metricNumber(detail.previousEntries),
+    entriesDelta: metricNumber(detail.entriesDelta),
     groups: metricNumber(detail.groups),
+    previousGroups: metricNumber(detail.previousGroups),
+    groupsDelta: metricNumber(detail.groupsDelta),
+    visibleRowsAdded: metricNumber(detail.visibleRowsAdded),
+    visibleRowsRemoved: metricNumber(detail.visibleRowsRemoved),
     messages: metricNumber(detail.messages),
+    previousMessages: metricNumber(detail.previousMessages),
+    messagesDelta: metricNumber(detail.messagesDelta),
+    reasoning: metricNumber(detail.reasoning),
+    meta: metricNumber(detail.meta),
+    backgroundTasks: metricNumber(detail.backgroundTasks),
     toolGroups: metricNumber(detail.toolGroups),
+    toolEntries: metricNumber(detail.toolEntries),
+    activityGroups: metricNumber(detail.activityGroups),
+    activityEntries: metricNumber(detail.activityEntries),
   });
   if (pendingMetrics.length >= MAX_BATCH_EVENTS) {
     flushChatScrollMetrics();

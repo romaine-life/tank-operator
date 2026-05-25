@@ -54,10 +54,6 @@ func (f *fakeDebugSessionEventLedgerStore) LatestEvents(context.Context, string,
 	return store.SessionEventPage{}, nil
 }
 
-func (f *fakeDebugSessionEventLedgerStore) EventsAround(context.Context, string, string, int, int) (store.SessionEventPage, error) {
-	return store.SessionEventPage{}, nil
-}
-
 func (f *fakeDebugSessionEventLedgerStore) EventsForTurn(context.Context, string, string, int) (store.SessionEventPage, error) {
 	return store.SessionEventPage{}, nil
 }

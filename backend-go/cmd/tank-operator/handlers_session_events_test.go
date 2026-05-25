@@ -35,10 +35,6 @@ func (s fakeSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) 
 	return s.pages[""], nil
 }
 
-func (s fakeSessionEventStore) EventsAround(_ context.Context, _ string, anchorOrderKey string, _ int, _ int) (store.SessionEventPage, error) {
-	return s.pages[anchorOrderKey], nil
-}
-
 func (s fakeSessionEventStore) EventsForTurn(_ context.Context, _ string, turnID string, _ int) (store.SessionEventPage, error) {
 	var events []map[string]any
 	for _, page := range s.pages {
@@ -108,6 +104,61 @@ func (s fakeSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string)
 	return 0, nil
 }
 
+type fakeSessionTranscriptRowStore struct {
+	latestRows      int
+	oldestRows      int
+	beforeCursor    string
+	beforeRows      int
+	aroundCursor    string
+	aroundBefore    int
+	aroundAfter     int
+	resolveTimeline map[string]string
+	pages           map[string]store.TranscriptRowPage
+}
+
+func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
+	return nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ReplaceForSession(context.Context, string, []map[string]any) error {
+	return nil
+}
+
+func (s *fakeSessionTranscriptRowStore) UpsertRows(context.Context, string, []map[string]any) error {
+	return nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListLatest(_ context.Context, _ string, rows int) (store.TranscriptRowPage, error) {
+	s.latestRows = rows
+	return s.pages["latest"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListOldest(_ context.Context, _ string, rows int) (store.TranscriptRowPage, error) {
+	s.oldestRows = rows
+	return s.pages["oldest"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListBefore(_ context.Context, _ string, beforeCursor string, rows int) (store.TranscriptRowPage, error) {
+	s.beforeCursor = beforeCursor
+	s.beforeRows = rows
+	return s.pages["before"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListAround(_ context.Context, _ string, rowCursor string, rowsBefore, rowsAfter int) (store.TranscriptRowPage, error) {
+	s.aroundCursor = rowCursor
+	s.aroundBefore = rowsBefore
+	s.aroundAfter = rowsAfter
+	return s.pages["around"], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ResolveCursorForTimelineID(_ context.Context, _ string, timelineID string) (string, error) {
+	return s.resolveTimeline[timelineID], nil
+}
+
+func (s *fakeSessionTranscriptRowStore) BackfillSessionIDs(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -115,11 +166,10 @@ func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 		header string
 		want   string
 	}{
-		{name: "timeline cursor", url: "/api/sessions/63/timeline?after_order_key=order-a", want: "order-a"},
 		{name: "stream cursor", url: "/api/sessions/63/events?last_order_key=order-b", want: "order-b"},
 		{name: "last event id wins", url: "/api/sessions/63/events?last_order_key=order-b", header: "order-c", want: "order-c"},
 		{name: "old generic cursor ignored", url: "/api/sessions/63/events?cursor=order-d", want: ""},
-		{name: "old document cursor ignored", url: "/api/sessions/63/timeline?after=event-id", want: ""},
+		{name: "old document cursor ignored", url: "/api/sessions/63/events?after=event-id", want: ""},
 	}
 
 	for _, tt := range tests {
@@ -157,107 +207,89 @@ func TestHandleSessionTurnActivityRejectsNonAdminProdScopeFromTestSlot(t *testin
 	}
 }
 
-func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
+func TestSessionTranscriptReadIntentFromRequestAnchorShapes(t *testing.T) {
+	beforeCursor := store.EncodeTranscriptRowCursor("order-002\x1frow-2")
 	tests := []struct {
 		name           string
 		url            string
-		wantKind       sessionEventReadKind
+		wantKind       sessionTranscriptReadKind
 		wantLabel      string
-		wantValidate   string
-		wantAnchorKey  string
-		wantBeforeKey  string
-		wantAfterKey   string
+		wantRows       int
+		wantBeforeRows int
+		wantAfterRows  int
+		wantCursor     string
 		wantTimelineID string
 	}{
 		{
 			name:      "no params → tail",
 			url:       "/api/sessions/s/timeline",
-			wantKind:  sessionEventReadTail,
+			wantKind:  sessionTranscriptReadTail,
 			wantLabel: "newest",
+			wantRows:  sessionTranscriptRowsDefault,
 		},
 		{
 			name:      "anchor=newest → tail",
-			url:       "/api/sessions/s/timeline?anchor=newest",
-			wantKind:  sessionEventReadTail,
+			url:       "/api/sessions/s/timeline?anchor=newest&rows=30",
+			wantKind:  sessionTranscriptReadTail,
 			wantLabel: "newest",
+			wantRows:  30,
 		},
 		{
-			// Symmetric counterpart of anchor=newest. No cursor validation
-			// because the head of the ledger is not a caller-supplied key.
-			name:      "anchor=oldest → head",
+			name:      "anchor=oldest → head rows",
 			url:       "/api/sessions/s/timeline?anchor=oldest",
-			wantKind:  sessionEventReadHead,
+			wantKind:  sessionTranscriptReadHead,
 			wantLabel: "oldest",
-		},
-		{
-			name:          "anchor=<order_key> → around with validation",
-			url:           "/api/sessions/s/timeline?anchor=order-x",
-			wantKind:      sessionEventReadAround,
-			wantLabel:     "around",
-			wantValidate:  "order-x",
-			wantAnchorKey: "order-x",
+			wantRows:  sessionTranscriptRowsDefault,
 		},
 		{
 			name:           "timeline_id → deferred around lookup",
-			url:            "/api/sessions/s/timeline?timeline_id=turn-1:item:msg-1",
-			wantKind:       sessionEventReadAround,
+			url:            "/api/sessions/s/timeline?timeline_id=turn-1:item:msg-1&rows_before=7&rows_after=9",
+			wantKind:       sessionTranscriptReadAround,
 			wantLabel:      "timeline_id",
+			wantBeforeRows: 7,
+			wantAfterRows:  9,
 			wantTimelineID: "turn-1:item:msg-1",
 		},
 		{
 			name:           "message aliases timeline_id for copied links",
 			url:            "/api/sessions/s/timeline?message=turn-1:item:msg-1",
-			wantKind:       sessionEventReadAround,
+			wantKind:       sessionTranscriptReadAround,
 			wantLabel:      "timeline_id",
+			wantBeforeRows: sessionTranscriptAroundRowsDefault,
+			wantAfterRows:  sessionTranscriptAroundRowsDefault,
 			wantTimelineID: "turn-1:item:msg-1",
 		},
 		{
-			name:          "before_order_key → back-paginate",
-			url:           "/api/sessions/s/timeline?before_order_key=order-y",
-			wantKind:      sessionEventReadBefore,
-			wantLabel:     "before",
-			wantValidate:  "order-y",
-			wantBeforeKey: "order-y",
-		},
-		{
-			name:         "after_order_key → forward catch-up",
-			url:          "/api/sessions/s/timeline?after_order_key=order-z",
-			wantKind:     sessionEventReadAfter,
-			wantLabel:    "after",
-			wantValidate: "order-z",
-			wantAfterKey: "order-z",
-		},
-		{
-			name:          "before wins over anchor (back-paginate is the most specific intent)",
-			url:           "/api/sessions/s/timeline?anchor=newest&before_order_key=order-y",
-			wantKind:      sessionEventReadBefore,
-			wantLabel:     "before",
-			wantValidate:  "order-y",
-			wantBeforeKey: "order-y",
+			name:       "before_cursor → back-paginate rows",
+			url:        "/api/sessions/s/timeline?before_cursor=" + beforeCursor + "&rows=6",
+			wantKind:   sessionTranscriptReadBefore,
+			wantLabel:  "before_cursor",
+			wantRows:   6,
+			wantCursor: beforeCursor,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tc.url, nil)
-			got := sessionEventReadIntentFromRequest(req)
+			got, status, err := sessionTranscriptReadIntentFromRequest(req)
+			if err != nil || status != http.StatusOK {
+				t.Fatalf("intent status=%d err=%v", status, err)
+			}
 			if got.kind != tc.wantKind {
 				t.Fatalf("kind = %d, want %d", got.kind, tc.wantKind)
 			}
 			if got.metricLabel != tc.wantLabel {
 				t.Fatalf("metricLabel = %q, want %q", got.metricLabel, tc.wantLabel)
 			}
-			if got.validateCursor != tc.wantValidate {
-				t.Fatalf("validateCursor = %q, want %q", got.validateCursor, tc.wantValidate)
+			if got.rows != tc.wantRows {
+				t.Fatalf("rows = %d, want %d", got.rows, tc.wantRows)
 			}
-			if got.anchorOrderKey != tc.wantAnchorKey {
-				t.Fatalf("anchorOrderKey = %q, want %q", got.anchorOrderKey, tc.wantAnchorKey)
+			if got.rowsBefore != tc.wantBeforeRows || got.rowsAfter != tc.wantAfterRows {
+				t.Fatalf("rows around = (%d,%d), want (%d,%d)", got.rowsBefore, got.rowsAfter, tc.wantBeforeRows, tc.wantAfterRows)
 			}
-			if got.beforeOrderKey != tc.wantBeforeKey {
-				t.Fatalf("beforeOrderKey = %q, want %q", got.beforeOrderKey, tc.wantBeforeKey)
-			}
-			if got.afterOrderKey != tc.wantAfterKey {
-				t.Fatalf("afterOrderKey = %q, want %q", got.afterOrderKey, tc.wantAfterKey)
+			if got.beforeCursor != tc.wantCursor {
+				t.Fatalf("beforeCursor = %q, want %q", got.beforeCursor, tc.wantCursor)
 			}
 			if got.timelineID != tc.wantTimelineID {
 				t.Fatalf("timelineID = %q, want %q", got.timelineID, tc.wantTimelineID)
@@ -266,123 +298,66 @@ func TestSessionEventReadIntentFromRequestAnchorShapes(t *testing.T) {
 	}
 }
 
-func TestResolveSessionEventTimelineAnchor(t *testing.T) {
-	eventStore := fakeSessionEventStore{
-		pages: map[string]store.SessionEventPage{
-			"order-002": {
-				Events: []map[string]any{
-					{"event_id": "e1", "order_key": "order-001", "timeline_id": "turn-1:item:msg-1"},
-					{"event_id": "e2", "order_key": "order-002", "timeline_id": "turn-1:item:msg-1"},
-				},
-			},
+func TestSessionTranscriptReadIntentRejectsRawEventTimelineParams(t *testing.T) {
+	for _, raw := range []string{
+		"limit=200",
+		"before_order_key=001",
+		"after_order_key=001",
+		"last_order_key=001",
+		"num_before=100",
+		"num_after=100",
+		"min_transcript_entries=24",
+		"anchor=001",
+		"before_cursor=not-a-cursor",
+		"anchor=newest&before_cursor=" + store.EncodeTranscriptRowCursor("001\x1frow"),
+	} {
+		t.Run(raw, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/sessions/s/timeline?"+raw, nil)
+			_, status, err := sessionTranscriptReadIntentFromRequest(req)
+			if err == nil || status != http.StatusBadRequest {
+				t.Fatalf("status=%d err=%v, want 400", status, err)
+			}
+		})
+	}
+}
+
+func TestRunSessionTranscriptRowReadUsesRowStore(t *testing.T) {
+	targetCursor := store.EncodeTranscriptRowCursor("order-010\x1frow-10")
+	rows := []map[string]any{{"id": "row-10", "kind": "message", "orderKey": "order-010"}}
+	rowStore := &fakeSessionTranscriptRowStore{
+		resolveTimeline: map[string]string{"turn-1:item:msg-1": targetCursor},
+		pages: map[string]store.TranscriptRowPage{
+			"around": {Rows: rows, PrevCursor: "prev", NextCursor: "next", FoundOldest: false, FoundNewest: false},
 		},
 	}
 
-	intent := sessionEventReadIntent{
-		kind:           sessionEventReadAround,
-		numBefore:      100,
-		numAfter:       100,
-		timelineID:     "turn-1:item:msg-1",
-		metricLabel:    "timeline_id",
-		responseAnchor: "timeline_id:turn-1:item:msg-1",
+	intent := sessionTranscriptReadIntent{
+		kind:       sessionTranscriptReadAround,
+		rowsBefore: 7,
+		rowsAfter:  9,
+		timelineID: "turn-1:item:msg-1",
 	}
-	status, err := resolveSessionEventTimelineAnchor(context.Background(), eventStore, "63", &intent)
-	if err != nil {
-		t.Fatalf("resolve timeline anchor: status=%d err=%v", status, err)
+	page, gotTargetCursor, status, err := runSessionTranscriptRowRead(context.Background(), rowStore, "63", intent)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("row read status=%d err=%v", status, err)
 	}
-	if intent.anchorOrderKey != "order-002" {
-		t.Fatalf("anchorOrderKey = %q, want newest order-002", intent.anchorOrderKey)
+	if gotTargetCursor != targetCursor {
+		t.Fatalf("target cursor = %q, want %q", gotTargetCursor, targetCursor)
 	}
-	if intent.validateCursor != "" {
-		t.Fatalf("validateCursor = %q, want empty because lookup already proved existence", intent.validateCursor)
+	if rowStore.aroundCursor != targetCursor || rowStore.aroundBefore != 7 || rowStore.aroundAfter != 9 {
+		t.Fatalf("around dispatch = cursor:%q before:%d after:%d", rowStore.aroundCursor, rowStore.aroundBefore, rowStore.aroundAfter)
 	}
-
-	missing := sessionEventReadIntent{timelineID: "missing"}
-	status, err = resolveSessionEventTimelineAnchor(context.Background(), eventStore, "63", &missing)
-	if err == nil || status != 404 {
-		t.Fatalf("missing timeline target: status=%d err=%v, want 404", status, err)
-	}
-}
-
-func TestSessionEventReadIntentDefaultsAndCaps(t *testing.T) {
-	// Defaults: limit=200, num_before=100, num_after=100.
-	req := httptest.NewRequest("GET", "/api/sessions/s/timeline?timeline_id=turn-1:item:msg-1", nil)
-	got := sessionEventReadIntentFromRequest(req)
-	if got.numBefore != 100 || got.numAfter != 100 {
-		t.Fatalf("default num_before/num_after = (%d,%d), want (100,100)", got.numBefore, got.numAfter)
+	if len(page.Rows) != 1 || page.Rows[0]["id"] != "row-10" {
+		t.Fatalf("rows = %#v", page.Rows)
 	}
 
-	// Caps: num_before > 250 clamps to 250; limit > 1000 clamps to 1000.
-	req = httptest.NewRequest("GET", "/api/sessions/s/timeline?anchor=newest&limit=5000", nil)
-	got = sessionEventReadIntentFromRequest(req)
-	if got.limit != 1000 {
-		t.Fatalf("limit cap = %d, want 1000", got.limit)
+	missing := sessionTranscriptReadIntent{
+		kind:       sessionTranscriptReadAround,
+		timelineID: "missing",
 	}
-
-	req = httptest.NewRequest("GET", "/api/sessions/s/timeline?anchor=order-x&num_before=9999&num_after=9999", nil)
-	got = sessionEventReadIntentFromRequest(req)
-	if got.numBefore != 250 || got.numAfter != 250 {
-		t.Fatalf("num_before/num_after caps = (%d,%d), want (250,250)", got.numBefore, got.numAfter)
-	}
-}
-
-// cursorRecordingFakeStore wraps fakeSessionEventStore but captures the
-// cursor passed to ListBySession so dispatch tests can prove that a given
-// read kind targets the right indexed scan (empty cursor = head/legacy,
-// AfterOrderKey set = forward, BeforeOrderKey set = backward). Named
-// distinctly from recordingSessionEventStore in handlers_turns_test.go,
-// which captures Upserts for a different test surface.
-type cursorRecordingFakeStore struct {
-	fakeSessionEventStore
-	lastCursor store.SessionEventCursor
-	lastLimit  int
-}
-
-func (s *cursorRecordingFakeStore) ListBySession(ctx context.Context, sessionID string, cursor store.SessionEventCursor, limit int) (store.SessionEventPage, error) {
-	s.lastCursor = cursor
-	s.lastLimit = limit
-	return s.fakeSessionEventStore.ListBySession(ctx, sessionID, cursor, limit)
-}
-
-func TestRunSessionEventReadAnchorOldestUsesEmptyCursor(t *testing.T) {
-	// anchor=oldest must dispatch ListBySession with an empty cursor so the
-	// store's ascending scan stamps FoundOldest=true (no AfterOrderKey /
-	// BeforeOrderKey supplied — see sessionEventPageFromAscendingScan).
-	rec := &cursorRecordingFakeStore{
-		fakeSessionEventStore: fakeSessionEventStore{
-			pages: map[string]store.SessionEventPage{
-				"": {
-					Events: []map[string]any{
-						{"event_id": "e1", "order_key": "001", "type": "item.completed"},
-					},
-					FoundOldest:  true,
-					FoundNewest:  true,
-					NextOrderKey: "001",
-					PrevOrderKey: "001",
-				},
-			},
-		},
-	}
-	app := &appServer{sessionEvents: rec}
-
-	intent := sessionEventReadIntent{
-		kind:           sessionEventReadHead,
-		limit:          200,
-		metricLabel:    "oldest",
-		responseAnchor: "oldest",
-	}
-	page, err := app.runSessionEventRead(context.Background(), rec, "63", intent)
-	if err != nil {
-		t.Fatalf("dispatch error: %v", err)
-	}
-	if rec.lastCursor.AfterOrderKey != "" || rec.lastCursor.BeforeOrderKey != "" {
-		t.Fatalf("anchor=oldest must pass empty cursor; got %+v", rec.lastCursor)
-	}
-	if rec.lastLimit != 200 {
-		t.Fatalf("limit propagation: got %d, want 200", rec.lastLimit)
-	}
-	if !page.FoundOldest {
-		t.Fatalf("anchor=oldest must surface FoundOldest=true; got %+v", page)
+	_, _, status, err = runSessionTranscriptRowRead(context.Background(), rowStore, "63", missing)
+	if err == nil || status != http.StatusNotFound {
+		t.Fatalf("missing status=%d err=%v, want 404", status, err)
 	}
 }
 

@@ -30,6 +30,9 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 	for _, want := range []string{
 		"tank_upsert_session_status_event",
 		"tank_sessions_status_events_after_write",
+		"session_transcript_rows",
+		"v_order_key || chr(31) || v_event_id",
+		"'sourceEventId', v_event_id",
 		"'type', 'session.status'",
 		"'visibility', 'durable'",
 		"WHEN 'loading' THEN '00000000'",
@@ -46,6 +49,9 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 	}
 	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_events") > strings.Index(migrations, "tank_upsert_session_status_event") {
 		t.Fatal("session_events table must exist before session status events are written")
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_transcript_rows") > strings.Index(migrations, "tank_upsert_session_status_event") {
+		t.Fatal("session_transcript_rows table must exist before session status rows are written")
 	}
 	if strings.Index(migrations, "CREATE TRIGGER tank_sessions_status_events_after_write") > strings.Index(migrations, "SELECT tank_upsert_session_status_event") {
 		t.Fatal("session status trigger should be installed before backfill")

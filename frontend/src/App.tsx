@@ -274,6 +274,19 @@ type SdkHistoryRefreshResult = {
   stale?: boolean;
   error?: string;
 };
+type TranscriptTimelineBody = {
+  session_id?: string;
+  rows?: unknown[];
+  next_cursor?: string;
+  prev_cursor?: string;
+  live_order_key?: string;
+  found_oldest?: boolean;
+  found_newest?: boolean;
+  read_state?: { last_read_order_key?: unknown } | null;
+  activity?: unknown;
+  target_timeline_id?: string;
+  target_cursor?: string;
+};
 type SdkHistoryRefreshSource =
   | "history"
   | "projected-refresh"
@@ -920,6 +933,10 @@ const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
 const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
 const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
+const SDK_TIMELINE_TAIL_ROWS = 24;
+const SDK_TIMELINE_OLDER_ROWS = 8;
+const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
+const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
 const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
@@ -2403,25 +2420,6 @@ function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
   return null;
 }
 
-function sdkHistoryTerminalForRun(
-  events: unknown[],
-  clientNonce: string,
-): SdkTerminalResult | undefined {
-  let afterRunUserMessage = false;
-  for (const event of events) {
-    if (!isTankConversationEvent(event)) continue;
-    if (event.type === "user_message.created") {
-      if (afterRunUserMessage) return undefined;
-      if (event.client_nonce === clientNonce) afterRunUserMessage = true;
-      continue;
-    }
-    if (!afterRunUserMessage) continue;
-    const terminal = sdkTerminalResult(event);
-    if (terminal) return terminal;
-  }
-  return undefined;
-}
-
 function isClaudeRunMode(mode: SessionMode): boolean {
   return mode === "claude_gui";
 }
@@ -3062,7 +3060,7 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
 
 // transcriptComparable returns a stable JSON of the transcript's load-bearing
 // fields, used to short-circuit no-op replay updates. Chat sessions rebuild
-// from canonical /timeline events; there is no client-side cache.
+// from server-owned transcript rows; live SSE events are only the tail overlay.
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
@@ -3142,18 +3140,11 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
   );
 }
 
-function projectedTranscriptEntriesFromTimelineBody(body: {
-  transcript?: unknown;
-}): TranscriptEntry[] {
-  const transcript = body.transcript;
-  if (!transcript || typeof transcript !== "object" || Array.isArray(transcript)) {
-    throw new Error("timeline response missing server transcript projection");
+function transcriptRowsFromTimelineBody(body: TranscriptTimelineBody): TranscriptEntry[] {
+  if (!Array.isArray(body.rows)) {
+    throw new Error("timeline response missing server transcript rows");
   }
-  const entries = (transcript as { entries?: unknown }).entries;
-  if (!Array.isArray(entries)) {
-    throw new Error("timeline transcript projection missing entries");
-  }
-  return normalizeProjectedTranscriptEntries(entries);
+  return normalizeProjectedTranscriptEntries(body.rows);
 }
 
 function normalizeProjectedTranscriptEntries(entries: unknown[]): TranscriptEntry[] {
@@ -3364,10 +3355,6 @@ function mergeProjectedTranscriptWindows(
     out.push(entry);
   }
   return out;
-}
-
-function countTranscriptMessages(entries: TranscriptEntry[]): number {
-  return entries.filter((entry) => entry.kind === "message").length;
 }
 
 function orderedConversationEvents(events: TankConversationEvent[]): TankConversationEvent[] {
@@ -3601,6 +3588,58 @@ function chatScrollGroupSnapshot(
 
 function chatScrollEntrySnapshot(entries: TranscriptEntry[]): Record<string, unknown> {
   return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length);
+}
+
+function chatScrollSnapshotNumber(
+  snapshot: Record<string, unknown>,
+  key: string,
+): number {
+  const value = snapshot[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function chatScrollSnapshotString(
+  snapshot: Record<string, unknown>,
+  key: string,
+): string {
+  const value = snapshot[key];
+  return typeof value === "string" ? value : "";
+}
+
+function chatScrollPreviousEntrySnapshot(
+  previous: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    previousEntries: chatScrollSnapshotNumber(previous, "entries"),
+    previousGroups: chatScrollSnapshotNumber(previous, "groups"),
+    previousMessages: chatScrollSnapshotNumber(previous, "messages"),
+    previousFirstGroupKey: chatScrollSnapshotString(previous, "firstGroupKey"),
+    previousLastGroupKey: chatScrollSnapshotString(previous, "lastGroupKey"),
+  };
+}
+
+function chatScrollEntryDelta(
+  previous: Record<string, unknown>,
+  nextEntries: TranscriptEntry[],
+): Record<string, unknown> {
+  const next = chatScrollEntrySnapshot(nextEntries);
+  const entriesDelta =
+    chatScrollSnapshotNumber(next, "entries") -
+    chatScrollSnapshotNumber(previous, "entries");
+  const groupsDelta =
+    chatScrollSnapshotNumber(next, "groups") -
+    chatScrollSnapshotNumber(previous, "groups");
+  const messagesDelta =
+    chatScrollSnapshotNumber(next, "messages") -
+    chatScrollSnapshotNumber(previous, "messages");
+  return {
+    ...chatScrollPreviousEntrySnapshot(previous),
+    entriesDelta,
+    groupsDelta,
+    messagesDelta,
+    visibleRowsAdded: Math.max(0, groupsDelta),
+    visibleRowsRemoved: Math.max(0, -groupsDelta),
+  };
 }
 
 function logChatScrollGroups(
@@ -6659,17 +6698,14 @@ function ChatPane({
   const timelineBootstrapScrollToLatestRef = useRef(false);
   const sdkTimelineCursorRef = useRef<string | null>(null);
   const sdkLastReadSentRef = useRef<string | null>(null);
-  // Windowed-transcript bookkeeping introduced when /timeline switched from
-  // a 50-page forward walk to anchored reads. `sdkOldestLoadedOrderKeyRef`
-  // tracks the prev-cursor of the loaded window so "Load earlier" can
-  // back-paginate. `sdkFoundOldestRef` / `sdkFoundNewestRef` mirror the
-  // server's found_oldest / found_newest so the UI can hide back- and
-  // forward-paginate affordances at the edges of the ledger. Empty cursor
-  // / unknown booleans default to "we don't know yet" — UI treats that
-  // conservatively (paginate buttons remain visible until proven needed).
-  const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
+  // Windowed-transcript bookkeeping. `/timeline` pages server-projected
+  // transcript rows; `sdkOldestLoadedCursorRef` tracks the prev row cursor so
+  // "Load earlier" asks for rows the user can actually see.
+  const sdkOldestLoadedCursorRef = useRef<string | null>(null);
   const sdkFoundOldestRef = useRef(false);
   const sdkFoundNewestRef = useRef(false);
+  const sdkLoadingOlderRef = useRef(false);
+  const sdkTimelineRequestSeqRef = useRef(0);
   const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
@@ -6839,12 +6875,43 @@ function ChatPane({
       setRunStatus((prev) => (prev === "running" ? "done" : prev));
     }
   }
-  function replaceSdkServerEvents(
-    serverEvents: TankConversationEvent[],
+  function applySdkActivitySummaryToUi(rawActivity: unknown): void {
+    if (!rawActivity || typeof rawActivity !== "object" || Array.isArray(rawActivity)) {
+      return;
+    }
+    const activity = normalizeSessionActivity({
+      ...(rawActivity as Record<string, unknown>),
+      session_id: session.id,
+    });
+    if (!activity) return;
+    const sdkActive =
+      activity.status === "submitted" ||
+      activity.status === "streaming" ||
+      activity.status === "needs_input" ||
+      activity.status === "stopping";
+    setRenderedActiveTurnId(sdkActive ? activity.active_turn_id : null);
+    activeInterruptTargetRef.current = sdkActive ? activity.active_turn_id : null;
+    if (sdkActive) {
+      setRunStatus(activity.status === "stopping" ? "stopping" : "running");
+      setRunning(true);
+      return;
+    }
+    setActiveTool(null);
+    if (currentRunRef.current) return;
+    setRunning(false);
+    if (activity.failed || activity.status === "error") {
+      setRunStatus("error");
+    } else if (activity.status === "stopped") {
+      setRunStatus("done");
+    } else {
+      setRunStatus((prev) => (prev === "running" ? "done" : prev));
+    }
+  }
+  function replaceSdkServerRows(
+    projectedEntries: TranscriptEntry[],
     clearRealtime = false,
-    projectedEntries: TranscriptEntry[] = [],
   ): void {
-    sdkServerEventsRef.current = serverEvents;
+    sdkServerEventsRef.current = [];
     sdkServerProjectedEntriesRef.current = projectedEntries;
     if (clearRealtime) {
       sdkRealtimeEventsRef.current = [];
@@ -6897,7 +6964,7 @@ function ChatPane({
     sdkConversationStateRef.current = initialConversationState;
     setRenderedActiveTurnId(null);
     sdkTimelineCursorRef.current = null;
-    sdkOldestLoadedOrderKeyRef.current = null;
+    sdkOldestLoadedCursorRef.current = null;
     sdkFoundOldestRef.current = false;
     sdkFoundNewestRef.current = false;
     sdkAtBottomRef.current = true;
@@ -6928,34 +6995,6 @@ function ChatPane({
       clearRealtime: timelineBootstrapClearRealtimeRef.current,
       scrollToLatestOnReady: timelineBootstrapScrollToLatestRef.current,
     });
-  }
-  function canClearSdkRealtime(
-    serverEvents: TankConversationEvent[],
-    expectedCursor: string | null,
-  ): boolean {
-    // Postgres writes are the durable source, but a replay query can still
-    // return behind the tab's SSE cursor. Keep local entries until replay can
-    // replace them without reducing the visible message transcript.
-    const serverCursor = serverEvents.reduce<string | null>(
-      (cursor, event) =>
-        advanceTimelineCursor(
-          cursor,
-          eventTimelineCursor(event as unknown as JsonObject),
-        ),
-      null,
-    );
-    if (expectedCursor && (!serverCursor || serverCursor < expectedCursor)) {
-      return false;
-    }
-    const serverProjection = projectConversationState(
-      reduceConversationEvents(orderedConversationEvents(serverEvents)),
-    );
-    const serverEntries = conversationEntriesToTranscript(serverProjection.entries);
-    const currentEntries = mergeSdkTranscript(
-      sdkServerEntriesRef.current,
-      sdkRealtimeEntriesRef.current,
-    );
-    return countTranscriptMessages(serverEntries) >= countTranscriptMessages(currentEntries);
   }
   function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
@@ -7067,14 +7106,13 @@ function ChatPane({
   }
 
   function scheduleProjectedTimelineRefresh(): void {
-    if (sdkServerProjectedEntriesRef.current.length === 0) return;
     if (!sdkAtBottomRef.current) return;
     if (sdkProjectedRefreshTimerRef.current !== null) {
       window.clearTimeout(sdkProjectedRefreshTimerRef.current);
     }
     sdkProjectedRefreshTimerRef.current = window.setTimeout(() => {
       sdkProjectedRefreshTimerRef.current = null;
-      void refreshSdkRunHistoryResult(false, undefined, "projected-refresh");
+      void refreshSdkRunHistoryResult(false, "projected-refresh");
     }, 500);
   }
 
@@ -7206,52 +7244,48 @@ function ChatPane({
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
 
-  // History replay hits the canonical event log written by the pod-side
-  // runner, then renders through the same reducer/projection path used for
-  // live SDK frames.
+  // History replay hits the server-owned transcript-row read model. Live SSE
+  // still carries raw Tank events, but historical navigation no longer pages
+  // raw events or asks the browser to project them.
   function refreshSdkRunHistory(
     clearRealtime = false,
     source: SdkHistoryRefreshSource = "history",
   ): Promise<boolean> {
-    return refreshSdkRunHistoryResult(clearRealtime, undefined, source).then(
+    return refreshSdkRunHistoryResult(clearRealtime, source).then(
       (result) => result.replayed,
     );
   }
 
-  // refreshSdkRunHistoryResult loads the durable transcript through a
-  // single anchored read instead of the prior 50-page forward walk from
-  // order_key=0. The old loop was the root cause of the mid-load scroll
-  // "dance": rendering as each 1000-event page arrived extended the DOM
-  // under the user's eyes, so any user scroll-down latched off the
-  // auto-scroll effect and the next page rendered with stale scroll
-  // position. Per docs/migration-policy.md the old path is deleted, not
-  // kept as a fallback.
-  //
-  // Anchor resolution: normal session navigation always opens at the durable
-  // ledger tail. The only non-tail bootstrap is an explicit ?message=
-  // transcript deep link, which the backend resolves from timeline_id to
-  // order_key and returns as a bounded window around that persisted cursor.
+  function nextSdkTimelineRequestId(source: string): string {
+    sdkTimelineRequestSeqRef.current += 1;
+    return `${session.id}:${sdkWindowEpochRef.current}:${sdkTimelineRequestSeqRef.current}:${source}`;
+  }
+
+  // Normal session navigation opens the transcript row tail. The only
+  // non-tail bootstrap is an explicit ?message= transcript deep link, which
+  // the backend resolves to a durable row cursor and returns as a bounded row
+  // window around that target.
   function refreshSdkRunHistoryResult(
     clearRealtime = false,
-    clientNonce?: string,
     source: SdkHistoryRefreshSource = "history",
   ): Promise<SdkHistoryRefreshResult> {
     const refreshSessionId = session.id;
-    const clearRealtimeCursor = clearRealtime ? sdkTimelineCursorRef.current : null;
     const refreshEpoch = sdkWindowEpochRef.current;
     const startedAt = performance.now();
+    const requestId = nextSdkTimelineRequestId(source);
+    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
       let anchor = "newest";
       if (targetTimelineId) {
         params.set("timeline_id", targetTimelineId);
-        params.set("num_before", "100");
-        params.set("num_after", "100");
+        params.set("rows_before", String(SDK_TIMELINE_DEEPLINK_ROWS_BEFORE));
+        params.set("rows_after", String(SDK_TIMELINE_DEEPLINK_ROWS_AFTER));
         anchor = "timeline_id";
       } else {
         params.set("anchor", "newest");
-        params.set("limit", "200");
+        params.set("rows", String(SDK_TIMELINE_TAIL_ROWS));
       }
       const scrollToLatestOnReady =
         timelineBootstrapScrollToLatestRef.current && anchor === "newest";
@@ -7264,9 +7298,12 @@ function ChatPane({
         sessionMode: session.mode,
         source,
         anchor,
+        requestId,
         clearRealtime,
         epoch: refreshEpoch,
         scrollToLatestOnReady,
+        ...chatScrollPreviousEntrySnapshot(previousSnapshot),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       const res = await authedFetch(
         scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
@@ -7278,25 +7315,17 @@ function ChatPane({
           sessionMode: session.mode,
           source,
           anchor,
+          requestId,
           status: res.status,
           durationMs: Math.round(performance.now() - startedAt),
+          ...chatScrollElementSnapshot(transcriptScrollEl),
         });
         return {
           replayed: false,
           error: `timeline request failed: ${res.status}`,
         };
       }
-      const body = (await res.json()) as {
-        session_id?: string;
-        events?: unknown[];
-        transcript?: unknown;
-        next_order_key?: string;
-        prev_order_key?: string;
-        has_more?: boolean;
-        found_oldest?: boolean;
-        found_newest?: boolean;
-        read_state?: { last_read_order_key?: unknown } | null;
-      };
+      const body = (await res.json()) as TranscriptTimelineBody;
       if (sessionIdRef.current !== refreshSessionId) return { replayed: false };
       if (sdkWindowEpochRef.current !== refreshEpoch) {
         logChatScrollEvent("timeline-stale", {
@@ -7305,8 +7334,10 @@ function ChatPane({
           sessionMode: session.mode,
           source,
           anchor,
+          requestId,
           epoch: refreshEpoch,
           currentEpoch: sdkWindowEpochRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
         });
         return { replayed: false, stale: true };
       }
@@ -7317,79 +7348,62 @@ function ChatPane({
           lastReadOrderKey,
         );
       }
-      if (!Array.isArray(body.events)) {
-        return { replayed: false, error: "timeline response did not include events" };
-      }
       let projectedEntries: TranscriptEntry[];
       try {
-        projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
+        projectedEntries = transcriptRowsFromTimelineBody(body);
       } catch (err) {
         return {
           replayed: false,
           error: String((err as Error).message ?? err),
         };
       }
-      const canonicalEvents: TankConversationEvent[] = [];
-      for (const ev of body.events) {
-        if (isTankConversationEvent(ev)) {
-          advanceSdkTimelineCursor(ev);
-          canonicalEvents.push(ev);
-        }
-      }
-      // Forward cursor advances to next_order_key — the SSE stream resumes
-      // from this point so we don't re-emit events already in the window.
-      const nextAfter =
-        typeof body.next_order_key === "string" ? body.next_order_key : "";
-      if (nextAfter) {
+      const liveOrderKey =
+        typeof body.live_order_key === "string" ? body.live_order_key : "";
+      if (liveOrderKey) {
         sdkTimelineCursorRef.current = advanceTimelineCursor(
           sdkTimelineCursorRef.current,
-          nextAfter,
+          liveOrderKey,
         );
       }
       const prevAfter =
-        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+        typeof body.prev_cursor === "string" ? body.prev_cursor : "";
       if (prevAfter) {
-        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+        sdkOldestLoadedCursorRef.current = prevAfter;
       }
+      const nextAfter =
+        typeof body.next_cursor === "string" ? body.next_cursor : "";
       const foundOldest = body.found_oldest === true;
       const foundNewest = body.found_newest === true;
       sdkFoundOldestRef.current = foundOldest;
       sdkFoundNewestRef.current = foundNewest;
       setSdkFoundOldest(foundOldest);
       setSdkFoundNewest(foundNewest);
-      const terminal = clientNonce
-        ? sdkHistoryTerminalForRun(body.events, clientNonce)
-        : undefined;
       logChatScrollEntries("timeline-loaded", projectedEntries, {
         surface: "session",
         sessionId: refreshSessionId,
         sessionMode: session.mode,
         source,
         anchor,
-        eventCount: Array.isArray(body.events) ? body.events.length : 0,
-        canonicalEventCount: canonicalEvents.length,
+        requestId,
+        eventCount: projectedEntries.length,
+        canonicalEventCount: projectedEntries.length,
         foundOldest,
         foundNewest,
         hasPrevCursor: Boolean(prevAfter),
         hasNextCursor: Boolean(nextAfter),
         clearRealtime,
-        terminalStatus: terminal?.status ?? "",
+        terminalStatus: "",
         durationMs: Math.round(performance.now() - startedAt),
+        ...chatScrollEntryDelta(previousSnapshot, projectedEntries),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
       });
-      if (canonicalEvents.length === 0) {
-        if (scrollToLatestOnReady) timelineBootstrapScrollToLatestRef.current = false;
-        return { replayed: false, terminal };
-      }
-      replaceSdkServerEvents(
-        canonicalEvents,
-        clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
-        projectedEntries,
-      );
+      replaceSdkServerRows(projectedEntries, clearRealtime);
+      applySdkActivitySummaryToUi(body.activity);
       if (scrollToLatestOnReady) {
         timelineBootstrapScrollToLatestRef.current = false;
         requestScrollToLatest("auto", source);
       }
-      return { replayed: true, terminal };
+      return { replayed: projectedEntries.length > 0 };
     };
     return load().catch((err) => ({
       replayed: false,
@@ -7397,23 +7411,28 @@ function ChatPane({
     }));
   }
 
-  // loadSdkOlderEvents fetches one bounded page of events strictly older
-  // than the current window's oldest event. Surfaced through the "Earlier
-  // messages" affordance at the top of the transcript. Each click brings
-  // 100 more events into the window; the UI hides the button once
-  // sdkFoundOldest flips true.
+  // loadSdkOlderEvents fetches transcript rows strictly older than the
+  // current window's first rendered row. A click maps to one row-page request;
+  // raw tool chatter inside Turn activity rows is loaded only when that row is
+  // expanded through the turn-activity endpoint.
   async function loadSdkOlderEvents(): Promise<void> {
     const refreshSessionId = session.id;
-    const oldest = sdkOldestLoadedOrderKeyRef.current;
     if (sdkFoundOldestRef.current) return;
-    if (sdkLoadingOlder) return;
+    if (sdkLoadingOlderRef.current) return;
+    sdkLoadingOlderRef.current = true;
     setSdkOlderError(null);
     setSdkLoadingOlder(true);
-    if (!oldest) {
+    const requestId = nextSdkTimelineRequestId("older");
+    const beforeCursor = sdkOldestLoadedCursorRef.current;
+    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
+    if (!beforeCursor) {
       logChatScrollEvent("older-missing-cursor", {
         surface: "session",
         sessionId: refreshSessionId,
         sessionMode: session.mode,
+        requestId,
+        ...chatScrollPreviousEntrySnapshot(previousSnapshot),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       try {
         await jumpSdkToOldest("older-missing-cursor");
@@ -7423,107 +7442,133 @@ function ChatPane({
           `Could not load earlier messages: ${String((err as Error).message ?? err)}`,
         );
       } finally {
+        sdkLoadingOlderRef.current = false;
         setSdkLoadingOlder(false);
       }
       return;
     }
-    logChatScrollEvent("older-request", {
-      surface: "session",
-      sessionId: refreshSessionId,
-      sessionMode: session.mode,
-      beforeOrderKey: oldest,
-    });
     try {
+      const startedAt = performance.now();
+      logChatScrollEvent("older-request", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        requestId,
+        beforeCursor,
+        ...chatScrollPreviousEntrySnapshot(previousSnapshot),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
       const params = new URLSearchParams({
-        before_order_key: oldest,
-        limit: "100",
+        before_cursor: beforeCursor,
+        rows: String(SDK_TIMELINE_OLDER_ROWS),
       });
       const res = await authedFetch(
         scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
       );
       if (!res.ok) {
+        logChatScrollEvent("older-error", {
+          surface: "session",
+          sessionId: refreshSessionId,
+          sessionMode: session.mode,
+          requestId,
+          beforeCursor,
+          status: res.status,
+          durationMs: Math.round(performance.now() - startedAt),
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
         setSdkOlderError(`Could not load earlier messages: ${res.status}`);
         return;
       }
-      const body = (await res.json()) as {
-        events?: unknown[];
-        transcript?: unknown;
-        prev_order_key?: string;
-        found_oldest?: boolean;
-      };
+      const body = (await res.json()) as TranscriptTimelineBody;
       if (sessionIdRef.current !== refreshSessionId) return;
-      if (!Array.isArray(body.events)) return;
       let projectedOlderEntries: TranscriptEntry[];
       try {
-        projectedOlderEntries = projectedTranscriptEntriesFromTimelineBody(body);
+        projectedOlderEntries = transcriptRowsFromTimelineBody(body);
       } catch (err) {
         setSdkOlderError(`Could not load earlier messages: ${String((err as Error).message ?? err)}`);
         return;
       }
-      const olderEvents: TankConversationEvent[] = [];
-      for (const ev of body.events) {
-        if (isTankConversationEvent(ev)) olderEvents.push(ev);
-      }
-      if (olderEvents.length > 0) {
-        // Merge: existing server events stay at the tail of the array;
-        // older page goes to the head. orderedConversationEvents
-        // sorts ASC by order_key so insertion order doesn't matter, but
-        // doing a head-merge keeps the conceptual model honest.
-        sdkServerEventsRef.current = orderedConversationEvents([
-          ...olderEvents,
-          ...sdkServerEventsRef.current,
-        ]);
-        sdkServerProjectedEntriesRef.current = mergeProjectedTranscriptWindows(
-          projectedOlderEntries,
-          sdkServerProjectedEntriesRef.current,
-        );
-        syncSdkRenderedEntries();
-        logChatScrollEntries(
-          "older-loaded",
-          sdkServerProjectedEntriesRef.current,
-          {
-            surface: "session",
-            sessionId: refreshSessionId,
-            sessionMode: session.mode,
-            eventCount: olderEvents.length,
-            beforeOrderKey: oldest,
-          },
-        );
-      }
+      const nextProjectedEntries = mergeProjectedTranscriptWindows(
+        projectedOlderEntries,
+        sdkServerProjectedEntriesRef.current,
+      );
       const prevAfter =
-        typeof body.prev_order_key === "string" ? body.prev_order_key : "";
+        typeof body.prev_cursor === "string" ? body.prev_cursor : "";
       if (prevAfter) {
-        sdkOldestLoadedOrderKeyRef.current = prevAfter;
+        sdkOldestLoadedCursorRef.current = prevAfter;
+      }
+      const liveOrderKey =
+        typeof body.live_order_key === "string" ? body.live_order_key : "";
+      if (liveOrderKey) {
+        sdkTimelineCursorRef.current = advanceTimelineCursor(
+          sdkTimelineCursorRef.current,
+          liveOrderKey,
+        );
       }
       const foundOldest = body.found_oldest === true;
       if (foundOldest) {
         sdkFoundOldestRef.current = true;
         setSdkFoundOldest(true);
       }
+      const delta = chatScrollEntryDelta(previousSnapshot, nextProjectedEntries);
+      logChatScrollEntries("older-loaded", nextProjectedEntries, {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        requestId,
+        eventCount: projectedOlderEntries.length,
+        canonicalEventCount: projectedOlderEntries.length,
+        beforeCursor,
+        foundOldest,
+        hasPrevCursor: Boolean(prevAfter),
+        durationMs: Math.round(performance.now() - startedAt),
+        ...delta,
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
+      if (projectedOlderEntries.length > 0) {
+        sdkServerProjectedEntriesRef.current = nextProjectedEntries;
+        syncSdkRenderedEntries();
+        applySdkActivitySummaryToUi(body.activity);
+      }
+      if (projectedOlderEntries.length === 0) {
+        logChatScrollEntries("older-no-visible-change", nextProjectedEntries, {
+          surface: "session",
+          sessionId: refreshSessionId,
+          sessionMode: session.mode,
+          requestId,
+          beforeCursor,
+          eventCount: 0,
+          ...delta,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
+      }
       setSdkOlderError(null);
     } finally {
+      sdkLoadingOlderRef.current = false;
       setSdkLoadingOlder(false);
     }
   }
 
-  // jumpSdkToOldest resets the window to the head of the ledger. Symmetric
-  // counterpart of jumpSdkToLatest — drives the "scroll to start" floating
-  // button next to scroll-to-bottom. Always refetches (anchor=oldest)
-  // rather than walking the entire ledger client-side, so the round-trip
-  // cost is O(limit) regardless of session length. The handler is the
-  // dedicated anchor=oldest path added in handlers_session_events.go,
-  // which dispatches an indexed ASC scan from the head with
-  // FoundOldest=true.
+  // jumpSdkToOldest resets the window to the first transcript rows. It never
+  // walks raw events; the server pages the materialized row read model.
   async function jumpSdkToOldest(source = "jump-oldest"): Promise<void> {
     const refreshSessionId = session.id;
-    const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const params = new URLSearchParams({
+      anchor: "oldest",
+      rows: String(SDK_TIMELINE_TAIL_ROWS),
+    });
     const startedAt = performance.now();
+    const requestId = nextSdkTimelineRequestId(source);
+    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
     logChatScrollEvent("timeline-request", {
       surface: "session",
       sessionId: refreshSessionId,
       sessionMode: session.mode,
       source,
       anchor: "oldest",
+      requestId,
+      ...chatScrollPreviousEntrySnapshot(previousSnapshot),
+      ...chatScrollElementSnapshot(transcriptScrollEl),
     });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
@@ -7535,47 +7580,29 @@ function ChatPane({
         sessionMode: session.mode,
         source,
         anchor: "oldest",
+        requestId,
         status: res.status,
         durationMs: Math.round(performance.now() - startedAt),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       throw new Error(`timeline request failed: ${res.status}`);
     }
-    const body = (await res.json()) as {
-      events?: unknown[];
-      transcript?: unknown;
-      next_order_key?: string;
-      prev_order_key?: string;
-      found_oldest?: boolean;
-      found_newest?: boolean;
-    };
+    const body = (await res.json()) as TranscriptTimelineBody;
     if (sessionIdRef.current !== refreshSessionId) return;
-    if (!Array.isArray(body.events)) {
-      throw new Error("timeline response did not include events");
-    }
-    const projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
-    const canonicalEvents: TankConversationEvent[] = [];
-    for (const ev of body.events) {
-      if (isTankConversationEvent(ev)) {
-        advanceSdkTimelineCursor(ev);
-        canonicalEvents.push(ev);
-      }
-    }
-    // Forward cursor: events newer than this page exist only if found_newest
-    // is false. The SSE stream resumes at next_order_key; we don't drop the
-    // SSE cursor here because the user can scroll forward into territory
-    // already covered by the live tail subscriber.
-    const nextAfter =
-      typeof body.next_order_key === "string" ? body.next_order_key : "";
-    if (nextAfter) {
+    const projectedEntries = transcriptRowsFromTimelineBody(body);
+    const liveOrderKey =
+      typeof body.live_order_key === "string" ? body.live_order_key : "";
+    if (liveOrderKey) {
       sdkTimelineCursorRef.current = advanceTimelineCursor(
         sdkTimelineCursorRef.current,
-        nextAfter,
+        liveOrderKey,
       );
     }
+    const nextAfter =
+      typeof body.next_cursor === "string" ? body.next_cursor : "";
     const prevAfter =
-      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
-    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
-    // anchor=oldest always sets found_oldest=true server-side; mirror it.
+      typeof body.prev_cursor === "string" ? body.prev_cursor : "";
+    if (prevAfter) sdkOldestLoadedCursorRef.current = prevAfter;
     sdkFoundOldestRef.current = body.found_oldest === true;
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
@@ -7586,14 +7613,19 @@ function ChatPane({
       sessionMode: session.mode,
       source,
       anchor: "oldest",
-      eventCount: canonicalEvents.length,
+      requestId,
+      eventCount: projectedEntries.length,
+      canonicalEventCount: projectedEntries.length,
       foundOldest: body.found_oldest === true,
       foundNewest: body.found_newest === true,
       hasPrevCursor: Boolean(prevAfter),
       hasNextCursor: Boolean(nextAfter),
       durationMs: Math.round(performance.now() - startedAt),
+      ...chatScrollEntryDelta(previousSnapshot, projectedEntries),
+      ...chatScrollElementSnapshot(transcriptScrollEl),
     });
-    replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
+    replaceSdkServerRows(projectedEntries, false);
+    applySdkActivitySummaryToUi(body.activity);
   }
 
   // jumpSdkToLatest resets the window to the live tail. If the SPA never
@@ -7604,14 +7636,22 @@ function ChatPane({
   async function jumpSdkToLatest(source = "jump-latest"): Promise<void> {
     if (sdkFoundNewestRef.current) return;
     const refreshSessionId = session.id;
-    const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const params = new URLSearchParams({
+      anchor: "newest",
+      rows: String(SDK_TIMELINE_TAIL_ROWS),
+    });
     const startedAt = performance.now();
+    const requestId = nextSdkTimelineRequestId(source);
+    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
     logChatScrollEvent("timeline-request", {
       surface: "session",
       sessionId: refreshSessionId,
       sessionMode: session.mode,
       source,
       anchor: "newest",
+      requestId,
+      ...chatScrollPreviousEntrySnapshot(previousSnapshot),
+      ...chatScrollElementSnapshot(transcriptScrollEl),
     });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
@@ -7623,45 +7663,34 @@ function ChatPane({
         sessionMode: session.mode,
         source,
         anchor: "newest",
+        requestId,
         status: res.status,
         durationMs: Math.round(performance.now() - startedAt),
+        ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       return;
     }
-    const body = (await res.json()) as {
-      events?: unknown[];
-      transcript?: unknown;
-      next_order_key?: string;
-      prev_order_key?: string;
-      found_oldest?: boolean;
-      found_newest?: boolean;
-    };
+    const body = (await res.json()) as TranscriptTimelineBody;
     if (sessionIdRef.current !== refreshSessionId) return;
-    if (!Array.isArray(body.events)) return;
     let projectedEntries: TranscriptEntry[];
     try {
-      projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
+      projectedEntries = transcriptRowsFromTimelineBody(body);
     } catch {
       return;
     }
-    const canonicalEvents: TankConversationEvent[] = [];
-    for (const ev of body.events) {
-      if (isTankConversationEvent(ev)) {
-        advanceSdkTimelineCursor(ev);
-        canonicalEvents.push(ev);
-      }
-    }
-    const nextAfter =
-      typeof body.next_order_key === "string" ? body.next_order_key : "";
-    if (nextAfter) {
+    const liveOrderKey =
+      typeof body.live_order_key === "string" ? body.live_order_key : "";
+    if (liveOrderKey) {
       sdkTimelineCursorRef.current = advanceTimelineCursor(
         sdkTimelineCursorRef.current,
-        nextAfter,
+        liveOrderKey,
       );
     }
+    const nextAfter =
+      typeof body.next_cursor === "string" ? body.next_cursor : "";
     const prevAfter =
-      typeof body.prev_order_key === "string" ? body.prev_order_key : "";
-    if (prevAfter) sdkOldestLoadedOrderKeyRef.current = prevAfter;
+      typeof body.prev_cursor === "string" ? body.prev_cursor : "";
+    if (prevAfter) sdkOldestLoadedCursorRef.current = prevAfter;
     sdkFoundOldestRef.current = body.found_oldest === true;
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
@@ -7672,14 +7701,19 @@ function ChatPane({
       sessionMode: session.mode,
       source,
       anchor: "newest",
-      eventCount: canonicalEvents.length,
+      requestId,
+      eventCount: projectedEntries.length,
+      canonicalEventCount: projectedEntries.length,
       foundOldest: body.found_oldest === true,
       foundNewest: body.found_newest === true,
       hasPrevCursor: Boolean(prevAfter),
       hasNextCursor: Boolean(nextAfter),
       durationMs: Math.round(performance.now() - startedAt),
+      ...chatScrollEntryDelta(previousSnapshot, projectedEntries),
+      ...chatScrollElementSnapshot(transcriptScrollEl),
     });
-    replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
+    replaceSdkServerRows(projectedEntries, false);
+    applySdkActivitySummaryToUi(body.activity);
   }
 
   async function scrollTranscriptToConversationStart(): Promise<void> {
@@ -7734,7 +7768,6 @@ function ChatPane({
     });
     const refresh = refreshSdkRunHistoryResult(
       clearRealtime,
-      run?.id,
       source,
     )
       .then((result) => {
@@ -8983,7 +9016,7 @@ function ChatPane({
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
       logSessionEventStreamEvent("resync_required", { sessionMode: session.mode });
-      void refreshSdkRunHistoryResult(true, undefined, "resync").finally(() => {
+      void refreshSdkRunHistoryResult(true, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
         sdkEventSourceRef.current = null;
