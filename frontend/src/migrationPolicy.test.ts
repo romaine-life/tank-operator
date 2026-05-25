@@ -260,6 +260,14 @@ test("avatar editor is embedded in Settings admin, not a standalone app route", 
   assert.equal(appChromeCapabilitiesSource.includes("Settings -> Admin avatar pane"), true);
 });
 
+test("settings admin exposes the design portfolio catalog", () => {
+  assert.match(
+    appSource,
+    /href="\/_styleguide"[\s\S]*target="_blank"[\s\S]*Design portfolio/,
+  );
+  assert.equal(mainSource.includes('"/_styleguide": () => <StyleguideIndex />'), true);
+});
+
 test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
