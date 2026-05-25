@@ -181,6 +181,20 @@ past pending rows); if `emits_total` climbs on the server but the
 matching browser's `tank_session_event_client_received_total` stays
 flat, the SPA reducer is dropping (candidate C).
 
+## Cluster Health Sidebar Surface
+
+`GET /api/cluster-health` (authenticated) returns the backend snapshot rendered
+above the profile avatar in the sidebar. It combines Kubernetes node
+readiness/pressure, Tank session pod readiness, and NATS JetStream monitor data
+from `NATS_MONITOR_URLS`.
+
+The endpoint is intentionally a compact user-visible health surface, not a
+replacement for Prometheus or Grafana. It exists so the home page can show the
+cluster-level failure modes that otherwise look like "Tank just died":
+not-ready or pressured nodes, pending/not-ready session pods, unreachable NATS
+replicas, JetStream memory saturation, slow consumers, meta backlog, and
+`TANK_SESSION_BUS` replica-count drift from `NATS_STREAM_REPLICAS`.
+
 ## Avatar Upload Debug Surface
 
 `GET /api/debug/avatar-upload-attempts` (admin-only) returns durable

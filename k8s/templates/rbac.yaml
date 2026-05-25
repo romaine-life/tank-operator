@@ -66,6 +66,31 @@ roleRef:
   kind: Role
   name: tank-operator-design-selection
 ---
+# Read-only cluster health for the authenticated home/sidebar surface. The
+# endpoint only needs node readiness/pressure; session pod health is covered by
+# the namespace-scoped sessions manager Role above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "tank-operator.orchestratorServiceAccount" . }}-cluster-health
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "tank-operator.orchestratorServiceAccount" . }}-cluster-health
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "tank-operator.orchestratorServiceAccount" . }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "tank-operator.orchestratorServiceAccount" . }}-cluster-health
+---
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 # Orchestrator SA needs auth-delegator so internal endpoints can call
 # TokenReview for audience-scoped service-account tokens.

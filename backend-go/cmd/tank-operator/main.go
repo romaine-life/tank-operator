@@ -753,7 +753,7 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 		slog.Warn("session bus disabled; NATS_URL is unset")
 		return nil
 	}
-	replicas := 2
+	replicas := 3
 	if raw := strings.TrimSpace(os.Getenv("NATS_STREAM_REPLICAS")); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			replicas = parsed
