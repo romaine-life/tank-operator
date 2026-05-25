@@ -16,11 +16,13 @@ The browser DOM is not the source of truth. Provider streams are adapter input,
 not the rendered protocol. The frontend renders the Tank conversation protocol
 from durable events.
 
-Compacted agent activity is a projection of the same durable transcript ledger,
-not a second ledger. The Turn activity row is an activity/log surface; the main
-transcript is the settled conversation surface. The UI may duplicate assistant
-prose across those projections, but it must not visibly move a rendered row from
-one surface to the other.
+Compacted agent activity is a server-owned projection of the same durable
+transcript ledger, not a second ledger. The Turn activity row is an activity/log
+surface; the main transcript is the settled conversation surface. Historical
+timeline reads return Turn activity as primary collapsed rows, with child
+entries loaded on expansion. The UI may duplicate assistant prose across those
+projections, but it must not visibly move a rendered row from one surface to the
+other.
 
 ## Sources Of Truth
 
@@ -46,6 +48,9 @@ one surface to the other.
   delivery works.
 - Compactable activity must not be rendered first as a settled transcript row
   and later relocated into Turn activity.
+- Previous-conversation loads must consume the server transcript projection;
+  raw timeline events are not the authority for historical Turn activity
+  grouping.
 
 ## Live Behavior
 

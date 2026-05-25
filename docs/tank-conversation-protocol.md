@@ -280,19 +280,27 @@ failures and pod failure affect session-level error state.
 ### Transcript Compaction
 
 The durable ledger remains fully replayable. Transcript compaction is a
-frontend projection concern layered on top of `session_events`, not a producer
-or storage behavior. The projection has two distinct surfaces:
+server-owned transcript projection layered on top of `session_events`, not a
+producer or storage behavior and not a browser-local reconstruction pass. The
+projection has two distinct surfaces:
 
 - The Turn activity row is an activity/log projection of what happened during a
   turn.
 - The main transcript is the settled conversation projection.
 
 Rows must not visibly bounce between those surfaces. If an event is eligible
-for Turn activity, the frontend classifies it before first paint; it must not
-render the event as a standalone main-transcript row and later move that same
-rendered row into Turn activity. Conversely, content shown inside Turn activity
-while a turn is active is provisional activity output, not a settled transcript
-row being promoted later.
+for Turn activity, the server transcript projection classifies it before first
+paint; the frontend must not render the event as a standalone main-transcript
+row and later move that same rendered row into Turn activity. Conversely,
+content shown inside Turn activity while a turn is active is provisional
+activity output, not a settled transcript row being promoted later.
+
+Historical timeline reads return first-class `turn_activity` rows. These rows
+load collapsed by default and carry summary metadata only: turn id, activity
+counts, compacted child ids, order range, timestamps, status, and error count.
+The child entries for a Turn activity row are fetched only when the row is
+expanded through the turn activity endpoint. This keeps previous-conversation
+navigation bounded while preserving a durable replay path for deep links.
 
 For an active turn, the client may condense assistant progress notes,
 provisional assistant text, tool rows, reasoning blocks, background-task rows,

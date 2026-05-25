@@ -114,6 +114,23 @@ test("chat history bootstrap is tail-first and not browser-position based", () =
   assert.equal(appSource.includes("writeSdkTranscriptPosition"), false);
 });
 
+test("historical transcript bootstrap requires server-projected turn activity", () => {
+  assert.equal(appSource.includes("projectedTranscriptEntriesFromTimelineBody"), true);
+  assert.equal(
+    appSource.includes("timeline response missing server transcript projection"),
+    true,
+  );
+  assert.match(
+    appSource,
+    /replaceSdkServerEvents\(\s*canonicalEvents,[\s\S]*?projectedEntries,/,
+  );
+  assert.match(
+    appSource,
+    /\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
+  );
+  assert.equal(appSource.includes('kind !== "turn_activity"'), true);
+});
+
 test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
