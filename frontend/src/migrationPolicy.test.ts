@@ -351,6 +351,14 @@ test("in-flight home title edits are transferred to the created session", () => 
   assert.equal(appSource.includes("latestActiveElement"), true);
 });
 
+test("in-flight home composer drafts survive session creation", () => {
+  assert.equal(appSource.includes("homeComposerTextRef.current"), true);
+  assert.equal(appSource.includes("transferHomeComposerDraft"), true);
+  assert.equal(appSource.includes("setComposerDraftTransfer(transferredComposerRequest)"), true);
+  assert.equal(appSource.includes("canSubmit={!busy}"), true);
+  assert.equal(appSource.includes("controlsDisabled={busy}"), true);
+});
+
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);

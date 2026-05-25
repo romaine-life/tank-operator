@@ -402,6 +402,12 @@ interface AutoRenameSessionRequest {
   clearIfUnchanged?: string;
 }
 
+interface ComposerDraftTransferRequest {
+  sessionId: string;
+  text: string;
+  focus: boolean;
+}
+
 interface TestState {
   active?: boolean;
   slot_index?: number | null;
@@ -6380,6 +6386,8 @@ function ChatPane({
   user,
   autoRename,
   onAutoRenameConsumed,
+  composerDraftTransfer,
+  onComposerDraftTransferConsumed,
   autoFocusComposer,
   onAutoFocusComposerConsumed,
   primeTurnCompleteSound,
@@ -6404,6 +6412,8 @@ function ChatPane({
   user: SessionUser;
   autoRename: AutoRenameSessionRequest | null;
   onAutoRenameConsumed: () => void;
+  composerDraftTransfer: ComposerDraftTransferRequest | null;
+  onComposerDraftTransferConsumed: () => void;
   autoFocusComposer: boolean;
   onAutoFocusComposerConsumed: () => void;
   // App-owned audio: the SSE consumer in App.tsx rings on the
@@ -6625,6 +6635,20 @@ function ChatPane({
     if (!textarea) return false;
     textarea.focus();
     const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+  const setComposerTextareaValue = useCallback((value: string): boolean => {
+    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea) return false;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    setComposerText(value);
+    const cursor = value.length;
     textarea.setSelectionRange(cursor, cursor);
     return true;
   }, []);
@@ -9129,6 +9153,24 @@ function ChatPane({
   const contextWindow = getContextWindow(modelForContext);
 
   useEffect(() => {
+    if (!composerDraftTransfer || !visible || activeTab !== "chat") return;
+    requestAnimationFrame(() => {
+      if (!setComposerTextareaValue(composerDraftTransfer.text)) return;
+      if (composerDraftTransfer.focus) {
+        focusComposerTextarea();
+      }
+      onComposerDraftTransferConsumed();
+    });
+  }, [
+    activeTab,
+    composerDraftTransfer,
+    focusComposerTextarea,
+    onComposerDraftTransferConsumed,
+    setComposerTextareaValue,
+    visible,
+  ]);
+
+  useEffect(() => {
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
     const activeElement = document.activeElement;
     if (
@@ -10592,6 +10634,7 @@ export function App() {
   const [homeComposerMode, setHomeComposerMode] =
     useState<RunComposerMode>("default");
   const [homeComposerText, setHomeComposerText] = useState("");
+  const homeComposerTextRef = useRef("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const homeSessionNameRef = useRef("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
@@ -10700,6 +10743,8 @@ export function App() {
   // signal.
   const [autoRenameSession, setAutoRenameSession] =
     useState<AutoRenameSessionRequest | null>(null);
+  const [composerDraftTransfer, setComposerDraftTransfer] =
+    useState<ComposerDraftTransferRequest | null>(null);
   // Freshly-created chat sessions should land in the composer once the
   // session is ready. The title can still be renamed explicitly via F2.
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
@@ -11730,6 +11775,13 @@ export function App() {
       let created: Session = normalizeSession(await res.json());
       const homeTitleDraft = homeSessionNameRef.current;
       const homeTitleDraftTrimmed = homeTitleDraft.trim();
+      const activeElement = document.activeElement;
+      const homeComposerHadFocus =
+        activeElement instanceof Element &&
+        Boolean(homeComposerWrapRef.current?.contains(activeElement)) &&
+        activeElement.closest("textarea") != null;
+      const homeComposerDraft = homeComposerTextRef.current;
+      const transferHomeComposerDraft = CHAT_MODES.has(created.mode) && homeComposerDraft.length > 0;
       const homeDefaultTitleUnchanged =
         homeEditingDefaultTitleRef.current &&
         (homeTitleDraftTrimmed === "" || homeTitleDraftTrimmed === HOME_DEFAULT_SESSION_TITLE);
@@ -11743,6 +11795,14 @@ export function App() {
               : {}),
           }
         : null;
+      const transferredComposerRequest: ComposerDraftTransferRequest | null =
+        transferHomeComposerDraft
+          ? {
+              sessionId: created.id,
+              text: homeComposerDraft,
+              focus: homeComposerHadFocus,
+            }
+          : null;
       const requestedName =
         transferHomeTitleEdit || homeDefaultTitleUnchanged ? "" : homeTitleDraftTrimmed;
       let requestedNameApplied = false;
@@ -11783,8 +11843,14 @@ export function App() {
         setHomeSessionNameDraft("");
         setHomeTitleEditing(false);
         homeEditingDefaultTitleRef.current = false;
+      } else if (transferredComposerRequest) {
+        setAutoFocusComposerSessionId(null);
       } else if (CHAT_MODES.has(created.mode)) {
         setAutoFocusComposerSessionId(created.id);
+      }
+      if (transferredComposerRequest) {
+        setComposerDraftTransfer(transferredComposerRequest);
+        setHomeComposerTextDraft("");
       }
       if (requestedNameApplied) {
         setHomeSessionNameDraft("");
@@ -12014,6 +12080,11 @@ export function App() {
   function setHomeSessionNameDraft(value: string) {
     homeSessionNameRef.current = value;
     setHomeSessionName(value);
+  }
+
+  function setHomeComposerTextDraft(value: string) {
+    homeComposerTextRef.current = value;
+    setHomeComposerText(value);
   }
 
   function setHomeTitleEditing(value: boolean) {
@@ -12805,8 +12876,9 @@ export function App() {
                 onPermissionModeChange={setHomeComposerMode}
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-                disabled={busy}
-                onTextChange={setHomeComposerText}
+                canSubmit={!busy}
+                controlsDisabled={busy}
+                onTextChange={setHomeComposerTextDraft}
                 toolButtons={
                   <>
                     <button
@@ -12912,6 +12984,12 @@ export function App() {
                       }
                       onAutoRenameConsumed={() =>
                         setAutoRenameSession((prev) => (prev?.sessionId === s.id ? null : prev))
+                      }
+                      composerDraftTransfer={
+                        composerDraftTransfer?.sessionId === s.id ? composerDraftTransfer : null
+                      }
+                      onComposerDraftTransferConsumed={() =>
+                        setComposerDraftTransfer((prev) => (prev?.sessionId === s.id ? null : prev))
                       }
                       autoFocusComposer={autoFocusComposerSessionId === s.id}
                       onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
