@@ -3,10 +3,14 @@ import {
   CheckIcon,
   ChevronDownIcon,
   ListChecksIcon,
+  Loader2Icon,
   MessageSquareIcon,
   SearchIcon,
   SquareTerminalIcon,
+  WrenchIcon,
 } from "lucide-react";
+import type { ReactNode } from "react";
+import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
@@ -15,23 +19,9 @@ import {
   styleguideShellStyle,
 } from "./shared";
 
-const activitySteps = [
-  {
-    icon: SearchIcon,
-    label: "Reading docs/product-inspirations.md",
-    meta: "durable history and live delivery split",
-  },
-  {
-    icon: SquareTerminalIcon,
-    label: "Checking transcript activity components",
-    meta: "frontend/src/App.tsx",
-  },
-  {
-    icon: ListChecksIcon,
-    label: "Preparing a hot-swap test",
-    meta: "tank-operator-slot-1",
-  },
-];
+type TranscriptRole = "user" | "assistant" | "system";
+
+const assistantAvatar = getSessionAvatar("turn-activity-thinking-prototype");
 
 function ThinkingDots() {
   return (
@@ -43,99 +33,187 @@ function ThinkingDots() {
   );
 }
 
-function ThinkingCard() {
-  return (
-    <details
-      className="turn-activity-thinking-card is-active"
-      open
-      data-design-component="turn-activity-thinking"
-      data-design-state="active"
-      data-design-source="frontend/src/styleguide/portfolio-turn-activity.tsx"
-    >
-      <summary className="turn-activity-thinking-summary">
-        <span className="turn-activity-thinking-avatar" aria-hidden="true">
-          <BotIcon size={15} strokeWidth={2} />
-        </span>
-        <span className="turn-activity-thinking-copy">
-          <span className="turn-activity-thinking-label">
-            Codex is thinking
-            <ThinkingDots />
-          </span>
-          <span className="turn-activity-thinking-meta">1m 18s - working in /workspace/tank-operator</span>
-        </span>
-        <ChevronDownIcon className="turn-activity-thinking-chevron" size={15} strokeWidth={2} aria-hidden="true" />
-      </summary>
-      <div className="turn-activity-thinking-body">
-        {activitySteps.map((step) => {
-          const Icon = step.icon;
-          return (
-            <div className="turn-activity-thinking-step" key={step.label}>
-              <span className="turn-activity-thinking-step-icon" aria-hidden="true">
-                <Icon size={14} strokeWidth={2} />
-              </span>
-              <span className="turn-activity-thinking-step-text">
-                <span>{step.label}</span>
-                <span>{step.meta}</span>
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </details>
-  );
-}
-
-function SettledActivityCard() {
-  return (
-    <details
-      className="turn-activity-thinking-card is-settled"
-      data-design-component="turn-activity-thinking"
-      data-design-state="settled"
-      data-design-source="frontend/src/styleguide/portfolio-turn-activity.tsx"
-    >
-      <summary className="turn-activity-thinking-summary">
-        <span className="turn-activity-thinking-avatar" aria-hidden="true">
-          <CheckIcon size={15} strokeWidth={2} />
-        </span>
-        <span className="turn-activity-thinking-copy">
-          <span className="turn-activity-thinking-label">Codex thought for 42s</span>
-          <span className="turn-activity-thinking-meta">2 tools, 1 file changed</span>
-        </span>
-        <ChevronDownIcon className="turn-activity-thinking-chevron" size={15} strokeWidth={2} aria-hidden="true" />
-      </summary>
-      <div className="turn-activity-thinking-body">
-        <div className="turn-activity-thinking-step">
-          <span className="turn-activity-thinking-step-icon" aria-hidden="true">
-            <SquareTerminalIcon size={14} strokeWidth={2} />
-          </span>
-          <span className="turn-activity-thinking-step-text">
-            <span>Ran frontend build</span>
-            <span>npm run build</span>
-          </span>
-        </div>
-      </div>
-    </details>
-  );
-}
-
-function NeedsInputActivityCard() {
+function TranscriptMessage({
+  role,
+  children,
+  messageId,
+  designState,
+}: {
+  role: TranscriptRole;
+  children: ReactNode;
+  messageId: string;
+  designState?: string;
+}) {
+  const variant = role === "user" ? "user" : role === "system" ? "system" : "assistant";
   return (
     <div
-      className="turn-activity-thinking-card is-input"
-      data-design-component="turn-activity-thinking"
-      data-design-state="needs-input"
-      data-design-source="frontend/src/styleguide/portfolio-turn-activity.tsx"
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant={variant}
+      data-role={variant}
+      data-kind="message"
+      data-message-id={messageId}
+      data-design-component={designState ? "turn-activity-thinking" : undefined}
+      data-design-state={designState}
+      data-design-source={designState ? "frontend/src/styleguide/portfolio-turn-activity.tsx" : undefined}
     >
-      <div className="turn-activity-thinking-summary">
-        <span className="turn-activity-thinking-avatar" aria-hidden="true">
-          <MessageSquareIcon size={15} strokeWidth={2} />
+      {variant === "assistant" && (
+        <span className="run-msg-ai-avatar" aria-hidden="true">
+          <AgentAvatarIcon avatar={assistantAvatar} className="run-msg-ai-icon" />
         </span>
-        <span className="turn-activity-thinking-copy">
-          <span className="turn-activity-thinking-label">Codex needs input</span>
-          <span className="turn-activity-thinking-meta">Choose whether this should replace or supplement turn activity.</span>
+      )}
+      {variant === "system" && (
+        <span className="run-msg-system-avatar" aria-hidden="true">
+          <BotIcon size={16} strokeWidth={2.1} />
         </span>
+      )}
+      <div className="run-transcript-message-content" data-slot="message-content">
+        <div className="run-transcript-message-text" data-slot="message-text">
+          {children}
+        </div>
+        <div className="run-msg-footer" data-always-visible="">
+          <div className="run-msg-timings">
+            <span className="run-msg-timing-row">now</span>
+          </div>
+        </div>
+      </div>
+      {variant === "user" && (
+        <span className="run-msg-avatar">
+          <span className="avatar" aria-hidden="true">NG</span>
+        </span>
+      )}
+    </div>
+  );
+}
+
+function MarkdownText({ children }: { children: ReactNode }) {
+  return (
+    <div className="run-markdown">
+      <p>{children}</p>
+    </div>
+  );
+}
+
+function ToolPreview({
+  icon,
+  label,
+  state,
+  colorClass,
+}: {
+  icon: ReactNode;
+  label: string;
+  state: "running" | "completed" | "failed";
+  colorClass: string;
+}) {
+  return (
+    <div className="run-transcript-tool" data-slot="tool-item" data-kind="tool" data-state={state}>
+      <div className="run-transcript-tool-connector" data-slot="tool-item-connector">
+        <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
+      </div>
+      <div className="run-transcript-tool-content">
+        <button
+          type="button"
+          className="run-transcript-tool-header"
+          data-slot="tool-item-header"
+          aria-expanded={false}
+        >
+          <span className="run-transcript-tool-icon" data-slot="tool-item-icon">
+            <span className={`run-tool-icon-glyph ${colorClass}`} aria-hidden="true">
+              {icon}
+            </span>
+          </span>
+          <span className="run-transcript-tool-label" data-slot="tool-item-label">
+            {label}
+          </span>
+          {state === "running" && (
+            <Loader2Icon size={12} className="run-spin run-tool-spinner" aria-hidden="true" />
+          )}
+          <span className="run-transcript-tool-chevron" data-slot="tool-item-chevron">
+            <ChevronDownIcon size={14} strokeWidth={2} className="run-chevron-icon" aria-hidden="true" />
+          </span>
+        </button>
       </div>
     </div>
+  );
+}
+
+function ThinkingActivityMessage() {
+  return (
+    <TranscriptMessage role="assistant" messageId="thinking-active" designState="active">
+      <div className="run-markdown turn-activity-thinking-copy">
+        <p className="turn-activity-thinking-title">
+          Codex is thinking
+          <ThinkingDots />
+        </p>
+        <p className="turn-activity-thinking-subtitle">
+          Reading the current transcript renderer and preparing a static hot-swap.
+        </p>
+      </div>
+      <div className="run-transcript-tools turn-activity-thinking-tools" data-slot="tool-group" data-state="running">
+        <button type="button" className="run-transcript-tools-header" aria-expanded={true}>
+          <span className="run-transcript-tools-icon" title="Turn activity" aria-label="Turn activity">
+            <WrenchIcon size={14} strokeWidth={2} aria-hidden="true" />
+          </span>
+          <span className="run-transcript-tools-label">3 activity updates - 1 running</span>
+          <Loader2Icon size={12} className="run-spin run-tool-spinner" aria-hidden="true" />
+          <span className="run-transcript-tools-chevron">
+            <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
+          </span>
+        </button>
+        <div className="run-transcript-tools-body">
+          <ToolPreview
+            icon={<SearchIcon size={14} strokeWidth={2} />}
+            label="Read docs/product-inspirations.md"
+            state="completed"
+            colorClass="tool-color-search"
+          />
+          <ToolPreview
+            icon={<SquareTerminalIcon size={14} strokeWidth={2} />}
+            label="Inspect RunMessages and RunTurnActivityGroup"
+            state="completed"
+            colorClass="tool-color-bash"
+          />
+          <ToolPreview
+            icon={<ListChecksIcon size={14} strokeWidth={2} />}
+            label="Hot-swap tank-operator-slot-1"
+            state="running"
+            colorClass="tool-color-todo"
+          />
+        </div>
+      </div>
+    </TranscriptMessage>
+  );
+}
+
+function SettledActivityMessage() {
+  return (
+    <TranscriptMessage role="assistant" messageId="thinking-settled" designState="settled">
+      <div className="run-markdown turn-activity-thinking-copy">
+        <p className="turn-activity-thinking-title">
+          <CheckIcon size={15} strokeWidth={2.1} aria-hidden="true" />
+          Codex thought for 42s
+        </p>
+        <p className="turn-activity-thinking-subtitle">
+          2 tools, 1 file changed. Expandable detail would use the same tool rows above.
+        </p>
+      </div>
+    </TranscriptMessage>
+  );
+}
+
+function NeedsInputActivityMessage() {
+  return (
+    <TranscriptMessage role="system" messageId="thinking-input" designState="needs-input">
+      <div className="run-markdown turn-activity-thinking-copy">
+        <p className="turn-activity-thinking-title">
+          <MessageSquareIcon size={15} strokeWidth={2.1} aria-hidden="true" />
+          Codex needs input
+        </p>
+        <p className="turn-activity-thinking-subtitle">
+          Choose whether this should replace or supplement the existing Turn activity row.
+        </p>
+      </div>
+    </TranscriptMessage>
   );
 }
 
@@ -146,39 +224,29 @@ export function StyleguidePortfolioTurnActivity() {
         <BackLink />
         <h1 style={pageTitleStyle}>portfolio scene: turn activity</h1>
         <p style={captionStyle}>
-          Prototype for a Slack/Discord-style thinking indicator that can carry
-          durable turn activity without making the transcript feel like a log
-          viewer.
+          Prototype for a Slack/Discord-style thinking indicator placed inside
+          the same transcript shell, message grid, avatar column, and tool rows
+          the production chat pane uses today.
         </p>
         <section style={sectionStyle}>
-          <div className="turn-activity-lab-frame">
-            <div className="turn-activity-lab-transcript" aria-label="Turn activity thinking prototype">
-              <div className="turn-activity-lab-message is-user">
-                <span className="turn-activity-lab-author">You</span>
-                <p>Can you set up a first pass at the new turn activity treatment?</p>
+          <div className="turn-activity-production-frame">
+            <main className="run-main turn-activity-production-main" aria-label="Transcript">
+              <div className="run-transcript run-transcript-claude turn-activity-production-transcript" data-slot="root">
+                <TranscriptMessage role="user" messageId="user-request">
+                  <MarkdownText>
+                    Can you set up a first pass at the new turn activity treatment?
+                  </MarkdownText>
+                </TranscriptMessage>
+                <ThinkingActivityMessage />
+                <TranscriptMessage role="assistant" messageId="assistant-answer">
+                  <MarkdownText>
+                    I set up the prototype route and wired it into the styleguide.
+                  </MarkdownText>
+                </TranscriptMessage>
+                <SettledActivityMessage />
+                <NeedsInputActivityMessage />
               </div>
-              <ThinkingCard />
-              <div className="turn-activity-lab-message is-assistant">
-                <span className="turn-activity-lab-author">Codex</span>
-                <p>I set up the prototype route and wired it into the styleguide.</p>
-              </div>
-              <SettledActivityCard />
-              <NeedsInputActivityCard />
-            </div>
-            <aside className="turn-activity-lab-notes" aria-label="Prototype states">
-              <div>
-                <span className="turn-activity-lab-kicker">Active</span>
-                <p>Inline presence row, low contrast, with animated typing dots and expandable durable detail.</p>
-              </div>
-              <div>
-                <span className="turn-activity-lab-kicker">Settled</span>
-                <p>Collapsed history keeps a compact timing and tool-count summary.</p>
-              </div>
-              <div>
-                <span className="turn-activity-lab-kicker">Needs input</span>
-                <p>Same footprint, warmer state color, no activity expansion unless there is detail to inspect.</p>
-              </div>
-            </aside>
+            </main>
           </div>
         </section>
       </div>
