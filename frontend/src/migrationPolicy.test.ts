@@ -311,6 +311,17 @@ test("chat back-pagination keeps an explicit access path", () => {
   assert.equal(appSource.includes("older-missing-cursor"), true);
 });
 
+test("focused transcript Home and End keys resolve durable conversation edges", () => {
+  assert.equal(appSource.includes("scrollTranscriptToConversationStart"), true);
+  assert.equal(appSource.includes("scrollTranscriptToConversationEnd"), true);
+  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\(\)/);
+  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\(\)/);
+  assert.match(appSource, /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/);
+  assert.match(appSource, /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/);
+  assert.match(appSource, /requestScrollToLatest\("smooth", "keyboard"\)/);
+  assert.equal(appSource.includes("transcriptScrollEl.scrollTop = 0"), false);
+});
+
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
