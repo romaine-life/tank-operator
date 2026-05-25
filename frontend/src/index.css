@@ -6670,7 +6670,7 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript {
-  --run-transcript-active-rail-left: 0.55rem;
+  --run-transcript-active-rail-left: 0.2rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
@@ -6694,8 +6694,9 @@ textarea.run-files-viewer-editor:focus {
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript {
   background: linear-gradient(
     90deg,
-    var(--run-surface-accent-fill),
-    rgba(10, 10, 10, 0) 9.5rem
+    rgba(96, 165, 250, 0.075),
+    rgba(96, 165, 250, 0.035) 4rem,
+    rgba(10, 10, 10, 0) 11rem
   );
 }
 
