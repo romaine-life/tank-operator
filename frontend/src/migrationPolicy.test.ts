@@ -135,6 +135,10 @@ test("historical transcript bootstrap requires server-projected turn activity", 
     appSource,
     /\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
   );
+  assert.match(
+    appSource,
+    /authedFetch\(\s*scopedSessionPathForPane\([\s\S]{0,220}\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
+  );
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
