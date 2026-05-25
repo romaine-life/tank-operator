@@ -397,8 +397,7 @@ button:disabled {
 .admin-avatar-access h1,
 .admin-avatar-header h1,
 .admin-avatar-editor h2,
-.admin-avatar-gallery h2,
-.admin-avatar-group h3 {
+.admin-avatar-gallery h2 {
   margin: 0;
   letter-spacing: 0;
 }
@@ -599,17 +598,6 @@ button:disabled {
 .admin-avatar-gallery-head {
   justify-content: space-between;
   margin-bottom: var(--space-4);
-}
-
-.admin-avatar-group + .admin-avatar-group {
-  margin-top: var(--space-6);
-}
-
-.admin-avatar-group h3 {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  font-weight: 650;
-  text-transform: uppercase;
 }
 
 .admin-avatar-empty {

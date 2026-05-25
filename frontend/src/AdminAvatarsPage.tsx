@@ -199,10 +199,10 @@ export function AdminAvatarsPage() {
     };
   }, [crop, imageRect]);
 
-  const grouped = useMemo(() => ({
-    agent: entries.filter((entry) => entry.kind === "agent"),
-    system: entries.filter((entry) => entry.kind === "system"),
-  }), [entries]);
+  const visibleEntries = useMemo(
+    () => entries.filter((entry) => entry.kind === kind),
+    [entries, kind],
+  );
 
   const updateCropFromPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!imageRect || !stageRef.current) return;
@@ -460,58 +460,53 @@ export function AdminAvatarsPage() {
 
         <section className="admin-avatar-gallery" aria-label="Avatar gallery">
           <div className="admin-avatar-gallery-head">
-            <h2>Avatars</h2>
+            <h2>{kind === "agent" ? "Agent avatars" : "System avatars"}</h2>
             {loadingEntries && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
           </div>
           {listError && <div className="admin-avatar-error">{listError}</div>}
-          {(["agent", "system"] as AvatarKind[]).map((group) => (
-            <div className="admin-avatar-group" key={group}>
-              <h3>{group}</h3>
-              {grouped[group].length === 0 ? (
-                <p className="admin-avatar-empty">No {group} avatars.</p>
-              ) : (
-                <div className="admin-avatar-grid">
-                  {grouped[group].map((entry) => (
-                    <div className="admin-avatar-card" key={entry.id}>
-                      <button
-                        type="button"
-                        className="admin-avatar-card-main"
-                        aria-label={`View ${entry.name}`}
-                        onClick={(event) =>
-                          openAvatarPreview({
-                            name: entry.name,
-                            avatarSrc: entry.avatarSrc,
-                            backingSrc: entry.backing_url,
-                            kind: entry.kind,
-                          }, event)
-                        }
-                      >
-                        <span className="admin-avatar-card-preview" aria-hidden="true">
-                          <img src={entry.avatarSrc} alt="" draggable={false} />
-                        </span>
-                        <span className="admin-avatar-card-body">
-                          <span className="admin-avatar-card-name">{entry.name}</span>
-                          <span className="admin-avatar-card-meta">{entry.created_by}</span>
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="admin-avatar-delete"
-                        title="delete avatar"
-                        aria-label={`Delete ${entry.name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void deleteAvatar(entry);
-                        }}
-                      >
-                        <Trash2Icon size={15} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
+          {visibleEntries.length === 0 ? (
+            <p className="admin-avatar-empty">No {kind} avatars.</p>
+          ) : (
+            <div className="admin-avatar-grid">
+              {visibleEntries.map((entry) => (
+                <div className="admin-avatar-card" key={entry.id}>
+                  <button
+                    type="button"
+                    className="admin-avatar-card-main"
+                    aria-label={`View ${entry.name}`}
+                    onClick={(event) =>
+                      openAvatarPreview({
+                        name: entry.name,
+                        avatarSrc: entry.avatarSrc,
+                        backingSrc: entry.backing_url,
+                        kind: entry.kind,
+                      }, event)
+                    }
+                  >
+                    <span className="admin-avatar-card-preview" aria-hidden="true">
+                      <img src={entry.avatarSrc} alt="" draggable={false} />
+                    </span>
+                    <span className="admin-avatar-card-body">
+                      <span className="admin-avatar-card-name">{entry.name}</span>
+                      <span className="admin-avatar-card-meta">{entry.created_by}</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-avatar-delete"
+                    title="delete avatar"
+                    aria-label={`Delete ${entry.name}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void deleteAvatar(entry);
+                    }}
+                  >
+                    <Trash2Icon size={15} aria-hidden="true" />
+                  </button>
                 </div>
-              )}
+              ))}
             </div>
-          ))}
+          )}
         </section>
       </main>
     </div>
