@@ -361,6 +361,29 @@ func TestCreateSessionInitialTurnFailureRollsBackCreatedPod(t *testing.T) {
 	}
 }
 
+// TestCreateHermesSessionInitialTurnSubmitsAtCreate asserts two
+// independent durability contracts on the hermes_gui create path:
+//
+// Phase A — the durable-before-202 contract. After handleCreateSession
+// returns the 201, the session's transcript already contains the
+// user_message.created + turn.submitted pair, even if Hermes itself
+// returns slowly. This is what the SPA needs to render the user
+// bubble immediately on submit.
+//
+// Phase B — the terminal-safety-net contract. The bridge spawns a
+// goroutine to tail Hermes' SSE event-stream. When the upstream stream
+// ends without an explicit terminal event (here, simulated by the
+// mock server returning 200 OK with an empty body), the bridge MUST
+// emit turn.command_failed with reason="hermes_stream_lost" itself so
+// the SPA's projection resolves to error rather than hanging in
+// "running" forever. This is durable-terminal-contract from
+// nelsong6/tank-operator#532 — load-bearing for hermes_gui sessions.
+//
+// The phases are awaited explicitly via Bridge.WaitForTurn so the
+// assertion below isn't racing the bridge's streaming goroutine, the
+// way the previous "len(upserts) == 2" assertion was (it flaked on
+// nelsong6/tank-operator#638's CI when the goroutine emitted its
+// safety-net upsert before the assertion ran).
 func TestCreateHermesSessionInitialTurnSubmitsAtCreate(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -375,6 +398,8 @@ func TestCreateHermesSessionInitialTurnSubmitsAtCreate(t *testing.T) {
 			}
 			writeJSON(w, http.StatusOK, hermes.CreateRunResponse{RunID: "run-1", Status: "started"})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run-1/events":
+			// Empty event-stream — intentionally triggers the bridge's
+			// hermes_stream_lost safety net (Phase B below).
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 		default:
@@ -414,13 +439,128 @@ func TestCreateHermesSessionInitialTurnSubmitsAtCreate(t *testing.T) {
 	if createRun.Input != "hello hermes" || createRun.SessionID != created.ID {
 		t.Fatalf("hermes create run request = %#v", createRun)
 	}
+
 	es := app.sessionEvents.(*recordingSessionEventStore)
-	if len(es.upserts) != 2 {
-		t.Fatalf("hermes upserts = %d, want 2", len(es.upserts))
+
+	// Phase A — durable-before-202 contract. The first two upserts
+	// are deterministic: handleCreateSession's hermes path calls
+	// b.store.Upsert for user_message.created + turn.submitted
+	// synchronously inside SubmitTurn, BEFORE spawning the streaming
+	// goroutine. The streaming goroutine's safety-net upsert may
+	// already have landed at index 2 (it races us); the count check
+	// is intentionally >= 2 to avoid re-introducing the prior flake.
+	if len(es.upserts) < 2 {
+		t.Fatalf("hermes upserts (Phase A) = %d, want >= 2", len(es.upserts))
 	}
 	for i, want := range []string{"user_message.created", "turn.submitted"} {
 		if got, _ := es.upserts[i]["type"].(string); got != want {
-			t.Fatalf("upsert[%d].type = %q, want %q", i, got, want)
+			t.Fatalf("Phase A upsert[%d].type = %q, want %q", i, got, want)
+		}
+	}
+
+	// Phase B — terminal-safety-net contract. Block until the bridge's
+	// streaming goroutine for this turn has returned (its done chan
+	// closed via runStream's defer). After this point the durable
+	// terminal event must be in the store: either a translated
+	// terminal from the upstream stream, or — for the empty-stream
+	// case this test simulates — a turn.command_failed with
+	// reason="hermes_stream_lost".
+	turnID, _ := es.upserts[1]["turn_id"].(string)
+	if turnID == "" {
+		t.Fatalf("turn.submitted has no turn_id; payload=%#v", es.upserts[1])
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := app.hermesBridge.WaitForTurn(waitCtx, created.ID, turnID); err != nil {
+		t.Fatalf("WaitForTurn: %v", err)
+	}
+	terminal := es.upserts[len(es.upserts)-1]
+	if got, _ := terminal["type"].(string); got != "turn.command_failed" {
+		t.Fatalf("Phase B terminal upsert type = %q, want turn.command_failed", got)
+	}
+	payload, _ := terminal["payload"].(map[string]any)
+	if reason, _ := payload["reason"].(string); reason != "hermes_stream_lost" {
+		t.Fatalf("Phase B terminal reason = %q, want hermes_stream_lost (the safety-net signature)", reason)
+	}
+}
+
+// TestCreateHermesSessionRealTerminalSuppressesSafetyNet asserts the
+// flip side of the safety-net contract: when Hermes' SSE stream DOES
+// carry a terminal event, the bridge translates it and the
+// hermes_stream_lost rescue MUST NOT fire on top. Otherwise every
+// successful turn would also produce a spurious command_failed and
+// the SPA would render two contradictory terminals.
+func TestCreateHermesSessionRealTerminalSuppressesSafetyNet(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	hermesServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
+			writeJSON(w, http.StatusOK, hermes.CreateRunResponse{RunID: "run-1", Status: "started"})
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run-1/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				t.Errorf("test server writer is not a flusher")
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			// Minimal SSE frame matching the Hermes translator's
+			// terminal contract — run.completed maps to
+			// EventTurnCompleted at translator.go:107, which
+			// suppresses the safety net.
+			if _, err := w.Write([]byte("event: run.completed\ndata: {}\n\n")); err != nil {
+				return
+			}
+			flusher.Flush()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer hermesServer.Close()
+	app.hermesBridge = hermes.NewBridge(hermes.BridgeOptions{
+		Client: hermes.NewClient(hermes.Options{
+			BaseURL: hermesServer.URL,
+			Tokens:  staticHermesTokenSource{},
+			Timeout: time.Second,
+		}),
+		Store: app.sessionEvents.(*recordingSessionEventStore),
+		Scope: "default",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"hermes_gui",
+		"initial_turn":{"client_nonce":"turn-hermes_real","prompt":"hello"}
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created sessions.Info
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	turnID, _ := es.upserts[1]["turn_id"].(string)
+	waitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := app.hermesBridge.WaitForTurn(waitCtx, created.ID, turnID); err != nil {
+		t.Fatalf("WaitForTurn: %v", err)
+	}
+	// Walk every upsert; no command_failed with reason=hermes_stream_lost
+	// must appear. (A translated terminal — turn.completed or sibling —
+	// is fine and expected; we don't constrain its exact type here
+	// because the translator's mapping is its own contract pinned
+	// elsewhere.)
+	for _, evt := range es.upserts {
+		if t1, _ := evt["type"].(string); t1 == "turn.command_failed" {
+			payload, _ := evt["payload"].(map[string]any)
+			if reason, _ := payload["reason"].(string); reason == "hermes_stream_lost" {
+				t.Fatalf("hermes_stream_lost fired on top of a real terminal; upserts=%#v", es.upserts)
+			}
 		}
 	}
 }
