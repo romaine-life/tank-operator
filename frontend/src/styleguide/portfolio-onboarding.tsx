@@ -20,7 +20,8 @@ export function StyleguidePortfolioOnboarding() {
         <h1 style={pageTitleStyle}>portfolio scene: onboarding</h1>
         <p style={captionStyle}>
           First-run wall. This stays sparse: one task, one primary CTA,
-          diagnostic supporting copy.
+          diagnostic supporting copy, and the same signed-in metadata as the
+          live onboarding gate.
         </p>
         <section style={sectionStyle}>
           <div
@@ -35,13 +36,14 @@ export function StyleguidePortfolioOnboarding() {
             <div className="welcome-inner onboarding" style={{ maxWidth: 460 }}>
               <h2 className="welcome-title">Connect GitHub</h2>
               <p className="welcome-sub">
-                tank-operator needs the App installed so sessions can read and
-                write repos through mcp-github.
+                tank-operator needs the <code>tank-operator</code> GitHub App
+                installed on your account so your sessions can read and write
+                your repos via mcp-github.
               </p>
               <a className="btn-primary onboarding-cta" href="#">Install GitHub App</a>
               <p className="onboarding-meta">
-                signed in as <code>you@example.com</code> ·{" "}
-                <button className="link-button" type="button">Sign out</button>
+                Signed in as <strong>you@example.com</strong>.{" "}
+                <button className="link-button" type="button">sign out</button>
               </p>
             </div>
           </div>

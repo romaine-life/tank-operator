@@ -3,7 +3,7 @@
 // independently. Keep behavior + markup identical to what was inline
 // before; this is a pure structural move.
 
-import { ArrowLeftIcon, FolderIcon, InfoIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, FolderIcon, InfoIcon, SettingsIcon } from "lucide-react";
 import {
   BackLink,
   captionStyle,
@@ -12,6 +12,39 @@ import {
   showcaseFrameStyle,
   styleguideShellStyle,
 } from "./shared";
+
+function BackgroundTab({
+  active = false,
+  count = 2,
+  disabled = false,
+}: {
+  active?: boolean;
+  count?: number;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      title={disabled ? "Background activity is available once the session starts" : "Background"}
+      data-design-component="RunHeaderTab"
+      data-design-state={active ? "background-active" : disabled ? "background-disabled" : "background-rest"}
+      data-design-source="frontend/src/App.tsx"
+    >
+      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Background</span>
+      <span
+        className="run-shell-tasks-count"
+        data-active={count > 0 ? "true" : undefined}
+        aria-label={`${count} background items`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
 
 export function StyleguideRunHeaderTabs() {
   return (
@@ -35,6 +68,7 @@ export function StyleguideRunHeaderTabs() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
+                    <BackgroundTab count={0} />
                     <button
                       className="run-tab"
                       type="button"
@@ -87,6 +121,7 @@ export function StyleguideRunHeaderTabs() {
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
+                    <BackgroundTab count={3} />
                     <button
                       className="run-tab run-tab-active"
                       type="button"
@@ -131,6 +166,7 @@ export function StyleguideRunHeaderTabs() {
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
+                    <BackgroundTab count={1} />
                     <button
                       className="run-tab run-tab-active"
                       type="button"

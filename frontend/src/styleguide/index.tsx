@@ -33,10 +33,10 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
   {
     name: "components",
     entries: [
-      { slug: "new-session-row", label: "new session row", sub: "launcher" },
+      { slug: "new-session-row", label: "session launcher", sub: "home setup + composer" },
       { slug: "run-header-tabs", label: "run header tabs", sub: "side-pane nav" },
       { slug: "session-row", label: "session row", sub: "sidebar list entry" },
-      { slug: "mode-dropdown", label: "mode dropdown", sub: "provider selector" },
+      { slug: "mode-dropdown", label: "runtime controls", sub: "provider + interaction" },
       { slug: "welcome-card", label: "welcome card", sub: "boot/onboarding shell" },
       { slug: "error-pill", label: "error pill", sub: "inline transient errors" },
       { slug: "boot-state", label: "boot state", sub: "full-screen lifecycle" },

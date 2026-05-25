@@ -1,8 +1,4 @@
-// One section per route — pulls a copy of the original section's JSX
-// out of the monolithic StyleguideView so feature pages can iterate
-// independently. Keep behavior + markup identical to what was inline
-// before; this is a pure structural move.
-
+import { MonitorIcon, TerminalIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
 import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
 import {
@@ -11,8 +7,30 @@ import {
   pageTitleStyle,
   sectionStyle,
   styleguideShellStyle,
-  TankIcon,
 } from "./shared";
+
+function ModePair({
+  provider,
+  interaction,
+  label,
+}: {
+  provider: "anthropic" | "codex" | "hermes" | "pi";
+  interaction: "gui" | "cli";
+  label: string;
+}) {
+  const Interaction = interaction === "gui" ? MonitorIcon : TerminalIcon;
+  return (
+    <>
+      <span className="mode mode-icon-only mode-provider-chip" title={label} aria-label={label}>
+        <ProviderIcon provider={provider} className="mode-provider-icon" />
+        <span className="sr-only">{label}</span>
+      </span>
+      <span className="mode mode-icon-only mode-interaction-chip" title={interaction} aria-label={interaction}>
+        <Interaction className="mode-interaction-icon" aria-hidden="true" />
+      </span>
+    </>
+  );
+}
 
 export function StyleguideSessionRow() {
   return (
@@ -21,74 +39,89 @@ export function StyleguideSessionRow() {
         <BackLink />
         <h1 style={pageTitleStyle}>session row</h1>
         <p style={captionStyle}>
-          One row per session in the sidebar list. Top: session name + delete
-          affordance. Bottom: status dot + mode chip + compact boot/runtime
-          stats + optional inline actions (remote-control, rollout,
-          save-credentials). Active row gets the <code>is-open</code> class; not
-          styled here for brevity.
+          Current sidebar rows: agent avatar, read-only name label, status dot,
+          provider and interaction chips, boot/runtime stats, activity chips,
+          and inline actions such as save for config sessions.
         </p>
         <section style={sectionStyle}>
-          <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
-            <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("my-session")} className="session-avatar" />
+          <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
+            <li className="is-open is-skill-test">
+              <AgentAvatarIcon avatar={getSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
-                <span className="session-open">
-                  <span className="session-id">my-session</span>
+                <span className="session-open" title="design-showcase">
+                  <span className="session-id">design-showcase</span>
                 </span>
                 <button className="session-delete" aria-label="delete session" type="button">
-                  ×
+                  <XIcon size={14} aria-hidden="true" />
                 </button>
               </div>
               <div className="session-row-bottom">
-                <span className="status-dot status-active" aria-label="status active" />
-                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
-                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
-                  <span className="sr-only">claude-cli</span>
-                </span>
+                <span className="status-dot status-agent-working" title="Agent working" aria-label="status: Agent working" />
+                <ModePair provider="codex" interaction="gui" label="Codex GUI" />
                 <span className="session-stats">
-                  <span className="session-stat" title="ready 32s after request">
+                  <span className="session-stat" title="ready 32s after request" aria-label="ready 32s after request">
                     <span aria-hidden="true">↓</span>
                     <span>32s</span>
                   </span>
-                  <span className="session-stat" title="running 12m">
+                  <span className="session-stat" title="running 12m" aria-label="running 12m">
                     <span aria-hidden="true">↑</span>
                     <span>12m</span>
                   </span>
                 </span>
-                <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
-                  <span>↗</span>
-                </button>
-                <button className="session-action session-rollout is-icon" type="button" aria-label="start rollout">
-                  <TankIcon className="session-action-tank-icon" />
-                </button>
-                <button className="session-action session-rollout is-icon is-clicked" type="button" aria-label="start rollout">
-                  <TankIcon className="session-action-tank-icon" />
-                </button>
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("starting")} className="session-avatar" />
+              <AgentAvatarIcon avatar={getSessionAvatar("needs-input", "jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
-                <span className="session-open">
-                  <span className="session-id">starting…</span>
+                <span className="session-open" title="migration-plan">
+                  <span className="session-id">migration-plan</span>
                 </span>
                 <button className="session-delete" aria-label="delete session" type="button">
-                  ×
+                  <XIcon size={14} aria-hidden="true" />
                 </button>
               </div>
               <div className="session-row-bottom">
-                <span className="status-dot status-pending" aria-label="status pending" />
-                <span className="mode mode-api_key">api</span>
-                <span className="session-stats">
-                  <span className="session-stat" title="starting for 18s since request">
-                    <span aria-hidden="true">↓</span>
-                    <span>18s</span>
-                  </span>
-                  <span className="session-stat" title="running less than 1m">
-                    <span aria-hidden="true">↑</span>
-                    <span>&lt;1m</span>
-                  </span>
+                <span className="status-dot status-agent-needs-input" title="Needs input" aria-label="status: Needs input" />
+                <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
+                <span className="session-activity-chip is-input" title="Agent needs input" aria-label="Agent needs input">
+                  input
                 </span>
+              </div>
+            </li>
+            <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("codex-config", "jp1-malcolm")} className="session-avatar" />
+              <div className="session-row-top">
+                <span className="session-open" title="codex-login">
+                  <span className="session-id">codex-login</span>
+                </span>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  <XIcon size={14} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-active" title="Active" aria-label="status: Active" />
+                <span className="mode mode-codex_config" title="Codex config" aria-label="Codex config">
+                  codex-cfg
+                </span>
+                <button className="session-action" type="button" title="capture ~/.codex/auth.json from this pod and write it to KV">
+                  save
+                </button>
+              </div>
+            </li>
+            <li className="is-closing">
+              <AgentAvatarIcon avatar={getSessionAvatar("closing", "jp1-grant")} className="session-avatar" />
+              <div className="session-row-top">
+                <span className="session-open" title="session is closing">
+                  <span className="session-id">cleanup-session</span>
+                </span>
+                <button className="session-delete" aria-label="closing session" type="button" disabled>
+                  <span className="session-delete-spinner" />
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-agent-stopping" title="Stopping" aria-label="status: Stopping" />
+                <ModePair provider="pi" interaction="cli" label="Pi CLI" />
+                <span className="session-closing-chip">closing</span>
               </div>
             </li>
           </ul>

@@ -3,14 +3,20 @@
 // independently. Keep behavior + markup identical to what was inline
 // before; this is a pure structural move.
 
-import { FolderIcon, InfoIcon, SettingsIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  FolderIcon,
+  InfoIcon,
+  MonitorIcon,
+  SettingsIcon,
+  TerminalIcon,
+  XIcon,
+} from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
+import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
-  IconChevronDown,
-  IconKey,
-  IconWrench,
   pageTitleStyle,
   portfolioFrameStyle,
   sectionStyle,
@@ -38,7 +44,7 @@ function MiniTerminal() {
 
 $ rg "run-tab" frontend/src
 frontend/src/App.tsx
-frontend/src/StyleguideView.tsx
+frontend/src/styleguide/run-header-tabs.tsx
 
 [reconnected]
 ❯ `}</div>
@@ -54,64 +60,97 @@ function PortfolioWorkspaceScene() {
             <span className="sidebar-home-label">tank-operator</span>
           </button>
         </div>
-        <div className="sidebar-section">
-          <div className="new-row new-row-launcher">
-            <button className="new-row-provider-toggle" type="button" aria-label="choose provider">
-              <span className="new-row-provider-slot">
-                <ProviderIcon provider="codex" className="new-row-provider-icon" />
-              </span>
-              <IconChevronDown className="new-row-provider-chevron" />
-            </button>
-            <div className="new-row-action-group" role="group" aria-label="session actions">
-              <button className="new-row-action" type="button" aria-label="start default session">
-                <span className="row-icon">+</span>
-              </button>
-              <button className="new-row-action" type="button" aria-label="start API key session">
-                <IconKey className="new-row-action-icon" />
-              </button>
-              <button className="new-row-action" type="button" aria-label="start config session">
-                <IconWrench className="new-row-action-icon" />
-              </button>
-            </div>
-          </div>
-        </div>
         <div className="sidebar-list">
-          <div className="sidebar-section-label">Sessions</div>
+          <div className="sidebar-list-head">
+            <div className="sidebar-section-label">Sessions</div>
+            <button className="sidebar-new-session" type="button" aria-label="New session" title="new session">
+              <span className="row-icon">+</span>
+            </button>
+          </div>
           <ul className="sessions">
             <li className="is-open">
+              <AgentAvatarIcon avatar={getSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">design-showcase</span>
                 </span>
-                <button className="session-delete" aria-label="delete session" type="button">×</button>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  <XIcon size={14} aria-hidden="true" />
+                </button>
               </div>
               <div className="session-row-bottom">
-                <span className="status-dot status-active" aria-label="status active" />
-                <span className="mode mode-codex_cli mode-icon-only" title="Codex CLI" aria-label="Codex CLI">
+                <span className="status-dot status-agent-working" aria-label="status: Agent working" />
+                <span className="mode mode-icon-only mode-provider-chip" title="Codex GUI" aria-label="Codex GUI">
                   <ProviderIcon provider="codex" className="mode-provider-icon" />
-                  <span className="sr-only">codex-cli</span>
+                  <span className="sr-only">codex-gui</span>
                 </span>
-                <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
-                  <span>↗</span>
-                </button>
+                <span className="mode mode-icon-only mode-interaction-chip" title="gui" aria-label="gui">
+                  <MonitorIcon className="mode-interaction-icon" aria-hidden="true" />
+                </span>
+                <span className="session-stats">
+                  <span className="session-stat" title="ready 28s after request">
+                    <span aria-hidden="true">↓</span>
+                    <span>28s</span>
+                  </span>
+                  <span className="session-stat" title="running 7m">
+                    <span aria-hidden="true">↑</span>
+                    <span>7m</span>
+                  </span>
+                </span>
               </div>
             </li>
             <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("avatar-review", "jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">avatar-review</span>
                 </span>
-                <button className="session-delete" aria-label="delete session" type="button">×</button>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  <XIcon size={14} aria-hidden="true" />
+                </button>
               </div>
               <div className="session-row-bottom">
-                <span className="status-dot status-pending" aria-label="status pending" />
-                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
+                <span className="status-dot status-agent-needs-input" aria-label="status: Needs input" />
+                <span className="mode mode-icon-only mode-provider-chip" title="Claude GUI" aria-label="Claude GUI">
                   <ProviderIcon provider="anthropic" className="mode-provider-icon" />
-                  <span className="sr-only">claude-cli</span>
+                  <span className="sr-only">claude-gui</span>
+                </span>
+                <span className="mode mode-icon-only mode-interaction-chip" title="gui" aria-label="gui">
+                  <MonitorIcon className="mode-interaction-icon" aria-hidden="true" />
+                </span>
+                <span className="session-activity-chip is-input">input</span>
+              </div>
+            </li>
+            <li>
+              <AgentAvatarIcon avatar={getSessionAvatar("pi-review", "jp1-grant")} className="session-avatar" />
+              <div className="session-row-top">
+                <span className="session-open">
+                  <span className="session-id">pi-review</span>
+                </span>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  <XIcon size={14} aria-hidden="true" />
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-pending" aria-label="status: Pending" />
+                <span className="mode mode-icon-only mode-provider-chip" title="Pi CLI" aria-label="Pi CLI">
+                  <ProviderIcon provider="pi" className="mode-provider-icon" />
+                  <span className="sr-only">pi-cli</span>
+                </span>
+                <span className="mode mode-icon-only mode-interaction-chip" title="cli" aria-label="cli">
+                  <TerminalIcon className="mode-interaction-icon" aria-hidden="true" />
                 </span>
               </div>
             </li>
           </ul>
+        </div>
+        <div className="sidebar-footer">
+          <button className="profile" type="button" title="nelson@example.com">
+            <span className="avatar" aria-hidden="true">NO</span>
+            <span className="profile-text">
+              <span className="profile-name">nelson@example.com</span>
+            </span>
+          </button>
         </div>
       </aside>
       <section className="run-panel">
@@ -120,6 +159,11 @@ function PortfolioWorkspaceScene() {
             <button className="run-header-name-btn" type="button">design-showcase</button>
           </div>
           <nav className="run-tabs" aria-label="Session actions">
+            <button className="run-tab run-shell-tasks-trigger" type="button" aria-pressed={false} title="Background">
+              <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Background</span>
+              <span className="run-shell-tasks-count" data-active="true" aria-label="2 background items">2</span>
+            </button>
             <button className="run-tab" type="button">
               <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
               <span>Files</span>

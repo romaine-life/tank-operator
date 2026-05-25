@@ -20,16 +20,16 @@ export function StyleguideStatusDot() {
         <BackLink />
         <h1 style={pageTitleStyle}>status dot</h1>
         <p style={captionStyle}>
-          Replaces the old text pill ("Active" / "Pending" / "Failed") in
-          the session row. Color carries the status; shape stays neutral so
-          the row's dominant visual belongs to the session name.
+          Compact session activity state in the sidebar row. Color carries the
+          durable lifecycle or agent state while the session name keeps the
+          dominant row weight.
         </p>
         <section style={sectionStyle}>
           <div style={rowStyle}>
-            {STATUSES.map((s) => (
-              <div key={s} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span className={`status-dot status-${s}`} aria-label={`status ${s}`} />
-                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{s}</span>
+            {STATUSES.map(([status, label]) => (
+              <div key={status} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className={`status-dot status-${status}`} aria-label={`status ${label}`} />
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{label}</span>
               </div>
             ))}
           </div>

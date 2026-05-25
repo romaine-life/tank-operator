@@ -15,6 +15,12 @@ const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
+const styleguideIndexSource = readSource("./styleguide/index.tsx");
+const styleguideSessionLauncherSource = readSource("./styleguide/new-session-row.tsx");
+const styleguideRuntimeControlsSource = readSource("./styleguide/mode-dropdown.tsx");
+const styleguideSessionRowSource = readSource("./styleguide/session-row.tsx");
+const styleguidePortfolioWorkspaceSource = readSource("./styleguide/portfolio-workspace.tsx");
+const styleguideSharedSource = readSource("./styleguide/shared.tsx");
 const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
 const installTankDocsSource = readSource("../../k8s/session-config/install-tank-docs.sh");
 const agentRunnerLaunchSource = readSource("../../k8s/session-config/agent-runner-launch.sh");
@@ -266,6 +272,24 @@ test("settings admin exposes the design portfolio catalog", () => {
     /href="\/_styleguide"[\s\S]*target="_blank"[\s\S]*Design portfolio/,
   );
   assert.equal(mainSource.includes('"/_styleguide": () => <StyleguideIndex />'), true);
+});
+
+test("styleguide catalog tracks current home and sidebar surfaces", () => {
+  assert.equal(styleguideIndexSource.includes("new session row"), false);
+  assert.equal(styleguideIndexSource.includes("mode dropdown"), false);
+  assert.equal(styleguideIndexSource.includes("session launcher"), true);
+  assert.equal(styleguideIndexSource.includes("runtime controls"), true);
+  assert.equal(styleguideSessionLauncherSource.includes("home-initial-grid"), true);
+  assert.equal(styleguideSessionLauncherSource.includes("home-repos"), true);
+  assert.equal(styleguideSessionLauncherSource.includes("new-row"), false);
+  assert.equal(styleguideRuntimeControlsSource.includes("home-choice-grid"), true);
+  assert.equal(styleguideRuntimeControlsSource.includes("dropdown-provider"), false);
+  assert.equal(styleguideRuntimeControlsSource.includes("new-row"), false);
+  assert.equal(styleguidePortfolioWorkspaceSource.includes("new-row"), false);
+  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), true);
+  assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
+  assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
+  assert.equal(styleguideSharedSource.includes("agent-needs-input"), true);
 });
 
 test("files tab is gated until the session container is available", () => {

@@ -1,73 +1,80 @@
-// One section per route — pulls a copy of the original section's JSX
-// out of the monolithic StyleguideView so feature pages can iterate
-// independently. Keep behavior + markup identical to what was inline
-// before; this is a pure structural move.
-
-import { useState } from "react";
+import { MonitorIcon, TerminalIcon } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
 import {
   BackLink,
   captionStyle,
-  IconChevronDown,
-  IconKey,
-  IconWrench,
   pageTitleStyle,
   sectionStyle,
   styleguideShellStyle,
 } from "./shared";
 
 export function StyleguideModeDropdown() {
-  const [dropdownOpen, setDropdownOpen] = useState(true);
-
   return (
     <div style={styleguideShellStyle}>
       <div style={{ maxWidth: 880 }}>
         <BackLink />
-        <h1 style={pageTitleStyle}>mode dropdown</h1>
+        <h1 style={pageTitleStyle}>runtime controls</h1>
         <p style={captionStyle}>
-          Provider selection is the only dropdown; action icons stay in the
-          launcher row.
+          Runtime selection now lives in the home configuration panel: provider
+          buttons first, then GUI/CLI interaction buttons. The old compact
+          provider dropdown is retired.
         </p>
         <section style={sectionStyle}>
-          <div className="new-row new-row-launcher" data-menu="mode">
-            <button
-              className={`new-row-provider-toggle${dropdownOpen ? " is-open" : ""}`}
-              type="button"
-              aria-label="choose provider"
-              onClick={() => setDropdownOpen((v) => !v)}
-            >
-              <span className="new-row-provider-slot">
-                <ProviderIcon provider="anthropic" className="new-row-provider-icon" />
-              </span>
-              <IconChevronDown className="new-row-provider-chevron" />
-            </button>
-            <div className="new-row-action-group" role="group" aria-label="session actions">
-              <button className="new-row-action" type="button" aria-label="start default session">
-                <span className="row-icon">+</span>
+          <div className="home-panel" style={{ maxWidth: 620 }}>
+            <div className="home-panel-head">
+              <h3>Provider</h3>
+              <span className="home-panel-meta">Codex GUI</span>
+            </div>
+            <div className="home-choice-grid" role="group" aria-label="provider">
+              <button className="home-choice" type="button" aria-pressed="false" title="Claude GUI">
+                <ProviderIcon provider="anthropic" className="home-choice-icon" />
+                <span>Claude</span>
               </button>
-              <button className="new-row-action" type="button" aria-label="start API key session">
-                <IconKey className="new-row-action-icon" />
+              <button className="home-choice is-selected" type="button" aria-pressed="true" title="Codex GUI">
+                <ProviderIcon provider="codex" className="home-choice-icon" />
+                <span>Codex</span>
               </button>
-              <button className="new-row-action" type="button" aria-label="start config session">
-                <IconWrench className="new-row-action-icon" />
+              <button className="home-choice" type="button" aria-pressed="false" title="Hermes">
+                <ProviderIcon provider="hermes" className="home-choice-icon" />
+                <span>Hermes</span>
+              </button>
+              <button className="home-choice" type="button" aria-pressed="false" title="Pi CLI">
+                <ProviderIcon provider="pi" className="home-choice-icon" />
+                <span>Pi</span>
               </button>
             </div>
-            {dropdownOpen && (
-              <ul className="dropdown dropdown-provider" role="menu">
-                <li>
-                  <button type="button" aria-label="Claude">
-                    <ProviderIcon provider="anthropic" className="dropdown-provider-icon" />
-                    <span className="sr-only">Claude</span>
-                  </button>
-                </li>
-                <li>
-                  <button type="button" aria-label="Codex">
-                    <ProviderIcon provider="codex" className="dropdown-provider-icon" />
-                    <span className="sr-only">Codex</span>
-                  </button>
-                </li>
-              </ul>
-            )}
+            <div className="home-panel-head home-panel-subhead">
+              <h3>Interaction</h3>
+              <span className="home-panel-meta">gui</span>
+            </div>
+            <div className="home-choice-grid" role="group" aria-label="interaction">
+              <button className="home-choice is-selected" type="button" aria-pressed="true">
+                <MonitorIcon className="home-choice-icon" aria-hidden="true" />
+                <span>gui</span>
+              </button>
+              <button className="home-choice" type="button" aria-pressed="false">
+                <TerminalIcon className="home-choice-icon" aria-hidden="true" />
+                <span>cli</span>
+              </button>
+            </div>
+            <div className="home-panel-head home-panel-subhead">
+              <h3>Unavailable state</h3>
+              <span className="home-panel-meta">Hermes CLI</span>
+            </div>
+            <div className="home-choice-grid" role="group" aria-label="unavailable interaction">
+              <button className="home-choice is-selected" type="button" aria-pressed="true">
+                <ProviderIcon provider="hermes" className="home-choice-icon" />
+                <span>Hermes</span>
+              </button>
+              <button className="home-choice is-selected" type="button" aria-pressed="true">
+                <MonitorIcon className="home-choice-icon" aria-hidden="true" />
+                <span>gui</span>
+              </button>
+              <button className="home-choice" type="button" disabled title="not available for this provider">
+                <TerminalIcon className="home-choice-icon" aria-hidden="true" />
+                <span>cli</span>
+              </button>
+            </div>
           </div>
         </section>
       </div>
