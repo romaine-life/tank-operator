@@ -127,6 +127,11 @@ import {
   logSessionListStreamSignal,
 } from "./sessionListTelemetry";
 import {
+  recordSessionListDebugEvent,
+  updateSessionListDebugRender,
+  type SessionListDebugRow,
+} from "./sessionListDebug";
+import {
   chatScrollElementSnapshot,
   logChatScrollEvent,
 } from "./chatScrollTelemetry";
@@ -408,6 +413,7 @@ interface Session {
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
+  row_version?: number;
 }
 
 interface TestState {
@@ -1137,6 +1143,34 @@ function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
 
 function sessionDisplayName(session: Session): string {
   return session.name ?? defaultSessionName(session);
+}
+
+function sessionListDebugRow(session: Session): SessionListDebugRow {
+  const avatar = getSessionAvatar(session.id, session.agent_avatar_id);
+  return {
+    id: session.id,
+    name: session.name,
+    display_name: sessionDisplayName(session),
+    pod_name: session.pod_name,
+    mode: session.mode,
+    status: session.status,
+    visible: true,
+    row_version: typeof session.row_version === "number" ? session.row_version : null,
+    sidebar_position:
+      typeof session.sidebar_position === "number" ? session.sidebar_position : null,
+    agent_avatar_id: session.agent_avatar_id ?? null,
+    system_avatar_id: session.system_avatar_id ?? null,
+    rendered_avatar_id: avatar.id,
+    rendered_avatar_src: avatar.src,
+    rendered_avatar_custom: avatar.custom === true,
+    requested_at: session.requested_at,
+    created_at: session.created_at,
+    ready_at: session.ready_at,
+  };
+}
+
+function sessionListDebugRows(sessions: readonly Session[]): SessionListDebugRow[] {
+  return sessions.map(sessionListDebugRow);
 }
 
 function selectTitleInputText(event: ReactFocusEvent<HTMLInputElement>): void {
@@ -9140,6 +9174,39 @@ function ChatPane({
     () => getSystemAvatar(session.id, session.system_avatar_id),
     [avatarCatalogVersion, session.id, session.system_avatar_id],
   );
+  useEffect(() => {
+    if (!visible) return;
+    recordSessionListDebugEvent({
+      kind: "active-avatar-render",
+      source: "ChatPane",
+      session_id: session.id,
+      row: {
+        ...sessionListDebugRow(session),
+        rendered_avatar_id: sessionAvatar.id,
+        rendered_avatar_src: sessionAvatar.src,
+        rendered_avatar_custom: sessionAvatar.custom === true,
+      },
+      detail: {
+        avatar_catalog_version: avatarCatalogVersion,
+        session_avatar_id: sessionAvatar.id,
+        session_avatar_src: sessionAvatar.src,
+        session_avatar_custom: sessionAvatar.custom === true,
+        system_avatar_id: systemAvatar?.id ?? null,
+        system_avatar_src: systemAvatar?.src ?? null,
+        system_avatar_custom: systemAvatar?.custom === true,
+      },
+    });
+  }, [
+    visible,
+    avatarCatalogVersion,
+    session,
+    sessionAvatar.id,
+    sessionAvatar.src,
+    sessionAvatar.custom,
+    systemAvatar?.id,
+    systemAvatar?.src,
+    systemAvatar?.custom,
+  ]);
   const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
@@ -11079,6 +11146,7 @@ export function App() {
       runtime_configured_at: row.runtime_configured_at ?? null,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
+      row_version: row.row_version,
     };
   }
 
@@ -11144,6 +11212,7 @@ export function App() {
       sessionStoreRef.current.applySnapshot(
         rawList.map(infoJSONToSessionRow),
         snapshotCursor,
+        "refresh",
       );
       logSessionListSnapshot({
         tip: snapshotCursor,
@@ -11188,6 +11257,14 @@ export function App() {
   }
 
   useEffect(() => {
+    recordSessionListDebugEvent({
+      kind: "scope-reset",
+      source: "App",
+      reason: "effective_session_scope_changed",
+      active_id: activeRef.current,
+      rows: sessionListDebugRows(sessionsRef.current),
+      detail: { effective_session_scope: effectiveSessionScope },
+    });
     sessionStoreRef.current = new SessionStore();
     activitySnapshotAppliedRef.current = false;
     lastSoundedOrderKeyRef.current = new Map();
@@ -11226,6 +11303,14 @@ export function App() {
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
+
+  useEffect(() => {
+    updateSessionListDebugRender({
+      active_id: active,
+      avatar_catalog_version: avatarCatalogVersion,
+      sessions: sessionListDebugRows(sessions),
+    });
+  }, [sessions, active, avatarCatalogVersion]);
 
   useEffect(() => {
     if (!user) return;
@@ -11459,7 +11544,16 @@ export function App() {
   useEffect(() => {
     if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
       const selectable = sessions.filter((s) => !closingIds.has(s.id));
-      setActive(selectable[selectable.length - 1]?.id ?? null);
+      const nextActive = selectable[selectable.length - 1]?.id ?? null;
+      recordSessionListDebugEvent({
+        kind: "active-fallback",
+        source: "App",
+        reason: closingIds.has(active) ? "active_closing" : "active_missing",
+        previous_active_id: active,
+        active_id: nextActive,
+        rows: sessionListDebugRows(sessions),
+      });
+      setActive(nextActive);
     }
     // Drop any mounted ids that no longer exist or are being deleted.
     setMounted((prev) => {
@@ -11733,6 +11827,13 @@ export function App() {
 
   async function markCreatedSessionTestState(id: string): Promise<void> {
     const state: TestState = { active: true };
+    recordSessionListDebugEvent({
+      kind: "test-state-optimistic",
+      source: "markCreatedSessionTestState",
+      session_id: id,
+      rows: sessionListDebugRows(sessionsRef.current),
+      detail: { state },
+    });
     setSessions((prev) =>
       prev.map((s) => (s.id === id ? { ...s, test_state: state, rollout_state: null } : s)),
     );
@@ -11745,6 +11846,13 @@ export function App() {
       throw new Error(`test state update failed: ${res.status}`);
     }
     const updated: Session = normalizeSession(await res.json());
+    recordSessionListDebugEvent({
+      kind: "test-state-response",
+      source: "markCreatedSessionTestState",
+      session_id: id,
+      row: sessionListDebugRow(updated),
+      rows: sessionListDebugRows(sessionsRef.current),
+    });
     setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
   }
 
@@ -11835,6 +11943,18 @@ export function App() {
       if (CHAT_MODES.has(mode)) {
         writeSessionInteraction(created.id, defaultInteraction);
       }
+      recordSessionListDebugEvent({
+        kind: "create-response",
+        source: "createSession",
+        session_id: created.id,
+        row: sessionListDebugRow(created),
+        rows: sessionListDebugRows(sessionsRef.current),
+        detail: {
+          requested_name: requestedName || null,
+          requested_name_applied: requestedNameApplied,
+          initial_skill_name: requestedInitialSkillName ?? null,
+        },
+      });
       // Insert the freshly-created session into the local list and open the
       // chat pane immediately, without waiting on /api/sessions to re-list or
       // on the pod becoming Ready. The backend returned the full session row
@@ -11847,6 +11967,14 @@ export function App() {
       setSessions((prev) => {
         if (prev.some((s) => s.id === created.id)) return prev;
         return [created, ...prev];
+      });
+      recordSessionListDebugEvent({
+        kind: "react-sessions-direct-write",
+        source: "createSession",
+        session_id: created.id,
+        row: sessionListDebugRow(created),
+        rows: sessionListDebugRows([created, ...sessionsRef.current]),
+        detail: { operation: "prepend_created_session" },
       });
       activate(created.id);
       if (CHAT_MODES.has(created.mode)) {
@@ -11871,6 +11999,13 @@ export function App() {
       if (seedTurnRequested && !seedTurnSubmittedAtCreate) {
         try {
           const readySession = await waitForSessionReady(created.id);
+          recordSessionListDebugEvent({
+            kind: "ready-session-response",
+            source: "createSession",
+            session_id: created.id,
+            row: sessionListDebugRow(readySession),
+            rows: sessionListDebugRows(sessionsRef.current),
+          });
           setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
           if (requestedInitialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
@@ -12101,6 +12236,14 @@ export function App() {
       });
       if (!res.ok) throw new Error(`rename failed: ${res.status}`);
       const updated: Session = normalizeSession(await res.json());
+      recordSessionListDebugEvent({
+        kind: "rename-response",
+        source: "renameSession",
+        session_id: id,
+        row: sessionListDebugRow(updated),
+        rows: sessionListDebugRows(sessionsRef.current),
+        detail: { next_name: nextName },
+      });
       setSessions((prev) =>
         prev.map((s) => (s.id === id ? { ...s, name: updated.name ?? null } : s))
       );
@@ -12110,6 +12253,13 @@ export function App() {
   }
 
   function patchSession(id: string, patch: Partial<Session>) {
+    recordSessionListDebugEvent({
+      kind: "react-sessions-direct-write",
+      source: "patchSession",
+      session_id: id,
+      rows: sessionListDebugRows(sessionsRef.current),
+      detail: { patch_keys: Object.keys(patch) },
+    });
     setSessions((prev) =>
       prev.map((s) => (s.id === id ? { ...s, ...patch } : s))
     );
