@@ -17,6 +17,7 @@ import {
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { AdminAvatarManager } from "./AdminAvatarManager";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -279,7 +280,7 @@ type SdkHistoryRefreshSource =
   | "resync"
   | "terminal-refresh";
 type ScrollToLatestBehavior = "auto" | "smooth";
-type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual";
+type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual" | "keyboard";
 type ScrollToLatestRequest = {
   signal: number;
   behavior: ScrollToLatestBehavior;
@@ -390,6 +391,8 @@ interface Session {
   runtime_model?: string;
   runtime_effort?: string;
   runtime_configured_at?: string | null;
+  agent_avatar_id?: string | null;
+  system_avatar_id?: string | null;
   sidebar_position?: number;
 }
 
@@ -878,6 +881,10 @@ function normalizeSession(session: Session): Session {
   next.runtime_effort = typeof session.runtime_effort === "string" ? session.runtime_effort : "";
   next.runtime_configured_at =
     typeof session.runtime_configured_at === "string" ? session.runtime_configured_at : null;
+  next.agent_avatar_id =
+    typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
+  next.system_avatar_id =
+    typeof session.system_avatar_id === "string" ? session.system_avatar_id : null;
   return next;
 }
 
@@ -1848,7 +1855,7 @@ function DemoLanding() {
               const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
-              const avatar = getSessionAvatar(s.id);
+              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
               return (
                 <li
                   key={s.id}
@@ -5719,6 +5726,7 @@ export function RunMessages({
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
   const consumedScrollToLatestSignalRef = useRef(0);
+  const consumedScrollToOldestSignalRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) => (
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
@@ -5862,6 +5870,8 @@ export function RunMessages({
   ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
+    if (consumedScrollToOldestSignalRef.current === scrollToOldestSignal) return;
+    consumedScrollToOldestSignalRef.current = scrollToOldestSignal;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       surface: telemetrySurface,
       sessionId,
@@ -6061,20 +6071,30 @@ function RunSettingsPanel({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
-    avatarEditorHref: string;
+    onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
 }) {
   const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
+  const [adminView, setAdminView] = useState<"controls" | "avatars">("controls");
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
       setSettingsTab("preferences");
     }
   }, [settingsTab, showAdminTab]);
+  useEffect(() => {
+    if (!showAdminTab || settingsTab !== "admin") {
+      setAdminView("controls");
+    }
+  }, [settingsTab, showAdminTab]);
+  const settingsScreenClassName =
+    settingsTab === "admin" && showAdminTab && adminView === "avatars"
+      ? "run-settings-screen run-settings-screen-wide"
+      : "run-settings-screen";
 
   return (
-    <div className="run-settings-screen">
+    <div className={settingsScreenClassName}>
       {showAdminTab && (
         <div className="run-settings-tabs" role="tablist" aria-label="Settings sections">
           <button
@@ -6098,38 +6118,63 @@ function RunSettingsPanel({
         </div>
       )}
       {settingsTab === "admin" && showAdminTab ? (
-        <section className="run-settings-section">
-          <h2 className="run-settings-title">Admin Controls</h2>
-          <a className="run-settings-link" href={adminControls.avatarEditorHref}>
-            <span className="run-settings-link-label">
-              <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
-              <span>Avatar editor</span>
-            </span>
-            <ExternalLinkIcon className="run-settings-check" aria-hidden="true" />
-          </a>
-          {adminControls.canViewProdSessions && (
+        adminView === "avatars" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setAdminView("controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Avatar editor</h2>
+              </div>
+            </section>
+            <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
+          </>
+        ) : (
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Admin Controls</h2>
             <button
               type="button"
-              className="run-settings-toggle"
-              onClick={() =>
-                adminControls.onViewingProdSessionsChange(
-                  !adminControls.viewingProdSessions,
-                )
-              }
-              aria-pressed={adminControls.viewingProdSessions}
+              className="run-settings-link"
+              onClick={() => setAdminView("avatars")}
             >
-              <span>Prod sessions</span>
-              <span className="run-settings-scope-value">
-                {adminControls.viewingProdSessions
-                  ? adminControls.prodScope
-                  : adminControls.currentScope}
+              <span className="run-settings-link-label">
+                <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
+                <span>Avatar editor</span>
               </span>
-              {adminControls.viewingProdSessions && (
-                <CheckIcon className="run-settings-check" aria-hidden="true" />
-              )}
+              <span className="run-settings-scope-value">
+                Manage
+              </span>
             </button>
-          )}
-        </section>
+            {adminControls.canViewProdSessions && (
+              <button
+                type="button"
+                className="run-settings-toggle"
+                onClick={() =>
+                  adminControls.onViewingProdSessionsChange(
+                    !adminControls.viewingProdSessions,
+                  )
+                }
+                aria-pressed={adminControls.viewingProdSessions}
+              >
+                <span>Prod sessions</span>
+                <span className="run-settings-scope-value">
+                  {adminControls.viewingProdSessions
+                    ? adminControls.prodScope
+                    : adminControls.currentScope}
+                </span>
+                {adminControls.viewingProdSessions && (
+                  <CheckIcon className="run-settings-check" aria-hidden="true" />
+                )}
+              </button>
+            )}
+          </section>
+        )
       ) : (
         <>
         <section className="run-settings-section">
@@ -6380,7 +6425,7 @@ function ChatPane({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
-    avatarEditorHref: string;
+    onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
   readOnly?: boolean;
@@ -6605,6 +6650,7 @@ function ChatPane({
   const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
   const sdkFoundOldestRef = useRef(false);
   const sdkFoundNewestRef = useRef(false);
+  const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -7350,7 +7396,7 @@ function ChatPane({
         sessionMode: session.mode,
       });
       try {
-        await jumpSdkToOldest();
+        await jumpSdkToOldest("older-missing-cursor");
         setScrollToOldestSignal((value) => value + 1);
       } catch (err) {
         setSdkOlderError(
@@ -7448,13 +7494,32 @@ function ChatPane({
   // dedicated anchor=oldest path added in handlers_session_events.go,
   // which dispatches an indexed ASC scan from the head with
   // FoundOldest=true.
-  async function jumpSdkToOldest(): Promise<void> {
+  async function jumpSdkToOldest(source = "jump-oldest"): Promise<void> {
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "oldest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      throw new Error(`timeline request failed: ${res.status}`);
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7495,6 +7560,19 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
@@ -7503,14 +7581,33 @@ function ChatPane({
   // existing DOM bottom is the live tail, so the caller can just scroll.
   // If the user back-paginated past the live tail, we drop the window
   // and refetch — that's the "stale tail" path mentioned in the plan.
-  async function jumpSdkToLatest(): Promise<void> {
+  async function jumpSdkToLatest(source = "jump-latest"): Promise<void> {
     if (sdkFoundNewestRef.current) return;
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "newest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      return;
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7549,7 +7646,56 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
+  }
+
+  async function scrollTranscriptToConversationStart(): Promise<void> {
+    if (sdkTranscriptKeyboardNavInFlightRef.current) return;
+    sdkTranscriptKeyboardNavInFlightRef.current = "oldest";
+    setSdkOlderError(null);
+    try {
+      if (!sdkFoundOldestRef.current) {
+        await jumpSdkToOldest("keyboard");
+      }
+      setScrollToOldestSignal((value) => value + 1);
+    } catch (err) {
+      setSdkOlderError(
+        `Could not load beginning of conversation: ${String((err as Error).message ?? err)}`,
+      );
+    } finally {
+      if (sdkTranscriptKeyboardNavInFlightRef.current === "oldest") {
+        sdkTranscriptKeyboardNavInFlightRef.current = null;
+      }
+    }
+  }
+
+  async function scrollTranscriptToConversationEnd(): Promise<void> {
+    if (sdkTranscriptKeyboardNavInFlightRef.current) return;
+    sdkTranscriptKeyboardNavInFlightRef.current = "newest";
+    try {
+      if (!sdkFoundNewestRef.current) {
+        await jumpSdkToLatest("keyboard");
+      }
+      setSdkPendingTailCount(0);
+      requestScrollToLatest("smooth", "keyboard");
+    } finally {
+      if (sdkTranscriptKeyboardNavInFlightRef.current === "newest") {
+        sdkTranscriptKeyboardNavInFlightRef.current = null;
+      }
+    }
   }
 
   useEffect(() => {
@@ -8010,6 +8156,70 @@ function ChatPane({
     focusTranscriptSection,
     mcpOpen,
     mentionOpen,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
+
+  // When the transcript region has focus, Home/End should target the
+  // conversation ledger edges, not just the current virtualized window.
+  useEffect(() => {
+    if (!visible || activeTab !== "chat" || !transcriptScrollEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.target !== transcriptScrollEl ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "Home",
+          targetEdge: "oldest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
+        void scrollTranscriptToConversationStart();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "End",
+          targetEdge: "newest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
+        void scrollTranscriptToConversationEnd();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    sessionScope,
     slashOpen,
     transcriptScrollEl,
     visible,
@@ -8810,12 +9020,12 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(
-    () => getSessionAvatar(session.id),
-    [avatarCatalogVersion, session.id],
+    () => getSessionAvatar(session.id, session.agent_avatar_id),
+    [avatarCatalogVersion, session.agent_avatar_id, session.id],
   );
   const systemAvatar = useMemo(
-    () => getSystemAvatar(session.id),
-    [avatarCatalogVersion, session.id],
+    () => getSystemAvatar(session.id, session.system_avatar_id),
+    [avatarCatalogVersion, session.id, session.system_avatar_id],
   );
   const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
@@ -9666,7 +9876,7 @@ function ChatPane({
           className="run-scroll-to-top"
           onClick={() => {
             const reachOldest = async () => {
-              await jumpSdkToOldest();
+              await jumpSdkToOldest("button");
               setScrollToOldestSignal((value) => value + 1);
             };
             void reachOldest();
@@ -9691,7 +9901,7 @@ function ChatPane({
           }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
             const reachNewest = async () => {
-              await jumpSdkToLatest();
+              await jumpSdkToLatest("button");
               setSdkPendingTailCount(0);
               requestScrollToLatest("smooth", "manual");
             };
@@ -10246,6 +10456,10 @@ export function App() {
     audio.currentTime = 0;
     void audio.play().catch(() => undefined);
   }, [getTurnCompleteAudio]);
+  const refreshRuntimeAvatarCatalog = useCallback(async () => {
+    await loadRuntimeAvatarCatalog();
+    setAvatarCatalogVersion((version) => version + 1);
+  }, []);
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -10480,7 +10694,7 @@ export function App() {
           viewingProdSessions,
           currentScope: currentSessionScope,
           prodScope: PROD_SESSION_SCOPE,
-          avatarEditorHref: "/admin/avatars",
+          onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
           onViewingProdSessionsChange: (value: boolean) => {
             const next = value ? PROD_SESSION_SCOPE : "";
             setSessionViewScopeOverride(next);
@@ -10725,6 +10939,8 @@ export function App() {
       runtime_model: row.runtime_model ?? "",
       runtime_effort: row.runtime_effort ?? "",
       runtime_configured_at: row.runtime_configured_at ?? null,
+      agent_avatar_id: row.agent_avatar_id ?? null,
+      system_avatar_id: row.system_avatar_id ?? null,
     };
   }
 
@@ -10761,6 +10977,10 @@ export function App() {
       runtime_effort: typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
       runtime_configured_at:
         typeof raw.runtime_configured_at === "string" ? raw.runtime_configured_at : undefined,
+      agent_avatar_id:
+        typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,
+      system_avatar_id:
+        typeof raw.system_avatar_id === "string" ? raw.system_avatar_id : undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     };
@@ -11893,7 +12113,7 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatar(s.id);
+              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const activityChips = sessionActivityChips(sessionActivities[s.id]);

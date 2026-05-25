@@ -59,6 +59,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			runtime_model,
 			runtime_effort,
 			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+			COALESCE(agent_avatar_id, ''),
+			COALESCE(system_avatar_id, ''),
 			sidebar_position,
 			row_version
 		FROM sessions
@@ -81,6 +83,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos                                                       []string
 			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
+			agentAvatarID, systemAvatarID                               string
 			sidebarPosition, rowVersion                                 int64
 		)
 		if err := rows.Scan(
@@ -90,6 +93,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&activitySummary, &testState, &rolloutState,
 			&repos, &cloneState, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
+			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
 		); err != nil {
@@ -122,6 +126,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			RuntimeModel:        runtimeModel,
 			RuntimeEffort:       runtimeEffort,
 			RuntimeConfiguredAt: runtimeAt,
+			AgentAvatarID:       agentAvatarID,
+			SystemAvatarID:      systemAvatarID,
 			SidebarPosition:     sidebarPosition,
 			RowVersion:          rowVersion,
 		})

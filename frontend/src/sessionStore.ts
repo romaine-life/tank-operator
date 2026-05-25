@@ -74,6 +74,8 @@ export interface SessionRow {
   runtime_model?: string;
   runtime_effort?: string;
   runtime_configured_at?: string;
+  agent_avatar_id?: string;
+  system_avatar_id?: string;
   // Durable user-facing order for the sidebar. Larger values render
   // earlier. This is intentionally separate from row_version so
   // status/test/rollout/activity updates do not reshuffle rows.

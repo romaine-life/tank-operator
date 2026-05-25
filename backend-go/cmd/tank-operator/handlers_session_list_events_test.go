@@ -215,6 +215,34 @@ func TestMarshalRowUpdateIncludesSessionRunConfig(t *testing.T) {
 	}
 }
 
+func TestMarshalRowUpdateIncludesAvatarAssignments(t *testing.T) {
+	payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:             "8",
+		Email:          "u@example.com",
+		Scope:          "default",
+		Visible:        true,
+		Status:         "Active",
+		AgentAvatarID:  "agent-a",
+		SystemAvatarID: "system-b",
+		RowVersion:     99,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Row struct {
+			AgentAvatarID  string `json:"agent_avatar_id"`
+			SystemAvatarID string `json:"system_avatar_id"`
+		} `json:"row"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		t.Fatal(err)
+	}
+	if probe.Row.AgentAvatarID != "agent-a" || probe.Row.SystemAvatarID != "system-b" {
+		t.Fatalf("avatar assignment row = %#v", probe.Row)
+	}
+}
+
 // TestMarshalRowUpdateRepos pins the SSE wire contract for the
 // repo-selection field: always an array, never absent, even when
 // the row has no repos picked. The SPA reads this directly into the

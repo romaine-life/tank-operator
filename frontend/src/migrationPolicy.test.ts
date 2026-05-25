@@ -12,6 +12,7 @@ const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
+const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
 const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
@@ -24,6 +25,12 @@ const bundledQualityTimeframesSource = readSource(
 );
 const bundledMigrationPolicySource = readSource(
   "../../k8s/session-config/docs/migration-policy.md",
+);
+const appChromeCapabilitiesSource = readSource(
+  "../../docs/features/app-chrome/capabilities.md",
+);
+const chatScrollMetricsHandlerSource = readSource(
+  "../../backend-go/cmd/tank-operator/handlers_client_metrics.go",
 );
 
 test("session activity is not refreshed by a steady interval", () => {
@@ -236,6 +243,19 @@ test("home splash test action stays disabled on the splash page", () => {
   );
 });
 
+test("avatar editor is embedded in Settings admin, not a standalone app route", () => {
+  assert.equal(mainSource.includes("/admin/avatars"), false);
+  assert.equal(mainSource.includes("AdminAvatarsPage"), false);
+  assert.equal(appSource.includes("avatarEditorHref"), false);
+  assert.equal(appSource.includes("<AdminAvatarManager"), true);
+  assert.equal(indexCssSource.includes("admin-avatar-page"), false);
+  assert.equal(indexCssSource.includes("admin-avatar-home"), false);
+  assert.equal(adminAvatarManagerSource.includes("bootstrapAuth"), false);
+  assert.equal(adminAvatarManagerSource.includes("Back to app"), false);
+  assert.equal(appChromeCapabilitiesSource.includes("admin route"), false);
+  assert.equal(appChromeCapabilitiesSource.includes("Settings -> Admin avatar pane"), true);
+});
+
 test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
@@ -367,6 +387,19 @@ test("chat back-pagination keeps an explicit access path", () => {
   assert.equal(appSource.includes("older-missing-cursor"), true);
 });
 
+test("focused transcript Home and End keys resolve durable conversation edges", () => {
+  assert.equal(appSource.includes("scrollTranscriptToConversationStart"), true);
+  assert.equal(appSource.includes("scrollTranscriptToConversationEnd"), true);
+  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\("keyboard"\)/);
+  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\("keyboard"\)/);
+  assert.match(appSource, /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/);
+  assert.match(appSource, /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/);
+  assert.match(appSource, /requestScrollToLatest\("smooth", "keyboard"\)/);
+  assert.equal(appSource.includes("transcriptScrollEl.scrollTop = 0"), false);
+  assert.equal(appSource.includes("consumedScrollToOldestSignalRef"), true);
+  assert.match(appSource, /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/);
+});
+
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
@@ -417,6 +450,16 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
+  assert.equal(appSource.includes('"keyboard-edge-navigation"'), true);
+  assert.equal(appSource.includes('jumpSdkToOldest("button")'), true);
+  assert.equal(appSource.includes('jumpSdkToLatest("button")'), true);
+  assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pagePath: currentPagePath()"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes("logChatScrollClientEvent"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"session_id"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
 });
 
 test("long-chat scroll lab route is admin gated and uses prometheus metrics", () => {

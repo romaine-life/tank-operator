@@ -129,6 +129,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/avatars", s.handleListAvatars)
 	mux.HandleFunc("GET /api/avatars/{avatar_id}/image", s.handleGetAvatarImage)
 	mux.HandleFunc("GET /api/avatars/{avatar_id}/backing", s.handleGetAvatarBacking)
+	mux.HandleFunc("GET /api/admin/avatar-decks", s.handleGetAvatarDecks)
 	mux.HandleFunc("POST /api/admin/avatars", s.handleCreateAvatar)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
 
