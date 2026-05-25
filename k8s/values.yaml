@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-9aeebe6e2a35c5412309c7c293f122ff86bdad4280805e156db1e955b5c3d2cc"
+  tag: "app-d8dc0770a31d298474878b82d5b4a42c68e7765260aa8c59bd3949998e01e59d"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -190,7 +190,14 @@ avatarAssets:
 
 sessionBus:
   stream: TANK_SESSION_BUS
-  streamReplicas: 2
+  # JetStream Raft tolerates {1, 3, 5} replicas. R=2 needs both replicas
+  # to ack to make progress (write quorum = 2 of 2) and has no tiebreaker,
+  # so a single slow member halts writes — the 2026-05-25 incident shape
+  # (one NATS pod slowed under host CPU pressure → entire TANK_SESSION_BUS
+  # lost quorum → every submit_turn failed with `nats: no response from
+  # stream`). R=3 requires the infra-bootstrap NATS chart to also run
+  # cluster.replicas: 3; both must move together.
+  streamReplicas: 3
   authSecret: tank-nats-auth
   tokenKvKey: tank-nats-token
   # NATS lives in its own namespace, deployed by infra-bootstrap's nats

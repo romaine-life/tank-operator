@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 // bridge needs. Kept narrow so tests can stub it.
 type EventStore interface {
 	Upsert(ctx context.Context, event map[string]any) error
+	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 }
 
 // Recorder is an optional observability hook for the bridge. Wire it from
@@ -26,8 +28,22 @@ type EventStore interface {
 type Recorder interface {
 	RunCreated()
 	RunCreateFailed()
-	RunTerminal(terminal string)   // "completed" | "failed" | "interrupted" | "command_failed" | "lost"
+	RunTerminal(terminal string) // "completed" | "failed" | "interrupted" | "command_failed" | "lost"
+	RunDuration(terminal string, seconds float64)
+	RunEvent(eventType string)
+	CapabilityCheck(result string)
 	TranslatorError(reason string) // "decode" | "unhandled_type"
+}
+
+// ActiveRunStore persists the upstream Hermes run currently driving a Tank
+// turn. Implemented by the Postgres session registry; nil is accepted in local
+// development, but production wires it so restart recovery does not depend on
+// process memory.
+type ActiveRunStore interface {
+	SetHermesActiveRun(ctx context.Context, owner, sessionID string, run sessionmodel.HermesActiveRun) error
+	ClearHermesActiveRun(ctx context.Context, owner, sessionID, turnID, runID string) error
+	GetHermesActiveRun(ctx context.Context, owner, sessionID, turnID string) (sessionmodel.HermesActiveRun, bool, error)
+	ListHermesActiveRuns(ctx context.Context) ([]sessionmodel.HermesActiveRun, error)
 }
 
 // RowPublisher mirrors sessions.RowEmitter — the bridge calls it after
@@ -43,15 +59,14 @@ type RowPublisher interface {
 // hermes_gui sessions for the orchestrator — turns are concurrency-safe; each
 // active turn runs in its own goroutine and tracks the run_id for cancel.
 //
-// Lifecycle is bounded by the session's lifetime. The bridge does not own a
-// background reconcile loop today; if the orchestrator restarts mid-turn,
-// active runs are abandoned and the user-visible state is whatever durable
-// terminal event has landed in session_events (or, if none, a
-// turn.command_failed emitted on the next stop/poll). Per-session reconcile
-// is a follow-up — tracked in nelsong6/tank-operator#540's "out of scope" list.
+// Lifecycle is bounded by the session's lifetime. Active run pointers are
+// durable on the sessions row, so a replacement orchestrator can reattach to
+// streams or synthesize terminal status from Hermes instead of abandoning
+// accepted turns on process restart.
 type Bridge struct {
 	client   *Client
 	store    EventStore
+	active   ActiveRunStore
 	rows     RowPublisher
 	recorder Recorder
 	scope    string
@@ -63,8 +78,9 @@ type Bridge struct {
 type activeTurn struct {
 	runID     string
 	cancel    context.CancelFunc
-	terminal  string // set on goroutine exit
 	startedAt time.Time
+	mu        sync.Mutex
+	terminal  string // set on goroutine exit or forced by stop/recovery failure
 	// done closes when the bridge's runStream goroutine for this turn
 	// returns — after the durable terminal event (translated terminal
 	// or the hermes_stream_lost safety net) has landed in
@@ -75,13 +91,34 @@ type activeTurn struct {
 	done chan struct{}
 }
 
+func (a *activeTurn) setTerminal(terminal string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.terminal = terminal
+}
+
+func (a *activeTurn) forceTerminal(terminal string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.terminal == "" {
+		a.terminal = terminal
+	}
+}
+
+func (a *activeTurn) getTerminal() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.terminal
+}
+
 // BridgeOptions configures NewBridge. Scope defaults to "default".
 type BridgeOptions struct {
-	Client   *Client
-	Store    EventStore
-	Rows     RowPublisher
-	Recorder Recorder
-	Scope    string
+	Client     *Client
+	Store      EventStore
+	ActiveRuns ActiveRunStore
+	Rows       RowPublisher
+	Recorder   Recorder
+	Scope      string
 }
 
 func NewBridge(opts BridgeOptions) *Bridge {
@@ -92,6 +129,7 @@ func NewBridge(opts BridgeOptions) *Bridge {
 	return &Bridge{
 		client:      opts.Client,
 		store:       opts.Store,
+		active:      opts.ActiveRuns,
 		rows:        opts.Rows,
 		recorder:    opts.Recorder,
 		scope:       scope,
@@ -189,28 +227,30 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 	}
 	b.record(func(r Recorder) { r.RunCreated() })
 
-	// 3. Spawn the streaming goroutine. The context derived from ctx survives
-	//    the caller's request — bridge owns it until terminal or cancel.
-	streamCtx, cancel := context.WithCancel(context.Background())
-	at := &activeTurn{
-		runID:     runResp.RunID,
-		cancel:    cancel,
-		startedAt: time.Now(),
-		done:      make(chan struct{}),
+	startedAt := time.Now().UTC()
+	activeRun := sessionmodel.HermesActiveRun{
+		Owner:       args.Email,
+		SessionID:   args.SessionID,
+		TurnID:      turnID,
+		ClientNonce: args.ClientNonce,
+		RunID:       runResp.RunID,
+		StartedAt:   startedAt.Format(time.RFC3339Nano),
 	}
-	b.mu.Lock()
-	b.activeTurns[args.SessionID+":"+turnID] = at
-	b.mu.Unlock()
+	if b.active != nil {
+		if err := b.active.SetHermesActiveRun(ctx, args.Email, args.SessionID, activeRun); err != nil {
+			_ = b.emitCommandFailed(ctx, args.SessionID, storageKey, args.Email, turnID, args.ClientNonce, "hermes_active_run_persist_failed", err.Error())
+			b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+			b.record(func(r Recorder) { r.RunDuration("command_failed", durationSecondsSince(startedAt)) })
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, _ = b.client.StopRun(stopCtx, runResp.RunID)
+			cancel()
+			return SubmitResult{}, fmt.Errorf("hermes active run persist: %w", err)
+		}
+	}
 
-	go b.runStream(streamCtx, runStreamArgs{
-		sessionID:   args.SessionID,
-		storageKey:  storageKey,
-		email:       args.Email,
-		turnID:      turnID,
-		clientNonce: args.ClientNonce,
-		runID:       runResp.RunID,
-		owner:       args.Email,
-	}, at)
+	// 3. Spawn the streaming goroutine. The context is owned by the bridge
+	//    until terminal or cancel, not by the HTTP request that submitted it.
+	b.startRunStream(activeRun)
 
 	return SubmitResult{TurnID: turnID, RunID: runResp.RunID}, nil
 }
@@ -262,11 +302,58 @@ type runStreamArgs struct {
 	owner       string
 }
 
+func (b *Bridge) startRunStream(run sessionmodel.HermesActiveRun) *activeTurn {
+	startedAt := parseHermesStartedAt(run.StartedAt)
+	streamCtx, cancel := context.WithCancel(context.Background())
+	at := &activeTurn{
+		runID:     run.RunID,
+		cancel:    cancel,
+		startedAt: startedAt,
+		done:      make(chan struct{}),
+	}
+	key := run.SessionID + ":" + run.TurnID
+	b.mu.Lock()
+	if existing, ok := b.activeTurns[key]; ok {
+		b.mu.Unlock()
+		cancel()
+		return existing
+	}
+	b.activeTurns[key] = at
+	b.mu.Unlock()
+
+	go b.runStream(streamCtx, runStreamArgs{
+		sessionID:   run.SessionID,
+		storageKey:  sessionmodel.SessionStorageKey(b.scope, run.SessionID),
+		email:       run.Owner,
+		turnID:      run.TurnID,
+		clientNonce: run.ClientNonce,
+		runID:       run.RunID,
+		owner:       run.Owner,
+	}, at)
+	return at
+}
+
+func parseHermesStartedAt(raw string) time.Time {
+	if raw != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Now().UTC()
+}
+
 func (b *Bridge) runStream(ctx context.Context, args runStreamArgs, at *activeTurn) {
 	defer func() {
 		b.mu.Lock()
 		delete(b.activeTurns, args.sessionID+":"+args.turnID)
 		b.mu.Unlock()
+		if b.active != nil {
+			if err := b.active.ClearHermesActiveRun(context.Background(), args.owner, args.sessionID, args.turnID, args.runID); err != nil {
+				slog.Warn("hermes bridge active-run clear failed",
+					"session_id", args.sessionID, "turn_id", args.turnID,
+					"run_id", args.runID, "error", err)
+			}
+		}
 		if b.rows != nil {
 			b.rows.PublishCurrentRow(context.Background(), args.owner, args.sessionID)
 		}
@@ -290,6 +377,7 @@ func (b *Bridge) runStream(ctx context.Context, args runStreamArgs, at *activeTu
 	})
 
 	streamErr := b.client.StreamEvents(ctx, args.runID, func(evt RunEvent) error {
+		b.record(func(r Recorder) { r.RunEvent(evt.Type) })
 		events := translator.Translate(evt)
 		for _, e := range events {
 			if err := b.store.Upsert(ctx, e); err != nil {
@@ -302,22 +390,26 @@ func (b *Bridge) runStream(ctx context.Context, args runStreamArgs, at *activeTu
 		return nil
 	})
 
-	at.terminal = translator.Terminal()
+	if terminal := translator.Terminal(); terminal != "" {
+		at.setTerminal(terminal)
+	}
+	terminal := at.getTerminal()
 
 	// The "durable terminal contract" inherited from #532: every accepted
 	// turn must produce a terminal event. If the stream ended without one,
 	// emit turn.command_failed so the SPA's projection resolves.
-	if at.terminal == "" {
+	if terminal == "" {
 		reason := "hermes_stream_lost"
 		detail := ""
 		if streamErr != nil && !errors.Is(streamErr, context.Canceled) {
 			detail = streamErr.Error()
 		}
 		_ = b.emitCommandFailed(context.Background(), args.sessionID, args.storageKey, args.email, args.turnID, args.clientNonce, reason, detail)
-		b.record(func(r Recorder) { r.RunTerminal("lost") })
-	} else {
-		b.record(func(r Recorder) { r.RunTerminal(at.terminal) })
+		terminal = "lost"
+		at.setTerminal(terminal)
 	}
+	b.record(func(r Recorder) { r.RunTerminal(terminal) })
+	b.record(func(r Recorder) { r.RunDuration(terminal, durationSecondsSince(at.startedAt)) })
 
 	if translator.UnhandledCount > 0 {
 		slog.Warn("hermes bridge unhandled event types",
@@ -417,6 +509,127 @@ func (b *Bridge) WaitForActiveTurnsToSettle(ctx context.Context) error {
 	}
 }
 
+// RecoverActiveRuns reattaches process memory to durable hermes_active_run
+// pointers after an orchestrator restart. Terminal Hermes statuses are
+// translated immediately; non-terminal statuses restart the SSE tailer. The
+// method keeps going after per-run failures and returns the first failure as
+// boot diagnostics.
+func (b *Bridge) RecoverActiveRuns(ctx context.Context) error {
+	if b == nil || b.active == nil {
+		return nil
+	}
+	runs, err := b.active.ListHermesActiveRuns(ctx)
+	if err != nil {
+		return fmt.Errorf("list hermes active runs: %w", err)
+	}
+	var firstErr error
+	for _, run := range runs {
+		if !run.Valid() {
+			continue
+		}
+		storageKey := sessionmodel.SessionStorageKey(b.scope, run.SessionID)
+		if terminal, err := b.store.FindTurnTerminal(ctx, run.SessionID, run.TurnID); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("find terminal for hermes run %s: %w", run.RunID, err)
+			}
+		} else if terminal != nil {
+			if clearErr := b.active.ClearHermesActiveRun(ctx, run.Owner, run.SessionID, run.TurnID, run.RunID); clearErr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("clear completed hermes run %s: %w", run.RunID, clearErr)
+			}
+			continue
+		}
+
+		status, err := b.client.GetRun(ctx, run.RunID)
+		if err != nil {
+			_ = b.emitCommandFailed(ctx, run.SessionID, storageKey, run.Owner, run.TurnID, run.ClientNonce, "hermes_reconcile_failed", err.Error())
+			b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+			b.recordRunDuration("command_failed", run.StartedAt)
+			_ = b.active.ClearHermesActiveRun(ctx, run.Owner, run.SessionID, run.TurnID, run.RunID)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("get hermes run %s: %w", run.RunID, err)
+			}
+			continue
+		}
+
+		switch normalizedHermesStatus(status.Status) {
+		case "completed", "failed", "cancelled":
+			if err := b.reconcileTerminalStatus(ctx, run, status); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if clearErr := b.active.ClearHermesActiveRun(ctx, run.Owner, run.SessionID, run.TurnID, run.RunID); clearErr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("clear terminal hermes run %s: %w", run.RunID, clearErr)
+			}
+		case "started", "running", "queued", "stopping", "":
+			b.startRunStream(run)
+		default:
+			_ = b.emitCommandFailed(ctx, run.SessionID, storageKey, run.Owner, run.TurnID, run.ClientNonce, "hermes_unknown_run_status", status.Status)
+			b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+			b.recordRunDuration("command_failed", run.StartedAt)
+			_ = b.active.ClearHermesActiveRun(ctx, run.Owner, run.SessionID, run.TurnID, run.RunID)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("hermes run %s has unknown status %q", run.RunID, status.Status)
+			}
+		}
+	}
+	return firstErr
+}
+
+func (b *Bridge) reconcileTerminalStatus(ctx context.Context, run sessionmodel.HermesActiveRun, status RunStatus) error {
+	storageKey := sessionmodel.SessionStorageKey(b.scope, run.SessionID)
+	translator := NewTranslator(TranslatorConfig{
+		SessionID:         run.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             run.Owner,
+		TurnID:            run.TurnID,
+		ClientNonce:       run.ClientNonce,
+	})
+	b.record(func(r Recorder) { r.RunEvent("run." + normalizedHermesStatus(status.Status)) })
+	events := translator.TranslateRunStatus(status)
+	for _, event := range events {
+		if err := b.store.Upsert(ctx, event); err != nil {
+			return fmt.Errorf("reconcile hermes run %s upsert: %w", run.RunID, err)
+		}
+	}
+	terminal := translator.Terminal()
+	if terminal == "" {
+		terminal = "command_failed"
+	}
+	b.record(func(r Recorder) { r.RunTerminal(terminal) })
+	b.recordRunDuration(terminal, run.StartedAt)
+	if b.rows != nil {
+		b.rows.PublishCurrentRow(context.Background(), run.Owner, run.SessionID)
+	}
+	return nil
+}
+
+func normalizedHermesStatus(status string) string {
+	trimmed := strings.TrimSpace(status)
+	switch trimmed {
+	case "completed", "failed", "cancelled", "started", "running", "queued", "stopping":
+		return trimmed
+	case "canceled":
+		return "cancelled"
+	default:
+		return trimmed
+	}
+}
+
+func (b *Bridge) recordRunDuration(terminal, startedAt string) {
+	started := parseHermesStartedAt(startedAt)
+	b.record(func(r Recorder) { r.RunDuration(terminal, durationSecondsSince(started)) })
+}
+
+func durationSecondsSince(started time.Time) float64 {
+	seconds := time.Since(started).Seconds()
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
+}
+
 // turn.command_failed is emitted directly so the UI's "stopping" state
 // still resolves (durable-terminal contract from #532).
 func (b *Bridge) StopTurn(ctx context.Context, sessionID, owner, turnID, clientNonce string) error {
@@ -424,15 +637,52 @@ func (b *Bridge) StopTurn(ctx context.Context, sessionID, owner, turnID, clientN
 	at, ok := b.activeTurns[sessionID+":"+turnID]
 	b.mu.Unlock()
 	storageKey := sessionmodel.SessionStorageKey(b.scope, sessionID)
+	runID := ""
+	if ok {
+		runID = at.runID
+	}
 
 	if !ok {
-		// Race: the terminal event landed between client click and server
-		// receipt. Emit a terminal-shaped marker for the "not found,
-		// legitimately" bucket — UI was probably already at a terminal
-		// projection but we don't want to silently strand.
-		return b.emitInterruptRequested(ctx, sessionID, storageKey, owner, turnID, clientNonce)
+		if b.active != nil {
+			run, found, err := b.active.GetHermesActiveRun(ctx, owner, sessionID, turnID)
+			if err != nil {
+				_ = b.emitCommandFailed(ctx, sessionID, storageKey, owner, turnID, clientNonce, "hermes_active_run_lookup_failed", err.Error())
+				b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+				return fmt.Errorf("hermes active run lookup: %w", err)
+			}
+			if found {
+				at = b.startRunStream(run)
+				runID = run.RunID
+			}
+		}
 	}
-	if _, err := b.client.StopRun(ctx, at.runID); err != nil {
+	if runID == "" {
+		terminal, err := b.store.FindTurnTerminal(ctx, sessionID, turnID)
+		if err != nil {
+			_ = b.emitCommandFailed(ctx, sessionID, storageKey, owner, turnID, clientNonce, "hermes_terminal_lookup_failed", err.Error())
+			b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+			return fmt.Errorf("hermes terminal lookup: %w", err)
+		}
+		if terminal != nil {
+			// Race: the terminal event landed between client click and server
+			// receipt. Preserve the explicit stop click as durable evidence.
+			return b.emitInterruptRequested(ctx, sessionID, storageKey, owner, turnID, clientNonce)
+		}
+		if err := b.emitCommandFailed(ctx, sessionID, storageKey, owner, turnID, clientNonce, "hermes_active_run_missing", "no in-memory or durable Hermes run was found for this turn"); err != nil {
+			return err
+		}
+		b.record(func(r Recorder) { r.RunTerminal("command_failed") })
+		return nil
+	}
+	if _, err := b.client.StopRun(ctx, runID); err != nil {
+		if at != nil {
+			at.forceTerminal("command_failed")
+			at.cancel()
+		}
+		_ = b.emitCommandFailed(ctx, sessionID, storageKey, owner, turnID, clientNonce, "hermes_stop_failed", err.Error())
+		if b.active != nil {
+			_ = b.active.ClearHermesActiveRun(context.Background(), owner, sessionID, turnID, runID)
+		}
 		return fmt.Errorf("hermes stop run: %w", err)
 	}
 	return b.emitInterruptRequested(ctx, sessionID, storageKey, owner, turnID, clientNonce)

@@ -180,6 +180,22 @@ var (
 		Name: "tank_session_list_event_publish_failure_total",
 		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
+	// sessionBusCommandPublishFailureTotal covers the JetStream Publish
+	// path for runner commands (submit_turn / interrupt_turn /
+	// input_reply / stop_background_task). The two counters above
+	// cover the raw nc.Publish wake fabric; this counter covers the
+	// js.Publish command fabric. Both are needed: the 2026-05-25
+	// incident produced a sustained js.Publish failure (JetStream
+	// quorum loss → `nats: no response from stream`) while the wake
+	// counters above stayed quiet, because raw nc.Publish does not
+	// wait for a stream ack. Labels: kind from the closed Command.Type
+	// set (4 series), reason from classifyPublishError (5 series) =
+	// 20 series total. The TankSessionBusPublishFailing alert in
+	// k8s/templates/observability.yaml pages on any non-zero rate.
+	sessionBusCommandPublishFailureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_bus_command_publish_failure_total",
+		Help: "Session-bus JetStream command publishes (submit_turn/interrupt_turn/input_reply/stop_background_task) that failed, labeled by kind and classified reason.",
+	}, []string{"kind", "reason"})
 	// Wake success counters + persist→wake latency. The published vs
 	// received delta is the candidate-A stethoscope (see
 	// docs/quality-timeframes.md observability requirement and the
@@ -247,6 +263,21 @@ var (
 		[]string{"event_type"},
 	)
 
+	// turnTerminalMissingClientNonceTotal catches a producer contract
+	// violation that the lifecycle counter cannot: terminal rows are
+	// present, so the server-side turn is not silently stranded, but an
+	// already-open browser tab cannot correlate the terminal back to its
+	// local currentRunRef by client_nonce. That leaves follow-up submits
+	// queued until refresh. Labels are bounded by the closed source enum
+	// and the four terminal event types.
+	turnTerminalMissingClientNonceTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_turn_terminal_missing_client_nonce_total",
+			Help: "Durable turn terminal events persisted without client_nonce, partitioned by bounded producer source and terminal event type.",
+		},
+		[]string{"source", "event_type"},
+	)
+
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
 	// persisted dominates; persist_failed and publish_failed near zero.
@@ -288,6 +319,31 @@ var (
 			Help: "Terminal outcomes observed on a hermes run's SSE stream.",
 		},
 		[]string{"terminal"},
+	)
+
+	hermesRunEventTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_run_event_total",
+			Help: "Hermes /v1/runs event-stream events observed by the bridge, by bounded upstream event type.",
+		},
+		[]string{"event_type"},
+	)
+
+	hermesRunDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "tank_hermes_run_duration_seconds",
+			Help:    "Wall-clock duration from Hermes run creation or recovery pointer timestamp to terminal handling.",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600},
+		},
+		[]string{"terminal"},
+	)
+
+	hermesCapabilityCheckTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_capability_check_total",
+			Help: "Hermes /v1/capabilities startup checks by bounded result.",
+		},
+		[]string{"result"},
 	)
 
 	hermesTranslatorErrorTotal = promauto.NewCounterVec(
@@ -1086,6 +1142,10 @@ func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
 	recordTurnLifecyclePersisted(eventType)
 }
 
+func (promPersisterMetrics) RecordTurnTerminalMissingClientNonce(source string, eventType string) {
+	recordTurnTerminalMissingClientNonce(source, eventType)
+}
+
 // recordTurnLifecyclePersisted bumps tank_turn_lifecycle_total for the
 // five lifecycle event types that bound a turn. Callers MUST filter
 // via conversation.IsTurnLifecycleEvent before invoking this helper —
@@ -1096,6 +1156,13 @@ func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
 // session_events and applies the same call-site filter.
 func recordTurnLifecyclePersisted(eventType string) {
 	turnLifecycleTotal.WithLabelValues(eventType).Inc()
+}
+
+func recordTurnTerminalMissingClientNonce(source string, eventType string) {
+	turnTerminalMissingClientNonceTotal.WithLabelValues(
+		sessionEventSourceLabel(source),
+		sessionEventTypeLabel(eventType),
+	).Inc()
 }
 
 // promProviderHealthMetrics satisfies providerhealth.Metrics so the
@@ -1171,6 +1238,39 @@ func (promWakeMetrics) RecordSessionEventPersistToWakeDuration(seconds float64) 
 	sessionEventPersistToWakeSeconds.Observe(seconds)
 }
 
+func (promWakeMetrics) RecordCommandPublishFailed(kind string, reason string) {
+	sessionBusCommandPublishFailureTotal.WithLabelValues(
+		sessionBusCommandKindLabel(kind),
+		sessionBusCommandReasonLabel(reason),
+	).Inc()
+}
+
+// sessionBusCommandKindLabel is the prom-side validator for the kind
+// label. The bus already buckets via commandKindLabel; this guard
+// catches a future schema drift where a new Command.Type slips through
+// without a matching bucket update, so cardinality stays bounded.
+func sessionBusCommandKindLabel(kind string) string {
+	switch kind {
+	case "submit_turn", "interrupt_turn", "input_reply", "stop_background_task", "other":
+		return kind
+	default:
+		return "other"
+	}
+}
+
+// sessionBusCommandReasonLabel mirrors classifyPublishError's bounded
+// output. Validation is intentionally redundant with the bus's own
+// classifier so a future bus change can't silently widen this label
+// set without touching the prom layer too.
+func sessionBusCommandReasonLabel(reason string) string {
+	switch reason {
+	case "no_response_from_stream", "connection", "timeout", "canceled", "other":
+		return reason
+	default:
+		return "other"
+	}
+}
+
 // recordSessionEventStreamEmittedByType is the per-event-type bump that
 // pairs with the existing unlabeled tank_session_event_stream_emitted_total.
 // Event type is bucketed against the closed enum in
@@ -1197,6 +1297,65 @@ func sessionEventTypeLabel(raw string) string {
 		"tool.approval_requested",
 		"tool.approval_resolved":
 		return raw
+	default:
+		return "other"
+	}
+}
+
+func sessionEventSourceLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "tank", "claude", "codex", "hermes":
+		return raw
+	default:
+		return "unknown"
+	}
+}
+
+func hermesTerminalLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "completed", "failed", "interrupted", "command_failed", "lost":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesRunEventTypeLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "response.created",
+		"run.created",
+		"run.started",
+		"response.output_text.delta",
+		"message.delta",
+		"response.output_item.added",
+		"response.output_item.done",
+		"response.completed",
+		"run.completed",
+		"response.failed",
+		"response.error",
+		"run.failed",
+		"response.cancelled",
+		"run.cancelled",
+		"hermes.tool.progress":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesCapabilityResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "error", "missing_required":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesTranslatorErrorLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "decode", "unhandled_type":
+		return strings.TrimSpace(raw)
 	default:
 		return "other"
 	}

@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -49,15 +51,16 @@ import (
 // (slug=tank-operator, stableId=orchestrator). Cache TTL = (token exp -
 // 30s) so a steady-state load issues ~one exchange call per 15min.
 //
-// The bridge's row-publish hook is unset for now: hermes_gui sessions
-// don't yet wire activity-summary updates onto the SPA sidebar's row
-// stream. Tracked as a follow-up.
-func buildHermesBridge(eventStore store.SessionEventStore, scope string) *hermes.Bridge {
+// The bridge probes Hermes capabilities at startup so a partial upstream
+// deployment fails visibly instead of accepting turns it cannot stream,
+// stop, or reconcile.
+func buildHermesBridge(ctx context.Context, eventStore store.SessionEventStore, sessionReg sessions.SessionRegistry, rows hermes.RowPublisher, scope string) *hermes.Bridge {
 	baseURL := strings.TrimSpace(os.Getenv("HERMES_API_URL"))
 	if baseURL == "" {
 		slog.Warn("hermes bridge disabled (missing HERMES_API_URL); hermes_gui sessions will return 503")
 		return nil
 	}
+	recorder := promHermesRecorder{}
 	tokenSource := hermes.NewAuthRomaineServiceProvider(hermes.AuthRomaineOptions{
 		ExchangeURL: os.Getenv("HERMES_AUTH_ROMAINE_EXCHANGE_URL"),
 		SATokenPath: os.Getenv("HERMES_AUTH_ROMAINE_SA_TOKEN_PATH"),
@@ -67,11 +70,35 @@ func buildHermesBridge(eventStore store.SessionEventStore, scope string) *hermes
 		return nil
 	}
 	client := hermes.NewClient(hermes.Options{BaseURL: baseURL, Tokens: tokenSource})
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	caps, err := client.Capabilities(probeCtx)
+	cancel()
+	if err != nil {
+		recorder.CapabilityCheck("error")
+		slog.Error("hermes bridge disabled (capabilities probe failed); hermes_gui sessions will return 503",
+			"base_url", baseURL, "error", err)
+		return nil
+	}
+	if err := hermes.ValidateCapabilities(caps); err != nil {
+		recorder.CapabilityCheck("missing_required")
+		slog.Error("hermes bridge disabled (required capabilities missing); hermes_gui sessions will return 503",
+			"base_url", baseURL, "error", err)
+		return nil
+	}
+	recorder.CapabilityCheck("ok")
+	var activeRuns hermes.ActiveRunStore
+	if store, ok := sessionReg.(hermes.ActiveRunStore); ok {
+		activeRuns = store
+	} else {
+		slog.Warn("hermes bridge active-run recovery disabled (session registry lacks ActiveRunStore)")
+	}
 	return hermes.NewBridge(hermes.BridgeOptions{
-		Client:   client,
-		Store:    eventStore,
-		Scope:    scope,
-		Recorder: promHermesRecorder{},
+		Client:     client,
+		Store:      eventStore,
+		ActiveRuns: activeRuns,
+		Rows:       rows,
+		Scope:      scope,
+		Recorder:   recorder,
 	})
 }
 
@@ -86,10 +113,19 @@ func (promHermesRecorder) RunCreateFailed() {
 	hermesRunTotal.WithLabelValues("failed_to_create").Inc()
 }
 func (promHermesRecorder) RunTerminal(terminal string) {
-	hermesRunTerminalTotal.WithLabelValues(terminal).Inc()
+	hermesRunTerminalTotal.WithLabelValues(hermesTerminalLabel(terminal)).Inc()
+}
+func (promHermesRecorder) RunDuration(terminal string, seconds float64) {
+	hermesRunDurationSeconds.WithLabelValues(hermesTerminalLabel(terminal)).Observe(seconds)
+}
+func (promHermesRecorder) RunEvent(eventType string) {
+	hermesRunEventTotal.WithLabelValues(hermesRunEventTypeLabel(eventType)).Inc()
+}
+func (promHermesRecorder) CapabilityCheck(result string) {
+	hermesCapabilityCheckTotal.WithLabelValues(hermesCapabilityResultLabel(result)).Inc()
 }
 func (promHermesRecorder) TranslatorError(reason string) {
-	hermesTranslatorErrorTotal.WithLabelValues(reason).Inc()
+	hermesTranslatorErrorTotal.WithLabelValues(hermesTranslatorErrorLabel(reason)).Inc()
 }
 
 // buildMCPGitHubClient wires up the mcpgithub client when the
@@ -320,8 +356,10 @@ func main() {
 	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
 	streamAuthTickets := buildStreamAuthTicketStore(pgPool)
 
-	// 11. Start reaper.
-	ctx := context.Background()
+	// 11. Start background workers under a process signal context so rolling
+	// updates can drain HTTP and Hermes turn streams cleanly.
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 	mgr.StartReaper(ctx)
 	// Build the shared RowWriter that the K8s watch and chat-activity
 	// emitter call through. Per docs/session-list-redesign.md Phase 4
@@ -429,6 +467,20 @@ func main() {
 	// 12. Register all routes. Internal session handlers authenticate via
 	// the auth.romaine.life service-principal JWT path (#486 Stage 4); the
 	// pre-migration (ns, sa) allowlist env was retired with that change.
+	hermesEventStore := store.SessionEventStore(sessionEventsStore)
+	if transcriptRowsStore != nil {
+		hermesEventStore = transcriptMaterializingEventStore{
+			SessionEventStore: sessionEventsStore,
+			materializer:      transcriptMaterializer,
+		}
+	}
+	hermesBridge := buildHermesBridge(ctx, hermesEventStore, sessionReg, rowPublisher, sessionScope)
+	if hermesBridge != nil {
+		if err := hermesBridge.RecoverActiveRuns(ctx); err != nil {
+			slog.Warn("hermes bridge active-run recovery completed with errors", "error", err)
+		}
+	}
+
 	mux := http.NewServeMux()
 	srv := &appServer{
 		k8s:            k8sClient,
@@ -458,7 +510,7 @@ func main() {
 		sessionServiceAccount:    sessionServiceAccount,
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
-		hermesBridge:             buildHermesBridge(sessionEventsStore, sessionScope),
+		hermesBridge:             hermesBridge,
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
 	}
@@ -478,9 +530,34 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	slog.Info("starting tank-operator go server", "addr", addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		slog.Error("server failed", "error", err)
-		os.Exit(1)
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- server.ListenAndServe()
+	}()
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		slog.Info("shutdown requested; draining tank-operator go server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			slog.Error("server shutdown failed", "error", err)
+		}
+		cancel()
+		if srv.hermesBridge != nil {
+			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := srv.hermesBridge.WaitForActiveTurnsToSettle(drainCtx); err != nil {
+				slog.Warn("hermes bridge drain timed out", "error", err)
+			}
+			cancel()
+		}
+		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("server failed during shutdown", "error", err)
+			os.Exit(1)
+		}
 	}
 }
 

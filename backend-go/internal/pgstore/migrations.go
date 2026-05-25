@@ -320,6 +320,13 @@ var schemaMigrations = []string{
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`,
 
+	// Hermes/no-pod active run pointer. The bridge writes this before
+	// streaming /v1/runs/:id/events and clears it only after a durable
+	// terminal event lands, giving replica restarts a bounded recovery
+	// surface for hermes_gui turns.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS hermes_active_run jsonb`,
+
 	// Session-pinned avatar assignment. The avatar deck is mutable as
 	// administrators add/delete assets, but an existing session's visible
 	// identity should not reshuffle on refresh. These columns are nullable so
@@ -369,6 +376,9 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS session_events_turn_terminal
 		ON session_events (tank_session_id, turn_id, order_key DESC)
 		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.interrupted')`,
+	`CREATE INDEX IF NOT EXISTS session_events_turn_terminal_all
+		ON session_events (tank_session_id, turn_id, order_key DESC)
+		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')`,
 	`CREATE INDEX IF NOT EXISTS session_events_event_id
 		ON session_events (tank_session_id, event_id)`,
 	`CREATE INDEX IF NOT EXISTS session_events_timeline_id_order_key

@@ -132,6 +132,25 @@ func TestMigrationsPersistSessionListDebugCaptures(t *testing.T) {
 		}
 	}
 	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_list_debug_captures") > strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") {
-		t.Fatal("session-list debug capture storage should be declared before sessions dependents churn row state")
+		t.Fatal("session-list debug capture storage should be declared before session rows")
+	}
+}
+
+func TestMigrationsPersistHermesActiveRunPointer(t *testing.T) {
+	migrations := strings.Join(schemaMigrations, "\n")
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS hermes_active_run jsonb",
+		"session_events_turn_terminal_all",
+		"'turn.command_failed'",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") > strings.Index(migrations, "ADD COLUMN IF NOT EXISTS hermes_active_run jsonb") {
+		t.Fatal("sessions table must exist before hermes active-run column")
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_events") > strings.Index(migrations, "session_events_turn_terminal_all") {
+		t.Fatal("session_events table must exist before hermes terminal index")
 	}
 }

@@ -19,6 +19,11 @@ type Store struct {
 	scope string
 }
 
+type RetiredSession struct {
+	Email string
+	ID    string
+}
+
 func NewPostgresStore(pool *pgxpool.Pool, scope string) *Store {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {

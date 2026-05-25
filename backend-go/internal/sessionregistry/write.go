@@ -208,6 +208,153 @@ func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, stat
 	return s.setJSONBColumn(ctx, "clone_state", "", email, sessionID, state)
 }
 
+// SetHermesActiveRun stores the upstream Hermes run currently driving a
+// hermes_gui turn. Unlike most sidebar-state updates, a missing row is an
+// error: the bridge has already accepted the turn and needs to know whether
+// the recovery pointer actually became durable.
+func (s *Store) SetHermesActiveRun(ctx context.Context, email, sessionID string, run sessionmodel.HermesActiveRun) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" {
+		return nil
+	}
+	run.Owner = normalized
+	run.SessionID = sessionID
+	run.TurnID = strings.TrimSpace(run.TurnID)
+	run.ClientNonce = strings.TrimSpace(run.ClientNonce)
+	run.RunID = strings.TrimSpace(run.RunID)
+	if !run.Valid() {
+		return errors.New("sessionregistry: invalid hermes active run")
+	}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		return fmt.Errorf("sessionregistry: marshal hermes active run: %w", err)
+	}
+	const q = `
+		UPDATE sessions
+		SET hermes_active_run = $4,
+			updated_at        = now(),
+			row_version       = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	tag, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, raw)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// ClearHermesActiveRun clears the active-run pointer only if it still points
+// at the same Tank turn and Hermes run. That compare-and-clear prevents an old
+// stream goroutine from erasing a newer turn's recovery pointer.
+func (s *Store) ClearHermesActiveRun(ctx context.Context, email, sessionID, turnID, runID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	turnID = strings.TrimSpace(turnID)
+	runID = strings.TrimSpace(runID)
+	if normalized == "" || sessionID == "" || turnID == "" || runID == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET hermes_active_run = NULL,
+			updated_at        = now(),
+			row_version       = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+			AND hermes_active_run ->> 'turn_id' = $4
+			AND hermes_active_run ->> 'run_id' = $5
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, turnID, runID)
+	return err
+}
+
+// GetHermesActiveRun reads the active-run pointer for one owner/session/turn.
+// Missing or malformed pointers are treated as absent so callers can fall back
+// to the durable terminal ledger.
+func (s *Store) GetHermesActiveRun(ctx context.Context, email, sessionID, turnID string) (sessionmodel.HermesActiveRun, bool, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	turnID = strings.TrimSpace(turnID)
+	if normalized == "" || sessionID == "" || turnID == "" {
+		return sessionmodel.HermesActiveRun{}, false, nil
+	}
+	const q = `
+		SELECT hermes_active_run
+		FROM sessions
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+			AND hermes_active_run IS NOT NULL
+			AND hermes_active_run ->> 'turn_id' = $4
+		LIMIT 1
+	`
+	var raw []byte
+	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID, turnID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sessionmodel.HermesActiveRun{}, false, nil
+	}
+	if err != nil {
+		return sessionmodel.HermesActiveRun{}, false, err
+	}
+	run, ok := decodeHermesActiveRun(raw, normalized, sessionID)
+	return run, ok, nil
+}
+
+// ListHermesActiveRuns reads every durable active-run pointer in this store's
+// scope. Called at orchestrator boot to reattach streams or synthesize the
+// missing terminal from Hermes' status endpoint.
+func (s *Store) ListHermesActiveRuns(ctx context.Context) ([]sessionmodel.HermesActiveRun, error) {
+	const q = `
+		SELECT email, session_id, hermes_active_run
+		FROM sessions
+		WHERE session_scope = $1
+			AND hermes_active_run IS NOT NULL
+		ORDER BY updated_at ASC
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []sessionmodel.HermesActiveRun
+	for rows.Next() {
+		var owner, sessionID string
+		var raw []byte
+		if err := rows.Scan(&owner, &sessionID, &raw); err != nil {
+			return nil, err
+		}
+		if run, ok := decodeHermesActiveRun(raw, owner, sessionID); ok {
+			out = append(out, run)
+		}
+	}
+	return out, rows.Err()
+}
+
+func decodeHermesActiveRun(raw []byte, owner, sessionID string) (sessionmodel.HermesActiveRun, bool) {
+	if len(raw) == 0 {
+		return sessionmodel.HermesActiveRun{}, false
+	}
+	var run sessionmodel.HermesActiveRun
+	if err := json.Unmarshal(raw, &run); err != nil {
+		return sessionmodel.HermesActiveRun{}, false
+	}
+	if run.Owner == "" {
+		run.Owner = strings.ToLower(strings.TrimSpace(owner))
+	}
+	if run.SessionID == "" {
+		run.SessionID = strings.TrimSpace(sessionID)
+	}
+	run.Owner = strings.ToLower(strings.TrimSpace(run.Owner))
+	run.SessionID = strings.TrimSpace(run.SessionID)
+	run.TurnID = strings.TrimSpace(run.TurnID)
+	run.ClientNonce = strings.TrimSpace(run.ClientNonce)
+	run.RunID = strings.TrimSpace(run.RunID)
+	run.StartedAt = strings.TrimSpace(run.StartedAt)
+	return run, run.Valid()
+}
+
 func (s *Store) setJSONBColumn(ctx context.Context, column, clearColumn, email, sessionID string, state map[string]any) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
@@ -507,6 +654,45 @@ func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error 
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID)
 	return err
+}
+
+// MarkScopeRetired hides every visible session row in this store's scope and
+// returns the affected owner/id pairs so callers can publish row tombstones.
+// It is used by test-slot teardown, where Glimmung removes the K8s runtime
+// directly instead of going through Manager.Delete for each session.
+func (s *Store) MarkScopeRetired(ctx context.Context) ([]RetiredSession, error) {
+	const q = `
+		UPDATE sessions
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE session_scope = $1
+		  AND visible = true
+		RETURNING email, session_id
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var retired []RetiredSession
+	for rows.Next() {
+		var row RetiredSession
+		if err := rows.Scan(&row.Email, &row.ID); err != nil {
+			return nil, err
+		}
+		row.Email = strings.ToLower(strings.TrimSpace(row.Email))
+		row.ID = strings.TrimSpace(row.ID)
+		if row.Email == "" || row.ID == "" {
+			continue
+		}
+		retired = append(retired, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return retired, nil
 }
 
 func parseTimestamp(s string) time.Time {

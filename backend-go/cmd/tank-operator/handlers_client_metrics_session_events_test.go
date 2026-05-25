@@ -13,11 +13,13 @@ import (
 func TestSessionEventStreamMetricsAcceptsValidBatch(t *testing.T) {
 	app := adminTestServer(t)
 	body := bytes.NewBufferString(`{"events":[
-		{"event":"opened","sessionMode":"claude_gui"},
-		{"event":"tank_event_received","eventType":"user_message.created","sessionMode":"claude_gui"},
-		{"event":"stream_silent_while_running","sessionMode":"claude_gui","idleSeconds":42.5,"whileRunning":true},
-		{"event":"closed_unmount","sessionMode":"claude_gui"}
-	]}`)
+			{"event":"opened","sessionMode":"claude_gui"},
+			{"event":"tank_event_received","eventType":"user_message.created","sessionMode":"claude_gui"},
+			{"event":"stream_silent_while_running","sessionMode":"claude_gui","idleSeconds":42.5,"whileRunning":true},
+			{"event":"terminal_matched_by_turn_id","eventType":"turn.completed","sessionMode":"hermes_gui"},
+			{"event":"queued_followup_blocked_after_terminal","sessionMode":"hermes_gui"},
+			{"event":"closed_unmount","sessionMode":"claude_gui"}
+		]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/session-events-stream", body)
 	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
 	req.Header.Set("Content-Type", "application/json")
@@ -70,6 +72,9 @@ func TestSessionEventStreamMetricsRejectsNaNIdleSeconds(t *testing.T) {
 func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	if got := sessionEventStreamClientEventLabel("opened"); got != "opened" {
 		t.Fatalf("opened label = %q", got)
+	}
+	if got := sessionEventStreamClientEventLabel("terminal_local_run_mismatch"); got != "terminal_local_run_mismatch" {
+		t.Fatalf("terminal mismatch label = %q", got)
 	}
 	if got := sessionEventStreamClientEventLabel("malicious-event-name"); got != "other" {
 		t.Fatalf("unknown event should clamp to other, got %q", got)

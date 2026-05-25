@@ -111,6 +111,26 @@ func (c *Client) Capabilities(ctx context.Context) (Capabilities, error) {
 	return out, nil
 }
 
+func ValidateCapabilities(caps Capabilities) error {
+	var missing []string
+	if !caps.Features.RunSubmission {
+		missing = append(missing, "run_submission")
+	}
+	if !caps.Features.RunStatus {
+		missing = append(missing, "run_status")
+	}
+	if !caps.Features.RunEventsSSE {
+		missing = append(missing, "run_events_sse")
+	}
+	if !caps.Features.RunStop {
+		missing = append(missing, "run_stop")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required Hermes capabilities: %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Runs
 

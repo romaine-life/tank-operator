@@ -97,13 +97,22 @@ All metric names are prefixed `tank_`. The full namespace:
   stream diagnostics ingested through
   `POST /api/client-metrics/session-events-stream`. Bounded labels:
   `event` (opened, ready, tank_event_received,
-  stream_silent_while_running, resync_required, stream_error,
-  closed_unmount, closed_error, reconnect_scheduled),
+  stream_silent_while_running, terminal_matched_by_turn_id,
+  terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
+  resync_required, stream_error, closed_unmount, closed_error,
+  reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
   candidate-B zombie-SSE detector: the browser's silence watchdog
   observes the idle interval whenever a connected stream has gone
   >30 s without emitting events while a turn is in flight.
+- `tank_turn_terminal_missing_client_nonce_total{source,event_type}` —
+  durable turn terminal rows (`turn.completed`, `turn.failed`,
+  `turn.command_failed`, `turn.interrupted`) persisted without
+  `client_nonce`. This catches the contract violation where the server
+  lifecycle is closed, so silent-stranding does not fire, but an
+  already-open browser tab cannot correlate the terminal to its local
+  run latch and may keep follow-up input queued until refresh.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
   to `/interrupt`. Single label `outcome` with three bounded values:
   `persisted`, `persist_failed`, `publish_failed`. Steady-state
@@ -322,14 +331,21 @@ the middleware extracts).
 declares one rule group per subsystem:
 
 - **HTTP**: 5xx rate, Postgres p99 latency, unmapped operations.
+- **Hermes bridge**: startup capability probe failures, `/v1/runs`
+  create failures, and translator schema drift. The bridge also emits
+  `tank_hermes_run_event_total{event_type}` and
+  `tank_hermes_run_duration_seconds{terminal}` with bounded labels; the
+  durable recovery pointer is `sessions.hermes_active_run`.
 - **Avatar uploads**: sustained parse/read/validate failures and any
   storage/metadata failures. The runbook starts from
   `GET /api/debug/avatar-upload-attempts?attempt_id=...`, using the
   reference emitted in the UI error.
 - **Session bus / live transport**: schema-rejected events (steady-state
   must be zero), wake-publish failures, stream auth ticket store failures,
-  and `turn.interrupt_requested` persist/publish failures (the durable
-  stop boundary; non-zero rate means stops are losing durability or never
+  terminal events missing `client_nonce`, browser terminal/local-run
+  mismatches, browser queued-followup-after-terminal reports, and
+  `turn.interrupt_requested` persist/publish failures (the durable stop
+  boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
 - **Stop chain self-telling**: `TankStopNotDelivered` fires if the
   backend persists Stop requests faster than runners' control-plane
@@ -381,7 +397,8 @@ HTTP request rate, 5xx rate by route, HTTP latency p50/p95/p99,
 Postgres rate/latency, session-event persister failures, NATS
 connection events, api-proxy refresh outcomes + 401 rate,
 mcp-auth-proxy request rate + SA token failures + GitHub attestation,
-runner turn duration + commands consumed.
+runner turn duration + commands consumed, Hermes run volume/event mix,
+and Hermes run duration.
 
 The "Session spawn" row at the bottom of the dashboard is the
 diagnostic surface for "why did my session take N seconds to start."
