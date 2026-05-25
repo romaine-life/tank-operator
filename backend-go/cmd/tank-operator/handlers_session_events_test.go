@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -131,6 +133,27 @@ func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 				t.Fatalf("AfterOrderKey = %q, want %q", got.AfterOrderKey, tt.want)
 			}
 		})
+	}
+}
+
+func TestHandleSessionTurnActivityRejectsNonAdminProdScopeFromTestSlot(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "tank-operator-slot-1"
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/sessions/63/turns/turn-1/activity?session_scope=default",
+		nil,
+	)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body = %s, want 403", res.Code, res.Body.String())
 	}
 }
 
