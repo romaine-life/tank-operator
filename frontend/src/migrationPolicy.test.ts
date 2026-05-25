@@ -26,6 +26,9 @@ const bundledQualityTimeframesSource = readSource(
 const bundledMigrationPolicySource = readSource(
   "../../k8s/session-config/docs/migration-policy.md",
 );
+const appChromeCapabilitiesSource = readSource(
+  "../../docs/features/app-chrome/capabilities.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -220,6 +223,8 @@ test("avatar editor is embedded in Settings admin, not a standalone app route", 
   assert.equal(indexCssSource.includes("admin-avatar-home"), false);
   assert.equal(adminAvatarManagerSource.includes("bootstrapAuth"), false);
   assert.equal(adminAvatarManagerSource.includes("Back to app"), false);
+  assert.equal(appChromeCapabilitiesSource.includes("admin route"), false);
+  assert.equal(appChromeCapabilitiesSource.includes("Settings -> Admin avatar pane"), true);
 });
 
 test("files tab is gated until the session container is available", () => {
