@@ -3992,13 +3992,62 @@ button:disabled {
     0 0 28px -18px rgba(96, 165, 250, 0.9);
 }
 
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within {
+  position: relative;
+  border-color: rgba(147, 197, 253, 0.9);
+  background:
+    linear-gradient(90deg, rgba(96, 165, 250, 0.09), rgba(255, 255, 255, 0.035) 10rem),
+    rgba(255, 255, 255, 0.035);
+  box-shadow:
+    0 0 0 2px rgba(96, 165, 250, 0.3),
+    0 0 0 6px rgba(96, 165, 250, 0.1),
+    0 18px 42px rgba(0, 0, 0, 0.3),
+    0 0 34px -14px rgba(96, 165, 250, 0.95);
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within::before {
+  content: "";
+  position: absolute;
+  left: 0.55rem;
+  top: 0.62rem;
+  bottom: 0.62rem;
+  z-index: 6;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(191, 219, 254, 0.98),
+    rgba(96, 165, 250, 0.86) 58%,
+    rgba(96, 165, 250, 0.28)
+  );
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.24),
+    0 0 22px rgba(96, 165, 250, 0.48);
+  pointer-events: none;
+}
+
 .styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active::before {
   top: 0.62rem;
   bottom: 0.62rem;
   height: auto;
 }
 
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within .run-composer-textarea {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.045) !important;
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within .run-composer-footer {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.05);
+}
+
 .styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active > * {
+  position: relative;
+  z-index: 1;
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within > * {
   position: relative;
   z-index: 1;
 }

@@ -357,7 +357,7 @@ function SegmentedControl<T extends string>({
 export function StyleguidePortfolioTranscript() {
   const [highlightTarget, setHighlightTarget] = useState<HighlightTarget>("assistant");
   const [composerState, setComposerState] = useState<ComposerSpecimenState>("ready");
-  const [activeSurface, setActiveSurface] = useState<ActiveSurface>("both");
+  const [activeSurface, setActiveSurface] = useState<ActiveSurface>("transcript");
   const transcriptActive = activeSurface === "transcript" || activeSurface === "both";
   const composerActive = activeSurface === "composer" || activeSurface === "both";
 

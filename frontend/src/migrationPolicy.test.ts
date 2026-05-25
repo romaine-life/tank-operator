@@ -293,6 +293,7 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-transcript-surface-active"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-composer-surface-active"), true);
   assert.equal(indexCssSource.includes(".styleguide-transcript-focus-shell"), true);
+  assert.equal(indexCssSource.includes(".run-composer.run-composer-interactive:focus-within"), true);
   assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), true);
   assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
   assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
