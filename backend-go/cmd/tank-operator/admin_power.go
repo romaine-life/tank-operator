@@ -15,7 +15,7 @@ func configuredSuperAdmins() map[string]bool {
 	return parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostAdminEmail()))
 }
 
-func isEffectiveAdmin(user auth.User) bool {
+func hasAdminPower(user auth.User) bool {
 	if user.Role == auth.RoleAdmin {
 		return true
 	}
@@ -24,11 +24,4 @@ func isEffectiveAdmin(user auth.User) bool {
 	}
 	actorEmail := strings.ToLower(strings.TrimSpace(user.ActorEmail))
 	return actorEmail != "" && configuredSuperAdmins()[actorEmail]
-}
-
-func effectiveRole(user auth.User) string {
-	if isEffectiveAdmin(user) {
-		return auth.RoleAdmin
-	}
-	return user.Role
 }

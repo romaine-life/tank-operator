@@ -73,8 +73,9 @@ until its failure modes are observable from this surface.
 - New PrometheusRule alerts include a runbook annotation that names the
   durable source of truth (the table, the ledger, or the K8s resource) and
   enumerates the candidate root causes the alert distinguishes.
-- New admin debug endpoints are admin-gated through the auth.romaine.life
-  role claim, are curl-able with a bot token, and embed an inline
+- New admin debug endpoints are gated through Tank admin power from
+  `/api/auth/me.is_admin`, are curl-able with a bot token or admin-owned
+  service-principal token, and embed an inline
   `description` field so an operator reading the JSON understands how to
   interpret each field without leaving the terminal.
 - Client-side telemetry that bears on user-trust failures Prom-routes
@@ -116,7 +117,7 @@ until its failure modes are observable from this surface.
   specific counter, histogram, log line, or admin endpoint per affected
   contract — and the citation maps to a failure mode named in that
   contract's Observability section.
-- A new admin debug endpoint is admin-role-gated, returns JSON with an
+- A new admin debug endpoint is Tank-admin-gated, returns JSON with an
   inline `description` field, and is documented under
   [docs/observability.md](../../observability.md) → "Per-stream debug
   surface" (or analogous section for its scope).

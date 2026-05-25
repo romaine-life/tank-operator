@@ -26,8 +26,8 @@ func (s *appServer) handleDebugSessionEventStreams(w http.ResponseWriter, r *htt
 	if !ok {
 		return
 	}
-	if user.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin role required")
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
 		return
 	}
 
