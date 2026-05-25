@@ -240,6 +240,10 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugSource.includes("MAX_EVENTS"), true);
   assert.equal(sessionListDebugSource.includes("sessionStorage"), true);
   assert.equal(sessionListDebugSource.includes("__tankSessionListDebug"), true);
+  assert.equal(
+    sessionListDebugSource.includes("/api/client-metrics/session-list-debug-capture"),
+    true,
+  );
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
 });

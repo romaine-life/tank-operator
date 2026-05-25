@@ -126,6 +126,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// (zombie SSE) and candidate-C (reducer drop) stethoscope on the
 	// client side. Pairs with server-side counters in observability.go.
 	mux.HandleFunc("POST /api/client-metrics/session-events-stream", s.handleSessionEventStreamMetrics)
+	// Browser-side session-list debug capture. The SPA posts its bounded
+	// /_debug/session-list ring automatically when a just-created row
+	// mutates client-side identity fields, removing the need for user
+	// devtools or manual link chasing during repro.
+	mux.HandleFunc("POST /api/client-metrics/session-list-debug-capture", s.handleSessionListDebugCapture)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos
 	// are not exposed as static public files; writes are admin-only.
@@ -177,6 +182,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// able server-side observability that replaces "share a Network
 	// tab screenshot."
 	mux.HandleFunc("GET /api/debug/session-list-state", s.handleDebugSessionListState)
+	// Admin-only durable client-side captures posted by
+	// /api/client-metrics/session-list-debug-capture.
+	mux.HandleFunc("GET /api/debug/session-list-captures", s.handleDebugSessionListCaptures)
 	// Admin-only debug surface for the chat-side SSE stream registry.
 	// Returns per-open-stream state (wakes/pages/emits/cursor) so an
 	// operator can distinguish wake-key-mismatch from zombie-SSE from

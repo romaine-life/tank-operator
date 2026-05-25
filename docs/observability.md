@@ -64,6 +64,17 @@ All metric names are prefixed `tank_`. The full namespace:
   `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
   `session_id`, email, raw route paths, or user-supplied event names as
   labels; unknown values collapse to `other` / `unknown`.
+- `tank_session_list_debug_capture_reports_total{result,reason}` —
+  browser-reported session-list debug captures ingested through
+  `POST /api/client-metrics/session-list-debug-capture`. The SPA sends
+  a bounded `/_debug/session-list` snapshot only when a session created
+  in the current tab later mutates client-side identity fields.
+  `reason` is a closed enum and unknown values collapse to `other`; the
+  metric never labels by owner, session id, path, or raw user input.
+- `tank_admin_debug_session_list_capture_reads_total{result}` — admin
+  reads of `GET /api/debug/session-list-captures`, the durable capture
+  store for client-side session-list anomalies. Captures are retained at
+  the latest 200 records per owner/scope.
 - `tank_session_event_wake_published_total` /
   `tank_session_event_wake_received_total` /
   `tank_session_event_persist_to_wake_seconds` — the per-session SSE
@@ -243,6 +254,27 @@ line per call (`caller_email`, `session_id`, `session_scope`,
 `tank_admin_debug_session_event_ledger_reads_total{result}` at
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
+
+## Session List Capture Debug Surface
+
+`GET /api/debug/session-list-captures` (admin-only) returns durable
+browser-side session-list captures posted by
+`POST /api/client-metrics/session-list-debug-capture`. Each record
+contains the captured client snapshot, the anomaly detail, and the
+server registry rows at ingest time.
+
+Standard workflow for "new session showed another session's name or
+avatar":
+
+1. Ask the user to reproduce in a fresh tab or session normally. They
+   do not need to open `/_debug/session-list` at failure time.
+2. Read `GET /api/debug/session-list-captures?owner=<email>&limit=10`
+   and inspect the latest capture for the new session id and reason.
+3. Compare the captured browser `snapshot` and `detail.observed` row
+   with `server_rows` recorded at ingest time. If `server_rows` is
+   stable while the browser snapshot shows the wrong `name` or avatar
+   id, the bug is in the client store/render/avatar resolution layer.
+   If both disagree with the create response, the bug is server-side.
 
 ## Cardinality rules
 

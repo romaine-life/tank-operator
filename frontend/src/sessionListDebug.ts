@@ -1,8 +1,11 @@
+import { authedFetch } from "./auth";
+
 const STORAGE_KEY = "tank.sessionListDebug";
 const MAX_EVENTS = 240;
 const MAX_ROWS_PER_EVENT = 80;
 const MAX_DETAIL_KEYS = 24;
 const MAX_STRING_LENGTH = 280;
+const CAPTURE_ENDPOINT = "/api/client-metrics/session-list-debug-capture";
 
 export type SessionListDebugRow = {
   id: string;
@@ -61,10 +64,34 @@ export type SessionListDebugSnapshot = {
 };
 
 type Listener = () => void;
+type SessionListDebugCapturePayload = {
+  reason: string;
+  session_id: string;
+  source: string;
+  active_id?: string | null;
+  location?: string | null;
+  client_seq: number;
+  detail?: unknown;
+  snapshot: SessionListDebugSnapshot;
+};
+
+type CaptureReporter = (payload: SessionListDebugCapturePayload) => Promise<void> | void;
+
+type WatchedCreatedSession = {
+  id: string;
+  name?: string | null;
+  agent_avatar_id?: string | null;
+  system_avatar_id?: string | null;
+  rendered_avatar_id?: string | null;
+};
 
 const listeners = new Set<Listener>();
+const createdSessionWatches = new Map<string, WatchedCreatedSession>();
+const reportedCaptureKeys = new Set<string>();
 
 let state: SessionListDebugSnapshot = readStoredSnapshot() ?? emptySnapshot();
+let captureReporter: CaptureReporter = defaultCaptureReporter;
+restoreCreatedSessionWatches(state.events);
 
 export function summarizeSessionListRow(value: unknown): SessionListDebugRow | null {
   if (!isRecord(value)) return null;
@@ -119,6 +146,7 @@ export function recordSessionListDebugEvent(
     location: currentLocation(),
     events: [...state.events, event].slice(-MAX_EVENTS),
   };
+  maybeWatchCreatedSession(event);
   persistAndNotify();
 }
 
@@ -127,18 +155,20 @@ export function updateSessionListDebugStore(args: {
   rows: readonly unknown[];
   tombstones: readonly string[];
 }): void {
+  const rows = summarizeSessionListRows(args.rows);
   state = {
     ...state,
     updated_at: nowISO(),
     location: currentLocation(),
     store: {
       cursor: args.cursor,
-      rows: summarizeSessionListRows(args.rows),
+      rows,
       tombstones: [...args.tombstones],
       updated_at: nowISO(),
     },
   };
   persistAndNotify();
+  checkCreatedSessionRowsForAnomalies("store-state", rows, null);
 }
 
 export function updateSessionListDebugRender(args: {
@@ -165,6 +195,7 @@ export function updateSessionListDebugRender(args: {
     rows,
     detail: { avatar_catalog_version: args.avatar_catalog_version },
   });
+  checkCreatedSessionRowsForAnomalies("render-state", rows, args.active_id);
 }
 
 export function getSessionListDebugSnapshot(): SessionListDebugSnapshot {
@@ -187,7 +218,14 @@ export function subscribeSessionListDebug(listener: Listener): () => void {
 
 export function resetSessionListDebugForTest(): void {
   state = emptySnapshot();
+  createdSessionWatches.clear();
+  reportedCaptureKeys.clear();
+  captureReporter = defaultCaptureReporter;
   persistAndNotify();
+}
+
+export function setSessionListDebugCaptureReporterForTest(reporter: CaptureReporter): void {
+  captureReporter = reporter;
 }
 
 function emptySnapshot(): SessionListDebugSnapshot {
@@ -210,6 +248,133 @@ function persistAndNotify(): void {
   }
   exposeSnapshot();
   for (const listener of listeners) listener();
+}
+
+function maybeWatchCreatedSession(event: SessionListDebugEvent): void {
+  if (!event.row) return;
+  if (event.kind === "rename-response") {
+    const existing = createdSessionWatches.get(event.row.id);
+    if (existing) existing.name = event.row.name ?? null;
+    return;
+  }
+  if (event.kind !== "create-response" && event.kind !== "react-sessions-direct-write") {
+    return;
+  }
+  const operation = isRecord(event.detail) ? event.detail.operation : "";
+  if (event.kind === "react-sessions-direct-write" && operation !== "prepend_created_session") {
+    return;
+  }
+  const existing = createdSessionWatches.get(event.row.id);
+  if (existing) return;
+  createdSessionWatches.set(event.row.id, {
+    id: event.row.id,
+    name: event.row.name ?? null,
+    agent_avatar_id: event.row.agent_avatar_id ?? null,
+    system_avatar_id: event.row.system_avatar_id ?? null,
+    rendered_avatar_id: event.row.rendered_avatar_id ?? null,
+  });
+}
+
+function restoreCreatedSessionWatches(events: readonly SessionListDebugEvent[]): void {
+  for (const event of events) {
+    maybeWatchCreatedSession(event);
+  }
+}
+
+function checkCreatedSessionRowsForAnomalies(
+  source: string,
+  rows: readonly SessionListDebugRow[],
+  activeID: string | null,
+): void {
+  for (const row of rows) {
+    const expected = createdSessionWatches.get(row.id);
+    if (!expected) continue;
+    const anomaly = createdSessionAnomaly(expected, row);
+    if (!anomaly) continue;
+    const key = `${row.id}:${anomaly.reason}`;
+    if (reportedCaptureKeys.has(key)) continue;
+    reportedCaptureKeys.add(key);
+    reportSessionListDebugCapture({
+      reason: anomaly.reason,
+      session_id: row.id,
+      source,
+      active_id: activeID,
+      detail: {
+        expected,
+        observed: row,
+        field: anomaly.field,
+      },
+    });
+  }
+}
+
+function createdSessionAnomaly(
+  expected: WatchedCreatedSession,
+  observed: SessionListDebugRow,
+): { reason: string; field: string } | null {
+  if ((expected.name ?? null) !== (observed.name ?? null)) {
+    return { reason: "created-session-name-mutated", field: "name" };
+  }
+  if ((expected.agent_avatar_id ?? null) !== (observed.agent_avatar_id ?? null)) {
+    return { reason: "created-session-agent-avatar-mutated", field: "agent_avatar_id" };
+  }
+  if ((expected.system_avatar_id ?? null) !== (observed.system_avatar_id ?? null)) {
+    return { reason: "created-session-system-avatar-mutated", field: "system_avatar_id" };
+  }
+  if (
+    expected.rendered_avatar_id &&
+    observed.rendered_avatar_id &&
+    expected.rendered_avatar_id !== observed.rendered_avatar_id
+  ) {
+    return { reason: "created-session-rendered-avatar-changed", field: "rendered_avatar_id" };
+  }
+  return null;
+}
+
+function reportSessionListDebugCapture(input: {
+  reason: string;
+  session_id: string;
+  source: string;
+  active_id?: string | null;
+  detail?: unknown;
+}): void {
+  recordSessionListDebugEvent({
+    kind: "auto-capture-triggered",
+    source: "sessionListDebug",
+    reason: input.reason,
+    session_id: input.session_id,
+    active_id: input.active_id,
+    detail: input.detail,
+  });
+  const payload: SessionListDebugCapturePayload = {
+    reason: input.reason,
+    session_id: input.session_id,
+    source: input.source,
+    active_id: input.active_id,
+    location: currentLocation(),
+    client_seq: state.seq,
+    detail: compactValue(input.detail, 0),
+    snapshot: getSessionListDebugSnapshot(),
+  };
+  void Promise.resolve(captureReporter(payload)).catch((error) => {
+    recordSessionListDebugEvent({
+      kind: "auto-capture-report-failed",
+      source: "sessionListDebug",
+      reason: input.reason,
+      session_id: input.session_id,
+      detail: { error: error instanceof Error ? error.message : String(error) },
+    });
+  });
+}
+
+async function defaultCaptureReporter(payload: SessionListDebugCapturePayload): Promise<void> {
+  if (typeof window === "undefined") return;
+  const res = await authedFetch(CAPTURE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`session-list debug capture failed: ${res.status}`);
 }
 
 function exposeSnapshot(): void {

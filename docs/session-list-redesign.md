@@ -192,6 +192,16 @@ which is why every server-side wonk has produced a user-visible bug.
    `sessionStorage` and exposes `window.__tankSessionListDebug()` so a
    reload of the debug route can still inspect the latest row, store,
    render, and avatar transitions from the current tab.
+6. **Automatic durable anomaly capture**: when the current tab creates
+   a session and later observes that row's client-side `name`,
+   assigned avatar ids, or rendered avatar id change unexpectedly, it
+   posts the bounded debug ring to
+   `POST /api/client-metrics/session-list-debug-capture`. The server
+   stores the client snapshot together with the current registry rows
+   in `session_list_debug_captures`, capped at the latest 200 captures
+   per owner/scope. Operators read the captured evidence from
+   `GET /api/debug/session-list-captures` instead of asking the user to
+   chase a debug link at the exact failure moment.
 
 The frontend SessionStore makes the user-visible view robust against
 any backend wonk by construction: the SPA cannot resurrect a deleted
@@ -437,8 +447,10 @@ standard:
   `tank_session_controller_reconcile_failure_total` with an alert.
 - **Observability**: `tank_session_row_writes_total{source}`,
   `tank_session_controller_reconcile_*`, `/api/debug/session-list-state`,
-  `/_debug/session-list`. The user can verify any sidebar bug
-  without browser devtools (per the standing constraint —
+  `/_debug/session-list`, and the durable automatic capture pair
+  `POST /api/client-metrics/session-list-debug-capture` /
+  `GET /api/debug/session-list-captures`. The user can verify any
+  sidebar bug without browser devtools (per the standing constraint —
   feedback_no_devtools_build_surfaces_instead).
 - **Tests cover the contract**: SessionStore behavior, controller
   reconcile loop, row-update wire shape, snapshot cursor semantics.

@@ -582,6 +582,72 @@ func sessionEventStreamClientResultLabel(raw string) string {
 	}
 }
 
+// --- Browser session-list debug captures ---
+//
+// The SPA posts bounded client-side debug rings only when a created
+// session row mutates identity fields in the client. Metrics stay
+// bounded: no email, session_id, path, or raw reason labels.
+
+var (
+	sessionListDebugCaptureReportsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_session_list_debug_capture_reports_total",
+			Help: "Browser session-list debug capture report requests, labeled by bounded result and reason.",
+		},
+		[]string{"result", "reason"},
+	)
+	debugSessionListCaptureReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_debug_session_list_capture_reads_total",
+			Help: "Admin reads of /api/debug/session-list-captures, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
+)
+
+func recordSessionListDebugCapture(result, reason string) {
+	sessionListDebugCaptureReportsTotal.WithLabelValues(
+		sessionListDebugCaptureResultLabel(result),
+		sessionListDebugCaptureReasonLabel(reason),
+	).Inc()
+}
+
+func recordDebugSessionListCaptureRead(result string) {
+	debugSessionListCaptureReadsTotal.WithLabelValues(
+		sessionListDebugCaptureReadResultLabel(result),
+	).Inc()
+}
+
+func sessionListDebugCaptureResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "invalid_json", "invalid_value", "denied_role", "not_configured", "store_error":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func sessionListDebugCaptureReadResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "empty", "bad_request", "forbidden", "not_configured", "store_error":
+		return raw
+	default:
+		return "other"
+	}
+}
+
+func sessionListDebugCaptureReasonLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "created-session-name-mutated",
+		"created-session-agent-avatar-mutated",
+		"created-session-system-avatar-mutated",
+		"created-session-rendered-avatar-changed":
+		return raw
+	default:
+		return "other"
+	}
+}
+
 // --- Browser chat-scroll metrics ---
 //
 // The SPA reports semantic scroll decisions here; the orchestrator owns
