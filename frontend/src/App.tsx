@@ -9341,6 +9341,7 @@ function ChatPane({
           {editingTitle ? (
             <input
               className="run-header-name-input"
+              aria-label="Session name"
               value={editingTitleValue}
               autoFocus
               onFocus={selectTitleInputText}
@@ -9357,7 +9358,6 @@ function ChatPane({
                 }
               }}
               onBlur={commitEditingTitle}
-              placeholder={defaultSessionName(session)}
               maxLength={80}
             />
           ) : (
@@ -12314,7 +12314,6 @@ export function App() {
                     }
                   }}
                   onBlur={finishHomeTitleEdit}
-                  placeholder={HOME_DEFAULT_SESSION_TITLE}
                   maxLength={80}
                 />
               ) : (
