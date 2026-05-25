@@ -3131,7 +3131,14 @@ function conversationEntriesToTranscript(
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "activity"; id: string; turnId: string; entries: TranscriptEntry[]; active?: boolean };
+  | {
+      kind: "activity";
+      id: string;
+      turnId: string;
+      entries: TranscriptEntry[];
+      compactedEntryIds: string[];
+      active?: boolean;
+    };
 type FlatEntryGroup = Exclude<EntryGroup, { kind: "activity" }>;
 
 function entryGroupKey(g: EntryGroup): string {
@@ -3740,6 +3747,7 @@ function RunMessageBubble({
   showDuration,
   onQuote,
   onFork,
+  canonicalMessage = true,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
@@ -3749,6 +3757,7 @@ function RunMessageBubble({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  canonicalMessage?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -3799,7 +3808,8 @@ function RunMessageBubble({
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
       data-severity={variant === "system" ? messageSeverity : undefined}
-      data-message-id={entry.id}
+      data-message-id={canonicalMessage ? entry.id : undefined}
+      data-activity-entry-id={canonicalMessage ? undefined : entry.id}
       data-highlight={highlighted ? "true" : undefined}
     >
       {variant === "assistant" && (
@@ -3847,7 +3857,7 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {variant === "assistant" && onFork && (
+          {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
           )}
           {variant !== "system" && (
@@ -3855,7 +3865,9 @@ function RunMessageBubble({
               <QuoteButton text={text} style="fence" onQuote={onQuote} />
               <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
               <CopyButton text={text} />
-              {!entry.localOnly && <LinkButton sessionId={sessionId} entryId={entry.id} />}
+              {canonicalMessage && !entry.localOnly && (
+                <LinkButton sessionId={sessionId} entryId={entry.id} />
+              )}
             </>
           )}
           <div className="run-msg-timings">
@@ -5107,7 +5119,6 @@ function RunTurnActivityGroup({
   onToolExpandedChange,
   highlightedEntryId,
   onQuote,
-  onFork,
   onOpenBackgroundTask,
 }: {
   group: Extract<EntryGroup, { kind: "activity" }>;
@@ -5125,12 +5136,15 @@ function RunTurnActivityGroup({
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
   highlightedEntryId: string | null;
   onQuote: (text: string, style: QuoteStyle) => void;
-  onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
 }) {
   const childGroups = useMemo(
     () => groupFlatTranscriptEntries(group.entries),
     [group.entries],
+  );
+  const compactedEntryIds = useMemo(
+    () => new Set(group.compactedEntryIds),
+    [group.compactedEntryIds],
   );
   const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
   const completedAt = [...group.entries]
@@ -5231,11 +5245,14 @@ function RunTurnActivityGroup({
                 entry={child.entry}
                 avatar={avatar}
                 sessionId={sessionId}
-                highlighted={highlightedEntryId === child.entry.id}
+                highlighted={
+                  compactedEntryIds.has(child.entry.id) &&
+                  highlightedEntryId === child.entry.id
+                }
                 showTimestamps={showTimestamps}
                 showDuration={showDuration}
                 onQuote={onQuote}
-                onFork={onFork}
+                canonicalMessage={false}
               />
             );
           })}
@@ -5363,7 +5380,7 @@ export function RunMessages({
         return contains;
       }
       if (g.kind === "activity") {
-        const contains = g.entries.some((e) => e.id === target);
+        const contains = g.compactedEntryIds.includes(target);
         if (contains) {
           activityGroupKey = entryGroupKey(g);
           const targetEntry = g.entries.find((entry) => entry.id === target);
@@ -5549,7 +5566,6 @@ export function RunMessages({
             onToolExpandedChange={setToolExpanded}
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
-            onFork={onFork}
             onOpenBackgroundTask={onOpenBackgroundTask}
           />
         );

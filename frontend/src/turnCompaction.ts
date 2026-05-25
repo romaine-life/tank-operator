@@ -10,12 +10,20 @@ export interface CompactableTranscriptEntry {
 
 export type CompactedTranscriptGroup<T extends CompactableTranscriptEntry> =
   | { kind: "entry"; entry: T }
-  | { kind: "activity"; id: string; turnId: string; entries: T[]; active?: boolean };
+  | {
+      kind: "activity";
+      id: string;
+      turnId: string;
+      entries: T[];
+      compactedEntryIds: string[];
+      active?: boolean;
+    };
 
 interface TurnActivity<T extends CompactableTranscriptEntry> {
   turnId: string;
   insertBefore: number;
   entries: T[];
+  compactedEntries: T[];
   active?: boolean;
 }
 
@@ -38,7 +46,7 @@ export function compactCompletedTurnEntries<T extends CompactableTranscriptEntry
   const compactedIndexes = new Set<number>();
   for (const activity of activities) {
     activityByInsertIndex.set(activity.insertBefore, activity);
-    for (const entry of activity.entries) {
+    for (const entry of activity.compactedEntries) {
       const index = entries.indexOf(entry);
       if (index >= 0) compactedIndexes.add(index);
     }
@@ -53,6 +61,7 @@ export function compactCompletedTurnEntries<T extends CompactableTranscriptEntry
         id: `turn-activity-${activity.turnId}`,
         turnId: activity.turnId,
         entries: activity.entries,
+        compactedEntryIds: activity.compactedEntries.map((entry) => entry.id),
         active: activity.active,
       });
     }
@@ -79,15 +88,21 @@ function completedTurnActivities<T extends CompactableTranscriptEntry>(
     }
     const finalAssistantStart = finalAssistantRunStart(entries, indexes);
     if (finalAssistantStart == null) continue;
-    const activityEntries = indexes
+    const finalAssistantIndexes = finalAssistantRunIndexes(entries, indexes, finalAssistantStart);
+    const compactedEntries = indexes
       .filter((index) => index < finalAssistantStart)
       .map((index) => entries[index])
       .filter((entry): entry is T => Boolean(entry) && !isUserMessage(entry));
-    if (activityEntries.length === 0) continue;
+    if (compactedEntries.length === 0) continue;
+    const activityEntries = indexes
+      .filter((index) => index < finalAssistantStart || finalAssistantIndexes.has(index))
+      .map((index) => entries[index])
+      .filter((entry): entry is T => Boolean(entry) && !isUserMessage(entry));
     activities.push({
       turnId,
       insertBefore: finalAssistantStart,
       entries: activityEntries,
+      compactedEntries,
     });
   }
   return activities.sort((a, b) => a.insertBefore - b.insertBefore);
@@ -104,17 +119,16 @@ function activeTurnActivities<T extends CompactableTranscriptEntry>(
     .map(({ index }) => index);
   if (indexes.length === 0) return [];
 
-  const finalAssistantStart = trailingAssistantRunStart(entries, indexes);
   const activityEntries = indexes
-    .filter((index) => finalAssistantStart == null || index < finalAssistantStart)
     .map((index) => entries[index])
     .filter((entry): entry is T => Boolean(entry) && !isUserMessage(entry));
   if (activityEntries.length === 0) return [];
 
   return [{
     turnId: activeTurnId,
-    insertBefore: finalAssistantStart ?? activityEntriesIndex(entries, activityEntries[0]),
+    insertBefore: activityEntriesIndex(entries, activityEntries[0]),
     entries: activityEntries,
+    compactedEntries: activityEntries,
     active: true,
   }];
 }
@@ -143,14 +157,21 @@ function finalAssistantRunStart<T extends CompactableTranscriptEntry>(
   return indexes[startPosition] ?? null;
 }
 
-function trailingAssistantRunStart<T extends CompactableTranscriptEntry>(
+function finalAssistantRunIndexes<T extends CompactableTranscriptEntry>(
   entries: readonly T[],
   indexes: readonly number[],
-): number | null {
-  if (indexes.length === 0) return null;
-  const lastEntry = entries[indexes[indexes.length - 1] ?? -1];
-  if (!lastEntry || !isAssistantMessage(lastEntry)) return null;
-  return finalAssistantRunStart(entries, indexes);
+  startIndex: number,
+): Set<number> {
+  const out = new Set<number>();
+  const startPosition = indexes.indexOf(startIndex);
+  if (startPosition < 0) return out;
+  for (let pos = startPosition; pos < indexes.length; pos += 1) {
+    const index = indexes[pos] ?? -1;
+    const entry = entries[index];
+    if (!entry || !isAssistantMessage(entry)) break;
+    out.add(index);
+  }
+  return out;
 }
 
 function activityEntriesIndex<T extends CompactableTranscriptEntry>(
