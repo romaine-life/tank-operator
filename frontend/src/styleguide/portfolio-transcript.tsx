@@ -27,6 +27,7 @@ import {
 
 type HighlightTarget = "assistant" | "user" | "activity";
 type ComposerSpecimenState = "ready" | "streaming" | "readonly";
+type ActiveSurface = "transcript" | "composer" | "both";
 
 const HIGHLIGHT_TARGETS: { id: HighlightTarget; label: string }[] = [
   { id: "assistant", label: "assistant link target" },
@@ -38,6 +39,12 @@ const COMPOSER_STATES: { id: ComposerSpecimenState; label: string }[] = [
   { id: "ready", label: "ready with text" },
   { id: "streaming", label: "streaming stop" },
   { id: "readonly", label: "read only" },
+];
+
+const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
+  { id: "transcript", label: "transcript selected" },
+  { id: "composer", label: "input selected" },
+  { id: "both", label: "both selected" },
 ];
 
 function TranscriptMessage({
@@ -268,15 +275,22 @@ function ComposerToolButtons() {
 
 function ComposerSpecimen({
   state,
+  active,
 }: {
   state: ComposerSpecimenState;
+  active: boolean;
 }) {
   const [permissionMode, setPermissionMode] = useState<RunComposerMode>("default");
   const readonly = state === "readonly";
   return (
     <ChatComposer
       key={state}
-      className={`run-composer-runpane run-composer-interactive${readonly ? " run-composer-readonly" : ""}`}
+      className={[
+        "run-composer-runpane",
+        "run-composer-interactive",
+        active ? "styleguide-surface-active styleguide-composer-surface-active" : "",
+        readonly ? "run-composer-readonly" : "",
+      ].filter(Boolean).join(" ")}
       placeholder="Ask for the next transcript design pass"
       initialText={
         readonly
@@ -343,6 +357,9 @@ function SegmentedControl<T extends string>({
 export function StyleguidePortfolioTranscript() {
   const [highlightTarget, setHighlightTarget] = useState<HighlightTarget>("assistant");
   const [composerState, setComposerState] = useState<ComposerSpecimenState>("ready");
+  const [activeSurface, setActiveSurface] = useState<ActiveSurface>("both");
+  const transcriptActive = activeSurface === "transcript" || activeSurface === "both";
+  const composerActive = activeSurface === "composer" || activeSurface === "both";
 
   return (
     <div style={styleguideShellStyle}>
@@ -350,11 +367,16 @@ export function StyleguidePortfolioTranscript() {
         <BackLink />
         <h1 style={pageTitleStyle}>portfolio scene: transcript states</h1>
         <p style={{ ...captionStyle, maxWidth: "74ch" }}>
-          Static fixture for the transcript pane's deep-link highlight, active turn group, and shared input box.
+          Static fixture for the transcript pane's deep-link highlight, selected surface state, active turn group, and shared input box.
         </p>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+            <SegmentedControl
+              items={ACTIVE_SURFACES}
+              value={activeSurface}
+              onChange={setActiveSurface}
+            />
             <SegmentedControl
               items={HIGHLIGHT_TARGETS}
               value={highlightTarget}
@@ -379,6 +401,7 @@ export function StyleguidePortfolioTranscript() {
           >
             <div style={{ height: "100%", minWidth: 760 }}>
               <WorkspaceShell
+                className="styleguide-transcript-focus-shell"
                 title={
                   <>
                     <button className="run-header-name-btn" type="button">
@@ -389,6 +412,7 @@ export function StyleguidePortfolioTranscript() {
                 }
                 tabs={<PortfolioTabs />}
                 body={<TranscriptSpecimen highlightTarget={highlightTarget} />}
+                bodyClassName={transcriptActive ? "styleguide-surface-active styleguide-transcript-surface-active" : undefined}
                 bodyAriaLabel="Transcript"
                 floatingBetweenBodyAndComposer={
                   <button
@@ -422,7 +446,7 @@ export function StyleguidePortfolioTranscript() {
                     </div>
                   </div>
                 }
-                composer={<ComposerSpecimen state={composerState} />}
+                composer={<ComposerSpecimen state={composerState} active={composerActive} />}
               />
             </div>
           </div>

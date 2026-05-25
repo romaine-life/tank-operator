@@ -20,6 +20,7 @@ const styleguideSessionLauncherSource = readSource("./styleguide/new-session-row
 const styleguideRuntimeControlsSource = readSource("./styleguide/mode-dropdown.tsx");
 const styleguideSessionRowSource = readSource("./styleguide/session-row.tsx");
 const styleguidePortfolioWorkspaceSource = readSource("./styleguide/portfolio-workspace.tsx");
+const styleguidePortfolioTranscriptSource = readSource("./styleguide/portfolio-transcript.tsx");
 const styleguideSharedSource = readSource("./styleguide/shared.tsx");
 const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
 const installTankDocsSource = readSource("../../k8s/session-config/install-tank-docs.sh");
@@ -288,6 +289,10 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(styleguideRuntimeControlsSource.includes("dropdown-provider"), false);
   assert.equal(styleguideRuntimeControlsSource.includes("new-row"), false);
   assert.equal(styleguidePortfolioWorkspaceSource.includes("new-row"), false);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("input selected"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-transcript-surface-active"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-composer-surface-active"), true);
+  assert.equal(indexCssSource.includes(".styleguide-transcript-focus-shell"), true);
   assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), true);
   assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
   assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
