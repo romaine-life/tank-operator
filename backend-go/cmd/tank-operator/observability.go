@@ -391,7 +391,7 @@ func recordAvatarUploadAttempt(stage, result string) {
 
 func avatarAssetOperationLabel(operation string) string {
 	switch operation {
-	case "list", "read_image", "create", "delete":
+	case "list", "read_image", "create", "delete", "update_kind":
 		return operation
 	default:
 		return "unknown"

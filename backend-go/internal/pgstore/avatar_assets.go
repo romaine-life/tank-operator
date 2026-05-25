@@ -122,6 +122,66 @@ func (s *AvatarAssetStore) Ensure(ctx context.Context, asset avatarassets.NewAss
 	return err
 }
 
+// UpdateKind flips an avatar's kind and atomically removes the avatar's
+// unused entries from the OLD kind's deck cycles. Used deck entries stay
+// as historical record of which avatar was drawn for which session. The
+// new kind picks the avatar up on its next cycle — adding it mid-cycle
+// would violate the "new additions wait until next cycle" rule that
+// covers fresh uploads (see migrations.go on avatar_deck_entries).
+func (s *AvatarAssetStore) UpdateKind(ctx context.Context, id, newKind string) (avatarassets.Metadata, error) {
+	normalized, ok := avatarassets.NormalizeKind(newKind)
+	if !ok {
+		return avatarassets.Metadata{}, errors.New("kind must be agent or system")
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return avatarassets.Metadata{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	const selectQ = `
+		SELECT kind FROM avatar_assets
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE
+	`
+	var currentKind string
+	if err := tx.QueryRow(ctx, selectQ, id).Scan(&currentKind); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return avatarassets.Metadata{}, avatarassets.ErrNotFound
+		}
+		return avatarassets.Metadata{}, err
+	}
+	if currentKind == normalized {
+		return avatarassets.Metadata{}, avatarassets.ErrKindUnchanged
+	}
+
+	const updateQ = `
+		UPDATE avatar_assets
+		SET kind = $2, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING id, kind, name, crop, created_by, created_at, updated_at,
+			avatar_mime, coalesce(avatar_blob_key, ''),
+			backing_mime, coalesce(backing_blob_key, '')
+	`
+	meta, err := scanAvatarMetadata(tx.QueryRow(ctx, updateQ, id, normalized))
+	if err != nil {
+		return avatarassets.Metadata{}, err
+	}
+
+	const cleanupDeckQ = `
+		DELETE FROM avatar_deck_entries
+		WHERE kind = $1 AND avatar_id = $2 AND used_session_id IS NULL
+	`
+	if _, err := tx.Exec(ctx, cleanupDeckQ, currentKind, id); err != nil {
+		return avatarassets.Metadata{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return avatarassets.Metadata{}, err
+	}
+	return meta, nil
+}
+
 func (s *AvatarAssetStore) Delete(ctx context.Context, id string) (avatarassets.Metadata, error) {
 	const q = `
 		UPDATE avatar_assets

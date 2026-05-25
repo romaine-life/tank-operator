@@ -102,16 +102,22 @@ Affected contracts:
 - Observability, because admin mutations affect user-visible identity surfaces
 
 Contract impact:
-- Avatar additions and deletions are confirmed by the backend durable store.
+- Avatar additions, deletions, and kind reassignments (agent <-> system) are
+  confirmed by the backend durable store.
 - Uploaded backing photos are not exposed as unauthenticated static assets.
 - Non-admin callers can read the active catalog for rendering but cannot mutate
   it.
-- Failure states for auth, upload validation, image reads, and deletes are
-  visible in the Settings -> Admin avatar pane.
+- A kind reassignment is atomic with cleanup of the avatar's unused entries in
+  the old kind's per-owner deck cycles; used entries stay as a historical
+  record of which avatar was drawn for which session.
+- Failure states for auth, upload validation, image reads, deletes, and kind
+  reassignments are visible in the Settings -> Admin avatar pane.
 
 Evidence:
 - PRs changing avatar admin behavior should verify the Settings -> Admin pane,
   admin-only writes, authenticated image reads, and reload-safe catalog
   rendering.
 - PRs changing avatar storage should cite the migration and bounded metric
-  evidence for avatar create/read/delete outcomes.
+  evidence for avatar create/read/delete/update_kind outcomes.
+- PRs touching kind reassignment should prove the unused-deck-entry cleanup
+  is atomic with the kind flip and that used entries are preserved.
