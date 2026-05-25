@@ -35,6 +35,12 @@ import {
   normalizeSessionActivity,
   type SessionActivitySummary,
 } from "./sessionActivity";
+import {
+  getSessionListDebugSnapshot,
+  recordSessionListDebugEvent,
+  updateSessionListDebugStore,
+  type SessionListDebugEvent,
+} from "./sessionListDebug";
 
 // SessionRow is the wire shape one row-update payload's `row` field
 // carries. Field set mirrors the SessionRecord projection the backend
@@ -112,7 +118,11 @@ export class SessionStore {
   // SSE or point-read observations; those late snapshots must not regress an
   // already-observed row from Active back to Pending or drop a row created
   // after the snapshot cursor.
-  applySnapshot(rows: SessionRow[], snapshotCursor: string | null): void {
+  applySnapshot(
+    rows: SessionRow[],
+    snapshotCursor: string | null,
+    source = "snapshot",
+  ): void {
     const previousRows = this.rows;
     const visibleByID = new Map<string, SessionRow>();
     for (const row of rows) {
@@ -142,6 +152,19 @@ export class SessionStore {
       }
     }
     this.cursor = maxRowCursor(this.cursor, snapshotCursor);
+    this.recordDebugEvent({
+      kind: "snapshot-applied",
+      source,
+      cursor: this.cursor,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+      detail: {
+        snapshot_cursor: snapshotCursor,
+        incoming_count: rows.length,
+        visible_count: [...visibleByID.values()].length,
+      },
+    });
+    this.publishDebugStoreState();
     this.emit({ kind: "snapshot-replaced" });
   }
 
@@ -149,19 +172,57 @@ export class SessionStore {
   // Returns true if the store state changed.
   applyRowUpdate(payload: SessionRowUpdatePayload): boolean {
     const row = payload.row;
-    if (!row || !row.id) return false;
+    if (!row || !row.id) {
+      this.recordDebugEvent({
+        kind: "row-dropped-malformed",
+        source: "SessionStore",
+        cursor: payload?.cursor ?? null,
+        detail: { has_row: row != null },
+      });
+      this.publishDebugStoreState();
+      return false;
+    }
 
     // Keep the resume cursor monotonic even when an older frame is ignored.
     // The row itself is still version-gated below so stale payloads cannot
     // replace newer row state.
+    const previousCursor = this.cursor;
     this.cursor = maxRowCursor(this.cursor, payload.cursor);
 
     if (this.tombstones.has(row.id)) {
+      this.recordDebugEvent({
+        kind: "row-dropped-tombstoned",
+        source: "SessionStore",
+        session_id: row.id,
+        cursor: this.cursor,
+        row,
+        rows: this.list(),
+        tombstones: this.tombstonedIds(),
+        detail: { payload_cursor: payload.cursor, previous_cursor: previousCursor },
+      });
+      this.publishDebugStoreState();
       this.emit({ kind: "row-dropped-tombstoned", id: row.id });
       return false;
     }
     const existing = this.rows.get(row.id);
     if (existing && existing.row_version > row.row_version) {
+      this.recordDebugEvent({
+        kind: "row-dropped-stale",
+        source: "SessionStore",
+        reason: "row_version_regression",
+        session_id: row.id,
+        cursor: this.cursor,
+        row,
+        rows: this.list(),
+        tombstones: this.tombstonedIds(),
+        detail: {
+          payload_cursor: payload.cursor,
+          existing_row_version: existing.row_version,
+          incoming_row_version: row.row_version,
+          previous_cursor: previousCursor,
+        },
+      });
+      this.publishDebugStoreState();
       return false;
     }
     if (!row.visible) {
@@ -169,8 +230,23 @@ export class SessionStore {
       // mutation that flipped visible=false). Tombstone the id and
       // remove from cache.
       this.tombstones.add(row.id);
+      const wasPresent = this.rows.has(row.id);
       if (this.rows.has(row.id)) {
         this.rows.delete(row.id);
+      }
+      this.recordDebugEvent({
+        kind: "row-removed-server",
+        source: "SessionStore",
+        reason: "visible_false",
+        session_id: row.id,
+        cursor: this.cursor,
+        row,
+        rows: this.list(),
+        tombstones: this.tombstonedIds(),
+        detail: { payload_cursor: payload.cursor, was_present: wasPresent },
+      });
+      this.publishDebugStoreState();
+      if (wasPresent) {
         this.emit({ kind: "row-removed", id: row.id });
         return true;
       }
@@ -178,6 +254,17 @@ export class SessionStore {
     }
     const had = existing != null;
     this.rows.set(row.id, row);
+    this.recordDebugEvent({
+      kind: had ? "row-replaced" : "row-added",
+      source: "SessionStore",
+      session_id: row.id,
+      cursor: this.cursor,
+      row,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+      detail: { payload_cursor: payload.cursor, previous_cursor: previousCursor },
+    });
+    this.publishDebugStoreState();
     this.emit({ kind: had ? "row-replaced" : "row-added", row });
     return true;
   }
@@ -190,8 +277,21 @@ export class SessionStore {
   // tombstone.
   optimisticDelete(id: string): void {
     this.tombstones.add(id);
+    const wasPresent = this.rows.has(id);
     if (this.rows.has(id)) {
       this.rows.delete(id);
+    }
+    this.recordDebugEvent({
+      kind: "optimistic-delete",
+      source: "SessionStore",
+      session_id: id,
+      cursor: this.cursor,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+      detail: { was_present: wasPresent },
+    });
+    this.publishDebugStoreState();
+    if (wasPresent) {
       this.emit({ kind: "row-removed", id });
     }
   }
@@ -202,10 +302,32 @@ export class SessionStore {
   // the visible order unless the persistence call fails and App.tsx
   // refreshes from the authoritative snapshot.
   applyLocalOrder(orderedIds: string[]): boolean {
-    if (orderedIds.length !== this.rows.size) return false;
+    if (orderedIds.length !== this.rows.size) {
+      this.recordDebugEvent({
+        kind: "local-order-rejected",
+        source: "SessionStore",
+        cursor: this.cursor,
+        rows: this.list(),
+        tombstones: this.tombstonedIds(),
+        detail: { ordered_ids: orderedIds, row_count: this.rows.size },
+      });
+      this.publishDebugStoreState();
+      return false;
+    }
     const seen = new Set<string>();
     for (const id of orderedIds) {
-      if (seen.has(id) || !this.rows.has(id)) return false;
+      if (seen.has(id) || !this.rows.has(id)) {
+        this.recordDebugEvent({
+          kind: "local-order-rejected",
+          source: "SessionStore",
+          cursor: this.cursor,
+          rows: this.list(),
+          tombstones: this.tombstonedIds(),
+          detail: { ordered_ids: orderedIds, rejected_id: id },
+        });
+        this.publishDebugStoreState();
+        return false;
+      }
       seen.add(id);
     }
     for (let index = 0; index < orderedIds.length; index += 1) {
@@ -217,6 +339,15 @@ export class SessionStore {
         sidebar_position: orderedIds.length - index,
       });
     }
+    this.recordDebugEvent({
+      kind: "local-order-applied",
+      source: "SessionStore",
+      cursor: this.cursor,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+      detail: { ordered_ids: orderedIds },
+    });
+    this.publishDebugStoreState();
     this.emit({ kind: "snapshot-replaced" });
     return true;
   }
@@ -233,6 +364,14 @@ export class SessionStore {
   // changes without prematurely advancing the cursor.
   setCursor(cursor: string | null): void {
     this.cursor = cursor;
+    this.recordDebugEvent({
+      kind: "cursor-set",
+      source: "SessionStore",
+      cursor: this.cursor,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+    });
+    this.publishDebugStoreState();
   }
 
   // list returns the cached rows in durable sidebar order. RowVersion
@@ -278,12 +417,26 @@ export class SessionStore {
     cursor: string | null;
     rows: SessionRow[];
     tombstones: string[];
+    recent_events: SessionListDebugEvent[];
   } {
     return {
       cursor: this.cursor,
       rows: this.list(),
       tombstones: this.tombstonedIds(),
+      recent_events: getSessionListDebugSnapshot().events,
     };
+  }
+
+  private publishDebugStoreState(): void {
+    updateSessionListDebugStore({
+      cursor: this.cursor,
+      rows: this.list(),
+      tombstones: this.tombstonedIds(),
+    });
+  }
+
+  private recordDebugEvent(input: Omit<SessionListDebugEvent, "seq" | "at">): void {
+    recordSessionListDebugEvent(input);
   }
 
   private emit(event: SessionStoreEvent): void {

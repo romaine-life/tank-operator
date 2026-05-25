@@ -188,7 +188,10 @@ which is why every server-side wonk has produced a user-visible bug.
    snapshot brings it back).
 5. **In-memory ring buffer of recent updates** for diagnosis — the
    `/_debug/session-list` page renders it without the user needing
-   browser devtools.
+   browser devtools. The SPA mirrors this bounded ring to
+   `sessionStorage` and exposes `window.__tankSessionListDebug()` so a
+   reload of the debug route can still inspect the latest row, store,
+   render, and avatar transitions from the current tab.
 
 The frontend SessionStore makes the user-visible view robust against
 any backend wonk by construction: the SPA cannot resurrect a deleted

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { LongChatDebugPage } from "./LongChatDebugPage";
+import { SessionListDebugPage } from "./SessionListDebugPage";
 import { AvatarPreviewHost } from "./avatarPreview";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
@@ -99,6 +100,7 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
 
 const DEBUG_ROUTES: Record<string, () => JSX.Element> = {
   "/_debug/long-chat": () => <LongChatDebugPage />,
+  "/_debug/session-list": () => <SessionListDebugPage />,
 };
 
 function Root() {

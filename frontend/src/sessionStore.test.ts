@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -6,6 +6,10 @@ import {
   normalizeSessionRowUpdate,
   type SessionRow,
 } from "./sessionStore";
+import {
+  getSessionListDebugSnapshot,
+  resetSessionListDebugForTest,
+} from "./sessionListDebug";
 
 function row(id: string, overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -22,6 +26,10 @@ function row(id: string, overrides: Partial<SessionRow> = {}): SessionRow {
   };
 }
 
+beforeEach(() => {
+  resetSessionListDebugForTest();
+});
+
 // TestStoreReplaceByIdNoDuplicates is the core invariant: a row
 // update for an id already in the cache replaces it in place — no
 // duplicate rows, no merge, no event-type discriminator. This is the
@@ -37,6 +45,29 @@ test("applyRowUpdate replaces by id without duplicating", () => {
   assert.equal(list.length, 1, "should have one row for id 8 only");
   assert.equal(list[0].status, "Active");
   assert.equal(store.getCursor(), "2");
+});
+
+test("debug dump includes recent session-list row events", () => {
+  const store = new SessionStore();
+  store.applyRowUpdate({
+    cursor: "1",
+    row: row("8", {
+      status: "Pending",
+      row_version: 1,
+      agent_avatar_id: "av_agent",
+      system_avatar_id: "av_system",
+    }),
+  });
+
+  const snapshot = getSessionListDebugSnapshot();
+  const dump = store.debugDump();
+  assert.equal(snapshot.store?.rows[0]?.id, "8");
+  assert.equal(snapshot.store?.rows[0]?.agent_avatar_id, "av_agent");
+  assert.ok(
+    snapshot.events.some((event) => event.kind === "row-added" && event.session_id === "8"),
+    "row-added event should be retained",
+  );
+  assert.deepEqual(dump.recent_events, snapshot.events);
 });
 
 test("applyRowUpdate ignores older row versions", () => {

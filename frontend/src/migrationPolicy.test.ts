@@ -12,6 +12,8 @@ const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
+const sessionListDebugSource = readSource("./sessionListDebug.ts");
+const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -229,6 +231,16 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   assert.equal(appSource.includes("mergeMutualSessionSkillState"), false);
   assert.equal(skillStateBody.includes('if (rolloutActive) return "rollout"'), false);
   assert.equal(skillStateBody.includes('if (testActive) return "test"'), false);
+});
+
+test("session-list debug route keeps client row history visible without devtools", () => {
+  assert.equal(mainSource.includes('"/_debug/session-list"'), true);
+  assert.equal(mainSource.includes("SessionListDebugPage"), true);
+  assert.equal(sessionListDebugSource.includes("MAX_EVENTS"), true);
+  assert.equal(sessionListDebugSource.includes("sessionStorage"), true);
+  assert.equal(sessionListDebugSource.includes("__tankSessionListDebug"), true);
+  assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
+  assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {

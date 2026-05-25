@@ -11,3 +11,8 @@ test("main.tsx allowlist keeps the splash repo defaults localStorage key alive",
 test("main.tsx no longer allowlists retired local tank auth token", () => {
   assert.doesNotMatch(mainSource, new RegExp('"tank-operator' + '-jwt"'));
 });
+
+test("main.tsx exposes the session-list debug route", () => {
+  assert.match(mainSource, /SessionListDebugPage/);
+  assert.match(mainSource, /"\/_debug\/session-list"/);
+});
