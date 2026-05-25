@@ -55,6 +55,44 @@ const defaultCrop: AvatarCrop = {
 
 const avatarCanvasSize = 512;
 
+function extensionForImageType(type: string): string {
+  switch (type) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/avif":
+      return "avif";
+    case "image/bmp":
+      return "bmp";
+    default:
+      return "png";
+  }
+}
+
+function namedClipboardImage(file: File): File {
+  if (file.name) return file;
+  const extension = extensionForImageType(file.type);
+  return new File([file], `pasted-avatar.${extension}`, {
+    type: file.type || "image/png",
+    lastModified: Date.now(),
+  });
+}
+
+function imageFileFromClipboard(data: DataTransfer): File | null {
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file) return namedClipboardImage(file);
+  }
+  for (const file of Array.from(data.files)) {
+    if (file.type.startsWith("image/")) return namedClipboardImage(file);
+  }
+  return null;
+}
+
 function isAvatarEntry(value: unknown): value is AvatarEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Record<string, unknown>;
@@ -229,6 +267,20 @@ export function AdminAvatarsPage() {
     });
   }, []);
 
+  useEffect(() => {
+    if (user?.role !== "admin") return;
+    const onPaste = (event: ClipboardEvent) => {
+      const data = event.clipboardData;
+      if (!data) return;
+      const file = imageFileFromClipboard(data);
+      if (!file) return;
+      event.preventDefault();
+      selectPhoto(file);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [selectPhoto, user?.role]);
+
   async function buildAvatarBlob(): Promise<Blob> {
     const image = imageRef.current;
     if (!image || !photoFile) throw new Error("choose a source photo first");
@@ -385,7 +437,7 @@ export function AdminAvatarsPage() {
           </label>
           <label className="admin-avatar-file">
             <UploadIcon size={16} aria-hidden="true" />
-            <span>{photoFile ? photoFile.name : "Choose photo"}</span>
+            <span>{photoFile ? photoFile.name : "Choose or paste photo"}</span>
             <input
               type="file"
               accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"
