@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-d8dc0770a31d298474878b82d5b4a42c68e7765260aa8c59bd3949998e01e59d"
+  tag: "app-05e06f84c6797130ebbdbbe1bc3f54bf2c40298b96681c248f7b2afa8b747e59"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -200,6 +200,10 @@ sessionBus:
   streamReplicas: 3
   authSecret: tank-nats-auth
   tokenKvKey: tank-nats-token
+  monitorURLs:
+    - http://tank-nats-0.tank-nats-headless.nats.svc.cluster.local:8222
+    - http://tank-nats-1.tank-nats-headless.nats.svc.cluster.local:8222
+    - http://tank-nats-2.tank-nats-headless.nats.svc.cluster.local:8222
   # NATS lives in its own namespace, deployed by infra-bootstrap's nats
   # chart. tank-operator chart no longer owns the NATS sub-chart; the
   # ExternalSecret template in k8s/templates/externalsecret-nats.yaml

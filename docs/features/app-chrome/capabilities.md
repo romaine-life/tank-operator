@@ -87,6 +87,35 @@ Evidence:
 - PRs expanding shell process semantics should either update this ledger or add
   a dedicated Shells contract.
 
+## Cluster Health Sidebar Surface
+
+Status: active
+
+Intent:
+Expose cluster-level causes of Tank instability directly in the persistent
+sidebar: Kubernetes node readiness/pressure, Tank session pod readiness, and
+NATS JetStream pressure/quorum risk.
+
+Affected contracts:
+- App Chrome
+- Observability
+- Session Lifecycle, when session pod readiness explains launch/runtime failures
+
+Contract impact:
+- The surface reads live backend-owned health state, not browser-local
+  inference.
+- Failure to load health is visible in the sidebar and retryable without
+  devtools.
+- NATS health includes both transport reachability and JetStream pressure
+  signals so the 2026-05-25 "publish dies when NATS stalls" shape is visible
+  before a user has to infer it from failed turns.
+
+Evidence:
+- PRs changing this surface should verify `GET /api/cluster-health`, the
+  sidebar render path, and Helm RBAC/env wiring.
+- PRs adding or removing health dimensions should cite the Observability
+  contract and explain which failure mode remains visible.
+
 ## Avatar Admin Console
 
 Status: active
