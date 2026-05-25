@@ -80,13 +80,13 @@ function PortfolioWorkspaceScene() {
           <ul className="sessions">
             <li className="is-open">
               <div className="session-row-top">
-                <span className="status-dot status-active" aria-label="status active" />
                 <span className="session-open">
                   <span className="session-id">design-showcase</span>
                 </span>
                 <button className="session-delete" aria-label="delete session" type="button">×</button>
               </div>
               <div className="session-row-bottom">
+                <span className="status-dot status-active" aria-label="status active" />
                 <span className="mode mode-codex_cli mode-icon-only" title="Codex CLI" aria-label="Codex CLI">
                   <ProviderIcon provider="codex" className="mode-provider-icon" />
                   <span className="sr-only">codex-cli</span>
@@ -98,13 +98,13 @@ function PortfolioWorkspaceScene() {
             </li>
             <li>
               <div className="session-row-top">
-                <span className="status-dot status-pending" aria-label="status pending" />
                 <span className="session-open">
                   <span className="session-id">avatar-review</span>
                 </span>
                 <button className="session-delete" aria-label="delete session" type="button">×</button>
               </div>
               <div className="session-row-bottom">
+                <span className="status-dot status-pending" aria-label="status pending" />
                 <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
                   <ProviderIcon provider="anthropic" className="mode-provider-icon" />
                   <span className="sr-only">claude-cli</span>

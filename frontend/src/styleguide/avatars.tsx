@@ -196,15 +196,15 @@ export function StyleguideAvatars() {
                       className="session-avatar"
                     />
                     <div className="session-row-top">
-                      <span
-                        className="status-dot status-active"
-                        aria-label="status active"
-                      />
                       <span className="session-open">
                         <span className="session-id">{selectedAvatar.name}</span>
                       </span>
                     </div>
                     <div className="session-row-bottom">
+                      <span
+                        className="status-dot status-active"
+                        aria-label="status active"
+                      />
                       <span
                         className="mode mode-claude_cli mode-icon-only"
                         title="Claude CLI"
