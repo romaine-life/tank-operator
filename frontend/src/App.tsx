@@ -367,6 +367,8 @@ interface Session {
   runtime_model?: string;
   runtime_effort?: string;
   runtime_configured_at?: string | null;
+  agent_avatar_id?: string | null;
+  system_avatar_id?: string | null;
   sidebar_position?: number;
 }
 
@@ -855,6 +857,10 @@ function normalizeSession(session: Session): Session {
   next.runtime_effort = typeof session.runtime_effort === "string" ? session.runtime_effort : "";
   next.runtime_configured_at =
     typeof session.runtime_configured_at === "string" ? session.runtime_configured_at : null;
+  next.agent_avatar_id =
+    typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
+  next.system_avatar_id =
+    typeof session.system_avatar_id === "string" ? session.system_avatar_id : null;
   return next;
 }
 
@@ -1825,7 +1831,7 @@ function DemoLanding() {
               const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
-              const avatar = getSessionAvatar(s.id);
+              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
               return (
                 <li
                   key={s.id}
@@ -8506,12 +8512,12 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(
-    () => getSessionAvatar(session.id),
-    [avatarCatalogVersion, session.id],
+    () => getSessionAvatar(session.id, session.agent_avatar_id),
+    [avatarCatalogVersion, session.agent_avatar_id, session.id],
   );
   const systemAvatar = useMemo(
-    () => getSystemAvatar(session.id),
-    [avatarCatalogVersion, session.id],
+    () => getSystemAvatar(session.id, session.system_avatar_id),
+    [avatarCatalogVersion, session.id, session.system_avatar_id],
   );
   const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
@@ -10328,6 +10334,8 @@ export function App() {
       runtime_model: row.runtime_model ?? "",
       runtime_effort: row.runtime_effort ?? "",
       runtime_configured_at: row.runtime_configured_at ?? null,
+      agent_avatar_id: row.agent_avatar_id ?? null,
+      system_avatar_id: row.system_avatar_id ?? null,
     };
   }
 
@@ -10364,6 +10372,10 @@ export function App() {
       runtime_effort: typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
       runtime_configured_at:
         typeof raw.runtime_configured_at === "string" ? raw.runtime_configured_at : undefined,
+      agent_avatar_id:
+        typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,
+      system_avatar_id:
+        typeof raw.system_avatar_id === "string" ? raw.system_avatar_id : undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     };
@@ -11496,7 +11508,7 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatar(s.id);
+              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const activityChips = sessionActivityChips(sessionActivities[s.id]);

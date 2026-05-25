@@ -46,6 +46,19 @@ test("runtime avatars replace fallback avatars with the same id", () => {
   assert.equal(matching[0].src, "blob:seeded-agent");
 });
 
+test("assigned agent avatar wins over hash selection", () => {
+  const custom: AgentAvatar = {
+    id: "assigned-agent",
+    kind: "agent",
+    name: "Assigned Agent",
+    src: "blob:assigned-agent",
+    custom: true,
+  };
+  setRuntimeAvatarsForTest([custom]);
+
+  assert.equal(getSessionAvatar("session-1", custom.id).id, custom.id);
+});
+
 test("system avatars are separate from agent avatars", () => {
   const system: AgentAvatar = {
     id: "custom-system",
@@ -57,5 +70,6 @@ test("system avatars are separate from agent avatars", () => {
   setRuntimeAvatarsForTest([system]);
 
   assert.equal(getSystemAvatar("session-1")?.id, "custom-system");
+  assert.equal(getSystemAvatar("session-2", "custom-system")?.id, "custom-system");
   assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === system.id), false);
 });

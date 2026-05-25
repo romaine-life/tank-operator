@@ -43,6 +43,29 @@ type avatarAssetResponse struct {
 	UpdatedAt  string            `json:"updated_at"`
 }
 
+type avatarDeckResponse struct {
+	Owner        string                   `json:"owner"`
+	SessionScope string                   `json:"session_scope"`
+	Decks        []avatarDeckKindResponse `json:"decks"`
+}
+
+type avatarDeckKindResponse struct {
+	Kind    string                    `json:"kind"`
+	Cycle   int64                     `json:"cycle"`
+	Entries []avatarDeckEntryResponse `json:"entries"`
+}
+
+type avatarDeckEntryResponse struct {
+	Position      int    `json:"position"`
+	AvatarID      string `json:"avatar_id"`
+	Name          string `json:"name"`
+	AvatarURL     string `json:"avatar_url,omitempty"`
+	Used          bool   `json:"used"`
+	UsedSessionID string `json:"used_session_id,omitempty"`
+	UsedAt        string `json:"used_at,omitempty"`
+	Available     bool   `json:"available"`
+}
+
 func (s *appServer) handleListAvatars(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -64,6 +87,62 @@ func (s *appServer) handleListAvatars(w http.ResponseWriter, r *http.Request) {
 		out = append(out, avatarAssetResponseFromMeta(meta))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
+}
+
+func (s *appServer) handleGetAvatarDecks(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAdmin(w, r, "deck_list")
+	if !ok {
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	registry := s.sessionRegistryForScope(sessionScope)
+	if registry == nil {
+		writeJSON(w, http.StatusOK, avatarDeckResponse{
+			Owner:        user.OwnerEmail(),
+			SessionScope: sessionScope,
+			Decks:        []avatarDeckKindResponse{},
+		})
+		return
+	}
+	owner := listSessionsOwner(user, r)
+	decks, err := registry.CurrentAvatarDecks(r.Context(), owner)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := avatarDeckResponse{
+		Owner:        owner,
+		SessionScope: sessionScope,
+		Decks:        make([]avatarDeckKindResponse, 0, len(decks)),
+	}
+	for _, deck := range decks {
+		entries := make([]avatarDeckEntryResponse, 0, len(deck.Entries))
+		for _, entry := range deck.Entries {
+			resp := avatarDeckEntryResponse{
+				Position:      entry.Position,
+				AvatarID:      entry.AvatarID,
+				Name:          entry.Name,
+				Used:          entry.Used,
+				UsedSessionID: entry.UsedSessionID,
+				UsedAt:        entry.UsedAt,
+				Available:     entry.Available,
+			}
+			if entry.Available {
+				resp.AvatarURL = "/api/avatars/" + url.PathEscape(entry.AvatarID) + "/image"
+			}
+			entries = append(entries, resp)
+		}
+		out.Decks = append(out.Decks, avatarDeckKindResponse{
+			Kind:    deck.Kind,
+			Cycle:   deck.Cycle,
+			Entries: entries,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *appServer) handleGetAvatarImage(w http.ResponseWriter, r *http.Request) {

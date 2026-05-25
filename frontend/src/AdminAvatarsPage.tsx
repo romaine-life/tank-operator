@@ -40,6 +40,23 @@ type AvatarView = AvatarEntry & {
   avatarSrc: string;
 };
 
+type AvatarDeckEntry = {
+  position: number;
+  avatar_id: string;
+  name: string;
+  avatar_url?: string;
+  used: boolean;
+  used_session_id?: string;
+  used_at?: string;
+  available: boolean;
+};
+
+type AvatarDeckKind = {
+  kind: AvatarKind;
+  cycle: number;
+  entries: AvatarDeckEntry[];
+};
+
 type ImageRect = {
   left: number;
   top: number;
@@ -123,6 +140,25 @@ async function fetchAvatarViews(): Promise<AvatarView[]> {
   return views;
 }
 
+function isAvatarDeckKind(value: unknown): value is AvatarDeckKind {
+  if (!value || typeof value !== "object") return false;
+  const deck = value as Record<string, unknown>;
+  return (
+    (deck.kind === "agent" || deck.kind === "system") &&
+    typeof deck.cycle === "number" &&
+    Array.isArray(deck.entries)
+  );
+}
+
+async function fetchAvatarDecks(): Promise<AvatarDeckKind[]> {
+  const res = await authedFetch("/api/admin/avatar-decks");
+  if (!res.ok) throw new Error(`avatar deck fetch failed: ${res.status}`);
+  const body = (await res.json()) as { decks?: unknown };
+  return Array.isArray(body.decks)
+    ? body.decks.filter(isAvatarDeckKind)
+    : [];
+}
+
 function containedImageRect(
   stageWidth: number,
   stageHeight: number,
@@ -150,6 +186,9 @@ export function AdminAvatarsPage() {
   const [entries, setEntries] = useState<AvatarView[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [loadingEntries, setLoadingEntries] = useState(false);
+  const [decks, setDecks] = useState<AvatarDeckKind[]>([]);
+  const [deckError, setDeckError] = useState<string | null>(null);
+  const [loadingDeck, setLoadingDeck] = useState(false);
   const [kind, setKind] = useState<AvatarKind>("agent");
   const [name, setName] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -196,9 +235,24 @@ export function AdminAvatarsPage() {
     }
   }, [revokeAvatarObjectURLs]);
 
+  const reloadDecks = useCallback(async () => {
+    setLoadingDeck(true);
+    setDeckError(null);
+    try {
+      setDecks(await fetchAvatarDecks());
+    } catch (err) {
+      setDeckError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingDeck(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (user?.role === "admin") void reloadEntries();
-  }, [reloadEntries, user?.role]);
+    if (user?.role === "admin") {
+      void reloadEntries();
+      void reloadDecks();
+    }
+  }, [reloadDecks, reloadEntries, user?.role]);
 
   useEffect(() => () => revokeAvatarObjectURLs(), [revokeAvatarObjectURLs]);
 
@@ -350,6 +404,7 @@ export function AdminAvatarsPage() {
       setName("");
       selectPhoto(null);
       await reloadEntries();
+      await reloadDecks();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -367,6 +422,7 @@ export function AdminAvatarsPage() {
       return;
     }
     await reloadEntries();
+    await reloadDecks();
   }
 
   if (!booted) {
@@ -396,6 +452,10 @@ export function AdminAvatarsPage() {
       </div>
     );
   }
+
+  const visibleDeck = decks.find((deck) => deck.kind === kind);
+  const deckEntries = visibleDeck?.entries ?? [];
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
 
   return (
     <div className="admin-avatar-page">
@@ -510,6 +570,59 @@ export function AdminAvatarsPage() {
           </button>
         </section>
 
+        <div className="admin-avatar-stack">
+        <section className="admin-avatar-deck" aria-label="Avatar traversal">
+          <div className="admin-avatar-gallery-head">
+            <h2>{kind === "agent" ? "Agent traversal" : "System traversal"}</h2>
+            {loadingDeck && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
+          </div>
+          {deckError && <div className="admin-avatar-error">{deckError}</div>}
+          {deckEntries.length === 0 ? (
+            <p className="admin-avatar-empty">No {kind} deck yet.</p>
+          ) : (
+            <div className="admin-avatar-deck-list">
+              {deckEntries.map((deckEntry) => {
+                const view = entriesById.get(deckEntry.avatar_id);
+                const disabled = deckEntry.used || !deckEntry.available || !view;
+                return (
+                  <button
+                    key={`${deckEntry.position}-${deckEntry.avatar_id}`}
+                    type="button"
+                    className="admin-avatar-deck-row"
+                    data-used={deckEntry.used ? "true" : undefined}
+                    data-available={deckEntry.available ? "true" : "false"}
+                    disabled={disabled}
+                    onClick={(event) => {
+                      if (!view) return;
+                      openAvatarPreview({
+                        name: view.name,
+                        avatarSrc: view.avatarSrc,
+                        backingSrc: view.backing_url,
+                        kind: view.kind,
+                      }, event);
+                    }}
+                  >
+                    <span className="admin-avatar-deck-position">{deckEntry.position}</span>
+                    <span className="admin-avatar-card-preview" aria-hidden="true">
+                      {view ? <img src={view.avatarSrc} alt="" draggable={false} /> : null}
+                    </span>
+                    <span className="admin-avatar-deck-body">
+                      <span className="admin-avatar-card-name">{deckEntry.name}</span>
+                      <span className="admin-avatar-card-meta">
+                        {deckEntry.used
+                          ? `used${deckEntry.used_session_id ? ` - ${deckEntry.used_session_id}` : ""}`
+                          : deckEntry.available
+                            ? "remaining"
+                            : "removed"}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
         <section className="admin-avatar-gallery" aria-label="Avatar gallery">
           <div className="admin-avatar-gallery-head">
             <h2>{kind === "agent" ? "Agent avatars" : "System avatars"}</h2>
@@ -560,6 +673,7 @@ export function AdminAvatarsPage() {
             </div>
           )}
         </section>
+        </div>
       </main>
     </div>
   );
