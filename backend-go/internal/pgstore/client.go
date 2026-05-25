@@ -78,7 +78,15 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("pgstore: parse DSN: %w", err)
 	}
 	poolConfig.MaxConnLifetime = MaxConnLifetime
-	poolConfig.MaxConns = 10
+	// MaxConns is bounded against the shared Azure Postgres Flex Server's
+	// `max_connections` ceiling. B1ms's default cap is 50. The orchestrator
+	// runs as prod×2 replicas + up to 5 test slots×2 replicas = 12 pods
+	// sharing one DB, each with its own pool; 12×4 = 48 fits the cap with
+	// 2-conn headroom. Raising MaxConns or growing the slot fleet without
+	// matching B-tier upgrade reintroduces the SQLSTATE 53300 crash-loop
+	// observed on 2026-05-25 ("remaining connection slots are reserved
+	// for roles with the SUPERUSER attribute").
+	poolConfig.MaxConns = 4
 	poolConfig.MinConns = 1
 	if cfg.QueryMetrics != nil {
 		poolConfig.ConnConfig.Tracer = NewQueryTracer(cfg.QueryMetrics)
