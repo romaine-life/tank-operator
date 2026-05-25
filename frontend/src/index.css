@@ -694,12 +694,19 @@ button:disabled {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.admin-avatar-card-main:disabled {
+  cursor: default;
+}
+
 .admin-avatar-card-preview {
   width: 3rem;
   height: 3rem;
   border-radius: 999px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
 }
 
 .admin-avatar-card-preview img {
