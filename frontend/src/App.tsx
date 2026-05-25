@@ -971,8 +971,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function effectiveUserRole(user: SessionUser | null | undefined): SessionRole | undefined {
-  return user?.effective_role ?? user?.role;
+function userIsAdmin(user: SessionUser | null | undefined): boolean {
+  return user?.is_admin === true;
 }
 
 interface SessionUser {
@@ -984,7 +984,7 @@ interface SessionUser {
   // caller. auth.romaine.life mints `pending` by default; tank-operator
   // rejects that role on direct JWT verification.
   role: SessionRole;
-  effective_role?: SessionRole;
+  is_admin: boolean;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -10718,9 +10718,9 @@ export function App() {
     readGlimmungLaunchContext()
   );
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
-  const userEffectiveRole = effectiveUserRole(user);
+  const hasAdminAccess = userIsAdmin(user);
   const canViewProdSessions =
-    user?.role === "admin" && currentSessionScope !== PROD_SESSION_SCOPE;
+    hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
     canViewProdSessions && sessionViewScopeOverride === PROD_SESSION_SCOPE
       ? PROD_SESSION_SCOPE
@@ -10733,7 +10733,7 @@ export function App() {
     [effectiveSessionScope],
   );
   const adminSettingsControls =
-    userEffectiveRole === "admin"
+    hasAdminAccess
       ? {
           visible: true,
           canViewProdSessions,

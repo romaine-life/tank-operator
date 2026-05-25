@@ -57,6 +57,17 @@ func TestDebugSessionEventStreamsAdminGate(t *testing.T) {
 			t.Fatalf("scope = %v, want default", body["scope"])
 		}
 	})
+
+	t.Run("service admin actor gets empty registry", func(t *testing.T) {
+		t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+		req := httptest.NewRequest(http.MethodGet, "/api/debug/session-event-streams", nil)
+		req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", adminEmail))
+		resp := httptest.NewRecorder()
+		app.handleDebugSessionEventStreams(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+		}
+	})
 }
 
 func TestDebugSessionEventStreamsReturnsRegisteredState(t *testing.T) {

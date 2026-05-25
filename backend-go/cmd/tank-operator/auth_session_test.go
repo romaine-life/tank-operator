@@ -19,10 +19,12 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-// Admin cross-user reads: role=admin bypasses the per-owner gate on
+// Admin cross-user reads: Tank admin power bypasses the per-owner gate on
 // read-only handlers (events list/SSE, session metadata, read-state
 // cursor update, file/MCP/skill listings). Non-admin still gets 404 on
-// any session that isn't theirs.
+// any session that isn't theirs. Human role=admin has admin power, and
+// role=service gets the same power only when actor_email is a configured
+// super admin.
 //
 // Writes (turns, uploads, terminal attach, name/test/rollout patches,
 // delete) intentionally stay per-owner — those handlers keep calling
@@ -315,6 +317,21 @@ func TestAuthorizeSessionRead_AdminCanReadAnyOwner(t *testing.T) {
 	}
 }
 
+func TestAuthorizeSessionRead_ServiceAdminActorCanReadAnyOwner(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	app := adminTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", adminEmail))
+	user, _ := app.verifier.CurrentUser(req)
+	info, status, err := app.authorizeSessionRead(req.Context(), user, "63")
+	if err != nil {
+		t.Fatalf("service-admin authorize: err=%v status=%d", err, status)
+	}
+	if info.Owner != otherUser {
+		t.Fatalf("service-admin read returned owner=%q, want %q", info.Owner, otherUser)
+	}
+}
+
 func TestAuthorizeSessionRead_NonAdminCrossUserReturns404NotLeak(t *testing.T) {
 	app := adminTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63", nil)
@@ -498,6 +515,22 @@ func TestListSessionsOwner_ServiceUsesActorEmail(t *testing.T) {
 	}
 }
 
+func TestListSessionsOwner_ServiceAdminActorQueryOverridesEmail(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions?owner=target@example.com", nil)
+	got := listSessionsOwner(
+		auth.User{
+			Email:      "pod-200@service.tank.romaine.life",
+			Role:       auth.RoleService,
+			ActorEmail: adminEmail,
+		},
+		req,
+	)
+	if got != "target@example.com" {
+		t.Fatalf("service-admin with ?owner=: got %q, want target@example.com", got)
+	}
+}
+
 func TestListSessionsOwner_AdminWithoutQueryUsesOwnEmail(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
 	got := listSessionsOwner(
@@ -542,6 +575,22 @@ func TestResolveSessionScope_AdminCanViewProdFromTestSlot(t *testing.T) {
 	)
 	if err != nil || status != http.StatusOK || got != "default" {
 		t.Fatalf("admin prod scope = (%q, %d, %v), want default", got, status, err)
+	}
+}
+
+func TestResolveSessionScope_ServiceAdminActorCanViewProdFromTestSlot(t *testing.T) {
+	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
+	app := &appServer{sessionScope: "tank-operator-slot-1"}
+	got, status, err := app.resolveSessionScope(
+		auth.User{
+			Email:      "pod-200@service.tank.romaine.life",
+			Role:       auth.RoleService,
+			ActorEmail: adminEmail,
+		},
+		"default",
+	)
+	if err != nil || status != http.StatusOK || got != "default" {
+		t.Fatalf("service-admin prod scope = (%q, %d, %v), want default", got, status, err)
 	}
 }
 
