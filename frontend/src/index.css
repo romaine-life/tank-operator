@@ -6670,7 +6670,7 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript {
-  --run-transcript-active-rail-left: calc(var(--space-5) + 0.7rem);
+  --run-transcript-active-rail-left: 0.55rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
@@ -6686,6 +6686,7 @@ textarea.run-files-viewer-editor:focus {
   min-width: 0;
   max-width: 100%;
   position: relative;
+  isolation: isolate;
   transition: background var(--motion-fast, 120ms) ease;
 }
 
@@ -6693,10 +6694,8 @@ textarea.run-files-viewer-editor:focus {
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript {
   background: linear-gradient(
     90deg,
-    rgba(10, 10, 10, 0) 0,
-    rgba(10, 10, 10, 0) calc(var(--run-transcript-active-rail-left) - 0.8rem),
-    var(--run-surface-accent-fill) var(--run-transcript-active-rail-left),
-    rgba(10, 10, 10, 0) calc(var(--run-transcript-active-rail-left) + 8.5rem)
+    var(--run-surface-accent-fill),
+    rgba(10, 10, 10, 0) 9.5rem
   );
 }
 
@@ -6706,7 +6705,7 @@ textarea.run-files-viewer-editor:focus {
   position: absolute;
   left: var(--run-transcript-active-rail-left);
   top: var(--space-5);
-  z-index: 6;
+  z-index: 0;
   width: 2px;
   height: min(5.75rem, calc(100% - (var(--space-5) * 2)));
   border-radius: 999px;
@@ -6720,6 +6719,12 @@ textarea.run-files-viewer-editor:focus {
     0 0 0 1px rgba(96, 165, 250, 0.16),
     0 0 18px rgba(96, 165, 250, 0.3);
   pointer-events: none;
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript > *,
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript > * {
+  position: relative;
+  z-index: 1;
 }
 
 .run-transcript-divider {
