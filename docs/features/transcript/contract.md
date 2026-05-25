@@ -16,11 +16,19 @@ The browser DOM is not the source of truth. Provider streams are adapter input,
 not the rendered protocol. The frontend renders the Tank conversation protocol
 from durable events.
 
+Compacted agent activity is a projection of the same durable transcript ledger,
+not a second ledger. The Turn activity row is an activity/log surface; the main
+transcript is the settled conversation surface. The UI may duplicate assistant
+prose across those projections, but it must not visibly move a rendered row from
+one surface to the other.
+
 ## Sources Of Truth
 
 - `session_events` owns transcript entries and ordering.
 - `order_key` owns transcript order and cursor movement.
 - `session.status` events own startup notices shown inside the transcript.
+- The Tank conversation protocol owns the projection rules for Turn activity
+  versus settled transcript messages.
 - Provider SDK events are inputs that must be converted to Tank events before
   the UI depends on them.
 - SSE is a live follower of durable events, not the transcript store.
@@ -36,6 +44,8 @@ from durable events.
   by Tank protocol rendering.
 - Refresh-only recovery must not be accepted as proof that live transcript
   delivery works.
+- Compactable activity must not be rendered first as a settled transcript row
+  and later relocated into Turn activity.
 
 ## Live Behavior
 
@@ -50,6 +60,16 @@ from durable events.
 - A reconnect from an unknown cursor must trigger explicit resync instead of
   silently skipping a gap.
 - Ready/load transitions must not reset, reorder, or replace the transcript.
+- Active-turn assistant prose is provisional until a successful terminal event
+  or an explicit durable final-answer marker exists. Without such a marker, the
+  final answer is inferred from the trailing assistant message/run after
+  `turn.completed`.
+- Turn activity may show a log copy of assistant prose, including prose that
+  later becomes the final answer, but that copy is not a second settled
+  transcript message.
+- Copy links, unread counts, latest-message state, and fork-from-message actions
+  must target the settled transcript projection, not duplicate activity-log
+  copies.
 
 ## Failure And Recovery
 
@@ -71,6 +91,9 @@ from durable events.
   then live stream telemetry.
 - A durable terminal event that exists but is not visible in an open transcript
   must leave enough telemetry to localize the miss.
+- A report that a message bounced between Turn activity and the main transcript
+  should be diagnosable from the durable event order plus the frontend
+  projection chosen before first paint.
 
 ## Acceptance Checks
 
@@ -83,3 +106,9 @@ from durable events.
 - Reconnect from an unknown cursor triggers explicit resync.
 - A browser or integration check proves that load/ready does not reset the
   transcript.
+- An active turn that emits assistant prose and then later emits more work does
+  not show that prose as a settled main-transcript row before moving it into
+  Turn activity.
+- A completed turn may show the final assistant prose in the main transcript
+  while also retaining a log copy in Turn activity, without counting it as two
+  transcript messages.

@@ -53,7 +53,7 @@ test("groups active turn activity before a final-answer candidate exists", () =>
   );
 });
 
-test("keeps trailing active assistant text visible as the final-answer candidate", () => {
+test("keeps trailing active assistant text in activity as provisional output", () => {
   const groups = compactCompletedTurnEntries([
     entry("user", "message", { role: "user" }),
     entry("tool", "tool"),
@@ -63,26 +63,44 @@ test("keeps trailing active assistant text visible as the final-answer candidate
   assert.deepEqual(
     groups.map((group) =>
       group.kind === "activity"
-        ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
+        ? [
+            "activity",
+            group.entries.map((activityEntry) => activityEntry.id),
+            group.compactedEntryIds,
+          ]
         : ["entry", group.entry.id],
     ),
     [
       ["entry", "user"],
-      ["activity", ["tool"]],
-      ["entry", "final"],
+      ["activity", ["tool", "final"], ["tool", "final"]],
     ],
   );
 });
 
-test("moves active assistant text into activity when later work arrives", () => {
-  const groups = compactCompletedTurnEntries([
+test("does not move active assistant text from transcript into activity when later work arrives", () => {
+  const beforeLaterWork = compactCompletedTurnEntries([
+    entry("user", "message", { role: "user" }),
+    entry("note", "message", { role: "assistant" }),
+  ], true, "turn-1");
+  const afterLaterWork = compactCompletedTurnEntries([
     entry("user", "message", { role: "user" }),
     entry("note", "message", { role: "assistant" }),
     entry("tool", "tool"),
   ], true, "turn-1");
 
   assert.deepEqual(
-    groups.map((group) =>
+    beforeLaterWork.map((group) =>
+      group.kind === "activity"
+        ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
+        : ["entry", group.entry.id],
+    ),
+    [
+      ["entry", "user"],
+      ["activity", ["note"]],
+    ],
+  );
+  assert.deepEqual(
+    afterLaterWork.map((group) =>
       group.kind === "activity"
         ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
         : ["entry", group.entry.id],
@@ -94,7 +112,7 @@ test("moves active assistant text into activity when later work arrives", () => 
   );
 });
 
-test("folds completed turn activity before the final assistant answer", () => {
+test("duplicates completed final assistant answer into activity without compacting the settled row", () => {
   const groups = compactCompletedTurnEntries([
     entry("user", "message", { role: "user", turnTerminalStatus: "completed" }),
     entry("note", "message", { role: "assistant", turnTerminalStatus: "completed" }),
@@ -105,12 +123,16 @@ test("folds completed turn activity before the final assistant answer", () => {
   assert.deepEqual(
     groups.map((group) =>
       group.kind === "activity"
-        ? ["activity", group.entries.map((activityEntry) => activityEntry.id)]
+        ? [
+            "activity",
+            group.entries.map((activityEntry) => activityEntry.id),
+            group.compactedEntryIds,
+          ]
         : ["entry", group.entry.id],
     ),
     [
       ["entry", "user"],
-      ["activity", ["note", "tool"]],
+      ["activity", ["note", "tool", "final"], ["note", "tool"]],
       ["entry", "final"],
     ],
   );
@@ -131,7 +153,11 @@ test("keeps trailing assistant response blocks visible together", () => {
   const activity = groups.find((group) => group.kind === "activity");
   assert.equal(activity?.kind, "activity");
   if (activity?.kind === "activity") {
-    assert.deepEqual(activity.entries.map((activityEntry) => activityEntry.id), ["tool"]);
+    assert.deepEqual(
+      activity.entries.map((activityEntry) => activityEntry.id),
+      ["tool", "final-a", "final-b"],
+    );
+    assert.deepEqual(activity.compactedEntryIds, ["tool"]);
   }
 });
 
@@ -145,8 +171,18 @@ test("folds background task rows into completed turn activity", () => {
   const activity = groups.find((group) => group.kind === "activity");
   assert.equal(activity?.kind, "activity");
   if (activity?.kind === "activity") {
-    assert.deepEqual(activity.entries.map((activityEntry) => activityEntry.id), ["task"]);
+    assert.deepEqual(activity.entries.map((activityEntry) => activityEntry.id), ["task", "final"]);
+    assert.deepEqual(activity.compactedEntryIds, ["task"]);
   }
+});
+
+test("does not create an activity row for completed turns with only a final answer", () => {
+  const groups = compactCompletedTurnEntries([
+    entry("user", "message", { role: "user", turnTerminalStatus: "completed" }),
+    entry("final", "message", { role: "assistant", turnTerminalStatus: "completed" }),
+  ], true);
+
+  assert.deepEqual(groups.map((group) => group.kind), ["entry", "entry"]);
 });
 
 test("does not fold failed turns or turns without final assistant text", () => {

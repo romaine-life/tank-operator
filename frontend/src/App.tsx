@@ -1627,6 +1627,8 @@ function DemoLanding() {
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
+  const demoBodyRef = useRef<HTMLElement | null>(null);
+  const demoComposerWrapRef = useRef<HTMLDivElement | null>(null);
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
   const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
@@ -1660,6 +1662,56 @@ function DemoLanding() {
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
   }, [demoSessions, activeDemoSession]);
+
+  const focusDemoComposerTextarea = useCallback((): boolean => {
+    const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
+      | HTMLTextAreaElement
+      | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+
+  const focusDemoSetupSection = useCallback((): boolean => {
+    if (!demoBodyRef.current) return false;
+    demoBodyRef.current.focus({ preventScroll: true });
+    return document.activeElement === demoBodyRef.current;
+  }, []);
+
+  // Match the authenticated splash Tab toggle on the signed-out preview:
+  // textarea ⇄ setup body. Other controls keep the browser's native tab order.
+  useEffect(() => {
+    if (activeDemoSession !== null) return;
+    const toggleDemoFocus = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Tab" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      const body = demoBodyRef.current;
+      if (!textarea || !body) return;
+      if (event.target === textarea) {
+        if (!focusDemoSetupSection()) return;
+      } else if (event.target === body) {
+        if (!focusDemoComposerTextarea()) return;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", toggleDemoFocus, { capture: true });
+    return () => window.removeEventListener("keydown", toggleDemoFocus, { capture: true });
+  }, [activeDemoSession, focusDemoComposerTextarea, focusDemoSetupSection]);
 
   function setDemoProvider(provider: Provider) {
     const interaction = availableInteractionFor(provider, demoInteraction);
@@ -1813,7 +1865,12 @@ function DemoLanding() {
         </div>
       </aside>
 
-      <main className="workspace demo-workspace">
+      <main
+        ref={demoBodyRef}
+        className="workspace demo-workspace"
+        tabIndex={-1}
+        aria-label={activeDemoSession == null ? "New session setup" : "Transcript preview"}
+      >
         {activeDemoSession == null ? (
           <div className="home">
             <div className="home-inner">
@@ -1958,74 +2015,76 @@ function DemoLanding() {
                   submitting redirects to sign-in instead of creating a
                   session. The icon row mirrors the authenticated home so
                   the demo accurately previews the chat surface. */}
-              <ChatComposer
-                className="run-composer-home run-composer-interactive"
-                placeholder="Sign in to start a session…"
-                onSubmit={() => {
-                  startLogin();
-                }}
-                permissionMode={demoComposerMode}
-                onPermissionModeChange={setDemoComposerMode}
-                sendByCtrlEnter={false}
-                toolButtons={
-                  <>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn"
-                      disabled
-                      aria-label="Attach files"
-                      title="Sign in to attach files"
-                    >
-                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <ComposerUsageRing
-                      tokensUsed={0}
-                      contextWindow={getContextWindow(selectedDemoModelId)}
-                      placeholder
-                      ariaLabel="Context usage preview"
-                      title="Context usage appears after sign in"
-                    />
-                    {GUI_ROLLOUT_MODES.has(selectedMode) && (
+              <div ref={demoComposerWrapRef}>
+                <ChatComposer
+                  className="run-composer-home run-composer-interactive"
+                  placeholder="Sign in to start a session…"
+                  onSubmit={() => {
+                    startLogin();
+                  }}
+                  permissionMode={demoComposerMode}
+                  onPermissionModeChange={setDemoComposerMode}
+                  sendByCtrlEnter={false}
+                  toolButtons={
+                    <>
                       <button
                         type="button"
-                        className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                        className="run-composer-icon-btn"
                         disabled
-                        aria-label="Start rollout"
-                        title="Sign in to use /rollout"
+                        aria-label="Attach files"
+                        title="Sign in to attach files"
                       >
-                        <TankIcon className="run-composer-icon" aria-hidden="true" />
+                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                      disabled
-                      aria-label="Start test skill"
-                      title="Sign in to start a session"
-                    >
-                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show slash commands"
-                      title="Sign in to use slash commands"
-                    >
-                      <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show MCP servers"
-                      title="Sign in to use MCP servers"
-                    >
-                      <McpIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                  </>
-                }
-              />
+                      <ComposerUsageRing
+                        tokensUsed={0}
+                        contextWindow={getContextWindow(selectedDemoModelId)}
+                        placeholder
+                        ariaLabel="Context usage preview"
+                        title="Context usage appears after sign in"
+                      />
+                      {GUI_ROLLOUT_MODES.has(selectedMode) && (
+                        <button
+                          type="button"
+                          className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                          disabled
+                          aria-label="Start rollout"
+                          title="Sign in to use /rollout"
+                        >
+                          <TankIcon className="run-composer-icon" aria-hidden="true" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                        disabled
+                        aria-label="Start test skill"
+                        title="Sign in to start a session"
+                      >
+                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show slash commands"
+                        title="Sign in to use slash commands"
+                      >
+                        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show MCP servers"
+                        title="Sign in to use MCP servers"
+                      >
+                        <McpIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                    </>
+                  }
+                />
+              </div>
             </div>
           </div>
         ) : (
@@ -3173,7 +3232,14 @@ function conversationEntriesToTranscript(
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "activity"; id: string; turnId: string; entries: TranscriptEntry[]; active?: boolean };
+  | {
+      kind: "activity";
+      id: string;
+      turnId: string;
+      entries: TranscriptEntry[];
+      compactedEntryIds: string[];
+      active?: boolean;
+    };
 type FlatEntryGroup = Exclude<EntryGroup, { kind: "activity" }>;
 
 function entryGroupKey(g: EntryGroup): string {
@@ -3783,6 +3849,7 @@ function RunMessageBubble({
   showDuration,
   onQuote,
   onFork,
+  canonicalMessage = true,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
@@ -3793,6 +3860,7 @@ function RunMessageBubble({
   showDuration: boolean;
   onQuote: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  canonicalMessage?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -3843,7 +3911,8 @@ function RunMessageBubble({
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
       data-severity={variant === "system" ? messageSeverity : undefined}
-      data-message-id={entry.id}
+      data-message-id={canonicalMessage ? entry.id : undefined}
+      data-activity-entry-id={canonicalMessage ? undefined : entry.id}
       data-highlight={highlighted ? "true" : undefined}
     >
       {variant === "assistant" && (
@@ -3895,7 +3964,7 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {variant === "assistant" && onFork && (
+          {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
           )}
           {variant !== "system" && (
@@ -3903,7 +3972,9 @@ function RunMessageBubble({
               <QuoteButton text={text} style="fence" onQuote={onQuote} />
               <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
               <CopyButton text={text} />
-              {!entry.localOnly && <LinkButton sessionId={sessionId} entryId={entry.id} />}
+              {canonicalMessage && !entry.localOnly && (
+                <LinkButton sessionId={sessionId} entryId={entry.id} />
+              )}
             </>
           )}
           <div className="run-msg-timings">
@@ -5156,7 +5227,6 @@ function RunTurnActivityGroup({
   onToolExpandedChange,
   highlightedEntryId,
   onQuote,
-  onFork,
   onOpenBackgroundTask,
 }: {
   group: Extract<EntryGroup, { kind: "activity" }>;
@@ -5175,12 +5245,15 @@ function RunTurnActivityGroup({
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
   highlightedEntryId: string | null;
   onQuote: (text: string, style: QuoteStyle) => void;
-  onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
 }) {
   const childGroups = useMemo(
     () => groupFlatTranscriptEntries(group.entries),
     [group.entries],
+  );
+  const compactedEntryIds = useMemo(
+    () => new Set(group.compactedEntryIds),
+    [group.compactedEntryIds],
   );
   const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
   const completedAt = [...group.entries]
@@ -5282,11 +5355,14 @@ function RunTurnActivityGroup({
                 avatar={avatar}
                 systemAvatar={systemAvatar}
                 sessionId={sessionId}
-                highlighted={highlightedEntryId === child.entry.id}
+                highlighted={
+                  compactedEntryIds.has(child.entry.id) &&
+                  highlightedEntryId === child.entry.id
+                }
                 showTimestamps={showTimestamps}
                 showDuration={showDuration}
                 onQuote={onQuote}
-                onFork={onFork}
+                canonicalMessage={false}
               />
             );
           })}
@@ -5416,7 +5492,7 @@ export function RunMessages({
         return contains;
       }
       if (g.kind === "activity") {
-        const contains = g.entries.some((e) => e.id === target);
+        const contains = g.compactedEntryIds.includes(target);
         if (contains) {
           activityGroupKey = entryGroupKey(g);
           const targetEntry = g.entries.find((entry) => entry.id === target);
@@ -5603,7 +5679,6 @@ export function RunMessages({
             onToolExpandedChange={setToolExpanded}
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
-            onFork={onFork}
             onOpenBackgroundTask={onOpenBackgroundTask}
           />
         );
@@ -6107,6 +6182,19 @@ function ChatPane({
       ...chatScrollElementSnapshot(node),
     });
   }, [session.id, session.mode]);
+  const focusComposerTextarea = useCallback((): boolean => {
+    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+  const focusTranscriptSection = useCallback((): boolean => {
+    if (!transcriptScrollEl) return false;
+    transcriptScrollEl.focus({ preventScroll: true });
+    return document.activeElement === transcriptScrollEl;
+  }, [transcriptScrollEl]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const sdkEventReconnectTimerRef = useRef<number | null>(null);
@@ -7445,21 +7533,64 @@ function ChatPane({
     return () => wrap.removeEventListener("keydown", onKey, true);
   }, [runPrefs.sendByCtrlEnter, slashOpen]);
 
+  // Tab toggles focus between the two primary chat surfaces: composer and
+  // transcript. Leave native tab order alone for message buttons, header tabs,
+  // Stop, and every other control.
+  useEffect(() => {
+    if (!visible || activeTab !== "chat") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.key !== "Tab" ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.isComposing ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      if (!textarea) return;
+      if (e.target === textarea) {
+        if (!focusTranscriptSection()) return;
+      } else if (transcriptScrollEl && e.target === transcriptScrollEl) {
+        if (!focusComposerTextarea()) return;
+      } else {
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    focusComposerTextarea,
+    focusTranscriptSection,
+    mcpOpen,
+    mentionOpen,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
+
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
-  // Stop pill. Capture phase so it fires even if focus is on the textarea.
-  // Skips when the slash palette is open — Esc closes the palette in that
-  // case (handled below).
+  // Stop pill. Capture phase so it fires even if focus is in the textarea.
+  // Skips when a palette is open — Esc closes the palette in those cases
+  // (handled below).
   useEffect(() => {
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !slashOpen) {
+      if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
         e.preventDefault();
         cancelRun();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [running, slashOpen, visible]);
+  }, [mcpOpen, mentionOpen, running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -8316,15 +8447,6 @@ function ChatPane({
     : selectedModelId;
   const contextWindow = getContextWindow(modelForContext);
 
-  const focusComposerTextarea = useCallback((): boolean => {
-    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
-    if (!textarea) return false;
-    textarea.focus();
-    const cursor = textarea.value.length;
-    textarea.setSelectionRange(cursor, cursor);
-    return true;
-  }, []);
-
   useEffect(() => {
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
     const activeElement = document.activeElement;
@@ -8482,6 +8604,7 @@ function ChatPane({
       style={chatFontScaleStyle}
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
+      bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
       composerVisible={activeTab === "chat"}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}
@@ -9707,6 +9830,7 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
   const pendingHomeComposerFocusRef = useRef(false);
   // Files picked / dropped / pasted onto the home composer before the
@@ -9750,6 +9874,11 @@ export function App() {
     const cursor = textarea.value.length;
     textarea.setSelectionRange(cursor, cursor);
     return true;
+  }, []);
+  const focusHomeSetupSection = useCallback((): boolean => {
+    if (!homeBodyRef.current) return false;
+    homeBodyRef.current.focus({ preventScroll: true });
+    return document.activeElement === homeBodyRef.current;
   }, []);
   const [homeDragActive, setHomeDragActive] = useState(false);
   useEffect(() => {
@@ -10413,6 +10542,39 @@ export function App() {
       focusHomeComposerTextarea();
     });
   }, [active, focusHomeComposerTextarea, homeActiveTab]);
+
+  // Match the run pane's two-surface Tab toggle on the pre-session splash:
+  // textarea ⇄ setup body. Other controls keep the browser's native tab order.
+  useEffect(() => {
+    if (active !== null || homeActiveTab !== "chat") return;
+    const toggleHomeFocus = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Tab" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      const body = homeBodyRef.current;
+      if (!textarea || !body) return;
+      if (event.target === textarea) {
+        if (!focusHomeSetupSection()) return;
+      } else if (event.target === body) {
+        if (!focusHomeComposerTextarea()) return;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", toggleHomeFocus, { capture: true });
+    return () => window.removeEventListener("keydown", toggleHomeFocus, { capture: true });
+  }, [active, focusHomeComposerTextarea, focusHomeSetupSection, homeActiveTab]);
 
   useEffect(() => {
     if (active !== null) return;
@@ -11255,6 +11417,8 @@ export function App() {
           <WorkspaceShell
             className="run-panel-home"
             bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
+            bodyRef={homeBodyRef}
+            bodyAriaLabel={homeActiveTab === "chat" ? "New session setup" : "Workspace panel"}
             title={(<>
               {homeEditingTitle ? (
                 <input
