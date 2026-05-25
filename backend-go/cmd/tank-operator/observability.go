@@ -215,6 +215,38 @@ var (
 		[]string{"event_type"},
 	)
 
+	// turnLifecycleTotal counts durable turn lifecycle events committed
+	// to session_events, partitioned by event type. The five types covered
+	// — turn.submitted plus the four terminal types (turn.completed,
+	// turn.failed, turn.command_failed, turn.interrupted) — bound a
+	// turn's open/close lifecycle. The TankTurnSilentStranding alert in
+	// k8s/templates/observability.yaml fires when sum(submitted) exceeds
+	// sum(terminal) over a window long enough to rule out a single long
+	// Codex turn.
+	//
+	// This is the silent-stranding observability surface named in the
+	// Agent Runners contract (docs/features/agent-runners/contract.md
+	// → Observability: "Silent strandings, where a requested action has
+	// no terminal event, are a counted bug class"). ea70777
+	// (nelsong6/tank-operator#652) — orchestrator deploy left every
+	// pre-existing runner subscribed to the OLD wire format, every
+	// submit_turn published to the new format was dropped, no terminal
+	// event ever fired — would have triggered this alert within minutes
+	// of deploy. Both the backend-direct path (handlers_turns.go
+	// persistBackendEvent) and the runner-side persister
+	// (sessionbus.RunEventPersister) increment this counter, so the
+	// signal works regardless of which path wrote the row.
+	//
+	// Label cardinality is bounded to 5 series; non-lifecycle event
+	// types are dropped at the recordTurnLifecyclePersisted call site.
+	turnLifecycleTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_turn_lifecycle_total",
+			Help: "Durable turn lifecycle events committed to session_events, labeled by event type (turn.submitted + four terminal types).",
+		},
+		[]string{"event_type"},
+	)
+
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
 	// persisted dominates; persist_failed and publish_failed near zero.
@@ -951,6 +983,22 @@ func (promPersisterMetrics) RecordTransientFailure() {
 
 func (promPersisterMetrics) RecordTurnFailurePersisted(source string, reason string) {
 	transcriptTurnFailureTotal.WithLabelValues(source, reason).Inc()
+}
+
+func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
+	recordTurnLifecyclePersisted(eventType)
+}
+
+// recordTurnLifecyclePersisted bumps tank_turn_lifecycle_total for the
+// five lifecycle event types that bound a turn. Callers MUST filter
+// via conversation.IsTurnLifecycleEvent before invoking this helper —
+// the label set is bounded at 5 series, and the impl trusts the call
+// site rather than re-filtering. Both persistOneEvent (sessionbus) and
+// persistBackendEvent (handlers_turns.go) follow this pattern. Adding
+// a third writer is a regression unless that writer also lands rows in
+// session_events and applies the same call-site filter.
+func recordTurnLifecyclePersisted(eventType string) {
+	turnLifecycleTotal.WithLabelValues(eventType).Inc()
 }
 
 // promProviderHealthMetrics satisfies providerhealth.Metrics so the

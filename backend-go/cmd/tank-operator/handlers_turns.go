@@ -49,6 +49,18 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 		}
 		return err
 	}
+	// Silent-stranding observability: bump the lifecycle counter for the
+	// five bounding types after the durable write commits. The
+	// backend-direct path writes user_message.created + turn.submitted
+	// here at submit time, and the various turn.command_failed events on
+	// the interrupt / input-reply / stop-background paths. Pairs with
+	// the same call inside sessionbus.persistOneEvent so the signal
+	// works regardless of which path wrote the row. Filter on
+	// IsTurnLifecycleEvent at the call boundary so the helper just
+	// records. See docs/features/agent-runners/contract.md → Observability.
+	if eventType := stringMapField(event, "type"); conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
+		recordTurnLifecyclePersisted(eventType)
+	}
 	if s.sessionBus != nil && storageKey != "" {
 		if err := s.sessionBus.PublishSessionEventWake(ctx, storageKey); err != nil {
 			slog.Warn("session event wake publish failed",

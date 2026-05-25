@@ -336,6 +336,74 @@ spec:
               reads can still work while live delivery never opens. Check
               Postgres connectivity and the stream_auth_tickets migration.
 
+        # Silent-stranding alert. Agent Runners contract names this as a
+        # counted bug class: "Silent strandings, where a requested action
+        # has no terminal event, are a counted bug class." The signal is
+        # divergence between turn.submitted (the open boundary, written by
+        # the backend's persistBackendEvent) and the four terminal types
+        # (turn.completed / turn.failed / turn.command_failed /
+        # turn.interrupted, written either by the runner-side persister or
+        # the backend-direct path). Both paths increment
+        # tank_turn_lifecycle_total at the same durable Upsert boundary, so
+        # the counter is path-independent.
+        #
+        # ea70777 (nelsong6/tank-operator#652) is the prototypical
+        # incident: the orchestrator deploy bumped the JetStream subject
+        # shape, every pre-existing runner kept subscribing on the OLD
+        # filter, every submit_turn published to the new subject was
+        # dropped, no terminal event ever fired. With this alert in place,
+        # silent strandings of that shape page within ~30 minutes of the
+        # deploy instead of waiting for a user bug report.
+        #
+        # Threshold tuning: window [15m], `> 2` divergence, `for: 20m`.
+        # A single legit Codex turn that runs 15 minutes contributes +1
+        # divergence inside the window; the `> 2` threshold and `for: 20m`
+        # together require the divergence to exceed two open turns
+        # sustained for 20+ minutes before firing. ea70777 would have
+        # produced +6 divergence within 30 minutes (six pre-deploy
+        # sessions, each emitting submit_turn with no terminal). False-
+        # positive shape would require 3+ simultaneous long turns lasting
+        # longer than the window, which is uncommon for this app's
+        # workload.
+        - alert: TankTurnSilentStranding
+          expr: |
+            sum(increase(tank_turn_lifecycle_total{event_type="turn.submitted"}[15m]))
+              - sum(increase(tank_turn_lifecycle_total{event_type=~"turn\\.(completed|failed|command_failed|interrupted)"}[15m]))
+              > 2
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: "turn.submitted is outrunning terminal events — silent stranding"
+            runbook: |
+              The backend is persisting turn.submitted events faster than
+              the runner is emitting turn.completed / turn.failed /
+              turn.command_failed / turn.interrupted. Agent Runners
+              contract names silent strandings (a submitted turn with no
+              terminal event) as a counted bug class — this counter is
+              the surface, this alert is the page.
+
+              Likely causes, in priority order:
+              (1) Runner JetStream consumer filter mismatch with the
+                  orchestrator's publish subject — the ea70777 (PR #652)
+                  failure shape. Verify via:
+                    nats consumer info TANK_SESSION_BUS <provider>_*
+                  against the wire shape in
+                  backend-go/internal/sessionbus/subjects.go and
+                  runner-shared/sessionBus.js. The CLAUDE.md migration
+                  audit checklist names this exact gate.
+              (2) Persister consumer dropping terminal events (compare
+                  tank_session_event_persist_schema_rejected_total and
+                  tank_session_event_persist_transient_failure_total).
+              (3) Provider hanging on a long turn (check
+                  tank_runner_provider_error_total per mode and runner
+                  pod logs).
+
+              Diagnose in Grafana with:
+                sum by (event_type) (rate(tank_turn_lifecycle_total[5m]))
+              The submitted line outpacing the terminal lines is the
+              direct signature.
+
     - name: tank-operator.session-list
       rules:
         # K8s-watch producer is leader-elected. The lease should be

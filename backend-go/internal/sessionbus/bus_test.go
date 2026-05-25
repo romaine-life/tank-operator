@@ -28,6 +28,7 @@ type recordingMetrics struct {
 	schemaRejected      int
 	transientFailure    int
 	turnFailureRecorded []turnFailureRecord
+	turnLifecycle       map[string]int
 }
 
 type turnFailureRecord struct {
@@ -39,6 +40,12 @@ func (m *recordingMetrics) RecordSchemaRejected()   { m.schemaRejected++ }
 func (m *recordingMetrics) RecordTransientFailure() { m.transientFailure++ }
 func (m *recordingMetrics) RecordTurnFailurePersisted(source string, reason string) {
 	m.turnFailureRecorded = append(m.turnFailureRecorded, turnFailureRecord{source: source, reason: reason})
+}
+func (m *recordingMetrics) RecordTurnLifecyclePersisted(eventType string) {
+	if m.turnLifecycle == nil {
+		m.turnLifecycle = map[string]int{}
+	}
+	m.turnLifecycle[eventType]++
 }
 
 type stubMsg struct {
@@ -286,6 +293,94 @@ func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
 
 	if len(metrics.turnFailureRecorded) != 0 {
 		t.Fatalf("turn-failure counter fired on turn.completed (%d times); the counter is for failures only", len(metrics.turnFailureRecorded))
+	}
+}
+
+// TestPersistMessageRecordsTurnLifecycleCounter pins the silent-stranding
+// observability contract: each of the five lifecycle event types
+// (turn.submitted + the four terminal types) MUST bump
+// tank_turn_lifecycle_total{event_type=<type>} when the persister
+// commits a durable row, and non-lifecycle types MUST NOT contribute
+// (so the alert's expr stays comparing the right cardinalities). The
+// silent-stranding alert in k8s/templates/observability.yaml reads this
+// counter directly — a divergence here is the prototypical ea70777-
+// shape failure surface per docs/features/agent-runners/contract.md.
+func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
+	lifecycleTypes := []string{
+		"turn.submitted",
+		"turn.completed",
+		"turn.failed",
+		"turn.command_failed",
+		"turn.interrupted",
+	}
+	for _, eventType := range lifecycleTypes {
+		t.Run(eventType, func(t *testing.T) {
+			bus := &Bus{scope: "default"}
+			store := &recordingStore{}
+			metrics := &recordingMetrics{}
+			raw, _ := json.Marshal(map[string]any{
+				"event_id":   "evt-" + eventType,
+				"session_id": "63",
+				"actor":      "runner",
+				"source":     "codex",
+				"type":       eventType,
+				"created_at": "2026-05-12T00:00:00.000Z",
+				"order_key":  "order-" + eventType,
+				"visibility": "durable",
+				"turn_id":    "turn-1",
+			})
+			msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
+
+			bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+			if metrics.turnLifecycle[eventType] != 1 {
+				t.Fatalf("lifecycle counter for %q = %d, want 1", eventType, metrics.turnLifecycle[eventType])
+			}
+		})
+	}
+}
+
+// TestPersistMessageOmitsNonLifecycleFromLifecycleCounter pins the bound
+// on tank_turn_lifecycle_total's label set: only the five lifecycle
+// types contribute. turn.started, item.*, tool.*, and session.* are
+// either intermediate or non-turn signals and must not skew the
+// submitted-vs-terminal divergence the silent-stranding alert reads.
+func TestPersistMessageOmitsNonLifecycleFromLifecycleCounter(t *testing.T) {
+	nonLifecycleTypes := []string{
+		"turn.started",
+		"turn.interrupt_requested",
+		"item.completed",
+		"tool.approval_requested",
+		"session.status",
+		"user_message.created",
+	}
+	for _, eventType := range nonLifecycleTypes {
+		t.Run(eventType, func(t *testing.T) {
+			bus := &Bus{scope: "default"}
+			store := &recordingStore{}
+			metrics := &recordingMetrics{}
+			raw, _ := json.Marshal(map[string]any{
+				"event_id":   "evt-" + eventType,
+				"session_id": "63",
+				"actor":      "runner",
+				"source":     "codex",
+				"type":       eventType,
+				"created_at": "2026-05-12T00:00:00.000Z",
+				"order_key":  "order-" + eventType,
+				"visibility": "durable",
+				"turn_id":    "turn-1",
+			})
+			msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
+
+			bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+			if got := metrics.turnLifecycle[eventType]; got != 0 {
+				t.Fatalf("lifecycle counter unexpectedly bumped for %q (= %d); only the five lifecycle types contribute", eventType, got)
+			}
+			if len(metrics.turnLifecycle) != 0 {
+				t.Fatalf("lifecycle counter has %d entries after non-lifecycle event %q; want 0", len(metrics.turnLifecycle), eventType)
+			}
+		})
 	}
 }
 

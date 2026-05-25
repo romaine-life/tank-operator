@@ -452,6 +452,30 @@ func validVisibility(visibility Visibility) bool {
 	return visibility == VisibilityDurable
 }
 
+// IsTurnLifecycleEvent reports whether eventType bounds a turn — i.e.,
+// it is the open boundary (turn.submitted) or one of the four terminal
+// types. The silent-stranding alert
+// (k8s/templates/observability.yaml → TankTurnSilentStranding) compares
+// the counts of these types, so the set must stay tight: turn.started
+// is intermediate (not a boundary); turn.interrupt_requested is a stop
+// request, not a stop completion; item.* / tool.* / session.* are not
+// turn boundaries. Both the runner-side persister
+// (sessionbus.persistOneEvent) and the backend-direct path
+// (cmd/tank-operator.persistBackendEvent) filter on this predicate
+// before incrementing tank_turn_lifecycle_total. See
+// docs/features/agent-runners/contract.md → Observability.
+func IsTurnLifecycleEvent(eventType EventType) bool {
+	switch eventType {
+	case EventTurnSubmitted,
+		EventTurnCompleted,
+		EventTurnFailed,
+		EventTurnCommandFailed,
+		EventTurnInterrupted:
+		return true
+	}
+	return false
+}
+
 func validEventType(eventType EventType) bool {
 	switch eventType {
 	case EventUserMessageCreated,
