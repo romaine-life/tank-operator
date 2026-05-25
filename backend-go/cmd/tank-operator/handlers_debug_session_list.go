@@ -86,6 +86,8 @@ func debugRowJSON(record sessionmodel.SessionRecord) map[string]any {
 		"updated_at":       record.UpdatedAt,
 		"ready_at":         record.ReadyAt,
 		"terminating_at":   record.TerminatingAt,
+		"agent_avatar_id":  record.AgentAvatarID,
+		"system_avatar_id": record.SystemAvatarID,
 		"sidebar_position": record.SidebarPosition,
 		"row_version":      record.RowVersion,
 		"has_activity":     len(record.ActivitySummary) > 0,

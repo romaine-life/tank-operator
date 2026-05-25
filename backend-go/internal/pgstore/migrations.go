@@ -268,6 +268,37 @@ var schemaMigrations = []string{
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`,
 
+	// Session-pinned avatar assignment. The avatar deck is mutable as
+	// administrators add/delete assets, but an existing session's visible
+	// identity should not reshuffle on refresh. These columns are nullable so
+	// older rows and no-avatar system pools can continue to render through the
+	// frontend fallback path.
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS agent_avatar_id text`,
+	`ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS system_avatar_id text`,
+
+	// avatar_deck_entries is the durable shuffled traversal state for avatar
+	// assignment. A deck is scoped by owner + session scope + kind. Each cycle
+	// snapshots the active avatar IDs at cycle creation time; new additions wait
+	// until the next cycle by design.
+	`CREATE TABLE IF NOT EXISTS avatar_deck_entries (
+		email           text NOT NULL,
+		session_scope   text NOT NULL,
+		kind            text NOT NULL CHECK (kind IN ('agent', 'system')),
+		cycle           bigint NOT NULL,
+		position        integer NOT NULL,
+		avatar_id       text NOT NULL,
+		used_session_id text,
+		used_at         timestamptz,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (email, session_scope, kind, cycle, position)
+	)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS avatar_deck_entries_avatar_once_per_cycle
+		ON avatar_deck_entries (email, session_scope, kind, cycle, avatar_id)`,
+	`CREATE INDEX IF NOT EXISTS avatar_deck_entries_current
+		ON avatar_deck_entries (email, session_scope, kind, cycle DESC, position ASC)`,
+
 	// `session_events` â€” the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.

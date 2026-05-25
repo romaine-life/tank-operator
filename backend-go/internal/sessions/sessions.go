@@ -75,6 +75,8 @@ type Info struct {
 	RuntimeModel        string  `json:"runtime_model,omitempty"`
 	RuntimeEffort       string  `json:"runtime_effort,omitempty"`
 	RuntimeConfiguredAt *string `json:"runtime_configured_at,omitempty"`
+	AgentAvatarID       string  `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID      string  `json:"system_avatar_id,omitempty"`
 }
 
 type Reader struct {
@@ -257,6 +259,8 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RuntimeModel:        record.RuntimeModel,
 		RuntimeEffort:       record.RuntimeEffort,
 		RuntimeConfiguredAt: optionalString(record.RuntimeConfiguredAt),
+		AgentAvatarID:       record.AgentAvatarID,
+		SystemAvatarID:      record.SystemAvatarID,
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
 		info.Activity = activity

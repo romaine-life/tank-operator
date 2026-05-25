@@ -25,6 +25,15 @@ var defaultAgentAvatarAssets = []defaultAvatarAsset{
 	{id: "jp1-arnold", name: "Ray Arnold", file: "jp1-arnold.png"},
 }
 
+func defaultAvatarAssetFile(id string) (string, bool) {
+	for _, entry := range defaultAgentAvatarAssets {
+		if entry.id == id {
+			return entry.file, true
+		}
+	}
+	return "", false
+}
+
 func seedDefaultAvatarAssets(ctx context.Context, store avatarassets.Store, images avatarassets.ImageStore, roots tankStaticRootSet) {
 	if store == nil || images == nil {
 		return

@@ -440,6 +440,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		}
 	}
 
+	assignment := m.assignSessionAvatars(ctx, owner, sessionID)
+	info.AgentAvatarID = assignment.AgentAvatarID
+	info.SystemAvatarID = assignment.SystemAvatarID
+
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
 }
@@ -514,6 +518,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 			return Info{}, fmt.Errorf("no-pod session registry upsert: %w", regErr)
 		}
 	}
+	assignment := m.assignSessionAvatars(ctx, owner, sessionID)
 
 	m.mu.Lock()
 	m.lastActivity[sessionID] = time.Now()
@@ -521,17 +526,19 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 	m.mu.Unlock()
 
 	info := Info{
-		ID:          sessionID,
-		PodName:     nil,
-		Owner:       owner,
-		Status:      "Active",
-		Mode:        mode,
-		RequestedAt: &requestedAt,
-		CreatedAt:   &now,
-		ReadyAt:     &now,
-		Repos:       repos,
-		Model:       model,
-		Effort:      effort,
+		ID:             sessionID,
+		PodName:        nil,
+		Owner:          owner,
+		Status:         "Active",
+		Mode:           mode,
+		RequestedAt:    &requestedAt,
+		CreatedAt:      &now,
+		ReadyAt:        &now,
+		Repos:          repos,
+		Model:          model,
+		Effort:         effort,
+		AgentAvatarID:  assignment.AgentAvatarID,
+		SystemAvatarID: assignment.SystemAvatarID,
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
@@ -640,6 +647,24 @@ func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, st
 
 type runtimeConfigRegistry interface {
 	SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error
+}
+
+type sessionAvatarAssigner interface {
+	AssignSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
+}
+
+func (m *Manager) assignSessionAvatars(ctx context.Context, owner, sessionID string) sessionmodel.SessionAvatarAssignment {
+	assigner, ok := m.registry.(sessionAvatarAssigner)
+	if !ok {
+		return sessionmodel.SessionAvatarAssignment{}
+	}
+	assignment, err := assigner.AssignSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		slog.Warn("session avatar assignment failed",
+			"session_id", sessionID, "owner", owner, "error", err)
+		return sessionmodel.SessionAvatarAssignment{}
+	}
+	return assignment
 }
 
 // SetRuntimeConfig records the model/effort the runner actually applied

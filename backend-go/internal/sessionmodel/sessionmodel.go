@@ -157,6 +157,12 @@ type SessionRecord struct {
 	RuntimeEffort       string
 	RuntimeConfiguredAt string
 
+	// Avatar IDs are assigned by the backend from a durable shuffled deck.
+	// Empty means the row predates the deck assignment or that no active avatar
+	// exists for that kind, so clients should keep their fallback behavior.
+	AgentAvatarID  string
+	SystemAvatarID string
+
 	// SidebarPosition is the durable user-facing sort key for the
 	// session list. Larger values render earlier. It is intentionally
 	// separate from RowVersion: row_version is the live-update cursor
@@ -164,6 +170,11 @@ type SessionRecord struct {
 	// without changing the sidebar order.
 	SidebarPosition int64
 	RowVersion      int64
+}
+
+type SessionAvatarAssignment struct {
+	AgentAvatarID  string
+	SystemAvatarID string
 }
 
 // sessionConfigMounts is the canonical list of files mounted into every

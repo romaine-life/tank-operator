@@ -150,14 +150,23 @@ function chooseAvatar(pool: AgentAvatar[], seed: string): AgentAvatar | null {
   return best;
 }
 
-export function getSessionAvatar(sessionId: string): AgentAvatar {
+function findAvatarByID(pool: AgentAvatar[], avatarId?: string | null): AgentAvatar | null {
+  if (!avatarId) return null;
+  return pool.find((avatar) => avatar.id === avatarId) ?? null;
+}
+
+export function getSessionAvatar(sessionId: string, assignedAvatarId?: string | null): AgentAvatar {
+  const assigned = findAvatarByID(getAgentAvatarPool(), assignedAvatarId);
+  if (assigned) return assigned;
   if (runtimeAgentAvatars.length === 0) {
     return AGENT_AVATARS[hashString(sessionId) % AGENT_AVATARS.length];
   }
   return chooseAvatar(getAgentAvatarPool(), sessionId) ?? AGENT_AVATARS[0];
 }
 
-export function getSystemAvatar(seed: string): AgentAvatar | null {
+export function getSystemAvatar(seed: string, assignedAvatarId?: string | null): AgentAvatar | null {
+  const assigned = findAvatarByID(runtimeSystemAvatars, assignedAvatarId);
+  if (assigned) return assigned;
   return chooseAvatar(runtimeSystemAvatars, seed);
 }
 
