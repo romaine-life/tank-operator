@@ -50,6 +50,8 @@ export interface WorkspaceShellProps {
   bodyClassName?: string;
   /** Direct ref to the scrolling `<main>` element. */
   bodyRef?: Ref<HTMLElement>;
+  /** Accessible label for the focusable scrolling body. */
+  bodyAriaLabel?: string;
   /**
    * Composer footer slot — the `<ChatComposer>` plus any above-composer
    * UI (palettes, queued messages, attachments preview). Hidden when
@@ -83,6 +85,7 @@ export function WorkspaceShell({
   body,
   bodyClassName,
   bodyRef,
+  bodyAriaLabel,
   composer,
   composerAbove,
   composerVisible = true,
@@ -112,6 +115,8 @@ export function WorkspaceShell({
       <main
         className={["run-main", bodyClassName].filter(Boolean).join(" ")}
         ref={bodyRef}
+        tabIndex={-1}
+        aria-label={bodyAriaLabel}
       >
         {body}
       </main>
