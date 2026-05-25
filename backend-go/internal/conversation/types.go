@@ -307,6 +307,66 @@ func validateSessionStatusPayload(event map[string]any) error {
 	if stringField(payload, "text") == "" {
 		return fmt.Errorf("payload.text is required for %s", stringField(event, "type"))
 	}
+	if status == "failed" {
+		if err := validateSessionStatusFailedExtension(event, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSessionStatusFailedExtension enforces the contract for the
+// extended payload that ships alongside a session.status:failed event.
+// The extension lets the SPA render an actionable banner in the
+// transcript (e.g. "Codex sign-in expired — Re-sign-in to Codex"). The
+// contract intentionally rejects content-free failed banners: every
+// failed event must name what's broken (failure_scope + failure_subject)
+// and provide either an action affordance OR a non-trivial reason — see
+// docs/quality-timeframes.md's "Failure ... states are designed and
+// visible". The extension is optional only when no extension fields are
+// set at all, which is the legacy boot-status path (pod failure surfaces
+// as a bare failed status). Once any extension field is set, the full
+// shape is required so future writers can't half-populate.
+func validateSessionStatusFailedExtension(event map[string]any, payload map[string]any) error {
+	scope := stringField(payload, "failure_scope")
+	subject := stringField(payload, "failure_subject")
+	reason := stringField(payload, "failure_reason")
+	actionRaw, hasAction := payload["action"]
+	hasExtension := scope != "" || subject != "" || reason != "" || hasAction
+
+	if !hasExtension {
+		// Legacy bare failed status (pod lifecycle) — no extension required.
+		return nil
+	}
+
+	switch scope {
+	case "provider", "session", "pod":
+	default:
+		return fmt.Errorf("payload.failure_scope must be provider, session, or pod for %s when extension fields are present", stringField(event, "type"))
+	}
+	if subject == "" {
+		return fmt.Errorf("payload.failure_subject is required for %s when failure_scope is set", stringField(event, "type"))
+	}
+
+	if hasAction {
+		action, ok := actionRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("payload.action must be an object for %s", stringField(event, "type"))
+		}
+		label := stringField(action, "label")
+		href := stringField(action, "href")
+		if label == "" || href == "" {
+			return fmt.Errorf("payload.action.label and payload.action.href are required for %s", stringField(event, "type"))
+		}
+	}
+
+	// Reject content-free banners: the user-facing line must explain
+	// either WHY (reason) or WHAT TO DO (action). Both is fine; neither
+	// is not — that would be a regression to the "Error" pill we just
+	// retired.
+	if reason == "" && !hasAction {
+		return fmt.Errorf("payload.failure_reason or payload.action is required for %s when failure_scope is set", stringField(event, "type"))
+	}
 	return nil
 }
 

@@ -554,6 +554,45 @@ var schemaMigrations = []string{
 	// fresh database has nothing to drop; an upgraded database loses
 	// the table on the first migrations pass after this PR rolls.
 	`DROP TABLE IF EXISTS session_lifecycle_events`,
+
+	// provider_credential_health — Layer 1 durable model for the
+	// transcript-surfaced "Codex / Claude sign-in expired" banner.
+	// Source of truth for whether a provider's host-wide OAuth blob
+	// (or, when per-user OAuth lands, a per-user blob) is currently
+	// usable. Multi-provider and multi-scope from day one so the
+	// claude/codex follow-up and the per-user OAuth follow-up don't
+	// need schema migrations.
+	//
+	// status enum: "healthy" | "degraded" | "failed". "degraded" is a
+	// reserved seat for a future "transient retries succeeding but
+	// concerning" intermediate state — today the orchestrator's
+	// debouncer flips healthy↔failed directly.
+	//
+	// action_label / action_href carry the user-facing affordance
+	// (e.g. "Re-sign-in to Codex" → "/api/auth/codex/login"). Either
+	// both are populated or both are NULL; a contract test on the
+	// session.status emitter rejects content-free "failed" banners.
+	//
+	// row_version is the optimistic-concurrency counter the
+	// orchestrator subscriber UPSERTs against so two replicas racing
+	// on the same transition don't double-fan-out: only the writer
+	// that wins the version bump publishes the session.status events.
+	`CREATE TABLE IF NOT EXISTS provider_credential_health (
+		provider          text NOT NULL,
+		owner_scope       text NOT NULL,
+		status            text NOT NULL,
+		reason            text NOT NULL DEFAULT '',
+		text              text NOT NULL DEFAULT '',
+		action_label      text NOT NULL DEFAULT '',
+		action_href       text NOT NULL DEFAULT '',
+		detected_at       timestamptz NOT NULL,
+		last_attempted_at timestamptz NOT NULL,
+		last_succeeded_at timestamptz,
+		row_version       bigint NOT NULL DEFAULT 0,
+		PRIMARY KEY (provider, owner_scope)
+	)`,
+	`CREATE INDEX IF NOT EXISTS provider_credential_health_status
+		ON provider_credential_health (status, provider)`,
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

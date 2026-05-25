@@ -16,6 +16,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
@@ -206,8 +207,49 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+	// Provider-credential backfill: when a new session's mode requires a
+	// provider whose Layer 1 row is currently in a failed state, emit a
+	// session.status:failed banner into the freshly-created session's
+	// transcript ledger so the SPA renders the same "<provider> sign-in
+	// expired" line that already-active sessions see. The ordering rule
+	// from docs/features/transcript/contract.md is satisfied: this fires
+	// AFTER the initial-turn block above writes user_message.created (or
+	// the deferred persistInitialTurnUserMessage) and AFTER manager.Create
+	// inserts the sessions row whose trigger emits session.status:ready —
+	// never before user_message. A best-effort error here (Postgres
+	// blip, NATS not yet healthy) is logged but does not roll back the
+	// session create; the next poll cycle will fan out and pick it up.
+	s.backfillProviderHealthBanner(r.Context(), owner, info)
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
+}
+
+// backfillProviderHealthBanner is the session-create-time read-side of
+// the provider-credential-banner pipeline. The poll loop is the steady-
+// state writer; this method covers the gap for sessions created during
+// a sustained outage. Skipped silently when the mode's provider has no
+// Layer 1 entry yet (nothing to backfill) or when the row is healthy.
+func (s *appServer) backfillProviderHealthBanner(ctx context.Context, owner string, info sessions.Info) {
+	if s == nil || s.providerHealth == nil {
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		return
+	}
+	row, present, err := s.providerHealth.CurrentHealth(ctx, provider)
+	if err != nil {
+		slog.Warn("providerhealth current-health lookup failed on session create",
+			"provider", provider, "session_id", info.ID, "error", err)
+		return
+	}
+	if !present || row.Status != pgstore.ProviderHealthStatusFailed {
+		return
+	}
+	if err := s.providerHealth.EmitForSession(ctx, provider, info.ID, owner, row); err != nil {
+		slog.Warn("providerhealth session-create backfill emit failed",
+			"provider", provider, "session_id", info.ID, "error", err)
+	}
 }
 
 func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time) (int, string) {
@@ -831,6 +873,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.backfillProviderHealthBanner(r.Context(), email, info)
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
 }

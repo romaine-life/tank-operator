@@ -250,6 +250,62 @@ def _iso_ms(value: str | None) -> int | None:
         return None
 
 
+# User-facing copy for known OAuth refresh-failure reasons. The /health
+# endpoint surfaces these strings directly; the orchestrator's
+# session.status:failed banner copies them verbatim into the transcript.
+# Keep the strings actionable — every entry should answer "what does the
+# user do next" since the action affordance ("Re-sign-in to ...") is
+# generic.
+_REFRESH_FAILURE_TEXT = {
+    "refresh_token_reused": "Sign-in expired. The refresh token has already been used; re-authenticate to restore service.",
+    "invalid_grant": "Sign-in expired. Re-authenticate to restore service.",
+    "invalid_request": "Sign-in could not be refreshed. Re-authenticate to restore service.",
+    "unauthorized_client": "Sign-in is not authorized to refresh. Re-authenticate to restore service.",
+}
+
+
+def _classify_refresh_failure(resp: httpx.Response) -> tuple[str, str]:
+    """Extract a (reason, text) tuple from an OAuth /token error response.
+
+    The upstream body shape is the standard OAuth error envelope:
+        {"error": {"code": "refresh_token_reused", "message": "..."}}
+    For non-JSON bodies (rare; upstream proxies misbehaving), fall back
+    to the HTTP status as the reason. The reason field is what feeds
+    the orchestrator's metric label and Layer 1 row; text is what shows
+    in the transcript banner.
+    """
+    reason = ""
+    text = ""
+    try:
+        body = resp.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            code = err.get("code")
+            message = err.get("message")
+            if isinstance(code, str) and code:
+                reason = code
+            if isinstance(message, str) and message:
+                text = message
+        elif isinstance(err, str) and err:
+            reason = err
+    if not reason:
+        reason = f"http_{resp.status_code}"
+    if not text:
+        text = _REFRESH_FAILURE_TEXT.get(reason, "Sign-in could not be refreshed. Re-authenticate to restore service.")
+    else:
+        # If we got an upstream message AND the reason is one we have
+        # canonical copy for, prefer the canonical copy — the upstream
+        # message is often referrer-style ("Please try signing in again.")
+        # and lands awkwardly in the SPA's banner.
+        canonical = _REFRESH_FAILURE_TEXT.get(reason)
+        if canonical:
+            text = canonical
+    return reason, text
+
+
 class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
     def __init__(self, config: ProxyConfig | None = None) -> None:
         self._config = config or _config_from_env()
@@ -274,6 +330,20 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # of five+ successful rotations in two seconds.
         self._refresh_task: asyncio.Task[None] | None = None
         self._kv_url = os.environ.get("AZURE_KEYVAULT_URL", "")
+        # Health snapshot — the durable provider-credential health surface
+        # consumed by tank-operator's poller. The orchestrator polls
+        # /health/<provider> on a 30s interval, debounces sustained
+        # failures, and writes provider_credential_health rows + fans
+        # session.status:failed events into every affected session's
+        # transcript. See docs/features/transcript/contract.md for the
+        # surface. The proxy is a stateless monitor; durability lives in
+        # Postgres on the orchestrator side.
+        self._health_last_attempted_at: float | None = None
+        self._health_last_succeeded_at: float | None = None
+        self._health_last_result: str = "unknown"
+        self._health_last_reason: str = ""
+        self._health_last_text: str = ""
+        self._health_attempt_id: int = 0
         log.info(
             "starting %s auth injector (credentials=%s, kv_secret=%s)",
             self._config.provider,
@@ -545,9 +615,12 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             if self._cached_refresh is None:
                 log.error("no refresh token available; cannot rotate")
                 record_refresh("no_refresh_token")
+                self._record_health_result("no_refresh_token", "no_refresh_token", "No refresh token available; the OAuth blob is missing or unreadable.")
                 return
             log.info("calling %s to rotate %s token", self._config.token_url, self._config.provider)
             refresh_start = time.monotonic()
+            self._health_last_attempted_at = time.time()
+            self._health_attempt_id += 1
             try:
                 async with httpx.AsyncClient(timeout=30.0) as http:
                     resp = await http.post(
@@ -562,10 +635,13 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             except Exception:
                 log.exception("refresh request crashed; keeping existing tokens")
                 record_refresh("request_failed", time.monotonic() - refresh_start)
+                self._record_health_result("request_failed", "request_failed", "Upstream OAuth token endpoint unreachable.")
                 return
             if resp.status_code != 200:
                 log.error("refresh failed: status=%s body=%s", resp.status_code, resp.text[:500])
                 record_refresh("http_error", time.monotonic() - refresh_start)
+                reason, text = _classify_refresh_failure(resp)
+                self._record_health_result("http_error", reason, text)
                 return
             data = resp.json()
             new_access = data["access_token"]
@@ -595,7 +671,38 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 expires_in,
             )
             record_refresh("success", time.monotonic() - refresh_start)
+            self._health_last_succeeded_at = time.time()
+            self._record_health_result("success", "", "")
             await self._persist_to_kv(expires_in)
+
+    def _record_health_result(self, result: str, reason: str, text: str) -> None:
+        """Record the outcome of a refresh attempt for the /health endpoint.
+
+        result is the high-level outcome ("success" / "http_error" /
+        "request_failed" / "no_refresh_token"); reason is the
+        fine-grained label (e.g. "refresh_token_reused"); text is the
+        user-facing string the orchestrator copies into a
+        session.status:failed banner.
+        """
+        self._health_last_result = result
+        self._health_last_reason = reason
+        self._health_last_text = text
+
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return the current refresh-health snapshot for the /health
+        endpoint. The orchestrator's poller reads this every 30s,
+        debounces sustained failures, and writes Layer 1 rows. Times
+        are unix-seconds floats (or None when no attempt yet).
+        """
+        return {
+            "provider": self._config.provider,
+            "result": self._health_last_result,
+            "reason": self._health_last_reason,
+            "text": self._health_last_text,
+            "last_attempted_at": self._health_last_attempted_at,
+            "last_succeeded_at": self._health_last_succeeded_at,
+            "attempt_id": self._health_attempt_id,
+        }
 
     async def _persist_to_kv(self, expires_in: int) -> None:
         """Best-effort write of the rotated blob back to KV.
@@ -652,14 +759,21 @@ def _peek_status(msg: ext_proc_pb2.HttpHeaders) -> int | None:
     return None
 
 
-async def serve(port: int) -> grpc.aio.Server:
+async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
+    """Boot the ext_proc grpc server and return both the server and the
+    AuthInjector instance. The injector is returned so __main__ can wire
+    its health_snapshot() into the metrics-server's /health endpoint —
+    the orchestrator's poller reads that snapshot to drive the
+    transcript-surfaced provider-credential banner.
+    """
     config = _config_from_env()
     server = grpc.aio.server()
-    ext_proc_grpc.add_ExternalProcessorServicer_to_server(AuthInjector(config), server)
+    injector = AuthInjector(config)
+    ext_proc_grpc.add_ExternalProcessorServicer_to_server(injector, server)
     server.add_insecure_port(f"0.0.0.0:{port}")
     await server.start()
     log.info("%s ext_proc listening on 0.0.0.0:%d", config.provider, port)
-    return server
+    return server, injector
 
 
 # Suppress unused-import warning: the http_status import is kept so that
