@@ -86,3 +86,30 @@ Evidence:
   the backend or terminal surface.
 - PRs expanding shell process semantics should either update this ledger or add
   a dedicated Shells contract.
+
+## Avatar Admin Console
+
+Status: active
+
+Intent:
+Let administrators curate the durable avatar catalog used by app chrome and
+transcript surfaces without relying on automatic face detection or code edits.
+
+Affected contracts:
+- App Chrome
+- Auth And Streams, because avatar image reads and writes are authenticated
+- Observability, because admin mutations affect user-visible identity surfaces
+
+Contract impact:
+- Avatar additions and deletions are confirmed by the backend durable store.
+- Uploaded backing photos are not exposed as unauthenticated static assets.
+- Non-admin callers can read the active catalog for rendering but cannot mutate
+  it.
+- Failure states for auth, upload validation, image reads, and deletes are
+  visible in the admin route.
+
+Evidence:
+- PRs changing avatar admin behavior should verify admin-only writes,
+  authenticated image reads, and reload-safe catalog rendering.
+- PRs changing avatar storage should cite the migration and bounded metric
+  evidence for avatar create/read/delete outcomes.

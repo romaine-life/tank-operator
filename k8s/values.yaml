@@ -180,6 +180,14 @@ postgres:
   # AAD-issued Postgres role name; equals the UAMI's display name.
   user: claude-credentials-refresher-identity
 
+avatarAssets:
+  # Private Azure Blob container provisioned by infra/avatar_assets.tf.
+  # The backend reads/writes it through the same workload identity used
+  # for Postgres and Key Vault; browsers still go through authenticated
+  # /api/avatars/{id}/image|backing routes.
+  blobAccountURL: "https://romainetankavatars.blob.core.windows.net"
+  blobContainer: avatar-assets
+
 sessionBus:
   stream: TANK_SESSION_BUS
   streamReplicas: 2
