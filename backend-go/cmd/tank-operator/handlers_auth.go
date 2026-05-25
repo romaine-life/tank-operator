@@ -111,8 +111,9 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		Stream    string `json:"stream"`
-		SessionID string `json:"session_id"`
+		Stream       string `json:"stream"`
+		SessionID    string `json:"session_id"`
+		SessionScope string `json:"session_scope"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordStreamAuthTicket("create", "", "invalid")
@@ -121,6 +122,12 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 	}
 	streamKind := strings.TrimSpace(body.Stream)
 	sessionID := strings.TrimSpace(body.SessionID)
+	sessionScope, status, scopeErr := s.resolveSessionScope(user, body.SessionScope)
+	if scopeErr != nil {
+		recordStreamAuthTicket("create", streamKind, "denied")
+		writeError(w, status, scopeErr.Error())
+		return
+	}
 	switch streamKind {
 	case streamKindSessionList:
 		sessionID = ""
@@ -130,7 +137,7 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusBadRequest, "session_id is required for session event streams")
 			return
 		}
-		if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 			recordStreamAuthTicket("create", streamKind, "denied")
 			writeError(w, status, err.Error())
 			return
@@ -151,7 +158,7 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 		Role:         user.Role,
 		ActorEmail:   user.ActorEmail,
 		StreamKind:   streamKind,
-		SessionScope: s.sessionScope,
+		SessionScope: sessionScope,
 		SessionID:    sessionID,
 		ExpiresAt:    expiresAt,
 	}); err != nil {

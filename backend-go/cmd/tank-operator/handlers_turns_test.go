@@ -87,6 +87,10 @@ func (*recordingSessionBus) SubscribeWakesWithRecorder(context.Context, string, 
 	return make(chan struct{}), func() {}, nil
 }
 
+func (*recordingSessionBus) SubscribeWakesForStorageKey(context.Context, string, sessionbus.WakeRecorder) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
 // PublishSessionRowUpdate + SubscribeSessionRowUpdates are the row-
 // update wire surface (Phase 3 of docs/session-list-redesign.md).
 // Tests don't drive the sidebar SSE so the recorder no-ops both.

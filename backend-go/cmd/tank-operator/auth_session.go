@@ -7,8 +7,103 @@ import (
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
+
+const prodSessionScope = "default"
+
+func normalizeSessionScope(scope string) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return prodSessionScope
+	}
+	return scope
+}
+
+func (s *appServer) localSessionScope() string {
+	return normalizeSessionScope(s.sessionScope)
+}
+
+func (s *appServer) resolveSessionScope(user auth.User, requested string) (string, int, error) {
+	local := s.localSessionScope()
+	scope := strings.TrimSpace(requested)
+	if scope == "" {
+		return local, http.StatusOK, nil
+	}
+	scope = normalizeSessionScope(scope)
+	if scope == local {
+		return scope, http.StatusOK, nil
+	}
+	if user.Role != auth.RoleAdmin {
+		return "", http.StatusForbidden, errors.New("session scope not allowed")
+	}
+	if local == prodSessionScope || scope != prodSessionScope {
+		return "", http.StatusForbidden, errors.New("session scope not allowed")
+	}
+	return scope, http.StatusOK, nil
+}
+
+func (s *appServer) resolveSessionScopeFromRequest(user auth.User, r *http.Request) (string, int, error) {
+	return s.resolveSessionScope(user, r.URL.Query().Get("session_scope"))
+}
+
+func (s *appServer) sessionRegistryForScope(scope string) *sessionregistry.Store {
+	if s.pgPool == nil {
+		return nil
+	}
+	return sessionregistry.NewPostgresStore(s.pgPool, normalizeSessionScope(scope))
+}
+
+func (s *appServer) listSessionsInScope(ctx context.Context, owner, scope string) ([]sessions.Info, error) {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() {
+		return s.mgr.ListSessions(ctx, owner)
+	}
+	reg := s.sessionRegistryForScope(scope)
+	if reg == nil {
+		return nil, nil
+	}
+	records, err := reg.List(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sessions.Info, 0, len(records))
+	for _, record := range records {
+		if !record.Visible {
+			continue
+		}
+		out = append(out, sessions.InfoFromRecord(owner, record))
+	}
+	return out, nil
+}
+
+func (s *appServer) getRegisteredByOwnerInScope(ctx context.Context, owner, sessionID, scope string) (sessions.Info, error) {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() {
+		return s.mgr.GetRegisteredByOwner(ctx, owner, sessionID)
+	}
+	reg := s.sessionRegistryForScope(scope)
+	if reg == nil {
+		return sessions.Info{}, sessions.ErrNotFound
+	}
+	record, found, err := reg.Get(ctx, owner, sessionID)
+	if err != nil {
+		return sessions.Info{}, err
+	}
+	if !found || !record.Visible {
+		return sessions.Info{}, sessions.ErrNotFound
+	}
+	return sessions.InfoFromRecord(owner, record), nil
+}
+
+func (s *appServer) ownerForSessionInScope(ctx context.Context, scope, sessionID string) (string, error) {
+	reg := s.sessionRegistryForScope(scope)
+	if reg == nil {
+		return "", nil
+	}
+	return reg.OwnerForSession(ctx, normalizeSessionScope(scope), sessionID)
+}
 
 // authorizeSessionRead resolves a session by id and decides whether the
 // caller is allowed to read it.
@@ -37,20 +132,48 @@ func (s *appServer) authorizeSessionRead(
 	user auth.User,
 	sessionID string,
 ) (sessions.Info, int, error) {
+	return s.authorizeSessionReadInScope(ctx, user, sessionID, s.localSessionScope())
+}
+
+func (s *appServer) authorizeSessionReadInScope(
+	ctx context.Context,
+	user auth.User,
+	sessionID string,
+	scope string,
+) (sessions.Info, int, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return sessions.Info{}, http.StatusBadRequest, errors.New("missing session_id")
 	}
+	scope = normalizeSessionScope(scope)
 
-	if user.Role != auth.RoleAdmin {
-		owner := user.OwnerEmail()
-		registered, regErr := s.mgr.GetRegisteredByOwner(ctx, owner, sessionID)
-		if regErr == nil {
-			return registered, http.StatusOK, nil
+	owner := user.OwnerEmail()
+	if registered, regErr := s.getRegisteredByOwnerInScope(ctx, owner, sessionID, scope); regErr == nil {
+		return registered, http.StatusOK, nil
+	} else if regErr != nil && !errors.Is(regErr, sessions.ErrNotFound) {
+		return sessions.Info{}, http.StatusInternalServerError, regErr
+	}
+
+	if scope != s.localSessionScope() {
+		if user.Role == auth.RoleAdmin {
+			sessionOwner, ownerErr := s.ownerForSessionInScope(ctx, scope, sessionID)
+			if ownerErr != nil {
+				return sessions.Info{}, http.StatusInternalServerError, ownerErr
+			}
+			if sessionOwner != "" {
+				info, err := s.getRegisteredByOwnerInScope(ctx, sessionOwner, sessionID, scope)
+				if err == nil {
+					if !strings.EqualFold(info.Owner, user.Email) {
+						recordAdminCrossUserRead()
+					}
+					return info, http.StatusOK, nil
+				}
+				if !errors.Is(err, sessions.ErrNotFound) {
+					return sessions.Info{}, http.StatusInternalServerError, err
+				}
+			}
 		}
-		if regErr != nil && !errors.Is(regErr, sessions.ErrNotFound) {
-			return sessions.Info{}, http.StatusInternalServerError, regErr
-		}
+		return sessions.Info{}, http.StatusNotFound, errors.New("session not found")
 	}
 
 	info, err := s.mgr.GetByID(ctx, sessionID)
@@ -66,7 +189,6 @@ func (s *appServer) authorizeSessionRead(
 		}
 		return info, http.StatusOK, nil
 	}
-	owner := user.OwnerEmail()
 	if !strings.EqualFold(info.Owner, owner) {
 		// Mask existence — same 404 the caller would have seen if the
 		// session truly didn't exist. Don't surface owner email; that

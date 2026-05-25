@@ -136,12 +136,15 @@ func TestRequireBrowserStreamAuthAcceptsStreamTicket(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/sessions/63/events?stream_ticket=ticket-123", nil)
 	response := httptest.NewRecorder()
 
-	user, ok := app.requireBrowserStreamAuth(response, request, streamKindSessionEvents, "63")
+	user, sessionScope, ok := app.requireBrowserStreamAuth(response, request, streamKindSessionEvents, "63")
 	if !ok {
 		t.Fatalf("requireBrowserStreamAuth rejected stream ticket: status=%d body=%s", response.Code, response.Body.String())
 	}
 	if user.Email != "user@example.com" {
 		t.Fatalf("user email = %q, want user@example.com", user.Email)
+	}
+	if sessionScope != "default" {
+		t.Fatalf("session scope = %q, want default", sessionScope)
 	}
 	if tickets.validateToken != "ticket-123" || tickets.validateKind != streamKindSessionEvents || tickets.validateScope != "default" || tickets.validateSession != "63" {
 		t.Fatalf("validate args = (%q,%q,%q,%q)", tickets.validateToken, tickets.validateKind, tickets.validateScope, tickets.validateSession)
@@ -517,5 +520,38 @@ func TestListSessionsOwner_NonAdminQueryParamIsIgnored(t *testing.T) {
 	)
 	if got != "regular@example.com" {
 		t.Fatalf("non-admin with ?owner=: got %q, want their own email", got)
+	}
+}
+
+func TestResolveSessionScope_DefaultsToLocalScope(t *testing.T) {
+	app := &appServer{sessionScope: "tank-operator-slot-1"}
+	got, status, err := app.resolveSessionScope(
+		auth.User{Email: "regular@example.com", Role: auth.RoleUser},
+		"",
+	)
+	if err != nil || status != http.StatusOK || got != "tank-operator-slot-1" {
+		t.Fatalf("resolve empty scope = (%q, %d, %v), want local slot", got, status, err)
+	}
+}
+
+func TestResolveSessionScope_AdminCanViewProdFromTestSlot(t *testing.T) {
+	app := &appServer{sessionScope: "tank-operator-slot-1"}
+	got, status, err := app.resolveSessionScope(
+		auth.User{Email: adminEmail, Role: auth.RoleAdmin},
+		"default",
+	)
+	if err != nil || status != http.StatusOK || got != "default" {
+		t.Fatalf("admin prod scope = (%q, %d, %v), want default", got, status, err)
+	}
+}
+
+func TestResolveSessionScope_NonAdminCannotViewProdFromTestSlot(t *testing.T) {
+	app := &appServer{sessionScope: "tank-operator-slot-1"}
+	_, status, err := app.resolveSessionScope(
+		auth.User{Email: "regular@example.com", Role: auth.RoleUser},
+		"default",
+	)
+	if err == nil || status != http.StatusForbidden {
+		t.Fatalf("non-admin prod scope status=%d err=%v, want 403", status, err)
 	}
 }
