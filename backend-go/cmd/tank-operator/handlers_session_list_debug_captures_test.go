@@ -59,7 +59,7 @@ func TestSessionListDebugCaptureRejectsMissingRequiredFields(t *testing.T) {
 
 func TestSessionListDebugCaptureRejectsNonObjectSnapshot(t *testing.T) {
 	app := adminTestServer(t)
-	body := bytes.NewBufferString(`{"reason":"created-session-name-mutated","session_id":"223","snapshot":[],"detail":{}}`)
+	body := bytes.NewBufferString(`{"reason":"manual-capture","session_id":"223","snapshot":[],"detail":{}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/session-list-debug-capture", body)
 	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
 	req.Header.Set("Content-Type", "application/json")
@@ -129,7 +129,7 @@ func TestDebugSessionListCapturesAdminGateAndStoreRequirement(t *testing.T) {
 }
 
 func TestSessionListDebugCaptureLabelClamp(t *testing.T) {
-	if got := sessionListDebugCaptureReasonLabel("created-session-name-mutated"); got != "created-session-name-mutated" {
+	if got := sessionListDebugCaptureReasonLabel("manual-capture"); got != "manual-capture" {
 		t.Fatalf("known reason label = %q", got)
 	}
 	if got := sessionListDebugCaptureReasonLabel("raw-user-supplied-value"); got != "other" {
@@ -151,12 +151,12 @@ func TestSessionListDebugCaptureLabelClamp(t *testing.T) {
 
 func validSessionListDebugCaptureBody() string {
 	return `{
-		"reason":"created-session-name-mutated",
-		"session_id":"223",
-		"source":"render-state",
-		"active_id":"223",
-		"client_seq":12,
-		"snapshot":{"version":1,"events":[]},
-		"detail":{"field":"name"}
-	}`
+			"reason":"manual-capture",
+			"session_id":"223",
+			"source":"SessionListDebugPage",
+			"active_id":"223",
+			"client_seq":12,
+			"snapshot":{"version":1,"events":[]},
+			"detail":{"phase":"capture-now"}
+		}`
 }

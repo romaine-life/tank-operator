@@ -127,9 +127,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// client side. Pairs with server-side counters in observability.go.
 	mux.HandleFunc("POST /api/client-metrics/session-events-stream", s.handleSessionEventStreamMetrics)
 	// Browser-side session-list debug capture. The SPA posts its bounded
-	// /_debug/session-list ring automatically when a just-created row
-	// mutates client-side identity fields, removing the need for user
-	// devtools or manual link chasing during repro.
+	// /_debug/session-list ring when the debug page explicitly captures
+	// the current browser state or records a diagnostic window.
 	mux.HandleFunc("POST /api/client-metrics/session-list-debug-capture", s.handleSessionListDebugCapture)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos

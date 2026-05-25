@@ -2,10 +2,13 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  captureSessionListDebugSnapshot,
+  getSessionListDebugSnapshot,
   recordSessionListDebugEvent,
   resetSessionListDebugForTest,
   setSessionListDebugCaptureReporterForTest,
   updateSessionListDebugRender,
+  type SessionListDebugCapturePayload,
   type SessionListDebugRow,
 } from "./sessionListDebug";
 
@@ -28,8 +31,8 @@ beforeEach(() => {
   resetSessionListDebugForTest();
 });
 
-test("auto capture reports a created session name mutation", async () => {
-  const reports: unknown[] = [];
+test("created session identity changes stay local until a manual capture", async () => {
+  const reports: SessionListDebugCapturePayload[] = [];
   setSessionListDebugCaptureReporterForTest((payload) => {
     reports.push(payload);
   });
@@ -46,15 +49,18 @@ test("auto capture reports a created session name mutation", async () => {
   });
   await Promise.resolve();
 
-  assert.equal(reports.length, 1);
-  assert.equal((reports[0] as { reason: string }).reason, "created-session-name-mutated");
-  assert.equal((reports[0] as { session_id: string }).session_id, "223");
+  assert.equal(reports.length, 0);
+  assert.equal(
+    getSessionListDebugSnapshot().events.some((event) => event.kind === "render-state"),
+    true,
+  );
 });
 
-test("auto capture does not report the default display name for an unnamed created session", async () => {
-  const reports: unknown[] = [];
+test("manual capture posts the current debug snapshot", async () => {
+  const reports: SessionListDebugCapturePayload[] = [];
   setSessionListDebugCaptureReporterForTest((payload) => {
     reports.push(payload);
+    return { capture_id: "sldc_test", accepted: true };
   });
 
   recordSessionListDebugEvent({
@@ -67,13 +73,23 @@ test("auto capture does not report the default display name for an unnamed creat
     active_id: "223",
     sessions: [debugRow({ status: "Active", display_name: "223" })],
   });
-  await Promise.resolve();
+  const result = await captureSessionListDebugSnapshot({
+    reason: "manual-capture",
+    session_id: "223",
+    source: "SessionListDebugPage",
+    detail: { note: "bad render visible" },
+  });
 
-  assert.equal(reports.length, 0);
+  assert.equal(result?.capture_id, "sldc_test");
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0]?.reason, "manual-capture");
+  assert.equal(reports[0]?.session_id, "223");
+  assert.equal(reports[0]?.source, "SessionListDebugPage");
+  assert.equal(reports[0]?.snapshot.events.at(-1)?.kind, "manual-capture-requested");
 });
 
-test("auto capture treats an explicit rename response as the new expected name", async () => {
-  const reports: unknown[] = [];
+test("manual recording samples can share a run id", async () => {
+  const reports: SessionListDebugCapturePayload[] = [];
   setSessionListDebugCaptureReporterForTest((payload) => {
     reports.push(payload);
   });
@@ -92,9 +108,43 @@ test("auto capture treats an explicit rename response as the new expected name",
   });
   updateSessionListDebugRender({
     active_id: "223",
-    sessions: [debugRow({ name: "research", display_name: "research" })],
+    sessions: [debugRow({ status: "Active", display_name: "223" })],
   });
-  await Promise.resolve();
+  await captureSessionListDebugSnapshot({
+    reason: "manual-record-start",
+    source: "SessionListDebugPage",
+    detail: { run_id: "sldr_test", phase: "start" },
+  });
+  await captureSessionListDebugSnapshot({
+    reason: "manual-record-sample",
+    source: "SessionListDebugPage",
+    detail: { run_id: "sldr_test", phase: "sample", sample_index: 1 },
+  });
 
-  assert.equal(reports.length, 0);
+  assert.equal(reports.length, 2);
+  assert.equal(reports[0]?.session_id, "223");
+  assert.equal(reports[1]?.reason, "manual-record-sample");
+  assert.deepEqual((reports[1]?.detail as { run_id?: string }).run_id, "sldr_test");
+});
+
+test("manual capture failures are retained in the local debug ring", async () => {
+  setSessionListDebugCaptureReporterForTest(() => {
+    throw new Error("store unavailable");
+  });
+
+  await assert.rejects(
+    captureSessionListDebugSnapshot({
+      reason: "manual-capture",
+      session_id: "223",
+      source: "SessionListDebugPage",
+    }),
+    /store unavailable/,
+  );
+
+  assert.equal(
+    getSessionListDebugSnapshot().events.some(
+      (event) => event.kind === "manual-capture-report-failed",
+    ),
+    true,
+  );
 });

@@ -20,10 +20,10 @@ const (
 
 const debugSessionListCapturesDescription = `Durable browser-side session-list captures.
 
-The SPA posts a bounded /_debug/session-list snapshot when a just-created
-session row mutates its client-side name or avatar identity. Query this
-admin endpoint to inspect the captured client render/store/events plus the
-server registry rows recorded at ingest time.`
+The SPA posts bounded /_debug/session-list snapshots only when the user or an
+operator explicitly captures the current browser state or records a diagnostic
+window. Query this admin endpoint to inspect the captured client
+render/store/events plus the server registry rows recorded at ingest time.`
 
 type sessionListDebugCaptureRequest struct {
 	Reason    string          `json:"reason"`
@@ -349,10 +349,10 @@ func clampDebugCaptureString(value string, max int) string {
 
 func clampSessionListDebugCaptureReason(value string) string {
 	switch strings.TrimSpace(value) {
-	case "created-session-name-mutated",
-		"created-session-agent-avatar-mutated",
-		"created-session-system-avatar-mutated",
-		"created-session-rendered-avatar-changed":
+	case "manual-capture",
+		"manual-record-start",
+		"manual-record-sample",
+		"manual-record-stop":
 		return strings.TrimSpace(value)
 	default:
 		return "other"

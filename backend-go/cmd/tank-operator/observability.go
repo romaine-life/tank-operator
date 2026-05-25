@@ -640,9 +640,9 @@ func sessionEventStreamClientResultLabel(raw string) string {
 
 // --- Browser session-list debug captures ---
 //
-// The SPA posts bounded client-side debug rings only when a created
-// session row mutates identity fields in the client. Metrics stay
-// bounded: no email, session_id, path, or raw reason labels.
+// The SPA posts bounded client-side debug rings only when an operator or user
+// explicitly captures the current browser state or records a diagnostic window.
+// Metrics stay bounded: no email, session_id, path, or raw reason labels.
 
 var (
 	sessionListDebugCaptureReportsTotal = promauto.NewCounterVec(
@@ -694,10 +694,10 @@ func sessionListDebugCaptureReadResultLabel(raw string) string {
 
 func sessionListDebugCaptureReasonLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "created-session-name-mutated",
-		"created-session-agent-avatar-mutated",
-		"created-session-system-avatar-mutated",
-		"created-session-rendered-avatar-changed":
+	case "manual-capture",
+		"manual-record-start",
+		"manual-record-sample",
+		"manual-record-stop":
 		return raw
 	default:
 		return "other"

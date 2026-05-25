@@ -147,9 +147,9 @@ var schemaMigrations = []string{
 		ON avatar_upload_attempts (actor_email, created_at DESC)`,
 	// session_list_debug_captures is the durable client-side counterpart
 	// to /api/debug/session-list-state. The browser posts the bounded
-	// session-list debug ring when it detects a created row mutating
-	// identity fields client-side, so operators can diagnose without
-	// asking the user to preserve a tab or open devtools.
+	// session-list debug ring when the user or operator explicitly
+	// captures the browser state or records a diagnostic window, so
+	// operators can diagnose without asking for devtools.
 	`CREATE TABLE IF NOT EXISTS session_list_debug_captures (
 		id            text PRIMARY KEY,
 		owner_email   text NOT NULL,

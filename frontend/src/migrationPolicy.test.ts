@@ -244,8 +244,11 @@ test("session-list debug route keeps client row history visible without devtools
     sessionListDebugSource.includes("/api/client-metrics/session-list-debug-capture"),
     true,
   );
+  assert.equal(sessionListDebugSource.includes("captureSessionListDebugSnapshot"), true);
+  assert.equal(sessionListDebugSource.includes(["created", "session", "name"].join("-") + "-mutated"), false);
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugPageSource.includes("Record 2m"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {
