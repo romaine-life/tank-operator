@@ -86,6 +86,26 @@ export function recentRepoPreviewSlugs(
   return out;
 }
 
+export function recentRepoShortcutSlugs(
+  recent: string[],
+  limit = RECENT_REPO_PREVIEW_LIMIT,
+): string[] {
+  if (limit <= 0) return [];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawSlug of recent) {
+    const slug = rawSlug.trim();
+    if (!isValidRepoSlug(slug)) continue;
+    const key = slug.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(slug);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // addRepoSlug encapsulates the picker's add-to-staged logic in a pure
 // function. Returns either {ok: true, next: string[]} on a successful
 // add or {ok: false, error: string} with the user-facing reason.
