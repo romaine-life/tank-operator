@@ -150,15 +150,16 @@ test("chat history bootstrap is tail-first and not browser-position based", () =
 });
 
 test("historical transcript bootstrap requires server-projected turn activity", () => {
-  assert.equal(appSource.includes("projectedTranscriptEntriesFromTimelineBody"), true);
+  assert.equal(appSource.includes("transcriptRowsFromTimelineBody"), true);
   assert.equal(
-    appSource.includes("timeline response missing server transcript projection"),
+    appSource.includes("timeline response missing server transcript rows"),
     true,
   );
-  assert.match(
-    appSource,
-    /replaceSdkServerEvents\(\s*canonicalEvents,[\s\S]*?projectedEntries,/,
-  );
+  assert.equal(appSource.includes("replaceSdkServerRows(projectedEntries"), true);
+  assert.equal(appSource.includes("body.events"), false);
+  assert.equal(appSource.includes("before_order_key"), false);
+  assert.equal(appSource.includes("min_transcript_entries"), false);
+  assert.equal(appSource.includes("SDK_TIMELINE_TAIL_EVENT_LIMIT"), false);
   assert.match(
     appSource,
     /\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
@@ -398,7 +399,8 @@ test("chat submit explicitly lands at the latest message", () => {
 });
 
 test("chat back-pagination keeps an explicit access path", () => {
-  assert.equal(appSource.includes("before_order_key"), true);
+  assert.equal(appSource.includes("before_cursor"), true);
+  assert.equal(appSource.includes("beforeCursor"), true);
   assert.equal(appSource.includes("Load earlier messages"), true);
   assert.equal(appSource.includes("older-missing-cursor"), true);
 });

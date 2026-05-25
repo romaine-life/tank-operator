@@ -106,24 +106,6 @@ func TestSessionEventPageEmpty(t *testing.T) {
 	}
 }
 
-func TestNormalizeSessionEventAroundHalfCaps(t *testing.T) {
-	cases := []struct {
-		in   int
-		want int
-	}{
-		{-5, 0},
-		{0, 0},
-		{50, 50},
-		{250, 250},
-		{500, 250},
-	}
-	for _, tc := range cases {
-		if got := normalizeSessionEventAroundHalf(tc.in); got != tc.want {
-			t.Fatalf("normalizeSessionEventAroundHalf(%d) = %d, want %d", tc.in, got, tc.want)
-		}
-	}
-}
-
 func eventTypes(events []map[string]any) []string {
 	types := make([]string, 0, len(events))
 	for _, event := range events {

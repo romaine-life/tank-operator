@@ -104,7 +104,7 @@ func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
 	if !strings.Contains(timelineURL, "/api/sessions/93/timeline") || !strings.Contains(timelineURL, "message=turn_1%3Aitem%3Amsg_1") {
 		t.Fatalf("timeline_url = %q", timelineURL)
 	}
-	if got, _ := api["page_before_url"].(string); !strings.Contains(got, "before_order_key=%3Cprev_order_key%3E") {
+	if got, _ := api["page_before_url"].(string); !strings.Contains(got, "before_cursor=%3Cprev_cursor%3E") {
 		t.Fatalf("page_before_url = %q", got)
 	}
 	recipe, ok := body["agent_recipe"].([]any)
@@ -117,7 +117,7 @@ func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Authorization: Bearer $(cat /run/secrets/auth.romaine.life/token)",
-		"before_order_key",
+		"before_cursor",
 		"do not send it as JSON",
 	} {
 		if !strings.Contains(string(recipeJSON), want) {

@@ -235,6 +235,11 @@ func main() {
 
 	// 6. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(pgPool, sessionScope)
+	transcriptRowsStore := buildSessionTranscriptRowStore(pgPool, sessionScope)
+	transcriptMaterializer := transcriptRowsMaterializer{
+		events: sessionEventsStore,
+		rows:   transcriptRowsStore,
+	}
 
 	// 7. Init NATS JetStream session bus for SDK commands/events.
 	sessionBus := buildSessionBus(sessionScope)
@@ -356,8 +361,12 @@ func main() {
 		}
 		activityEmitter = emitter
 		sessionBus.SetLifecycleEmitter(emitter)
+		persisterStore := transcriptMaterializingEventStore{
+			SessionEventStore: sessionEventsStore,
+			materializer:      transcriptMaterializer,
+		}
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, promPersisterMetrics{}); err != nil {
+			if err := sessionBus.RunEventPersister(ctx, persisterStore, promPersisterMetrics{}); err != nil {
 				slog.Error("session bus event persister stopped", "error", err)
 			}
 		}()
@@ -422,17 +431,18 @@ func main() {
 	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:           k8sClient,
-		restCfg:       restCfg,
-		mgr:           mgr,
-		profiles:      profileStore,
-		sessionEvents: sessionEventsStore,
-		avatars:       avatarStore,
-		avatarImages:  avatarImageStore,
-		avatarUploads: avatarUploadAttemptStore,
-		pgPool:        pgPool,
-		sessionBus:    sessionBus,
-		readStates:    readStateStore,
+		k8s:            k8sClient,
+		restCfg:        restCfg,
+		mgr:            mgr,
+		profiles:       profileStore,
+		sessionEvents:  sessionEventsStore,
+		transcriptRows: transcriptRowsStore,
+		avatars:        avatarStore,
+		avatarImages:   avatarImageStore,
+		avatarUploads:  avatarUploadAttemptStore,
+		pgPool:         pgPool,
+		sessionBus:     sessionBus,
+		readStates:     readStateStore,
 		activityRefresher: &scopedSessionActivityRefresher{
 			pool:       pgPool,
 			publisher:  sessionBus,
@@ -453,6 +463,9 @@ func main() {
 		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
+	if pgPool != nil {
+		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
+	}
 
 	// 14. Listen and serve. Every request flows through
 	// httpInstrumentationMiddleware so 5xx errors carry method, route,
@@ -605,6 +618,13 @@ func buildSessionEventStore(pool *pgxpool.Pool, scope string) store.SessionEvent
 		return store.StubSessionEventStore{}
 	}
 	return store.NewPostgresSessionEventStore(pool, scope)
+}
+
+func buildSessionTranscriptRowStore(pool *pgxpool.Pool, scope string) store.SessionTranscriptRowStore {
+	if pool == nil {
+		return store.StubSessionTranscriptRowStore{}
+	}
+	return store.NewPostgresSessionTranscriptRowStore(pool, scope)
 }
 
 // rowFetcherFor adapts the SessionRegistry interface to the narrower

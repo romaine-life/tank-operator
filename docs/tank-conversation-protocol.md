@@ -385,12 +385,16 @@ Codex SDK adapter:
 History reads:
 
 - Normal navigation opens the live tail:
-  `GET /api/sessions/{session_id}/timeline?anchor=newest&limit=200`
+  `GET /api/sessions/{session_id}/timeline?anchor=newest&rows=24`
 - Explicit message links open a bounded page around a durable transcript
   identity:
-  `GET /api/sessions/{session_id}/timeline?timeline_id=<timeline_id>&num_before=100&num_after=100`
-- Manual upward pagination reads older events:
-  `GET /api/sessions/{session_id}/timeline?before_order_key=<cursor>&limit=100`
+  `GET /api/sessions/{session_id}/timeline?timeline_id=<timeline_id>&rows_before=12&rows_after=12`
+- Manual upward pagination reads older transcript rows:
+  `GET /api/sessions/{session_id}/timeline?before_cursor=<row_cursor>&rows=8`
+- `/timeline` pages `session_transcript_rows`, the server-owned visible
+  transcript read model. Raw `session_events` remain the live SSE transport
+  and Turn activity detail source, but raw event counts are not a `/timeline`
+  API contract.
 - Managed Codex background terminal stop:
   `POST /api/sessions/{session_id}/background-tasks/{task_id}/stop`
   publishes a `stop_background_task` control-plane command. The Codex
@@ -404,9 +408,13 @@ Returns:
 ```json
 {
   "session_id": "63",
-  "events": [],
-  "next_order_key": "001...",
-  "has_more": false,
+  "rows": [],
+  "prev_cursor": "opaque-row-cursor",
+  "next_cursor": "opaque-row-cursor",
+  "found_oldest": false,
+  "found_newest": true,
+  "live_order_key": "001...",
+  "cursor_semantic": "transcript_row",
   "activity": {
     "status": "streaming",
     "last_order_key": "001...",
@@ -422,9 +430,10 @@ Returns:
 ```
 
 The frontend must attach the live SSE stream only after the initial `/timeline`
-read has established a cursor. Browser-local scroll position is not a supported
-timeline anchor; reopening or switching sessions uses `anchor=newest` unless the
-URL carries an explicit `message`/`timeline_id` target.
+read has established `live_order_key` for the SSE resume cursor. Browser-local
+scroll position is not a supported timeline anchor; reopening or switching
+sessions uses `anchor=newest` unless the URL carries an explicit
+`message`/`timeline_id` target.
 
 This also applies when the React chat pane stayed mounted while hidden. Mounted
 component state may preserve local controls, but it is not a transcript anchor:
@@ -548,12 +557,12 @@ header, `Accept: */*`, `Accept: application/json`, or `?format=json`) get JSON
 directly; unauthenticated callers get the contract plus auth instructions,
 while authenticated callers get the resolved timeline payload inline. The
 payload is the same durable `/timeline` response: `target_timeline_id`,
-`target_order_key`, and a bounded `events` window around the persisted cursor.
+`target_cursor`, and a bounded `rows` window around the persisted row cursor.
 The JSON contract carries an `agent_recipe` array with copyable curl commands:
 send the projected service-account token to auth.romaine.life as
 `Authorization: Bearer <token>`, exchange the returned `auth_jwt` at this Tank
 origin, fetch the `json_url`, and page older context with
-`before_order_key=<prev_order_key>` when `found_oldest=false`.
+`before_cursor=<prev_cursor>` when `found_oldest=false`.
 
 Durable turn interruption:
 
@@ -800,12 +809,20 @@ Storage:
 
 - Keep the Postgres `session_events` table as the durable ledger, partitioned
   by `tank_session_id`.
+- Keep the Postgres `session_transcript_rows` table as the `/timeline` read
+  model, keyed by opaque transcript row cursors and refreshed from
+  `session_events` on each durable event write.
+- Mark completed transcript-row backfills in
+  `session_transcript_row_backfills`. Migration-created status rows are
+  visible transcript rows, but they are not proof that historical turns have
+  been projected.
 - Use NATS JetStream as the durable command/event fabric, not as the product
   history database. Commands are acked only after durable terminal events are
   published; events are acknowledged by the backend persister after the
   Postgres upsert succeeds.
 - Add or materialize per-user read state keyed by `email + session_id`.
-- Use `order_key` as the pagination cursor. Document id is only a dedupe key.
+- Use `order_key` as the live stream cursor. Use transcript row cursors as the
+  history pagination cursor. Document id is only a dedupe key.
 - Compute unread and attention state server-side from durable events plus read
   state.
 

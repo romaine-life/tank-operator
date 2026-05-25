@@ -352,6 +352,32 @@ var schemaMigrations = []string{
 		WHERE payload ? 'timeline_id'`,
 	`CREATE INDEX IF NOT EXISTS session_events_created_at
 		ON session_events (created_at)`,
+	`CREATE TABLE IF NOT EXISTS session_transcript_rows (
+		tank_session_id text NOT NULL,
+		row_cursor      text NOT NULL,
+		row_id          text NOT NULL,
+		row_kind        text NOT NULL,
+		turn_id         text,
+		start_order_key text NOT NULL,
+		end_order_key   text NOT NULL,
+		source_event_id text,
+		payload         jsonb NOT NULL,
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (tank_session_id, row_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS session_transcript_rows_cursor
+		ON session_transcript_rows (tank_session_id, row_cursor)`,
+	`CREATE INDEX IF NOT EXISTS session_transcript_rows_turn
+		ON session_transcript_rows (tank_session_id, turn_id)
+		WHERE turn_id IS NOT NULL`,
+	`CREATE INDEX IF NOT EXISTS session_transcript_rows_activity_ids
+		ON session_transcript_rows USING gin ((payload -> 'activityIds'))
+		WHERE payload ? 'activityIds'`,
+	`CREATE TABLE IF NOT EXISTS session_transcript_row_backfills (
+		tank_session_id    text PRIMARY KEY,
+		projection_version integer NOT NULL,
+		completed_at       timestamptz NOT NULL DEFAULT now()
+	)`,
 	`CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
 		p_email text,
 		p_scope text,
@@ -424,6 +450,11 @@ var schemaMigrations = []string{
 			v_doc := v_doc - 'email';
 		END IF;
 
+		DELETE FROM session_transcript_rows AS tr
+		WHERE tr.tank_session_id = v_storage_key
+		  AND tr.source_event_id = v_event_id
+		  AND tr.row_cursor <> (v_order_key || chr(31) || v_event_id);
+
 		DELETE FROM session_events AS se
 		WHERE se.tank_session_id = v_storage_key
 		  AND se.event_id = v_event_id
@@ -439,6 +470,43 @@ var schemaMigrations = []string{
 			turn_id = EXCLUDED.turn_id,
 			event_type = EXCLUDED.event_type,
 			payload = EXCLUDED.payload;
+
+		INSERT INTO session_transcript_rows (
+			tank_session_id, row_cursor, row_id, row_kind, turn_id,
+			start_order_key, end_order_key, source_event_id, payload, updated_at
+		) VALUES (
+			v_storage_key,
+			v_order_key || chr(31) || v_event_id,
+			v_event_id,
+			'message',
+			NULL,
+			v_order_key,
+			v_order_key,
+			v_event_id,
+			jsonb_build_object(
+				'id', v_event_id,
+				'kind', 'message',
+				'role', 'system',
+				'text', trim(p_text),
+				'time', v_event_iso,
+				'orderKey', v_order_key,
+				'sourceEventId', v_event_id,
+				'severity', CASE trim(p_status_key)
+					WHEN 'failed' THEN 'error'
+					ELSE 'info'
+				END
+			),
+			now()
+		)
+		ON CONFLICT (tank_session_id, row_id) DO UPDATE
+		SET row_cursor = EXCLUDED.row_cursor,
+			row_kind = EXCLUDED.row_kind,
+			turn_id = EXCLUDED.turn_id,
+			start_order_key = EXCLUDED.start_order_key,
+			end_order_key = EXCLUDED.end_order_key,
+			source_event_id = EXCLUDED.source_event_id,
+			payload = EXCLUDED.payload,
+			updated_at = now();
 	END
 	$$`,
 	`CREATE OR REPLACE FUNCTION tank_sessions_status_events_after_write()

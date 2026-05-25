@@ -39,6 +39,7 @@ type appServer struct {
 	mgr                 *sessions.Manager
 	profiles            profilesStore
 	sessionEvents       store.SessionEventStore
+	transcriptRows      store.SessionTranscriptRowStore
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store

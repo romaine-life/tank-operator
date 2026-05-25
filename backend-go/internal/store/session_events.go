@@ -16,30 +16,23 @@ import (
 
 // SessionEventStore reads the canonical SDK events the pod-side runners write
 // to the session_events Postgres table. The orchestrator owns writes through
-// the session bus persister, and the SPA consumes those same durable rows
-// through timeline snapshots and the SSE stream.
+// the session bus persister. The SPA consumes these rows through live SSE and
+// Turn activity detail reads; historical transcript navigation uses the
+// materialized session_transcript_rows read model.
 type SessionEventStore interface {
 	Upsert(ctx context.Context, event map[string]any) error
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 	HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error)
 	// OrderKeyForTimelineID resolves a rendered transcript entry id
 	// (`timeline_id`) to the newest durable order_key that contributed to
-	// that entry. Message deep links use this before dispatching the
-	// normal EventsAround read, keeping share resolution on the persisted
-	// conversation ledger instead of the browser DOM.
+	// that entry. Input-reply handlers use this to locate the originating
+	// user message without consulting browser state.
 	OrderKeyForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error)
 	// LatestEvents returns the most recent `limit` events for a session in
 	// ASC order_key. Implemented as a DESC LIMIT N indexed scan reversed in
-	// Go; bounded and indexed regardless of ledger size. Powers the SPA's
-	// tail-fetch path so opening a long chat is one round-trip, not a
-	// forward walk from order_key=0.
+	// Go; bounded and indexed regardless of ledger size. Powers live SSE
+	// resume bootstrap after the transcript-row snapshot is loaded.
 	LatestEvents(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error)
-	// EventsAround centers a page on `anchorOrderKey`: numBefore older
-	// events (ASC) plus numAfter newer events (ASC), inclusive of the
-	// anchor when present. Mirrors Zulip's `anchor` + `num_before` +
-	// `num_after`. Used for explicit transcript deep links. Two indexed
-	// seeks; no full scan.
-	EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error)
 	// EventsForTurn returns a bounded ASC slice for one turn. Transcript
 	// projection uses this to build primary Turn activity shells and lazy
 	// expansion bodies without relying on a browser-local raw-event window.
@@ -282,48 +275,10 @@ func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessi
 }
 
 // LatestEvents returns the most recent `limit` events ASC. Indexed DESC LIMIT
-// scan reversed in Go. Powers the SPA's tail-fetch path.
+// scan reversed in Go. Powers SSE resume bootstrap after the transcript-row
+// snapshot is loaded.
 func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error) {
 	return s.ListBySession(ctx, tankSessionID, SessionEventCursor{Direction: "desc"}, limit)
-}
-
-// EventsAround centers a page on `anchorOrderKey`: numBefore older events
-// plus numAfter newer events (both ASC), inclusive of the anchor when it
-// exists. Two indexed seeks: one DESC LIMIT for the before-slice, one ASC
-// LIMIT for the after-slice. The anchor itself is included in the before-
-// slice when present so the caller can land Virtuoso's
-// initialTopMostItemIndex on it directly.
-func (s *postgresSessionEventStore) EventsAround(ctx context.Context, tankSessionID, anchorOrderKey string, numBefore, numAfter int) (SessionEventPage, error) {
-	numBefore = normalizeSessionEventAroundHalf(numBefore)
-	numAfter = normalizeSessionEventAroundHalf(numAfter)
-	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
-
-	before, foundOldest, err := s.fetchBeforeSlice(ctx, storageKey, anchorOrderKey, numBefore)
-	if err != nil {
-		return SessionEventPage{}, err
-	}
-	after, foundNewest, err := s.fetchAfterSlice(ctx, storageKey, anchorOrderKey, numAfter)
-	if err != nil {
-		return SessionEventPage{}, err
-	}
-
-	events := make([]map[string]any, 0, len(before)+len(after))
-	events = append(events, before...)
-	events = append(events, after...)
-	for _, doc := range events {
-		doc["tank_session_id"] = tankSessionID
-	}
-
-	page := SessionEventPage{
-		Events:      events,
-		FoundOldest: foundOldest,
-		FoundNewest: foundNewest,
-	}
-	if len(events) > 0 {
-		page.PrevOrderKey = eventOrderKey(events[0])
-		page.NextOrderKey = eventOrderKey(events[len(events)-1])
-	}
-	return page, nil
 }
 
 func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
@@ -365,116 +320,6 @@ func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessi
 		return SessionEventPage{}, err
 	}
 	return sessionEventPageFromAscendingScan(out, limit, SessionEventCursor{}), nil
-}
-
-// fetchBeforeSlice reads up to `limit` events with order_key <= anchor (when
-// anchor non-empty) or the tail when anchor is empty, DESC, then reverses to
-// ASC. Returns (slice, foundOldest). foundOldest is true if the slice
-// includes the head of the ledger.
-func (s *postgresSessionEventStore) fetchBeforeSlice(ctx context.Context, storageKey, anchorOrderKey string, limit int) ([]map[string]any, bool, error) {
-	if limit <= 0 {
-		return nil, false, nil
-	}
-	queryLimit := limit + 1
-	q := `
-		SELECT payload
-		FROM session_events
-		WHERE tank_session_id = $1 AND order_key <> ''
-	`
-	args := []any{storageKey}
-	if anchorOrderKey != "" {
-		q += " AND order_key <= $2 ORDER BY order_key DESC LIMIT $3"
-		args = append(args, anchorOrderKey, queryLimit)
-	} else {
-		q += " ORDER BY order_key DESC LIMIT $2"
-		args = append(args, queryLimit)
-	}
-	rows, err := s.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	out := make([]map[string]any, 0, queryLimit)
-	for rows.Next() {
-		var payload []byte
-		if err := rows.Scan(&payload); err != nil {
-			return nil, false, err
-		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return nil, false, fmt.Errorf("session-events doc is not JSON: %w", err)
-		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			return nil, false, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		out = append(out, doc)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	foundOldest := len(out) <= limit
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out, foundOldest, nil
-}
-
-// fetchAfterSlice reads up to `limit` events with order_key > anchor (the
-// anchor itself is in the before-slice). ASC by definition. Returns
-// (slice, foundNewest). foundNewest is true if the slice includes the tail
-// of the ledger.
-func (s *postgresSessionEventStore) fetchAfterSlice(ctx context.Context, storageKey, anchorOrderKey string, limit int) ([]map[string]any, bool, error) {
-	if limit <= 0 {
-		// No after-slice requested. The caller can still be at the
-		// newest event if the before-slice happens to reach the tail,
-		// but that's a determination for the caller, not us.
-		return nil, false, nil
-	}
-	queryLimit := limit + 1
-	q := `
-		SELECT payload
-		FROM session_events
-		WHERE tank_session_id = $1 AND order_key <> ''
-	`
-	args := []any{storageKey}
-	if anchorOrderKey != "" {
-		q += " AND order_key > $2 ORDER BY order_key ASC LIMIT $3"
-		args = append(args, anchorOrderKey, queryLimit)
-	} else {
-		q += " ORDER BY order_key ASC LIMIT $2"
-		args = append(args, queryLimit)
-	}
-	rows, err := s.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, false, err
-	}
-	defer rows.Close()
-	out := make([]map[string]any, 0, queryLimit)
-	for rows.Next() {
-		var payload []byte
-		if err := rows.Scan(&payload); err != nil {
-			return nil, false, err
-		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return nil, false, fmt.Errorf("session-events doc is not JSON: %w", err)
-		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			return nil, false, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		out = append(out, doc)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	foundNewest := len(out) <= limit
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, foundNewest, nil
 }
 
 func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error) {
@@ -740,19 +585,6 @@ func normalizeSessionEventLimit(limit int) int {
 	return limit
 }
 
-// normalizeSessionEventAroundHalf caps either side of an EventsAround
-// request. A single anchor read should not return more than 500 events
-// total, so each half is capped at 250.
-func normalizeSessionEventAroundHalf(half int) int {
-	if half < 0 {
-		return 0
-	}
-	if half > 250 {
-		return 250
-	}
-	return half
-}
-
 // Stub for local dev where Postgres isn't configured.
 type StubSessionEventStore struct{}
 
@@ -767,14 +599,6 @@ func (StubSessionEventStore) ListBySession(_ context.Context, _ string, _ Sessio
 }
 
 func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (SessionEventPage, error) {
-	return SessionEventPage{
-		Events:      []map[string]any{},
-		FoundOldest: true,
-		FoundNewest: true,
-	}, nil
-}
-
-func (StubSessionEventStore) EventsAround(_ context.Context, _, _ string, _, _ int) (SessionEventPage, error) {
 	return SessionEventPage{
 		Events:      []map[string]any{},
 		FoundOldest: true,
