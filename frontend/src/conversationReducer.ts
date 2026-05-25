@@ -35,6 +35,17 @@ export interface ConversationMessage {
   // replaces the human owner's Gravatar so the handoff reads as
   // agent-authored. Absent for normal human-typed turns.
   originSessionId?: string;
+  // Severity tag for system-role messages. session.status:failed events
+  // with the extended payload (failure_scope=provider) carry this so
+  // the renderer can style the bubble as an error rather than a
+  // neutral system notice (e.g. "Session is ready."). undefined means
+  // "info" — the default.
+  severity?: "info" | "error";
+  // Optional actionable affordance ("Re-sign-in to Codex" → /...).
+  // Present on session.status:failed events that include an action in
+  // their durable payload; the renderer surfaces it as a button on the
+  // system-role message bubble.
+  action?: { label: string; href: string };
 }
 
 export interface ConversationItem {
@@ -70,6 +81,10 @@ export interface ConversationTurnTerminal {
   orderKey?: string;
   time: string;
   sourceEventId: string;
+  // Unwrapped error text for failed/command_failed turns. Drives the
+  // transcript meta line that renders at the turn's terminal order_key.
+  // Undefined on completed/interrupted turns.
+  detail?: string;
 }
 
 export interface ConversationBackgroundTask {
@@ -281,6 +296,7 @@ function applyTurnTerminal(
   status: ConversationTurnTerminalStatus,
 ): ConversationReducerState {
   if (!event.turn_id) return state;
+  const detail = status === "failed" ? errorText(event) ?? undefined : undefined;
   return {
     ...state,
     turnTerminals: {
@@ -292,6 +308,7 @@ function applyTurnTerminal(
         orderKey: event.order_key,
         time: event.created_at,
         sourceEventId: event.event_id,
+        ...(detail ? { detail } : {}),
       },
     },
   };
@@ -360,6 +377,9 @@ function applySessionStatusMessage(
 ): ConversationReducerState {
   const text = stringPayload(event, "text") ?? "";
   if (!event.timeline_id || !text) return state;
+  const status = stringPayload(event, "status");
+  const severity: "info" | "error" = status === "failed" ? "error" : "info";
+  const action = sessionStatusAction(event);
   const message: ConversationMessage = {
     id: event.timeline_id,
     role: "system",
@@ -367,11 +387,41 @@ function applySessionStatusMessage(
     orderKey: event.order_key,
     sourceEventId: event.event_id,
     createdAt: event.created_at,
+    severity,
+    ...(action ? { action } : {}),
   };
+  // session.status:failed banners share their timeline_id across
+  // transitions (e.g. failed -> ready on Codex auth recovery). Replace
+  // the prior entry rather than appending so a recovery doesn't leave
+  // the stale failed banner in the rendered transcript. Other
+  // session.status messages (loading / ready boot notices) keep their
+  // own unique timeline_ids and never collide here.
+  const existingIndex = state.messages.findIndex((m) => m.id === event.timeline_id);
+  if (existingIndex >= 0) {
+    const next = [...state.messages];
+    next[existingIndex] = message;
+    return { ...state, messages: next };
+  }
   return {
     ...state,
     messages: [...state.messages, message],
   };
+}
+
+function sessionStatusAction(
+  event: TankConversationEvent,
+): { label: string; href: string } | undefined {
+  const payload = event.payload;
+  if (!payload || typeof payload !== "object") return undefined;
+  const raw = (payload as Record<string, unknown>).action;
+  if (!raw || typeof raw !== "object") return undefined;
+  const label = (raw as { label?: unknown }).label;
+  const href = (raw as { href?: unknown }).href;
+  if (typeof label === "string" && label.length > 0 &&
+      typeof href === "string" && href.length > 0) {
+    return { label, href };
+  }
+  return undefined;
 }
 
 function upsertItem(

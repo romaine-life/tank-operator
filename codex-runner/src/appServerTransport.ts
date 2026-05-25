@@ -55,6 +55,25 @@ function abortError(message = "turn interrupted"): Error {
   return err;
 }
 
+// Unwrap a Codex app-server JSONRPC `error` notification's params into a
+// readable string. params?.error is often a structured `{code, type, message,
+// param}` object (e.g. token_expired); coercing it with String() yielded
+// "[object Object]" in the durable turn.failed payload, hiding the real cause.
+function codexErrorMessage(params: JsonRecord | undefined): string {
+  const candidate = params?.error ?? params?.message;
+  if (typeof candidate === "string" && candidate.length > 0) return candidate;
+  if (candidate && typeof candidate === "object") {
+    const message = (candidate as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+    try {
+      return JSON.stringify(candidate);
+    } catch {
+      // fall through to generic
+    }
+  }
+  return "codex app-server error";
+}
+
 class AsyncEventQueue {
   private readonly items: QueuedEvent[] = [];
   private readonly waiters: Array<(item: QueuedEvent | null) => void> = [];
@@ -400,7 +419,7 @@ export class CodexAppServerTransport {
     if (method === "error") {
       queue.push({
         kind: "event",
-        event: { type: "error", message: String(params?.message ?? params?.error ?? "codex app-server error") },
+        event: { type: "error", message: codexErrorMessage(params) },
       });
     }
   }

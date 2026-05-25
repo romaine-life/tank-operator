@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-4d6e674728173ece89ec160d3a4deb2950016ff21c28282d095e774676040a44"
+  tag: "app-942bda1d8874598a976496fc19fde6b02f5f6bfd220b584fcc974f188fe3189d"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -54,9 +54,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-9e1bd3522ad193276005957cc96c485aa3791a63f6798fcf2bf0bdc11abce22a
-  codexImage: romainecr.azurecr.io/codex-container:codex-64bae6c0d7ceddba01d780d74770b2ce94e6833cb17ff2c8a044b99aaf96860f
-  piImage: romainecr.azurecr.io/pi-container:pi-cdd551f4d84c1ab7555f4c2dea73806f49793907708224350e7518347d854a87
+  image: romainecr.azurecr.io/claude-container:claude-44e0e5af3abbf7a9fb7ac6200a4935cb4c4297b7633da95015f3404fd89a9aa4
+  codexImage: romainecr.azurecr.io/codex-container:codex-3e5e384b46d72ec75dea9100b8e5636474cfb36d4146ac79ffadec1088a9af41
+  piImage: romainecr.azurecr.io/pi-container:pi-e9e8cc553e4c4ee599c8b0e3e89fecc486578434feca0a10713409e8a31c3a09
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -126,7 +126,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-cf59254a6c312f8e8c55fad0df017b1ab8280b1d10284940e3685f4f6e2a764c"
+    tag: "api-proxy-13c2404235044f911e5d1432d80bc3196fe53ec3422d0266b3fce8ee13090f4b"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
@@ -232,6 +232,20 @@ hermes:
   # the exchange URL is identity-provider-scoped, while apiURL is the
   # downstream API target — they could conceivably move independently.
   authRomaineExchangeURL: "https://auth.romaine.life/api/auth/exchange/k8s"
+
+# Provider-credential health poller — drives the transcript-surfaced
+# "<provider> sign-in expired" banner. The orchestrator polls
+# codexProxyHealthURL every 30s, debounces sustained failures, writes
+# Layer 1 rows (provider_credential_health), and fans session.status
+# banner events into every active codex_gui session whose transcript
+# would otherwise show only a cryptic "Error" line. Leave
+# codexProxyHealthURL empty to disable the banner — useful in test
+# environments that lack a real Codex sign-in. The re-auth URL is the
+# affordance the SPA renders as a button on the banner; point at the
+# canonical Codex sign-in flow on auth.romaine.life.
+providerHealth:
+  codexProxyHealthURL: "http://codex-api-proxy.tank-operator.svc.cluster.local:9100/health/codex"
+  codexReauthURL: "https://auth.romaine.life"
 
 externalSecret:
   storeName: romaine-kv

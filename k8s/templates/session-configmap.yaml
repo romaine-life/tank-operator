@@ -17,6 +17,8 @@ data:
 {{ .Files.Get "session-config/install-tank-docs.sh" | indent 4 }}
   install-tank-skills.sh: |
 {{ .Files.Get "session-config/install-tank-skills.sh" | indent 4 }}
+  session-pod-bootstrap.sh: |
+{{ .Files.Get "session-config/session-pod-bootstrap.sh" | indent 4 }}
   agent-runner-launch.sh: |
 {{ .Files.Get "session-config/agent-runner-launch.sh" | indent 4 }}
   codex-runner-launch.sh: |

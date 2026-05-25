@@ -16,8 +16,10 @@ without colliding with the ext_proc port.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from typing import Any, Callable
 
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -126,10 +128,53 @@ async def _handle_healthz(_: web.Request) -> web.Response:
     return web.Response(text="ok")
 
 
-async def start_metrics_server(port: int) -> web.AppRunner:
+HealthSnapshotProvider = Callable[[], dict[str, Any]]
+
+
+def _make_health_handler(snapshot: HealthSnapshotProvider) -> Callable[[web.Request], web.Response]:
+    """Wrap a health-snapshot callable as an aiohttp handler.
+
+    The orchestrator polls this endpoint every 30s. Schema:
+        {
+          "provider": "codex" | "claude",
+          "result": "success" | "http_error" | "request_failed" | ...,
+          "reason": "refresh_token_reused" | "" | ...,
+          "text": "Sign-in expired. ...",
+          "last_attempted_at": <unix-seconds float | null>,
+          "last_succeeded_at": <unix-seconds float | null>,
+          "attempt_id": <int>
+        }
+    Snapshot exceptions degrade to 503 — the orchestrator treats
+    503s as "skip this poll cycle" so a momentary proxy issue doesn't
+    flip the transcript banner.
+    """
+    def handler(_: web.Request) -> web.Response:
+        try:
+            payload = snapshot()
+        except Exception:
+            log.exception("health snapshot failed")
+            return web.Response(status=503, text="snapshot unavailable")
+        return web.Response(
+            body=json.dumps(payload),
+            content_type="application/json",
+        )
+    return handler
+
+
+async def start_metrics_server(
+    port: int,
+    health_snapshot: HealthSnapshotProvider | None = None,
+) -> web.AppRunner:
     app = web.Application()
     app.router.add_get("/metrics", _handle_metrics)
     app.router.add_get("/healthz", _handle_healthz)
+    if health_snapshot is not None:
+        # Route is /health/<provider> so a Grafana dashboard or a
+        # multi-provider orchestrator can disambiguate which deployment
+        # answered without parsing the body. The shape matches the
+        # transcript-surfaced banner contract documented on tank-operator's
+        # side (docs/features/transcript/contract.md).
+        app.router.add_get(f"/health/{PROVIDER}", _make_health_handler(health_snapshot))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)

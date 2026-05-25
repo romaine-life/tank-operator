@@ -4503,24 +4503,28 @@ textarea.run-files-viewer-editor:focus {
   cursor: default;
 }
 
-/* Streaming status bar — sits between transcript and composer while the
-   run is in flight. Matches cloudcli's ClaudeStatus shape: provider icon
-   on the left, rotating action verb + animated dots, elapsed counter on
-   the right, destructive Stop pill with ESC kbd hint. Hidden when idle. */
-.run-status-bar {
+/* SSE connectivity banner — only renders when the live event stream is
+   degraded (connecting / connection_lost / resyncing). Healthy stream:
+   no banner. Replaces the old run-status pill's connectionLabel slot;
+   run status now lives on the composer's Submit↔Stop button and per-turn
+   errors are durable transcript meta lines. */
+.run-connection-banner {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.65rem;
+  justify-content: center;
   margin: 0 var(--space-5) var(--space-2);
-  padding: 0.55rem 0.75rem 0.55rem 0.85rem;
+  padding: 0.35rem 0.75rem;
   border-radius: 999px;
-  border: 1px solid rgba(52, 211, 153, 0.22);
-  background: linear-gradient(180deg, rgba(52, 211, 153, 0.08), rgba(52, 211, 153, 0.03));
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  background: linear-gradient(180deg, rgba(251, 191, 36, 0.08), rgba(251, 191, 36, 0.03));
   font-family: var(--font-primary);
-  font-size: var(--text-sm);
-  box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04);
-  animation: run-status-pulse 2.4s ease-in-out infinite;
+  font-size: var(--text-xs);
+}
+
+.run-connection-label {
+  color: rgba(251, 191, 36, 0.85);
+  letter-spacing: 0.02em;
 }
 
 /* "Load earlier messages" pill — sits at the top of the transcript when
@@ -4560,130 +4564,6 @@ textarea.run-files-viewer-editor:focus {
   margin: var(--space-3) auto var(--space-2);
   color: var(--danger, #f87171);
   font-size: var(--text-xs);
-}
-
-@keyframes run-status-pulse {
-  0%, 100% { box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.04); }
-  50%      { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.10); }
-}
-
-/* Idle/done state — amber static pill, no pulse. Mirrors cloudcli's
-   ClaudeStatus amber indicator when isLoading=false but status is set. */
-.run-status-bar-idle {
-  animation: none;
-  border-color: rgba(251, 191, 36, 0.25);
-  background: linear-gradient(180deg, rgba(251, 191, 36, 0.07), rgba(251, 191, 36, 0.03));
-  box-shadow: none;
-}
-
-.run-status-bar-idle .run-status-verb {
-  color: rgba(251, 191, 36, 0.85);
-}
-
-.run-status-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.4rem;
-  height: 1.4rem;
-  border-radius: 999px;
-}
-
-.run-status-avatar {
-  width: 1.4rem;
-  height: 1.4rem;
-  border-radius: 999px;
-  object-fit: contain;
-}
-
-.run-status-text {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.05rem;
-  color: var(--text-primary);
-  font-weight: 500;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.run-status-verb {
-  letter-spacing: 0.01em;
-}
-
-.run-status-dots {
-  display: inline-block;
-  width: 1.5em;
-  text-align: left;
-  color: rgba(255, 255, 255, 0.6);
-  font-variant-numeric: tabular-nums;
-}
-
-.run-status-connection {
-  flex: 0 0 auto;
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-}
-
-.run-status-elapsed {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  padding: 0 0.25rem;
-}
-
-.run-status-stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0.55rem 0.3rem 0.5rem;
-  border-radius: 0.5rem;
-  border: 1px solid rgba(239, 68, 68, 0.38);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fecaca;
-  font-family: var(--font-primary);
-  font-size: 0.78rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    background var(--motion-fast, 120ms) ease,
-    border-color var(--motion-fast, 120ms) ease,
-    color var(--motion-fast, 120ms) ease;
-}
-
-.run-status-stop:hover {
-  background: rgba(239, 68, 68, 0.2);
-  border-color: rgba(239, 68, 68, 0.55);
-  color: #fee2e2;
-}
-
-.run-status-stop:disabled {
-  cursor: progress;
-  opacity: 0.75;
-}
-
-.run-status-stop-icon {
-  width: 0.85rem;
-  height: 0.85rem;
-  fill: currentColor;
-}
-
-.run-status-kbd {
-  display: inline-block;
-  padding: 0.05rem 0.35rem;
-  margin-left: 0.15rem;
-  border-radius: 0.25rem;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(0, 0, 0, 0.25);
-  color: rgba(255, 255, 255, 0.7);
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
 }
 
 /* Per-message footer — timestamp + message actions, hover-revealed. */
@@ -5979,6 +5859,47 @@ textarea.run-files-viewer-editor:focus {
   color: rgba(207, 218, 232, 0.9);
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+/* Error-severity system messages — used by session.status:failed banners
+   (provider credential failures, sustained session-level conditions).
+   The bubble reads as a transcript-native error notice, NOT as a
+   floating toast — by design, per docs/features/transcript/contract.md.
+   The avatar takes a danger-tinted variant so the eye lands on the
+   banner without scanning the body. */
+.run-transcript-message[data-variant="system"][data-severity="error"] .run-msg-system-avatar {
+  color: rgba(252, 165, 165, 0.95);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+.run-transcript-message[data-variant="system"][data-severity="error"] .run-transcript-message-text {
+  color: rgba(254, 226, 226, 0.96);
+}
+
+.run-msg-system-action {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.55rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fee2e2;
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-msg-system-action:hover {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ffffff;
 }
 
 .run-msg-ai-icon {

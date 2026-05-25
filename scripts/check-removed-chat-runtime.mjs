@@ -643,6 +643,65 @@ const blocked = [
   // (cutover hygiene for in-flight stragglers); the pattern below
   // matches only the dispatch-to-acceptInterrupt shape, not the
   // defensive drop.
+  // Provider-credential health surface — the durable session.status:failed
+  // banner pipeline replaces every prior "infer codex auth state from
+  // turn outcomes" path the SPA might have grown. The Layer 1 row
+  // (provider_credential_health) is the source of truth; the orchestrator
+  // poller writes it; the SPA reads it through session.status events.
+  //
+  // The guards below catch the most likely regression shape: a future
+  // refactor that adds an SPA-side fetch of the proxy's /health endpoint
+  // (which would bypass the durable transcript surface and the debouncer)
+  // or a frontend.tsx file referencing Layer 1 row state by name. We
+  // intentionally do NOT block the unqualified "provider_credential_health"
+  // string because legitimate backend code references the table name in
+  // SQL, struct names, and counter help strings.
+  {
+    name: "in-SPA proxy /health/codex polling (must go via session.status banner)",
+    // Block fetch("/health/codex") / new EventSource("/health/codex") /
+    // similar from anywhere — the path is internal to the cluster and
+    // not exposed at the orchestrator HTTP boundary anyway, but a
+    // regression where a developer wires the SPA at it directly would
+    // bypass the debouncer. /health/codex appears nowhere in legitimate
+    // tank-operator frontend code today; the proxy and orchestrator
+    // reference it as a path literal in their own internal client.
+    pattern: /fetch\([\s\S]{0,80}["'`]\/health\/codex\b/,
+  },
+
+  // Run-status pill retired in favor of routing per-turn status through
+  // the durable transcript + composer (docs/features/transcript/contract.md
+  // names session_events as the source of truth; quality-timeframes.md's
+  // review heuristic "local UI state that can contradict durable state"
+  // describes the pill exactly). Per-turn failures now produce
+  // ConversationViewEntry meta entries from the reducer's turn.failed /
+  // turn.command_failed / turn.interrupted cases; the composer's
+  // PromptInputSubmit handles Submit↔Stop. Block reintroduction of the
+  // pill JSX, its state machinery, and the helper functions that only
+  // existed to fill the pill's rotating verb / elapsed counter slots.
+  {
+    name: "removed run-status-bar CSS class",
+    pattern: /\brun-status-bar\b/,
+  },
+  {
+    name: "removed run-status-avatar CSS class",
+    pattern: /\brun-status-avatar\b/,
+  },
+  {
+    name: "removed lastStatusText pill mirror state",
+    pattern: /\b(?:setLastStatusText|lastStatusText)\b/,
+  },
+  {
+    name: "removed STREAM_VERBS pill verb cycle",
+    pattern: /\bSTREAM_VERBS\b/,
+  },
+  {
+    name: "removed formatStreamElapsed pill elapsed helper",
+    pattern: /\bformatStreamElapsed\b/,
+  },
+  {
+    name: "removed formatToolLabel pill verb helper",
+    pattern: /\bformatToolLabel\b/,
+  },
   {
     name: "retired interrupt-on-data-plane dispatch",
     // Anchored on `.startCommandConsumer(...)` so the control-plane

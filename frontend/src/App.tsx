@@ -2469,26 +2469,6 @@ function isImagePath(path: string): boolean {
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
 // hasn't sent any text deltas yet.
-const STREAM_VERBS = [
-  "Thinking",
-  "Processing",
-  "Analyzing",
-  "Working",
-  "Computing",
-  "Reasoning",
-] as const;
-
-// Format a Claude tool name for display in the status pill.
-// "Bash" → "Bash"
-// "mcp__github__create_pull_request" → "github · create pull request"
-function formatToolLabel(toolName: string): string {
-  const stripped = toolName.replace(/^mcp__/, "");
-  const [server, ...rest] = stripped.split("__");
-  if (rest.length === 0) return server;
-  const action = rest.join("__").replace(/_/g, " ");
-  return `${server} · ${action}`;
-}
-
 // Context-window sizes per model. Used for the usage % ring. The 1M
 // variant of Opus is a separate id; for everything else, 200k is the
 // shipping default.
@@ -2522,14 +2502,6 @@ function totalContextTokens(u: ClaudeUsage | undefined): number {
     (u.cache_creation_input_tokens ?? 0) +
     (u.cache_read_input_tokens ?? 0)
   );
-}
-
-function formatStreamElapsed(ms: number): string {
-  const sec = Math.floor(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}m ${s}s`;
 }
 
 interface SlashCommand {
@@ -3783,6 +3755,25 @@ function RunMessageBubble({
   const { user } = useContext(RunContext);
   const text = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
+  // session.status:failed transcripts events carry severity="error" and
+  // an optional action (e.g. "Re-sign-in to Codex"). The renderer
+  // surfaces both: data-severity drives error-bubble styling; action
+  // becomes a button next to the text.
+  const messageSeverity =
+    typeof (entry as Record<string, unknown>).severity === "string"
+      ? ((entry as Record<string, unknown>).severity as "info" | "error")
+      : undefined;
+  const messageAction = (entry as Record<string, unknown>).action as
+    | { label?: unknown; href?: unknown }
+    | undefined;
+  const messageActionLabel =
+    messageAction && typeof messageAction.label === "string" && messageAction.label.length > 0
+      ? messageAction.label
+      : undefined;
+  const messageActionHref =
+    messageAction && typeof messageAction.href === "string" && messageAction.href.length > 0
+      ? messageAction.href
+      : undefined;
   const isSkillAction = messageKind === "skill-action";
   const skillName = (entry as Record<string, unknown>).skillName;
   const skillSupplementalText =
@@ -3807,6 +3798,7 @@ function RunMessageBubble({
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
+      data-severity={variant === "system" ? messageSeverity : undefined}
       data-message-id={entry.id}
       data-highlight={highlighted ? "true" : undefined}
     >
@@ -3839,6 +3831,16 @@ function RunMessageBubble({
             </span>
           ) : (
             <RunMarkdown>{text}</RunMarkdown>
+          )}
+          {variant === "system" && messageActionLabel && messageActionHref && (
+            <a
+              className="run-msg-system-action"
+              href={messageActionHref}
+              target="_self"
+              rel="noopener"
+            >
+              {messageActionLabel}
+            </a>
           )}
         </div>
         <div
@@ -5896,13 +5898,8 @@ function ChatPane({
     onAutoRenameConsumed();
   }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
-  const [activeToolName, setActiveToolName] = useState<string | null>(null);
-  const activeToolNameRef = useRef<string | null>(null);
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
-  // Mirrors cloudcli's ClaudeStatus idle state: persists last status text
-  // after the run ends (amber/static pill) instead of vanishing.
-  const [lastStatusText, setLastStatusText] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
@@ -5956,11 +5953,6 @@ function ChatPane({
     : (effortOptions.some((opt) => opt.id === preferredEffortId) ? preferredEffortId : fallbackEffortId);
   const [selectedModelId] = useState<string>(initialModelId);
   const [selectedEffortId] = useState<string>(initialEffortId);
-  // Run timing — drives the streaming status pill's elapsed counter and the
-  // rotating action verb / animated dots. Both refresh on a single 250ms
-  // interval while running so the bar updates without a per-element timer.
-  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
-  const [now, setNow] = useState<number>(() => Date.now());
   // Context tokens used in the most recent assistant turn.
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
@@ -6245,18 +6237,14 @@ function ChatPane({
     if (sdkActive) {
       setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
       setRunning(true);
-      setRunStartedAt((startedAt) => startedAt ?? Date.now());
-      setNow(Date.now());
       return;
     }
 
     setRunning(false);
     if (projection.runStatus === "error") {
       setRunStatus("error");
-      setLastStatusText("Error");
     } else if (projection.runStatus === "stopped") {
       setRunStatus("done");
-      setLastStatusText("Stopped");
     } else {
       setRunStatus((prev) => (prev === "running" ? "done" : prev));
     }
@@ -6576,14 +6564,6 @@ function ChatPane({
     return () => window.clearInterval(interval);
   }, [session.id, session.status, visible]);
 
-  // Tick `now` every 250ms while running. 250 is the LCM-ish for the dot
-  // animation (500ms cycle) and the elapsed counter (1s display step) —
-  // one timer drives both without per-element setIntervals.
-  useEffect(() => {
-    if (!running) return;
-    const id = window.setInterval(() => setNow(Date.now()), 250);
-    return () => window.clearInterval(id);
-  }, [running]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -7721,9 +7701,7 @@ function ChatPane({
     if (isScheduleWakeupToolName(toolName ?? undefined)) {
       scheduledWakeupRef.current = true;
     }
-    activeToolNameRef.current = toolName;
     activeToolUseIdRef.current = toolName ? toolUseId : null;
-    setActiveToolName(toolName);
   }
 
   function openSlashCommandMenu() {
@@ -7774,7 +7752,6 @@ function ChatPane({
     try {
       await interruptSdkTurn(turnID);
     } catch (err) {
-      setLastStatusText("Stop failed");
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
@@ -7838,7 +7815,6 @@ function ChatPane({
     try {
       await stopBackgroundTask(entry);
     } catch (err) {
-      setLastStatusText("Stop failed");
       const id = nextEntryId("background-stop-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
@@ -8061,9 +8037,6 @@ function ChatPane({
     setRunStatus("running");
     setRunning(true);
     setActiveTool(null);
-    setLastStatusText(null);
-    setRunStartedAt(Date.now());
-    setNow(Date.now());
     // The form clears the textarea internally on submit but doesn't
     // always fire an input event in time, so my mirror lingers and the
     // X-clear button stays visible. Force the mirror clean.
@@ -8080,7 +8053,6 @@ function ChatPane({
         setRunning(false);
         setRunStatus("error");
         setSdkConnectionState("idle");
-        setLastStatusText("Error");
         const id = nextEntryId("sdk-submit-error");
         appendSdkRealtimeEntries(
           markLocalEntries(
@@ -8106,13 +8078,6 @@ function ChatPane({
     const durationMs = Date.now() - run.turnStart;
     updateSdkLastAssistantDuration(durationMs);
     if (terminal.status === "done") {
-      setLastStatusText(
-        scheduledWakeupRef.current
-          ? "Wakeup scheduled"
-          : activeToolNameRef.current
-            ? `Used ${formatToolLabel(activeToolNameRef.current)}`
-            : "Done",
-      );
       setRunStatus("done");
       // Turn-complete sound is fired by the App-level SSE consumer
       // on the always-on /api/sessions/events stream, NOT here. Per
@@ -8123,10 +8088,8 @@ function ChatPane({
       // listener covers this same transition for both visible and
       // background sessions.
     } else if (terminal.status === "stopped") {
-      setLastStatusText("Stopped");
       setRunStatus("done");
     } else {
-      setLastStatusText(activeToolNameRef.current ? `Used ${formatToolLabel(activeToolNameRef.current)}` : "Error");
       setRunStatus("error");
     }
     scheduledWakeupRef.current = false;
@@ -8436,20 +8399,6 @@ function ChatPane({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [activeTab, focusComposerTextarea, visible]);
 
-  // Streaming-pill computeds — only meaningful while running.
-  const elapsedMs = runStartedAt != null ? Math.max(0, now - runStartedAt) : 0;
-  const elapsedLabel = formatStreamElapsed(elapsedMs);
-  const dotPhase = Math.floor(now / 500) % 3; // 0..2
-  const dots = ".".repeat(dotPhase + 1);
-  const isStopping = runStatus === "stopping";
-  // When a tool call is in flight, show its name. Otherwise cycle the
-  // generic verbs every 3s (matches cloudcli's ClaudeStatus pattern).
-  const verbIndex = Math.floor(now / 3000) % STREAM_VERBS.length;
-  const verb = isStopping
-    ? "Stopping"
-    : activeToolName
-    ? `Using ${formatToolLabel(activeToolName)}`
-    : STREAM_VERBS[verbIndex];
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
 
   async function sendInputReply(
@@ -9057,47 +9006,20 @@ function ChatPane({
         )}
       </>)}
       floatingBetweenBodyAndComposer={(<>
-      {/* Streaming status pill — pinned between transcript and composer
-          while the run is in flight. Provider icon, rotating verb +
-          animated dots, elapsed counter, Stop button with ESC hint. */}
-      {activeTab === "chat" && (running || lastStatusText !== null) && (
+      {/* Connectivity banner — only renders when the SSE stream is degraded
+          (connecting / connection_lost / resyncing). Healthy stream → no
+          banner. Replaces the connection label that used to ride on the
+          run-status pill. Run status itself (streaming / stopping / error)
+          now lives on the composer's Submit↔Stop button, and per-turn
+          errors land as durable transcript meta lines via the reducer +
+          projection path. */}
+      {activeTab === "chat" && connectionLabel && (
         <div
-          className={`run-status-bar${!running ? " run-status-bar-idle" : ""}`}
+          className="run-connection-banner"
           role="status"
           aria-live="polite"
         >
-          <span className="run-status-icon">
-            <AgentAvatarIcon avatar={sessionAvatar} className="run-status-avatar" />
-          </span>
-          <span className="run-status-text">
-            <span className="run-status-verb">{running ? verb : lastStatusText}</span>
-            {running && (
-              <span className="run-status-dots" aria-hidden="true">
-                {dots}
-              </span>
-            )}
-          </span>
-          {connectionLabel && (
-            <span className="run-status-connection">{connectionLabel}</span>
-          )}
-          {running && (
-            <>
-              <span className="run-status-elapsed" title="elapsed">
-                {elapsedLabel}
-              </span>
-              <button
-                type="button"
-                className="run-status-stop"
-                onClick={cancelRun}
-                disabled={isStopping}
-                aria-label={isStopping ? "Stopping generation" : "Stop generating"}
-              >
-                <SquareIcon className="run-status-stop-icon" aria-hidden="true" />
-                <span>{isStopping ? "Stopping" : "Stop"}</span>
-                {!isStopping && <kbd className="run-status-kbd">ESC</kbd>}
-              </button>
-            </>
-          )}
+          <span className="run-connection-label">{connectionLabel}</span>
         </div>
       )}
 
@@ -9564,19 +9486,12 @@ function CliProcessTerminal({
 }
 
 function CliSession({ session, visible }: { session: Session; visible: boolean }) {
+  // The sidebar already shows the session title, mode badge, and status —
+  // a duplicate header inside the pane is wasted vertical space and made
+  // the un-sized provider icon render at intrinsic SVG dimensions
+  // (the giant cloud). Let the terminal fill the pane.
   return (
     <section className="run-panel">
-      <header className="run-header">
-        <div className="run-title-block">
-          <div className="run-title-row">
-            <span className="run-provider-mark">
-              <ProviderIcon provider={MODE_MENU_ICONS[session.mode]} className="run-provider-icon" />
-            </span>
-            <h2 className="run-title">{sessionDisplayName(session)}</h2>
-          </div>
-          <p className="run-subtitle">{MODE_LABELS[session.mode]}</p>
-        </div>
-      </header>
       <main className="run-main">
         <div className="run-shell">
           <CliProcessTerminal session={session} visible={visible} />
