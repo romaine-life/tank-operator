@@ -1629,7 +1629,7 @@ button:disabled {
   gap: var(--space-2);
   min-width: 0;
   padding-left: 62px;
-  padding-right: 68px;
+  padding-right: 28px;
 }
 
 .session-row-bottom {
@@ -1693,13 +1693,13 @@ button:disabled {
 .session-open {
   background: transparent;
   display: flex;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   align-items: center;
   text-align: left;
   padding: 1px var(--space-1);
   font-family: var(--font-primary);
   font-size: 13px;
-  min-width: 2rem;
+  min-width: 0;
   max-width: 100%;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -1709,7 +1709,7 @@ button:disabled {
 .sessions li.is-closing .session-open { color: var(--text-faint); }
 
 .session-id {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1717,21 +1717,16 @@ button:disabled {
 }
 
 .session-stats {
-  position: absolute;
-  right: 31px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--text-faint);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  min-width: 2.5rem;
+  min-width: 0;
+  flex-shrink: 0;
   pointer-events: none;
-  z-index: 2;
 }
 
 .session-stat {
@@ -1879,6 +1874,7 @@ button:disabled {
 .status-dot.status-agent-waiting,
 .status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 .status-dot.status-agent-needs-input { background: var(--status-agent-needs-input); }
+.status-dot.status-agent-stopping { background: var(--status-agent-working); }
 .status-dot.status-agent-error { background: var(--status-error-fg); }
 
 .mode {
@@ -1974,11 +1970,6 @@ button:disabled {
   flex-shrink: 0;
 }
 
-.session-activity-chip.is-running {
-  background: rgba(251, 191, 36, 0.14);
-  color: #fcd34d;
-}
-
 .session-activity-chip.is-input {
   background: rgba(251, 146, 60, 0.14);
   color: var(--status-agent-needs-input);
@@ -1989,14 +1980,10 @@ button:disabled {
   color: var(--status-error-fg);
 }
 
+.session-activity-chip.is-stopping,
 .session-activity-chip.is-stopped {
   background: var(--status-pending-bg);
   color: var(--status-pending-fg);
-}
-
-.session-activity-chip.is-unread {
-  background: var(--blue-bg);
-  color: var(--accent-fg);
 }
 
 .mode-claude_cli        { background: var(--mode-claude-cli-bg); color: var(--mode-claude-cli-fg); }
