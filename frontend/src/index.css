@@ -3055,6 +3055,10 @@ button:disabled {
 }
 .run-header-name-input:focus { border-color: var(--accent); }
 .run-header-name-input::placeholder { color: var(--text-faint); opacity: 1; }
+.run-header-name-input::selection {
+  background: rgba(79, 140, 247, 0.38);
+  color: var(--text-primary);
+}
 
 .run-header-sub {
   font-size: var(--text-xs);
