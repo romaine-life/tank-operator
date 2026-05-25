@@ -71,6 +71,35 @@ func (s *AvatarAssetStore) Create(ctx context.Context, asset avatarassets.NewAss
 	))
 }
 
+func (s *AvatarAssetStore) Ensure(ctx context.Context, asset avatarassets.NewAsset) error {
+	cropJSON, err := json.Marshal(asset.Crop)
+	if err != nil {
+		return err
+	}
+	const q = `
+		INSERT INTO avatar_assets (
+			id, kind, name, avatar_mime, avatar_bytes,
+			backing_mime, backing_bytes, crop, created_by, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+		ON CONFLICT (id) DO NOTHING
+	`
+	_, err = s.pool.Exec(
+		ctx,
+		q,
+		asset.ID,
+		asset.Kind,
+		asset.Name,
+		asset.AvatarMIME,
+		asset.AvatarBytes,
+		asset.BackingMIME,
+		asset.BackingBytes,
+		cropJSON,
+		asset.CreatedBy,
+	)
+	return err
+}
+
 func (s *AvatarAssetStore) GetImage(ctx context.Context, id, variant string) (avatarassets.Image, error) {
 	var q string
 	switch variant {

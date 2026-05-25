@@ -53,6 +53,7 @@ type Image struct {
 type Store interface {
 	List(ctx context.Context) ([]Metadata, error)
 	Create(ctx context.Context, asset NewAsset) (Metadata, error)
+	Ensure(ctx context.Context, asset NewAsset) error
 	GetImage(ctx context.Context, id, variant string) (Image, error)
 	Delete(ctx context.Context, id string) error
 }
@@ -98,6 +99,20 @@ func (s *MemoryStore) List(_ context.Context) ([]Metadata, error) {
 func (s *MemoryStore) Create(_ context.Context, asset NewAsset) (Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createLocked(asset), nil
+}
+
+func (s *MemoryStore) Ensure(_ context.Context, asset NewAsset) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.records[asset.ID]; ok {
+		return nil
+	}
+	s.createLocked(asset)
+	return nil
+}
+
+func (s *MemoryStore) createLocked(asset NewAsset) Metadata {
 	now := time.Now().UTC()
 	meta := Metadata{
 		ID:        asset.ID,
@@ -115,7 +130,7 @@ func (s *MemoryStore) Create(_ context.Context, asset NewAsset) (Metadata, error
 		backingMIME:  asset.BackingMIME,
 		backingBytes: append([]byte(nil), asset.BackingBytes...),
 	}
-	return meta, nil
+	return meta
 }
 
 func (s *MemoryStore) GetImage(_ context.Context, id, variant string) (Image, error) {

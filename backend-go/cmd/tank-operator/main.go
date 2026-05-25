@@ -205,6 +205,11 @@ func main() {
 	// 4. Init profile store.
 	profileStore := buildProfileStore(pgPool)
 	avatarStore := buildAvatarAssetStore(pgPool)
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		seedDefaultAvatarAssets(ctx, avatarStore, tankStaticRoots())
+		cancel()
+	}
 
 	sessionScope := envDefault("SESSION_REGISTRY_SCOPE", "default")
 

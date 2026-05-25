@@ -26,10 +26,24 @@ test("runtime avatars extend the agent pool without removing built-ins", () => {
   assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id), true);
 });
 
-test("built-in avatars use their icon as the backing image", () => {
+test("fallback agent avatars use their icon as the backing image", () => {
   for (const avatar of AGENT_AVATARS) {
     assert.equal(avatar.backingSrc, avatar.src);
   }
+});
+
+test("runtime avatars replace fallback avatars with the same id", () => {
+  const fallback = AGENT_AVATARS[0];
+  setRuntimeAvatarsForTest([{
+    id: fallback.id,
+    kind: "agent",
+    name: fallback.name,
+    src: "blob:seeded-agent",
+    backingSrc: "/api/avatars/seeded/backing",
+  }]);
+  const matching = getAgentAvatarPool().filter((avatar) => avatar.id === fallback.id);
+  assert.equal(matching.length, 1);
+  assert.equal(matching[0].src, "blob:seeded-agent");
 });
 
 test("system avatars are separate from agent avatars", () => {

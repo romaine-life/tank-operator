@@ -37,21 +37,21 @@ type AvatarCatalogEntry = {
 // put the dark subject in the circle and push bright sky / clothing out
 // of frame — anything brighter than the sidebar bg reads as a filled
 // tile at 42px instead of a floating token.
-function builtInAgentAvatar(id: string, name: string, src: string): AgentAvatar {
+function fallbackAgentAvatar(id: string, name: string, src: string): AgentAvatar {
   return { id, kind: "agent", name, src, backingSrc: src };
 }
 
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
-  builtInAgentAvatar("jp1-raptor", "Velociraptor", "/assets/avatars/jp1-raptor.png"),
+  fallbackAgentAvatar("jp1-raptor", "Velociraptor", "/assets/avatars/jp1-raptor.png"),
   // Humans
-  builtInAgentAvatar("jp1-grant", "Dr. Alan Grant", "/assets/avatars/jp1-grant.png"),
-  builtInAgentAvatar("jp1-sattler", "Dr. Ellie Sattler", "/assets/avatars/jp1-sattler.png"),
-  builtInAgentAvatar("jp1-malcolm", "Dr. Ian Malcolm", "/assets/avatars/jp1-malcolm.png"),
-  builtInAgentAvatar("jp1-hammond", "John Hammond", "/assets/avatars/jp1-hammond.png"),
-  builtInAgentAvatar("jp1-nedry", "Dennis Nedry", "/assets/avatars/jp1-nedry.png"),
-  builtInAgentAvatar("jp1-muldoon", "Robert Muldoon", "/assets/avatars/jp1-muldoon.png"),
-  builtInAgentAvatar("jp1-arnold", "Ray Arnold", "/assets/avatars/jp1-arnold.png"),
+  fallbackAgentAvatar("jp1-grant", "Dr. Alan Grant", "/assets/avatars/jp1-grant.png"),
+  fallbackAgentAvatar("jp1-sattler", "Dr. Ellie Sattler", "/assets/avatars/jp1-sattler.png"),
+  fallbackAgentAvatar("jp1-malcolm", "Dr. Ian Malcolm", "/assets/avatars/jp1-malcolm.png"),
+  fallbackAgentAvatar("jp1-hammond", "John Hammond", "/assets/avatars/jp1-hammond.png"),
+  fallbackAgentAvatar("jp1-nedry", "Dennis Nedry", "/assets/avatars/jp1-nedry.png"),
+  fallbackAgentAvatar("jp1-muldoon", "Robert Muldoon", "/assets/avatars/jp1-muldoon.png"),
+  fallbackAgentAvatar("jp1-arnold", "Ray Arnold", "/assets/avatars/jp1-arnold.png"),
 ];
 
 let runtimeAgentAvatars: AgentAvatar[] = [];
@@ -121,7 +121,11 @@ export function setRuntimeAvatarsForTest(avatars: AgentAvatar[]) {
 }
 
 export function getAgentAvatarPool(): AgentAvatar[] {
-  return [...AGENT_AVATARS, ...runtimeAgentAvatars];
+  const runtimeIDs = new Set(runtimeAgentAvatars.map((avatar) => avatar.id));
+  return [
+    ...AGENT_AVATARS.filter((avatar) => !runtimeIDs.has(avatar.id)),
+    ...runtimeAgentAvatars,
+  ];
 }
 
 function hashString(value: string): number {

@@ -660,10 +660,6 @@ button:disabled {
   padding-right: 1.6rem;
 }
 
-.admin-avatar-card-body-readonly {
-  padding-right: 0;
-}
-
 .admin-avatar-card-name,
 .admin-avatar-card-meta {
   min-width: 0;

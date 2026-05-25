@@ -20,7 +20,6 @@ import {
   cropToSourceRect,
 } from "./adminAvatarCrop";
 import { openAvatarPreview } from "./avatarPreview";
-import { AGENT_AVATARS } from "./sessionAvatars";
 
 type AdminUser = NonNullable<Awaited<ReturnType<typeof bootstrapAuth>>>;
 
@@ -465,38 +464,11 @@ export function AdminAvatarsPage() {
             {loadingEntries && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
           </div>
           {listError && <div className="admin-avatar-error">{listError}</div>}
-          <div className="admin-avatar-group">
-            <h3>built-in agent</h3>
-            <div className="admin-avatar-grid">
-              {AGENT_AVATARS.map((avatar) => (
-                <div className="admin-avatar-card" key={avatar.id}>
-                  <button
-                    type="button"
-                    className="admin-avatar-card-preview"
-                    onClick={(event) =>
-                      openAvatarPreview({
-                        name: avatar.name,
-                        avatarSrc: avatar.src,
-                        backingSrc: avatar.backingSrc ?? avatar.src,
-                        kind: avatar.kind,
-                      }, event)
-                    }
-                  >
-                    <img src={avatar.src} alt="" draggable={false} />
-                  </button>
-                  <div className="admin-avatar-card-body admin-avatar-card-body-readonly">
-                    <span className="admin-avatar-card-name">{avatar.name}</span>
-                    <span className="admin-avatar-card-meta">built-in</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
           {(["agent", "system"] as AvatarKind[]).map((group) => (
             <div className="admin-avatar-group" key={group}>
-              <h3>uploaded {group}</h3>
+              <h3>{group}</h3>
               {grouped[group].length === 0 ? (
-                <p className="admin-avatar-empty">No {group} avatars uploaded.</p>
+                <p className="admin-avatar-empty">No {group} avatars.</p>
               ) : (
                 <div className="admin-avatar-grid">
                   {grouped[group].map((entry) => (
