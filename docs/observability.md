@@ -67,10 +67,10 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_session_list_debug_capture_reports_total{result,reason}` —
   browser-reported session-list debug captures ingested through
   `POST /api/client-metrics/session-list-debug-capture`. The SPA sends
-  bounded `/_debug/session-list` snapshots only from explicit debug-page
-  capture/record controls. `reason` is a closed enum and unknown values
-  collapse to `other`; the metric never labels by owner, session id,
-  path, or raw user input.
+  bounded `/_debug/session-list` snapshots only from explicit
+  Settings -> Admin or debug-page capture/record controls. `reason` is
+  a closed enum and unknown values collapse to `other`; the metric never
+  labels by owner, session id, path, or raw user input.
 - `tank_admin_debug_session_list_capture_reads_total{result}` — admin
   reads of `GET /api/debug/session-list-captures`, the durable capture
   store for client-side session-list diagnostics. Captures are retained
@@ -289,9 +289,10 @@ server registry rows at ingest time.
 Standard workflow for "new session showed another session's name or
 avatar":
 
-1. Ask the user to open `/_debug/session-list` in the affected browser
-   and click `Record 2m` before reproducing, or click `Capture Now` while
-   the bad render is visible.
+1. Ask the user to open Settings -> Admin in the affected browser and
+   click `Record 2m` before reproducing, or click `Capture Now` while
+   the bad render is visible. The standalone `/_debug/session-list`
+   page exposes the same controls plus raw client/server row state.
 2. Read `GET /api/debug/session-list-captures?owner=<email>&limit=10`
    and inspect the latest captures. Recording samples share
    `detail.run_id`.

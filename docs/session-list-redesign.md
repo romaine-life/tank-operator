@@ -192,9 +192,11 @@ which is why every server-side wonk has produced a user-visible bug.
    `sessionStorage` and exposes `window.__tankSessionListDebug()` so a
    reload of the debug route can still inspect the latest row, store,
    render, and avatar transitions from the current tab.
-6. **Explicit durable diagnostic capture**: `/_debug/session-list`
-   exposes `Capture Now` and `Record 2m` controls. The affected browser
-   posts bounded debug-ring snapshots to
+6. **Explicit durable diagnostic capture**: Settings -> Admin exposes
+   `Capture Now` and `Record 2m` controls in-page, and
+   `/_debug/session-list` exposes the same controls alongside raw
+   client/server row state. The affected browser posts bounded
+   debug-ring snapshots to
    `POST /api/client-metrics/session-list-debug-capture`; recording
    samples share a `detail.run_id`. The server stores each client
    snapshot together with the current registry rows in
@@ -447,10 +449,11 @@ standard:
   `tank_session_controller_reconcile_failure_total` with an alert.
 - **Observability**: `tank_session_row_writes_total{source}`,
   `tank_session_controller_reconcile_*`, `/api/debug/session-list-state`,
-  `/_debug/session-list`, and the durable explicit capture pair
-  `POST /api/client-metrics/session-list-debug-capture` /
-  `GET /api/debug/session-list-captures`. The user can verify any
-  sidebar bug without browser devtools (per the standing constraint —
+  `/_debug/session-list`, Settings -> Admin session-list diagnostic
+  controls, and the durable explicit capture pair `POST
+  /api/client-metrics/session-list-debug-capture` /
+  `GET /api/debug/session-list-captures`. The user can verify any sidebar
+  bug without browser devtools (per the standing constraint —
   feedback_no_devtools_build_surfaces_instead).
 - **Tests cover the contract**: SessionStore behavior, controller
   reconcile loop, row-update wire shape, snapshot cursor semantics.

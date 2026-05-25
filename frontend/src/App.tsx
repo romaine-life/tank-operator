@@ -19,6 +19,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -6352,6 +6353,15 @@ function RunSettingsPanel({
                 )}
               </button>
             )}
+            <div className="run-settings-diagnostics">
+              <div className="run-settings-diagnostics-head">
+                <span className="run-settings-link-label">
+                  <ClipboardListIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>Session-list diagnostics</span>
+                </span>
+              </div>
+              <SessionListDebugCaptureControls source="SettingsAdmin" />
+            </div>
           </section>
         )
       ) : (

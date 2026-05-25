@@ -14,6 +14,7 @@ const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTeleme
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
+const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -248,7 +249,9 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugSource.includes(["created", "session", "name"].join("-") + "-mutated"), false);
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
-  assert.equal(sessionListDebugPageSource.includes("Record 2m"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("Record 2m"), true);
+  assert.equal(appSource.includes("Session-list diagnostics"), true);
+  assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {
