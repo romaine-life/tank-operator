@@ -8,6 +8,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
@@ -208,6 +209,49 @@ func (s *appServer) handleInternalDeleteSession(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleInternalRetireSessionScope hides every visible session row in a
+// non-production session scope. Glimmung calls this while returning a test
+// slot because it owns the K8s runtime teardown and therefore does not go
+// through Manager.Delete for each session pod.
+func (s *appServer) handleInternalRetireSessionScope(w http.ResponseWriter, r *http.Request) {
+	user := s.requireSessionScopeRetireCaller(w, r)
+	if user == nil {
+		return
+	}
+	scope := normalizeSessionScope(r.PathValue("session_scope"))
+	if scope == prodSessionScope {
+		writeError(w, http.StatusBadRequest, "refusing to retire production session scope")
+		return
+	}
+	registry := s.sessionRegistryForScope(scope)
+	if registry == nil {
+		writeError(w, http.StatusServiceUnavailable, "session registry not configured")
+		return
+	}
+
+	retired, err := registry.MarkScopeRetired(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	rowPublisher := &sessioncontroller.RowPublisher{
+		Fetcher:   registry,
+		Publisher: s.sessionBus,
+		Scope:     scope,
+	}
+	for _, row := range retired {
+		rowPublisher.PublishCurrentRow(r.Context(), row.Email, row.ID)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"session_scope":  scope,
+		"retired_count":  len(retired),
+		"requested_role": user.Role,
+	})
 }
 
 // handleInternalPatchSession updates a session's name.
@@ -611,4 +655,28 @@ func (s *appServer) requireServicePrincipal(w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	return &user
+}
+
+func (s *appServer) requireSessionScopeRetireCaller(w http.ResponseWriter, r *http.Request) *auth.User {
+	if s.verifier == nil {
+		writeError(w, http.StatusInternalServerError, "JWT verifier not configured")
+		return nil
+	}
+	user, err := s.verifier.CurrentUser(r)
+	if err != nil {
+		writeError(w, auth.ErrorStatus(err), err.Error())
+		return nil
+	}
+	if user.Role == auth.RoleService {
+		if user.ActorEmail == "" {
+			writeError(w, http.StatusUnauthorized, "service-role token missing actor_email")
+			return nil
+		}
+		return &user
+	}
+	if hasAdminPower(user) {
+		return &user
+	}
+	writeError(w, http.StatusForbidden, "route requires role=service or admin")
+	return nil
 }

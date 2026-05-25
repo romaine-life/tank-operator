@@ -138,6 +138,40 @@ func TestHandleInternalGitHubInstallationFlagsHost(t *testing.T) {
 	}
 }
 
+func TestHandleInternalRetireSessionScopeRejectsDefaultScope(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := auth.NewVerifier(jwtKey)
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"name":        "Service: tank pod-session-x",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{verifier: verifier}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/session-scopes/default/retire", nil)
+	req.SetPathValue("session_scope", "default")
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalRetireSessionScope(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "production session scope") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func TestHandleInternalGitHubInstallationReturnsNullForUnknownEmail(t *testing.T) {
 	t.Setenv("HOST_EMAIL", "host@example.test")
 	jwtKey, err := auth.NewInMemoryJWT("svc-kid")

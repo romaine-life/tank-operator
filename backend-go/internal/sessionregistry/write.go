@@ -509,6 +509,45 @@ func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error 
 	return err
 }
 
+// MarkScopeRetired hides every visible session row in this store's scope and
+// returns the affected owner/id pairs so callers can publish row tombstones.
+// It is used by test-slot teardown, where Glimmung removes the K8s runtime
+// directly instead of going through Manager.Delete for each session.
+func (s *Store) MarkScopeRetired(ctx context.Context) ([]RetiredSession, error) {
+	const q = `
+		UPDATE sessions
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE session_scope = $1
+		  AND visible = true
+		RETURNING email, session_id
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var retired []RetiredSession
+	for rows.Next() {
+		var row RetiredSession
+		if err := rows.Scan(&row.Email, &row.ID); err != nil {
+			return nil, err
+		}
+		row.Email = strings.ToLower(strings.TrimSpace(row.Email))
+		row.ID = strings.TrimSpace(row.ID)
+		if row.Email == "" || row.ID == "" {
+			continue
+		}
+		retired = append(retired, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return retired, nil
+}
+
 func parseTimestamp(s string) time.Time {
 	s = strings.TrimSpace(s)
 	if s == "" {
