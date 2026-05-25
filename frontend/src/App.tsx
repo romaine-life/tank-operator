@@ -396,6 +396,12 @@ interface Session {
   sidebar_position?: number;
 }
 
+interface AutoRenameSessionRequest {
+  sessionId: string;
+  initialValue?: string;
+  clearIfUnchanged?: string;
+}
+
 interface TestState {
   active?: boolean;
   slot_index?: number | null;
@@ -6396,7 +6402,7 @@ function ChatPane({
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
-  autoRename: boolean;
+  autoRename: AutoRenameSessionRequest | null;
   onAutoRenameConsumed: () => void;
   autoFocusComposer: boolean;
   onAutoFocusComposerConsumed: () => void;
@@ -6439,17 +6445,22 @@ function ChatPane({
   const [editingTitle, setEditingTitle] = useState(false);
   const [editingTitleValue, setEditingTitleValue] = useState("");
   const editingTitleFromFallbackRef = useRef(false);
+  const editingTitleClearIfUnchangedRef = useRef<string | null>(null);
   const editingTitleClosingRef = useRef(false);
 
-  // Parent-driven auto-rename. When App sets autoRenameSessionId to this
+  // Parent-driven auto-rename. When App sets autoRenameSession to this
   // session's id after F2, the chat-pane title input opens with the
   // current name pre-loaded. We ack via onAutoRenameConsumed so the signal
   // is single-shot and re-runs cleanly on a subsequent F2.
   useEffect(() => {
     if (!autoRename || readOnly) return;
-    editingTitleFromFallbackRef.current = session.name == null;
+    const hasExplicitInitialValue = autoRename.initialValue !== undefined;
+    editingTitleFromFallbackRef.current = !hasExplicitInitialValue && session.name == null;
+    editingTitleClearIfUnchangedRef.current = autoRename.clearIfUnchanged?.trim() || null;
     editingTitleClosingRef.current = false;
-    setEditingTitleValue(sessionDisplayName(session));
+    setEditingTitleValue(
+      hasExplicitInitialValue ? autoRename.initialValue! : sessionDisplayName(session),
+    );
     setEditingTitle(true);
     onAutoRenameConsumed();
   }, [autoRename, readOnly, session.id, session.name, session.pod_name, onAutoRenameConsumed]);
@@ -9130,6 +9141,16 @@ function ChatPane({
       return;
     }
     requestAnimationFrame(() => {
+      const latestActiveElement = document.activeElement;
+      if (
+        latestActiveElement &&
+        latestActiveElement !== document.body &&
+        latestActiveElement !== document.documentElement &&
+        isTextEntryShortcutTarget(latestActiveElement)
+      ) {
+        onAutoFocusComposerConsumed();
+        return;
+      }
       if (focusComposerTextarea()) onAutoFocusComposerConsumed();
     });
   }, [
@@ -9192,6 +9213,7 @@ function ChatPane({
       }
       const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
       if (textarea && e.target === textarea) return;
+      if (isTextEntryShortcutTarget(e.target)) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -9257,6 +9279,7 @@ function ChatPane({
   };
   const beginEditingTitle = () => {
     editingTitleFromFallbackRef.current = session.name == null;
+    editingTitleClearIfUnchangedRef.current = null;
     editingTitleClosingRef.current = false;
     setEditingTitleValue(sessionDisplayName(session));
     setEditingTitle(true);
@@ -9264,6 +9287,7 @@ function ChatPane({
   const cancelEditingTitle = () => {
     editingTitleClosingRef.current = true;
     editingTitleFromFallbackRef.current = false;
+    editingTitleClearIfUnchangedRef.current = null;
     setEditingTitle(false);
   };
   const commitEditingTitle = () => {
@@ -9271,13 +9295,16 @@ function ChatPane({
     editingTitleClosingRef.current = true;
     const trimmed = editingTitleValue.trim();
     const fallbackName = defaultSessionName(session);
+    const clearIfUnchanged = editingTitleClearIfUnchangedRef.current;
     const nextName =
       trimmed === "" ||
-      (editingTitleFromFallbackRef.current && trimmed === fallbackName)
+      (editingTitleFromFallbackRef.current && trimmed === fallbackName) ||
+      (clearIfUnchanged != null && trimmed === clearIfUnchanged)
         ? null
         : trimmed;
     onRename(session.id, nextName);
     editingTitleFromFallbackRef.current = false;
+    editingTitleClearIfUnchangedRef.current = null;
     setEditingTitle(false);
   };
   const retryTimelineBootstrap = () => {
@@ -10566,7 +10593,9 @@ export function App() {
     useState<RunComposerMode>("default");
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
+  const homeSessionNameRef = useRef("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeEditingTitleRef = useRef(false);
   const homeEditingDefaultTitleRef = useRef(false);
   const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
@@ -10669,7 +10698,8 @@ export function App() {
   // rename input on its next render. Used by the F2 keyboard shortcut and
   // cleared by ChatPane via onAutoRenameConsumed once it has applied the
   // signal.
-  const [autoRenameSessionId, setAutoRenameSessionId] = useState<string | null>(null);
+  const [autoRenameSession, setAutoRenameSession] =
+    useState<AutoRenameSessionRequest | null>(null);
   // Freshly-created chat sessions should land in the composer once the
   // session is ready. The title can still be renamed explicitly via F2.
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
@@ -11527,7 +11557,7 @@ export function App() {
       // active (so the header is mounted) and ask it to enter edit mode.
       activate(session.id);
       setAutoFocusComposerSessionId(null);
-      setAutoRenameSessionId(session.id);
+      setAutoRenameSession({ sessionId: session.id });
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
     return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
@@ -11650,7 +11680,6 @@ export function App() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
-    const requestedName = homeSessionName.trim();
     const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
     const seedPrompt = composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
     const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode) ? [...homeAttachments] : [];
@@ -11699,6 +11728,23 @@ export function App() {
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       let created: Session = normalizeSession(await res.json());
+      const homeTitleDraft = homeSessionNameRef.current;
+      const homeTitleDraftTrimmed = homeTitleDraft.trim();
+      const homeDefaultTitleUnchanged =
+        homeEditingDefaultTitleRef.current &&
+        (homeTitleDraftTrimmed === "" || homeTitleDraftTrimmed === HOME_DEFAULT_SESSION_TITLE);
+      const transferHomeTitleEdit = homeEditingTitleRef.current && CHAT_MODES.has(created.mode);
+      const transferredTitleRequest: AutoRenameSessionRequest | null = transferHomeTitleEdit
+        ? {
+            sessionId: created.id,
+            initialValue: homeTitleDraft,
+            ...(homeEditingDefaultTitleRef.current
+              ? { clearIfUnchanged: HOME_DEFAULT_SESSION_TITLE }
+              : {}),
+          }
+        : null;
+      const requestedName =
+        transferHomeTitleEdit || homeDefaultTitleUnchanged ? "" : homeTitleDraftTrimmed;
       let requestedNameApplied = false;
       if (requestedName) {
         try {
@@ -11731,12 +11777,18 @@ export function App() {
         return [created, ...prev];
       });
       activate(created.id);
-      if (CHAT_MODES.has(created.mode)) {
+      if (transferredTitleRequest) {
+        setAutoFocusComposerSessionId(null);
+        setAutoRenameSession(transferredTitleRequest);
+        setHomeSessionNameDraft("");
+        setHomeTitleEditing(false);
+        homeEditingDefaultTitleRef.current = false;
+      } else if (CHAT_MODES.has(created.mode)) {
         setAutoFocusComposerSessionId(created.id);
       }
       if (requestedNameApplied) {
-        setHomeSessionName("");
-        setHomeEditingTitle(false);
+        setHomeSessionNameDraft("");
+        setHomeTitleEditing(false);
       }
       if (seedInitialTurnAtCreate && requestedInitialSkillName === "test") {
         void markCreatedSessionTestState(created.id).catch((e) => {
@@ -11753,7 +11805,13 @@ export function App() {
       if (seedTurnRequested && !seedTurnSubmittedAtCreate) {
         try {
           const readySession = await waitForSessionReady(created.id);
-          setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === created.id
+                ? { ...readySession, name: readySession.name ?? s.name }
+                : s,
+            ),
+          );
           if (requestedInitialSkillName === "test") {
             void markCreatedSessionTestState(created.id).catch((e) => {
               setError(String(e));
@@ -11953,25 +12011,35 @@ export function App() {
     writeDefaultSessionMode(mode);
   }
 
+  function setHomeSessionNameDraft(value: string) {
+    homeSessionNameRef.current = value;
+    setHomeSessionName(value);
+  }
+
+  function setHomeTitleEditing(value: boolean) {
+    homeEditingTitleRef.current = value;
+    setHomeEditingTitle(value);
+  }
+
   function beginHomeTitleEdit() {
-    const usingDefaultTitle = homeSessionName.trim() === "";
+    const usingDefaultTitle = homeSessionNameRef.current.trim() === "";
     homeEditingDefaultTitleRef.current = usingDefaultTitle;
     if (usingDefaultTitle) {
-      setHomeSessionName(HOME_DEFAULT_SESSION_TITLE);
+      setHomeSessionNameDraft(HOME_DEFAULT_SESSION_TITLE);
     }
-    setHomeEditingTitle(true);
+    setHomeTitleEditing(true);
   }
 
   function finishHomeTitleEdit() {
-    const trimmed = homeSessionName.trim();
+    const trimmed = homeSessionNameRef.current.trim();
     if (
       homeEditingDefaultTitleRef.current &&
       (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)
     ) {
-      setHomeSessionName("");
+      setHomeSessionNameDraft("");
     }
     homeEditingDefaultTitleRef.current = false;
-    setHomeEditingTitle(false);
+    setHomeTitleEditing(false);
   }
 
   async function renameSession(id: string, nextName: string | null) {
@@ -12014,7 +12082,7 @@ export function App() {
       next.delete(id);
       return next;
     });
-    setAutoRenameSessionId((prev) => (prev === id ? null : prev));
+    setAutoRenameSession((prev) => (prev?.sessionId === id ? null : prev));
     setActive((prev) => {
       if (prev !== id) return prev;
       const idx = sessions.findIndex((s) => s.id === id);
@@ -12309,7 +12377,7 @@ export function App() {
                   value={homeSessionName}
                   autoFocus
                   onFocus={selectTitleInputText}
-                  onChange={(e) => setHomeSessionName(e.target.value)}
+                  onChange={(e) => setHomeSessionNameDraft(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -12839,8 +12907,12 @@ export function App() {
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
-                      autoRename={autoRenameSessionId === s.id}
-                      onAutoRenameConsumed={() => setAutoRenameSessionId(null)}
+                      autoRename={
+                        autoRenameSession?.sessionId === s.id ? autoRenameSession : null
+                      }
+                      onAutoRenameConsumed={() =>
+                        setAutoRenameSession((prev) => (prev?.sessionId === s.id ? null : prev))
+                      }
                       autoFocusComposer={autoFocusComposerSessionId === s.id}
                       onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
                       primeTurnCompleteSound={primeTurnCompleteSound}

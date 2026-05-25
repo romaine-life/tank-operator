@@ -340,7 +340,15 @@ test("quality gap policy docs are bundled into session config", () => {
 test("fresh chat sessions focus the composer instead of the rename field", () => {
   assert.equal(appSource.includes("setAutoRenameSessionId(created.id)"), false);
   assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
-  assert.equal(appSource.includes("setAutoRenameSessionId(session.id)"), true);
+  assert.equal(appSource.includes("setAutoRenameSession({ sessionId: session.id })"), true);
+});
+
+test("in-flight home title edits are transferred to the created session", () => {
+  assert.equal(appSource.includes("transferHomeTitleEdit"), true);
+  assert.equal(appSource.includes("homeSessionNameRef.current"), true);
+  assert.equal(appSource.includes("clearIfUnchanged: HOME_DEFAULT_SESSION_TITLE"), true);
+  assert.equal(appSource.includes("setAutoFocusComposerSessionId(null);"), true);
+  assert.equal(appSource.includes("latestActiveElement"), true);
 });
 
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
