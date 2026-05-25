@@ -25,10 +25,11 @@ func (r *recordingStore) Upsert(_ context.Context, event map[string]any) error {
 }
 
 type recordingMetrics struct {
-	schemaRejected      int
-	transientFailure    int
-	turnFailureRecorded []turnFailureRecord
-	turnLifecycle       map[string]int
+	schemaRejected       int
+	transientFailure     int
+	turnFailureRecorded  []turnFailureRecord
+	turnLifecycle        map[string]int
+	missingTerminalNonce []missingTerminalNonceRecord
 }
 
 type turnFailureRecord struct {
@@ -46,6 +47,17 @@ func (m *recordingMetrics) RecordTurnLifecyclePersisted(eventType string) {
 		m.turnLifecycle = map[string]int{}
 	}
 	m.turnLifecycle[eventType]++
+}
+func (m *recordingMetrics) RecordTurnTerminalMissingClientNonce(source string, eventType string) {
+	m.missingTerminalNonce = append(m.missingTerminalNonce, missingTerminalNonceRecord{
+		source:    source,
+		eventType: eventType,
+	})
+}
+
+type missingTerminalNonceRecord struct {
+	source    string
+	eventType string
 }
 
 type stubMsg struct {
@@ -381,6 +393,75 @@ func TestPersistMessageOmitsNonLifecycleFromLifecycleCounter(t *testing.T) {
 				t.Fatalf("lifecycle counter has %d entries after non-lifecycle event %q; want 0", len(metrics.turnLifecycle), eventType)
 			}
 		})
+	}
+}
+
+func TestPersistMessageRecordsTerminalMissingClientNonce(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		eventType string
+		wantCount int
+	}{
+		{name: "completed missing nonce", eventType: "turn.completed", wantCount: 1},
+		{name: "failed missing nonce", eventType: "turn.failed", wantCount: 1},
+		{name: "interrupted missing nonce", eventType: "turn.interrupted", wantCount: 1},
+		{name: "submitted missing nonce is not terminal", eventType: "turn.submitted", wantCount: 0},
+		{name: "started missing nonce is not terminal", eventType: "turn.started", wantCount: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := &Bus{scope: "default"}
+			store := &recordingStore{}
+			metrics := &recordingMetrics{}
+			raw, _ := json.Marshal(map[string]any{
+				"event_id":   "evt-" + tc.eventType,
+				"session_id": "63",
+				"actor":      "runner",
+				"source":     "hermes",
+				"type":       tc.eventType,
+				"created_at": "2026-05-12T00:00:00.000Z",
+				"order_key":  "order-" + tc.eventType,
+				"visibility": "durable",
+				"turn_id":    "turn-1",
+			})
+			msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
+
+			bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+			if got := len(metrics.missingTerminalNonce); got != tc.wantCount {
+				t.Fatalf("missing terminal nonce records = %d, want %d", got, tc.wantCount)
+			}
+			if tc.wantCount == 1 {
+				record := metrics.missingTerminalNonce[0]
+				if record.source != "hermes" || record.eventType != tc.eventType {
+					t.Fatalf("missing terminal nonce record = %#v, want source=hermes eventType=%s", record, tc.eventType)
+				}
+			}
+		})
+	}
+}
+
+func TestPersistMessageDoesNotRecordTerminalMissingClientNonceWhenPresent(t *testing.T) {
+	bus := &Bus{scope: "default"}
+	store := &recordingStore{}
+	metrics := &recordingMetrics{}
+	raw, _ := json.Marshal(map[string]any{
+		"event_id":     "evt-completed",
+		"session_id":   "63",
+		"actor":        "runner",
+		"source":       "hermes",
+		"type":         "turn.completed",
+		"created_at":   "2026-05-12T00:00:00.000Z",
+		"order_key":    "order-completed",
+		"visibility":   "durable",
+		"turn_id":      "turn-1",
+		"client_nonce": "client-1",
+	})
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
+
+	bus.handlePersistMessage(context.Background(), store, metrics, msg)
+
+	if got := len(metrics.missingTerminalNonce); got != 0 {
+		t.Fatalf("missing terminal nonce records = %d, want 0", got)
 	}
 }
 

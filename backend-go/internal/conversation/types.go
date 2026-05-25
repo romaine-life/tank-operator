@@ -465,15 +465,25 @@ func validVisibility(visibility Visibility) bool {
 // before incrementing tank_turn_lifecycle_total. See
 // docs/features/agent-runners/contract.md → Observability.
 func IsTurnLifecycleEvent(eventType EventType) bool {
+	if eventType == EventTurnSubmitted {
+		return true
+	}
+	return IsTurnTerminalEvent(eventType)
+}
+
+// IsTurnTerminalEvent reports whether eventType closes a turn. These are
+// the events that must correlate back to the submitted client_nonce for the
+// browser's local run latch and queued-follow-up release logic.
+func IsTurnTerminalEvent(eventType EventType) bool {
 	switch eventType {
-	case EventTurnSubmitted,
-		EventTurnCompleted,
+	case EventTurnCompleted,
 		EventTurnFailed,
 		EventTurnCommandFailed,
 		EventTurnInterrupted:
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 func validEventType(eventType EventType) bool {

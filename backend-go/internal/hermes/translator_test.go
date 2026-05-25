@@ -66,6 +66,8 @@ func TestTranslator_HappyPath_TextOnlyResponse(t *testing.T) {
 	}
 	if e := eventOfType(out, string(conversation.EventTurnCompleted)); e == nil {
 		t.Errorf("missing turn.completed")
+	} else if got, _ := e["client_nonce"].(string); got != "n-deadbeef0000000000000000000000" {
+		t.Errorf("turn.completed client_nonce = %q, want translator config nonce", got)
 	}
 	itemDone := eventOfType(out, string(conversation.EventItemCompleted))
 	if itemDone == nil {
@@ -217,6 +219,9 @@ func TestTranslator_ResponseFailed_EmitsTurnFailed(t *testing.T) {
 	if failed == nil {
 		t.Fatalf("missing turn.failed")
 	}
+	if got, _ := failed["client_nonce"].(string); got != "n-deadbeef0000000000000000000000" {
+		t.Errorf("turn.failed client_nonce = %q, want translator config nonce", got)
+	}
 	if got := tr.Terminal(); got != "failed" {
 		t.Errorf("Terminal() = %q, want failed", got)
 	}
@@ -234,6 +239,8 @@ func TestTranslator_ResponseCancelled_EmitsTurnInterrupted(t *testing.T) {
 	})
 	if e := eventOfType(out, string(conversation.EventTurnInterrupted)); e == nil {
 		t.Fatalf("missing turn.interrupted")
+	} else if got, _ := e["client_nonce"].(string); got != "n-deadbeef0000000000000000000000" {
+		t.Errorf("turn.interrupted client_nonce = %q, want translator config nonce", got)
 	}
 	if got := tr.Terminal(); got != "interrupted" {
 		t.Errorf("Terminal() = %q, want interrupted", got)

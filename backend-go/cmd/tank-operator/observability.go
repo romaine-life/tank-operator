@@ -247,6 +247,21 @@ var (
 		[]string{"event_type"},
 	)
 
+	// turnTerminalMissingClientNonceTotal catches a producer contract
+	// violation that the lifecycle counter cannot: terminal rows are
+	// present, so the server-side turn is not silently stranded, but an
+	// already-open browser tab cannot correlate the terminal back to its
+	// local currentRunRef by client_nonce. That leaves follow-up submits
+	// queued until refresh. Labels are bounded by the closed source enum
+	// and the four terminal event types.
+	turnTerminalMissingClientNonceTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_turn_terminal_missing_client_nonce_total",
+			Help: "Durable turn terminal events persisted without client_nonce, partitioned by bounded producer source and terminal event type.",
+		},
+		[]string{"source", "event_type"},
+	)
+
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
 	// persisted dominates; persist_failed and publish_failed near zero.
@@ -1020,6 +1035,10 @@ func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
 	recordTurnLifecyclePersisted(eventType)
 }
 
+func (promPersisterMetrics) RecordTurnTerminalMissingClientNonce(source string, eventType string) {
+	recordTurnTerminalMissingClientNonce(source, eventType)
+}
+
 // recordTurnLifecyclePersisted bumps tank_turn_lifecycle_total for the
 // five lifecycle event types that bound a turn. Callers MUST filter
 // via conversation.IsTurnLifecycleEvent before invoking this helper —
@@ -1030,6 +1049,13 @@ func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
 // session_events and applies the same call-site filter.
 func recordTurnLifecyclePersisted(eventType string) {
 	turnLifecycleTotal.WithLabelValues(eventType).Inc()
+}
+
+func recordTurnTerminalMissingClientNonce(source string, eventType string) {
+	turnTerminalMissingClientNonceTotal.WithLabelValues(
+		sessionEventSourceLabel(source),
+		sessionEventTypeLabel(eventType),
+	).Inc()
 }
 
 // promProviderHealthMetrics satisfies providerhealth.Metrics so the
@@ -1133,6 +1159,15 @@ func sessionEventTypeLabel(raw string) string {
 		return raw
 	default:
 		return "other"
+	}
+}
+
+func sessionEventSourceLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "tank", "claude", "codex", "hermes":
+		return raw
+	default:
+		return "unknown"
 	}
 }
 
