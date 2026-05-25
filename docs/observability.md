@@ -106,6 +106,38 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
 
+## Scripted access via Grafana
+
+Grafana's `[auth.jwt]` block validates the `auth.romaine.life` JWKS,
+so any auth.romaine.life bearer token (including the admin bot-token
+from `CLAUDE.md` → "Break-glass CLI auth") works directly as an
+`Authorization` header on Grafana's REST API. The datasource proxy
+exposes the kube-prometheus-stack's Prometheus and Alertmanager
+without `kubectl port-forward`:
+
+```
+# firing alerts (the canonical first stop in diagnostic-discipline.md step 3)
+curl -H "Authorization: Bearer $JWT" \
+  https://grafana.romaine.life/api/datasources/proxy/uid/prometheus/api/v1/alerts
+
+# arbitrary PromQL
+curl -H "Authorization: Bearer $JWT" \
+  "https://grafana.romaine.life/api/datasources/proxy/uid/prometheus/api/v1/query?query=tank_session_event_client_events_total"
+
+# Alertmanager-side view (silences, groupings)
+curl -H "Authorization: Bearer $JWT" \
+  https://grafana.romaine.life/api/datasources/proxy/uid/alertmanager/api/v2/alerts
+```
+
+This is the default scripted-access path; `kubectl exec` +
+`wget /metrics` is reserved for the operator-only failure mode where
+Grafana itself is down, per
+`features/observability/contract.md → "Migration Rules"`. The single
+auth surface means an agent investigating a runtime bug does not need
+a separate Grafana SA token, KV secret, or device-flow handshake —
+the same bot token that curls `tank.romaine.life/api/sessions/...`
+curls `grafana.romaine.life/api/datasources/...`.
+
 ## Per-stream debug surface
 
 `GET /api/debug/session-event-streams` (admin-only) returns the
