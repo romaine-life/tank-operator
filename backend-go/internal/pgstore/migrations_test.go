@@ -54,3 +54,19 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 		t.Fatal("session status transcript backfill must not depend on the retired lifecycle ledger")
 	}
 }
+
+func TestMigrationsPrepareAvatarBlobStorage(t *testing.T) {
+	migrations := strings.Join(schemaMigrations, "\n")
+	for _, want := range []string{
+		"avatar_blob_key text",
+		"backing_blob_key text",
+		"ADD COLUMN IF NOT EXISTS avatar_blob_key",
+		"ADD COLUMN IF NOT EXISTS backing_blob_key",
+		"ALTER COLUMN avatar_bytes DROP NOT NULL",
+		"ALTER COLUMN backing_bytes DROP NOT NULL",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+}

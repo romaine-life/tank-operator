@@ -133,7 +133,14 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
-import { AgentAvatarIcon, getSessionAvatar, type AgentAvatar } from "./sessionAvatars";
+import {
+  AgentAvatarIcon,
+  getSessionAvatar,
+  getSystemAvatar,
+  loadRuntimeAvatarCatalog,
+  type AgentAvatar,
+} from "./sessionAvatars";
+import { openAvatarPreview } from "./avatarPreview";
 import {
   linkWorkspacePathsInMarkdown,
   normalizeWorkspacePathTarget,
@@ -1556,13 +1563,48 @@ function initials(user: SessionUser): string {
   return (first + second).toUpperCase().slice(0, 2);
 }
 
+function largerProfileAvatarURL(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (url.hostname.endsWith("gravatar.com")) {
+      url.searchParams.set("s", "512");
+    }
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 function Avatar({ user }: { user: SessionUser }) {
   const [failed, setFailed] = useState(false);
   if (failed || !user.avatar_url) {
     return <span className="avatar" aria-hidden="true">{initials(user)}</span>;
   }
+  const openPreview = (
+    event:
+      | ReactMouseEvent<HTMLSpanElement>
+      | ReactKeyboardEvent<HTMLSpanElement>,
+  ) => {
+    openAvatarPreview(
+      {
+        name: user.name || user.email,
+        avatarSrc: largerProfileAvatarURL(user.avatar_url),
+        kind: "personal",
+      },
+      event,
+    );
+  };
   return (
-    <span className="avatar avatar-image" aria-hidden="true">
+    <span
+      className="avatar avatar-image"
+      role="button"
+      tabIndex={0}
+      aria-label={`Preview ${user.name || user.email}`}
+      onClick={openPreview}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") openPreview(event);
+      }}
+    >
       <img src={user.avatar_url} alt="" onError={() => setFailed(true)} />
     </span>
   );
@@ -3836,6 +3878,7 @@ const RunContext = createContext<{
 function RunMessageBubble({
   entry,
   avatar,
+  systemAvatar,
   sessionId,
   highlighted,
   showTimestamps,
@@ -3846,6 +3889,7 @@ function RunMessageBubble({
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
+  systemAvatar: AgentAvatar | null;
   sessionId: string;
   highlighted: boolean;
   showTimestamps: boolean;
@@ -3913,8 +3957,12 @@ function RunMessageBubble({
         </span>
       )}
       {variant === "system" && (
-        <span className="run-msg-system-avatar" aria-hidden="true">
-          <BotIcon size={16} strokeWidth={2.1} />
+        <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+          {systemAvatar ? (
+            <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+          ) : (
+            <BotIcon size={16} strokeWidth={2.1} />
+          )}
         </span>
       )}
       <div
@@ -5207,6 +5255,7 @@ function RunTurnActivityGroup({
   open,
   onOpenChange,
   avatar,
+  systemAvatar,
   sessionId,
   showThinking,
   autoExpandTools,
@@ -5224,6 +5273,7 @@ function RunTurnActivityGroup({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   avatar: AgentAvatar;
+  systemAvatar: AgentAvatar | null;
   sessionId: string;
   showThinking: boolean;
   autoExpandTools: boolean;
@@ -5343,6 +5393,7 @@ function RunTurnActivityGroup({
                 key={child.entry.id}
                 entry={child.entry}
                 avatar={avatar}
+                systemAvatar={systemAvatar}
                 sessionId={sessionId}
                 highlighted={
                   compactedEntryIds.has(child.entry.id) &&
@@ -5377,6 +5428,7 @@ function RunTurnActivityGroup({
 export function RunMessages({
   entries,
   avatar,
+  systemAvatar = null,
   sessionId,
   sessionMode = "unknown",
   telemetrySurface = "session",
@@ -5402,6 +5454,7 @@ export function RunMessages({
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
+  systemAvatar?: AgentAvatar | null;
   sessionId: string;
   sessionMode?: string;
   telemetrySurface?: string;
@@ -5654,6 +5707,7 @@ export function RunMessages({
             open={activityOpenOverrides[groupKey] ?? false}
             onOpenChange={(open) => setActivityOpen(groupKey, open)}
             avatar={avatar}
+            systemAvatar={systemAvatar}
             sessionId={sessionId}
             showThinking={showThinking}
             autoExpandTools={autoExpandTools}
@@ -5673,6 +5727,7 @@ export function RunMessages({
         <RunMessageBubble
           entry={g.entry}
           avatar={avatar}
+          systemAvatar={systemAvatar}
           sessionId={sessionId}
           highlighted={highlightedEntryId === g.entry.id}
           showTimestamps={showTimestamps}
@@ -5686,6 +5741,7 @@ export function RunMessages({
       activityOpenOverrides,
       autoExpandTools,
       avatar,
+      systemAvatar,
       highlightedEntryId,
       onFork,
       onOpenBackgroundTask,
@@ -5778,9 +5834,11 @@ function RunSettingsPanel({
   setPaneFontScale: (value: number) => void;
   adminControls?: {
     visible: boolean;
+    canViewProdSessions: boolean;
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
+    avatarEditorHref: string;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
 }) {
@@ -5819,26 +5877,35 @@ function RunSettingsPanel({
       {settingsTab === "admin" && showAdminTab ? (
         <section className="run-settings-section">
           <h2 className="run-settings-title">Admin Controls</h2>
-          <button
-            type="button"
-            className="run-settings-toggle"
-            onClick={() =>
-              adminControls.onViewingProdSessionsChange(
-                !adminControls.viewingProdSessions,
-              )
-            }
-            aria-pressed={adminControls.viewingProdSessions}
-          >
-            <span>Prod sessions</span>
-            <span className="run-settings-scope-value">
-              {adminControls.viewingProdSessions
-                ? adminControls.prodScope
-                : adminControls.currentScope}
+          <a className="run-settings-link" href={adminControls.avatarEditorHref}>
+            <span className="run-settings-link-label">
+              <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
+              <span>Avatar editor</span>
             </span>
-            {adminControls.viewingProdSessions && (
-              <CheckIcon className="run-settings-check" aria-hidden="true" />
-            )}
-          </button>
+            <ExternalLinkIcon className="run-settings-check" aria-hidden="true" />
+          </a>
+          {adminControls.canViewProdSessions && (
+            <button
+              type="button"
+              className="run-settings-toggle"
+              onClick={() =>
+                adminControls.onViewingProdSessionsChange(
+                  !adminControls.viewingProdSessions,
+                )
+              }
+              aria-pressed={adminControls.viewingProdSessions}
+            >
+              <span>Prod sessions</span>
+              <span className="run-settings-scope-value">
+                {adminControls.viewingProdSessions
+                  ? adminControls.prodScope
+                  : adminControls.currentScope}
+              </span>
+              {adminControls.viewingProdSessions && (
+                <CheckIcon className="run-settings-check" aria-hidden="true" />
+              )}
+            </button>
+          )}
         </section>
       ) : (
         <>
@@ -6031,6 +6098,7 @@ function ChatPane({
   adminControls,
   readOnly = false,
   sessionScope,
+  avatarCatalogVersion,
 }: {
   session: Session;
   visible: boolean;
@@ -6060,13 +6128,16 @@ function ChatPane({
   playTurnCompleteSound: () => void;
   adminControls?: {
     visible: boolean;
+    canViewProdSessions: boolean;
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
+    avatarEditorHref: string;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
   readOnly?: boolean;
   sessionScope: string;
+  avatarCatalogVersion: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
@@ -8434,7 +8505,14 @@ function ChatPane({
         ? "error"
         : undefined;
 
-  const sessionAvatar = useMemo(() => getSessionAvatar(session.id), [session.id]);
+  const sessionAvatar = useMemo(
+    () => getSessionAvatar(session.id),
+    [avatarCatalogVersion, session.id],
+  );
+  const systemAvatar = useMemo(
+    () => getSystemAvatar(session.id),
+    [avatarCatalogVersion, session.id],
+  );
   const renderedEntries = entries;
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
@@ -9176,6 +9254,7 @@ function ChatPane({
             <RunMessages
               entries={renderedEntries}
               avatar={sessionAvatar}
+              systemAvatar={systemAvatar}
               sessionId={session.id}
               sessionMode={session.mode}
               pendingScrollMessageId={pendingScrollMessageId}
@@ -9730,6 +9809,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+  const [avatarCatalogVersion, setAvatarCatalogVersion] = useState(0);
   // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
   // sync immediately, while localStorage keeps them across reloads/windows.
   // Phase E: also persisted to the Postgres profiles row so prefs ride across
@@ -10047,10 +10127,12 @@ export function App() {
   const adminSettingsControls =
     user?.role === "admin"
       ? {
-          visible: canViewProdSessions,
+          visible: true,
+          canViewProdSessions,
           viewingProdSessions,
           currentScope: currentSessionScope,
           prodScope: PROD_SESSION_SCOPE,
+          avatarEditorHref: "/admin/avatars",
           onViewingProdSessionsChange: (value: boolean) => {
             const next = value ? PROD_SESSION_SCOPE : "";
             setSessionViewScopeOverride(next);
@@ -10099,6 +10181,22 @@ export function App() {
         setBooted(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    void loadRuntimeAvatarCatalog()
+      .then(() => {
+        if (!cancelled) setAvatarCatalogVersion((version) => version + 1);
+      })
+      .catch(() => {
+        // Avatar uploads are an enhancement over the static built-in pool.
+        // A failed catalog read should not block the session shell.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   // refreshRecentRepos pulls /api/github/recent-repos and seeds the
   // splash picker's "Recent" section. Best-effort: a network blip or
@@ -12085,6 +12183,7 @@ export function App() {
                       adminControls={adminSettingsControls}
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
+                      avatarCatalogVersion={avatarCatalogVersion}
                     />
                   </div>
                 ) : (

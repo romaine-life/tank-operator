@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/providerhealth"
@@ -37,6 +38,8 @@ type appServer struct {
 	mgr                 *sessions.Manager
 	profiles            profilesStore
 	sessionEvents       store.SessionEventStore
+	avatars             avatarassets.Store
+	avatarImages        avatarassets.ImageStore
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
 	readStates          store.ConversationReadStateStore
@@ -119,6 +122,14 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// (zombie SSE) and candidate-C (reducer drop) stethoscope on the
 	// client side. Pairs with server-side counters in observability.go.
 	mux.HandleFunc("POST /api/client-metrics/session-events-stream", s.handleSessionEventStreamMetrics)
+
+	// Avatar assets. Reads are authenticated so uploaded backing photos
+	// are not exposed as static public files; writes are admin-only.
+	mux.HandleFunc("GET /api/avatars", s.handleListAvatars)
+	mux.HandleFunc("GET /api/avatars/{avatar_id}/image", s.handleGetAvatarImage)
+	mux.HandleFunc("GET /api/avatars/{avatar_id}/backing", s.handleGetAvatarBacking)
+	mux.HandleFunc("POST /api/admin/avatars", s.handleCreateAvatar)
+	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
 
 	// Auth.
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)

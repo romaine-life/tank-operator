@@ -1,7 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { AdminAvatarsPage } from "./AdminAvatarsPage";
 import { App } from "./App";
 import { LongChatDebugPage } from "./LongChatDebugPage";
+import { AvatarPreviewHost } from "./avatarPreview";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
 import { StyleguideButtons } from "./styleguide/buttons";
@@ -100,10 +102,16 @@ const DEBUG_ROUTES: Record<string, () => JSX.Element> = {
   "/_debug/long-chat": () => <LongChatDebugPage />,
 };
 
+const ADMIN_ROUTES: Record<string, () => JSX.Element> = {
+  "/admin/avatars": () => <AdminAvatarsPage />,
+};
+
 function Root() {
   if (typeof window !== "undefined") {
     const debugRender = DEBUG_ROUTES[window.location.pathname];
     if (debugRender) return debugRender();
+    const adminRender = ADMIN_ROUTES[window.location.pathname];
+    if (adminRender) return adminRender();
     const render = STYLEGUIDE_ROUTES[window.location.pathname];
     if (render) return render();
   }
@@ -113,5 +121,6 @@ function Root() {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <Root />
+    <AvatarPreviewHost />
   </React.StrictMode>,
 );

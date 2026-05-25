@@ -1,7 +1,24 @@
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import { authedFetch } from "./auth";
+import { openAvatarPreview } from "./avatarPreview";
+
+export type AvatarKind = "agent" | "system";
+
 export type AgentAvatar = {
   id: string;
   name: string;
+  kind: AvatarKind;
   src: string;
+  backingSrc?: string;
+  custom?: boolean;
+};
+
+type AvatarCatalogEntry = {
+  id: string;
+  kind: AvatarKind;
+  name: string;
+  avatar_url: string;
+  backing_url: string;
 };
 
 // JP1 cast: 1 dino + 7 humans (brachiosaurus was dropped — the
@@ -20,18 +37,96 @@ export type AgentAvatar = {
 // put the dark subject in the circle and push bright sky / clothing out
 // of frame — anything brighter than the sidebar bg reads as a filled
 // tile at 42px instead of a floating token.
+function fallbackAgentAvatar(id: string, name: string, src: string): AgentAvatar {
+  return { id, kind: "agent", name, src, backingSrc: src };
+}
+
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
-  { id: "jp1-raptor", name: "Velociraptor", src: "/assets/avatars/jp1-raptor.png" },
+  fallbackAgentAvatar("jp1-raptor", "Velociraptor", "/assets/avatars/jp1-raptor.png"),
   // Humans
-  { id: "jp1-grant", name: "Dr. Alan Grant", src: "/assets/avatars/jp1-grant.png" },
-  { id: "jp1-sattler", name: "Dr. Ellie Sattler", src: "/assets/avatars/jp1-sattler.png" },
-  { id: "jp1-malcolm", name: "Dr. Ian Malcolm", src: "/assets/avatars/jp1-malcolm.png" },
-  { id: "jp1-hammond", name: "John Hammond", src: "/assets/avatars/jp1-hammond.png" },
-  { id: "jp1-nedry", name: "Dennis Nedry", src: "/assets/avatars/jp1-nedry.png" },
-  { id: "jp1-muldoon", name: "Robert Muldoon", src: "/assets/avatars/jp1-muldoon.png" },
-  { id: "jp1-arnold", name: "Ray Arnold", src: "/assets/avatars/jp1-arnold.png" },
+  fallbackAgentAvatar("jp1-grant", "Dr. Alan Grant", "/assets/avatars/jp1-grant.png"),
+  fallbackAgentAvatar("jp1-sattler", "Dr. Ellie Sattler", "/assets/avatars/jp1-sattler.png"),
+  fallbackAgentAvatar("jp1-malcolm", "Dr. Ian Malcolm", "/assets/avatars/jp1-malcolm.png"),
+  fallbackAgentAvatar("jp1-hammond", "John Hammond", "/assets/avatars/jp1-hammond.png"),
+  fallbackAgentAvatar("jp1-nedry", "Dennis Nedry", "/assets/avatars/jp1-nedry.png"),
+  fallbackAgentAvatar("jp1-muldoon", "Robert Muldoon", "/assets/avatars/jp1-muldoon.png"),
+  fallbackAgentAvatar("jp1-arnold", "Ray Arnold", "/assets/avatars/jp1-arnold.png"),
 ];
+
+let runtimeAgentAvatars: AgentAvatar[] = [];
+let runtimeSystemAvatars: AgentAvatar[] = [];
+let runtimeObjectURLs: string[] = [];
+
+function revokeRuntimeObjectURLs() {
+  if (typeof URL === "undefined") return;
+  for (const objectURL of runtimeObjectURLs) {
+    URL.revokeObjectURL(objectURL);
+  }
+  runtimeObjectURLs = [];
+}
+
+function isCatalogEntry(value: unknown): value is AvatarCatalogEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.id === "string" &&
+    (entry.kind === "agent" || entry.kind === "system") &&
+    typeof entry.name === "string" &&
+    typeof entry.avatar_url === "string" &&
+    typeof entry.backing_url === "string"
+  );
+}
+
+async function loadAvatarImage(entry: AvatarCatalogEntry): Promise<AgentAvatar | null> {
+  try {
+    const res = await authedFetch(entry.avatar_url);
+    if (!res.ok) return null;
+    const src = URL.createObjectURL(await res.blob());
+    runtimeObjectURLs.push(src);
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      name: entry.name,
+      src,
+      backingSrc: entry.backing_url,
+      custom: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function loadRuntimeAvatarCatalog(): Promise<number> {
+  if (typeof URL === "undefined") return 0;
+  const res = await authedFetch("/api/avatars");
+  if (!res.ok) throw new Error(`avatar catalog fetch failed: ${res.status}`);
+  const body = (await res.json()) as { entries?: unknown };
+  const entries = Array.isArray(body.entries)
+    ? body.entries.filter(isCatalogEntry)
+    : [];
+  revokeRuntimeObjectURLs();
+  const avatars = (await Promise.all(entries.map(loadAvatarImage))).filter(
+    (avatar): avatar is AgentAvatar => avatar !== null,
+  );
+  runtimeAgentAvatars = avatars.filter((avatar) => avatar.kind === "agent");
+  runtimeSystemAvatars = avatars.filter((avatar) => avatar.kind === "system");
+  return avatars.length;
+}
+
+export function setRuntimeAvatarsForTest(avatars: AgentAvatar[]) {
+  revokeRuntimeObjectURLs();
+  runtimeAgentAvatars = avatars.filter((avatar) => avatar.kind === "agent");
+  runtimeSystemAvatars = avatars.filter((avatar) => avatar.kind === "system");
+}
+
+export function getAgentAvatarPool(): AgentAvatar[] {
+  const runtimeIDs = new Set(runtimeAgentAvatars.map((avatar) => avatar.id));
+  return [
+    ...AGENT_AVATARS.filter((avatar) => !runtimeIDs.has(avatar.id)),
+    ...runtimeAgentAvatars,
+  ];
+}
 
 function hashString(value: string): number {
   let hash = 2166136261;
@@ -42,8 +137,28 @@ function hashString(value: string): number {
   return hash >>> 0;
 }
 
+function chooseAvatar(pool: AgentAvatar[], seed: string): AgentAvatar | null {
+  let best: AgentAvatar | null = null;
+  let bestScore = -1;
+  for (const avatar of pool) {
+    const score = hashString(`${seed}\x1f${avatar.id}`);
+    if (score > bestScore) {
+      best = avatar;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export function getSessionAvatar(sessionId: string): AgentAvatar {
-  return AGENT_AVATARS[hashString(sessionId) % AGENT_AVATARS.length];
+  if (runtimeAgentAvatars.length === 0) {
+    return AGENT_AVATARS[hashString(sessionId) % AGENT_AVATARS.length];
+  }
+  return chooseAvatar(getAgentAvatarPool(), sessionId) ?? AGENT_AVATARS[0];
+}
+
+export function getSystemAvatar(seed: string): AgentAvatar | null {
+  return chooseAvatar(runtimeSystemAvatars, seed);
 }
 
 export function AgentAvatarIcon({
@@ -53,6 +168,21 @@ export function AgentAvatarIcon({
   avatar: AgentAvatar;
   className?: string;
 }) {
+  const openPreview = (
+    event:
+      | ReactMouseEvent<HTMLImageElement>
+      | ReactKeyboardEvent<HTMLImageElement>,
+  ) => {
+    openAvatarPreview(
+      {
+        name: avatar.name,
+        avatarSrc: avatar.src,
+        backingSrc: avatar.backingSrc,
+        kind: avatar.kind,
+      },
+      event,
+    );
+  };
   return (
     <img
       className={className}
@@ -60,7 +190,13 @@ export function AgentAvatarIcon({
       alt=""
       title={avatar.name}
       draggable={false}
-      aria-hidden="true"
+      role="button"
+      tabIndex={0}
+      aria-label={`Preview ${avatar.name}`}
+      onClick={openPreview}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") openPreview(event);
+      }}
     />
   );
 }
