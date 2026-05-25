@@ -26,6 +26,12 @@ test("runtime avatars extend the agent pool without removing built-ins", () => {
   assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id), true);
 });
 
+test("built-in avatars use their icon as the backing image", () => {
+  for (const avatar of AGENT_AVATARS) {
+    assert.equal(avatar.backingSrc, avatar.src);
+  }
+});
+
 test("system avatars are separate from agent avatars", () => {
   const system: AgentAvatar = {
     id: "custom-system",
