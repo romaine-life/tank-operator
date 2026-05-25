@@ -568,14 +568,14 @@ The backend validates ownership, then performs two writes in this order:
    POST collapses to one durable row at the Postgres UNIQUE constraint.
 2. **Publish a durable JetStream `interrupt_turn` command** on the
    per-session/per-provider **control-plane subject**
-   (`tank.session.<storage>.control.<provider>`), not the command subject
+   (`tank.session.<scope-token>.<session-token>.control.<provider>`), not the command subject
    used for `submit_turn` / `input_reply`. Runners consume the command
    from a dedicated control-plane JetStream consumer (separate
    `durable_name`, separate `filter_subject`, higher `max_ack_pending`)
    and abort the matching active turn from inside the session pod.
 
-The data plane (`tank.session.<storage>.commands.<provider>`) and the
-control plane (`tank.session.<storage>.control.<provider>`) are
+The data plane (`tank.session.<scope-token>.<session-token>.commands.<provider>`) and the
+control plane (`tank.session.<scope-token>.<session-token>.control.<provider>`) are
 deliberately separate JetStream subjects with separate durable consumers.
 The data-plane consumer runs `max_ack_pending=1` so a long-running
 `submit_turn` is processed end-to-end before the next one starts; that's
@@ -588,6 +588,14 @@ doesn't interrupt deep tool-use loops" regression; see
 `scripts/check-removed-chat-runtime.mjs` and
 `backend-go/internal/sessionbus/SubjectForCommand` for the regression
 guards on either side of the wire.
+
+Runner-produced events use the sibling event subject
+`tank.session.<scope-token>.<session-token>.events`, and each orchestrator
+runs its persister on `tank.session.<scope-token>.*.events` with a
+scope-specific durable consumer name. Prod and test slots share the NATS
+stream, so the scope token is part of the physical subject rather than a
+post-delivery filter; a slot completion cannot be claimed by a different
+scope's persister and lose the sidebar activity-summary side effect.
 
 If step 1 fails, the handler returns 500 and step 2 does not execute — the
 ledger never carries a side-effect that wasn't accompanied by a durable

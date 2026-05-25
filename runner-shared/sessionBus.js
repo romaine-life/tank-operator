@@ -76,12 +76,12 @@ export class SharedSessionBus {
                 // handler is never invoked for these; the control plane
                 // is the only place they can take effect.
                 if (isInterruptCommand(command) || isInputReplyCommand(command) || isStopBackgroundTaskCommand(command)) {
+                    record.ack();
                     console.warn("session bus: dropped stray control command on data plane (control plane is the supported path)", {
                         type: command.type,
                         command_id: command.command_id,
                         target_turn_id: command.target_turn_id,
                     });
-                    record.ack();
                     continue;
                 }
                 try {
@@ -308,10 +308,10 @@ export class SharedSessionBus {
         }
     }
     consumerName() {
-        return `${sanitizeConsumerName(this.provider)}_${storageToken(this.sessionStorageKey)}`;
+        return `${sanitizeConsumerName(this.provider)}_${scopedConsumerToken(this.sessionStorageKey)}`;
     }
     controlConsumerName() {
-        return `${sanitizeConsumerName(this.provider)}_control_${storageToken(this.sessionStorageKey)}`;
+        return `${sanitizeConsumerName(this.provider)}_control_${scopedConsumerToken(this.sessionStorageKey)}`;
     }
     commandFromMessage(msg) {
         const command = msg.json();
@@ -395,8 +395,8 @@ export function turnIDForClientNonce(clientNonce) {
     return `turn_${stableIDPart(clientNonce)}`;
 }
 
-function commandSubject(sessionStorageKey, provider) {
-    return `tank.session.${storageToken(sessionStorageKey)}.commands.${sanitizeSubjectToken(provider)}`;
+export function commandSubject(sessionStorageKey, provider) {
+    return `${scopedSessionSubjectPrefix(sessionStorageKey)}.commands.${sanitizeSubjectToken(provider)}`;
 }
 
 // controlSubject mirrors backend-go's sessionbus.ControlSubject. The two
@@ -404,14 +404,47 @@ function commandSubject(sessionStorageKey, provider) {
 // won't see interrupts. See scripts/check-stop-request-migration.mjs for
 // the regression guard that grep-pins both sides.
 export function controlSubject(sessionStorageKey, provider) {
-    return `tank.session.${storageToken(sessionStorageKey)}.control.${sanitizeSubjectToken(provider)}`;
+    return `${scopedSessionSubjectPrefix(sessionStorageKey)}.control.${sanitizeSubjectToken(provider)}`;
 }
 
-function eventSubject(sessionStorageKey) {
-    return `tank.session.${storageToken(sessionStorageKey)}.events`;
+export function eventSubject(sessionStorageKey) {
+    return `${scopedSessionSubjectPrefix(sessionStorageKey)}.events`;
 }
 
-function storageToken(value) {
+export function eventSubjectFilter(scope) {
+    return `tank.session.${scopeToken(scope)}.*.events`;
+}
+
+function scopedSessionSubjectPrefix(sessionStorageKey) {
+    const { scope, sessionId } = storageScopeAndSessionID(sessionStorageKey);
+    return `tank.session.${scopeToken(scope)}.${sessionIDToken(sessionId)}`;
+}
+
+function storageScopeAndSessionID(sessionStorageKey) {
+    const key = String(sessionStorageKey || "").trim();
+    if (!key) {
+        return { scope: "default", sessionId: "" };
+    }
+    const separator = key.indexOf(":");
+    if (separator < 0) {
+        return { scope: "default", sessionId: key };
+    }
+    const scope = key.slice(0, separator).trim() || "default";
+    const sessionId = key.slice(separator + 1).trim();
+    return { scope, sessionId };
+}
+
+function scopedConsumerToken(sessionStorageKey) {
+    const { scope, sessionId } = storageScopeAndSessionID(sessionStorageKey);
+    return `${scopeToken(scope)}_${sessionIDToken(sessionId)}`;
+}
+
+function scopeToken(value) {
+    const scope = String(value || "").trim() || "default";
+    return Buffer.from(scope, "utf8").toString("base64url");
+}
+
+function sessionIDToken(value) {
     return Buffer.from(String(value || "").trim(), "utf8").toString("base64url");
 }
 

@@ -3787,6 +3787,11 @@ button:disabled {
   gap: 0.5rem;
 }
 
+.run-help-status-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .run-help-row {
   display: grid;
   grid-template-columns: 3.5rem minmax(0, 1fr);
@@ -3801,11 +3806,62 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
+.run-help-status-row {
+  display: grid;
+  grid-template-columns: minmax(6.75rem, 8rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+}
+
+.run-help-status-sample {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.run-help-status-spacer {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex: 0 0 auto;
+}
+
+.run-help-status-copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.run-help-status-label {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.run-help-status-detail {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
 .run-help-key {
   color: #93c5fd;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+@media (max-width: 520px) {
+  .run-help-status-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
 }
 
 /* Main content area — empty state or transcript. */

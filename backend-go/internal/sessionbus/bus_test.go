@@ -72,7 +72,7 @@ func TestPersistMessageAcksValidEvent(t *testing.T) {
 		"visibility": "durable",
 		"turn_id":    "turn-1",
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -101,7 +101,7 @@ func TestPersistMessageTerminatesSchemaRejected(t *testing.T) {
 		"type": "user_message.created",
 		"id":   "broken",
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -139,7 +139,7 @@ func TestPersistMessageRetriesTransientFailures(t *testing.T) {
 		"visibility": "durable",
 		"turn_id":    "turn-1",
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -164,7 +164,7 @@ func TestPersistMessageTerminatesInvalidJSON(t *testing.T) {
 	bus := &Bus{scope: "default"}
 	store := &recordingStore{}
 	metrics := &recordingMetrics{}
-	msg := &stubMsg{subject: "tank.session.63.events", data: []byte("not-json")}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: []byte("not-json")}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -215,7 +215,7 @@ func TestPersistMessageRecordsTurnFailureCounter(t *testing.T) {
 			"error":  "rate limit exceeded",
 		},
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -252,7 +252,7 @@ func TestPersistMessageRecordsCommandFailedCounter(t *testing.T) {
 			"reason": "command_failed",
 		},
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -280,7 +280,7 @@ func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
 		"visibility": "durable",
 		"turn_id":    "turn-1",
 	})
-	msg := &stubMsg{subject: "tank.session.63.events", data: raw}
+	msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 	bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
@@ -382,14 +382,18 @@ func TestSubjectForCommandRoutesBackgroundStopToControlPlane(t *testing.T) {
 
 // TestControlSubjectShape pins the wire format so the runner-shared JS
 // helper (which builds the same shape independently) is mechanically
-// comparable. The shape token order is: subjectRoot, storageToken,
-// "control", sanitizedProvider.
+// comparable. The shape token order is: subjectRoot, scopeToken,
+// sessionToken, "control", sanitizedProvider.
 func TestControlSubjectShape(t *testing.T) {
 	got := ControlSubject("abc", "claude")
 	wantPrefix := "tank.session."
 	wantSuffix := ".control.claude"
 	if !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, wantSuffix) {
 		t.Fatalf("control subject shape = %q, want prefix %q + %q", got, wantPrefix, wantSuffix)
+	}
+	parts := strings.Split(got, ".")
+	if len(parts) != 6 {
+		t.Fatalf("control subject tokens = %d, want 6: %q", len(parts), got)
 	}
 	if got == CommandSubject("abc", "claude") {
 		t.Fatalf("control and command subjects collided: %q", got)

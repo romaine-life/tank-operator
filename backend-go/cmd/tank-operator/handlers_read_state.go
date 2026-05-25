@@ -40,7 +40,8 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 		writeError(w, status, scopeErr.Error())
 		return
 	}
-	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+	info, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope)
+	if err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
@@ -61,6 +62,12 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.activityRefresher != nil && strings.EqualFold(info.Owner, user.OwnerEmail()) {
+		if err := s.activityRefresher.RefreshSessionActivity(r.Context(), info.Owner, sessionScope, sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, "refresh session activity: "+err.Error())
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, sessionReadStateResponse{
 		SessionID: sessionID,

@@ -38,6 +38,32 @@ test("session activity is not refreshed by a steady interval", () => {
   assert.equal(/setInterval\(\s*refreshSessionActivity/.test(appSource), false);
 });
 
+test("session activity status states have explicit sidebar styles", () => {
+  for (const state of [
+    "active",
+    "failed",
+    "pending",
+    "agent-working",
+    "agent-waiting",
+    "agent-needs-input",
+    "agent-stopping",
+    "agent-error",
+  ]) {
+    assert.equal(
+      indexCssSource.includes(`.status-dot.status-${state}`),
+      true,
+      `missing status-dot style for ${state}`,
+    );
+  }
+  for (const state of ["input", "failed", "stopping", "stopped"]) {
+    assert.equal(
+      indexCssSource.includes(`.session-activity-chip.is-${state}`),
+      true,
+      `missing session-activity-chip style for ${state}`,
+    );
+  }
+});
+
 test("chat transcript UI does not use the retired agent-ws route", () => {
   assert.equal(appSource.includes("agent-ws"), false);
 });
