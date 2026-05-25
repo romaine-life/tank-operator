@@ -57,6 +57,15 @@ const ignoredRelativePaths = new Set([
   // the migration guard doesn't fire on the deletion statement
   // itself.
   "backend-go/internal/pgstore/migrations.go",
+  // sessionBusSubjects.test.ts pins the post-ea70777 wire shape and
+  // asserts the legacy 3-token tank.session.<storage_token>.events
+  // form is NOT what eventSubject() returns. The legacy literal
+  // appears as a notEqual assertion fixture — it's the negative
+  // confirmation that the cutover held. Same exemption shape as
+  // backend-go/internal/sessionbus/subjects_test.go (which uses string
+  // concat and doesn't trip the guard) — TS string concat isn't as
+  // idiomatic, so the test pins the literal directly.
+  "agent-runner/src/sessionbus/sessionBusSubjects.test.ts",
 ]);
 
 const blocked = [
@@ -712,6 +721,36 @@ const blocked = [
     // which is the shape JetStream max_ack_pending=1 turns into a stuck
     // interrupt.
     pattern: /\.startCommandConsumer\(async\s*\(record\)[\s\S]{0,800}?isInterruptCommand\(record\)\s*\)\s*\{\s*(?:commandsConsumedTotal[\s\S]{0,200}?)?await\s+this\.acceptInterrupt/,
+  },
+  // ea70777 (nelsong6/tank-operator#652) retired the 4-token chat
+  // command/control subject shape and the 3-token chat event subject
+  // shape in favor of scope-partitioned 5-token / 4-token shapes that
+  // partition cleanly across (scope, session_id). The cutover gap left
+  // every pre-deploy session pod silently stranded on the OLD filter
+  // (see CLAUDE.md → "Migration audit checklist" for the durable-
+  // consumer wire-format gate). Block reintroduction of complete-
+  // literal OLD subjects on the wire so a future refactor can't quietly
+  // revert and silently re-strand chat. Test fixtures that construct
+  // the legacy shape via string concatenation (subjects_test.go's
+  // legacySlotSubject := "tank.session." + StorageToken(...) + ".events")
+  // do NOT contain a complete literal and don't trip the guard. The
+  // post-cutover shape is tank.session.<scope_token>.<session_token>.…
+  // (one more segment between tank.session and the boundary keyword).
+  {
+    name: "retired 4-token chat command subject literal",
+    pattern: /tank\.session\.[A-Za-z0-9_\-]+\.commands\.[a-z_]+\b/,
+  },
+  {
+    name: "retired 4-token chat control subject literal",
+    pattern: /tank\.session\.[A-Za-z0-9_\-]+\.control\.[a-z_]+\b/,
+  },
+  {
+    name: "retired 3-token chat event subject literal",
+    // tank.session.<token>.events is the pre-cutover shape; the
+    // post-cutover shape is tank.session.<scope>.<token>.events. The
+    // regex's [A-Za-z0-9_\-]+ stops at a dot, so the 4-token form
+    // (with an extra dot before .events) does not match this pattern.
+    pattern: /tank\.session\.[A-Za-z0-9_\-]+\.events\b/,
   },
 ];
 

@@ -92,6 +92,21 @@ type PersisterMetrics interface {
 	// counter is how we notice "every session is failing" without browser
 	// devtools. Steady-state expectation: low and bursty.
 	RecordTurnFailurePersisted(source string, reason string)
+	// RecordTurnLifecyclePersisted increments for the five lifecycle
+	// event types that bound a turn — turn.submitted (the open boundary)
+	// plus the four terminal types (turn.completed / turn.failed /
+	// turn.command_failed / turn.interrupted). The submitted-vs-terminal
+	// divergence is the silent-stranding observability surface per
+	// docs/features/agent-runners/contract.md → Observability ("Silent
+	// strandings, where a requested action has no terminal event, are a
+	// counted bug class"). The TankTurnSilentStranding alert in
+	// k8s/templates/observability.yaml fires when submitted outruns
+	// terminal for a window long enough to rule out a single long Codex
+	// turn. ea70777 (nelsong6/tank-operator#652) was the prototypical
+	// silent-stranding incident; this counter would have caught it within
+	// minutes of deploy instead of a user bug report. Non-lifecycle event
+	// types are dropped at the implementation; the label set is bounded.
+	RecordTurnLifecyclePersisted(eventType string)
 }
 
 type noopPersisterMetrics struct{}
@@ -99,6 +114,7 @@ type noopPersisterMetrics struct{}
 func (noopPersisterMetrics) RecordSchemaRejected()                     {}
 func (noopPersisterMetrics) RecordTransientFailure()                   {}
 func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string) {}
+func (noopPersisterMetrics) RecordTurnLifecyclePersisted(string)       {}
 
 // WakeMetrics receives counters for wake/event publish failures, the
 // success path, and the end-to-end persist→wake latency. The bus
@@ -543,6 +559,7 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics Per
 	if err := store.Upsert(ctx, event); err != nil {
 		return err
 	}
+	eventType, _ := event["type"].(string)
 	// Record turn-failure persistence right after the durable write
 	// commits. This is the observability surface that replaced the SPA
 	// run-status pill: with the pill gone, "every codex_gui session is
@@ -551,7 +568,7 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics Per
 	// from payload.reason so a Codex auth storm vs a generic
 	// provider_failure spike are distinguishable; the source label
 	// (claude/codex/tank) lets per-provider alerts fire independently.
-	if eventType, _ := event["type"].(string); eventType == string(conversation.EventTurnFailed) || eventType == string(conversation.EventTurnCommandFailed) {
+	if eventType == string(conversation.EventTurnFailed) || eventType == string(conversation.EventTurnCommandFailed) {
 		source, _ := event["source"].(string)
 		reason := ""
 		if payload, ok := event["payload"].(map[string]any); ok {
@@ -564,6 +581,15 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics Per
 			reason = "unknown"
 		}
 		metrics.RecordTurnFailurePersisted(source, reason)
+	}
+	// Silent-stranding surface: count the five lifecycle types that bound
+	// a turn (turn.submitted + the four terminal types). The
+	// TankTurnSilentStranding alert reads from the divergence between
+	// submitted and terminal counts. Filter at the call boundary so the
+	// interface contract is "this is a lifecycle event" — the impl just
+	// records.
+	if conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
+		metrics.RecordTurnLifecyclePersisted(eventType)
 	}
 	upsertedAt := time.Now()
 	storageKey, _ := event["tank_session_id"].(string)
