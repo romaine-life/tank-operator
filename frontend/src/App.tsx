@@ -9302,6 +9302,7 @@ function ChatPane({
               className="run-header-name-input"
               value={editingTitleValue}
               autoFocus
+              onFocus={(e) => e.currentTarget.select()}
               onChange={(e) => setEditingTitleValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -12239,6 +12240,7 @@ export function App() {
                   aria-label="Session name"
                   value={homeSessionName}
                   autoFocus
+                  onFocus={(e) => e.currentTarget.select()}
                   onChange={(e) => setHomeSessionName(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
