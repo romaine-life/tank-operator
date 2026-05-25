@@ -281,22 +281,44 @@ failures and pod failure affect session-level error state.
 
 The durable ledger remains fully replayable. Transcript compaction is a
 frontend projection concern layered on top of `session_events`, not a producer
-or storage behavior.
+or storage behavior. The projection has two distinct surfaces:
 
-For an active turn, the client may condense current assistant progress notes,
-tool rows, reasoning blocks, background-task rows, and meta rows into a single
-Turn activity disclosure row as they arrive. A trailing run of assistant text
-stays visible in the main transcript as the candidate final answer; if later
-work arrives after it, that assistant text moves into the activity row.
+- The Turn activity row is an activity/log projection of what happened during a
+  turn.
+- The main transcript is the settled conversation projection.
 
-For a turn that ended with `turn.completed` and produced at least one final
-assistant message, the client may condense pre-final activity into the same Turn
-activity row. The final assistant message remains visible in the main
-transcript. Failed turns, interrupted turns, and turns that never produce a
-final assistant message stay expanded so failure and stop context is not hidden.
+Rows must not visibly bounce between those surfaces. If an event is eligible
+for Turn activity, the frontend classifies it before first paint; it must not
+render the event as a standalone main-transcript row and later move that same
+rendered row into Turn activity. Conversely, content shown inside Turn activity
+while a turn is active is provisional activity output, not a settled transcript
+row being promoted later.
 
-Deep links still target the original `timeline_id`; opening a link to a
-compacted item expands the Turn activity row around that item.
+For an active turn, the client may condense assistant progress notes,
+provisional assistant text, tool rows, reasoning blocks, background-task rows,
+and meta rows into a single Turn activity disclosure row as they arrive. A
+normal assistant message does not by itself declare that it is the final answer;
+without an explicit durable final-answer marker, the final answer is identified
+only after a successful terminal event.
+
+For a turn that ended with `turn.completed` and produced at least one assistant
+message, the client identifies the final answer as the trailing assistant
+message/run for that turn. The final assistant answer is rendered in the main
+transcript as the settled assistant response. Pre-final activity may remain
+condensed into the same Turn activity row. The activity row may also contain an
+activity/log copy of assistant prose, including prose that later becomes the
+final answer, but that copy is not a second settled transcript message.
+
+Failed turns, interrupted turns, and turns that never produce a final assistant
+message stay expanded so failure and stop context is not hidden.
+
+Deep links still target durable `timeline_id` values. Opening a link to a
+compacted activity item expands the Turn activity row around that item. When the
+same assistant prose is projected both as Turn activity and as the settled final
+answer, the settled main-transcript answer is the canonical message target for
+copy links, unread counts, latest-message state, and fork-from-message actions;
+the activity copy is evidence for the turn log, not another conversation
+message.
 
 `shell_task.*` events are session-level background shell processes spawned
 by a tool call. They are not normal tool items: they can continue after the
