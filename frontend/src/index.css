@@ -1702,7 +1702,7 @@ button:disabled {
   flex: 1 1 auto;
   align-items: center;
   text-align: left;
-  padding: 1px var(--space-1);
+  padding: 1px var(--space-1) 1px 0;
   font-family: var(--font-primary);
   font-size: 13px;
   min-width: 0;
