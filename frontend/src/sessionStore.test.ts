@@ -143,6 +143,35 @@ test("list uses sidebar_position instead of row_version", () => {
   assert.deepEqual(store.list().map((r) => r.id), ["a", "b", "c"]);
 });
 
+test("rename row updates keep assigned avatar ids", () => {
+  const store = new SessionStore();
+  const update = normalizeSessionRowUpdate({
+    cursor: "2",
+    row: {
+      id: "8",
+      owner: "u@example.com",
+      mode: "codex_gui",
+      session_scope: "default",
+      name: "renamed session",
+      visible: true,
+      status: "Active",
+      repos: [],
+      agent_avatar_id: "jp1-malcolm",
+      system_avatar_id: "system-logo",
+      sidebar_position: 1,
+      row_version: 2,
+    },
+  });
+
+  assert.ok(update, "valid rename row update must parse");
+  store.applyRowUpdate(update);
+
+  const [updated] = store.list();
+  assert.equal(updated.name, "renamed session");
+  assert.equal(updated.agent_avatar_id, "jp1-malcolm");
+  assert.equal(updated.system_avatar_id, "system-logo");
+});
+
 test("applyLocalOrder preserves drag order through later row updates", () => {
   const store = new SessionStore();
   store.applySnapshot([
@@ -234,6 +263,8 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       runtime_model: "gpt-5.5",
       runtime_effort: "xhigh",
       runtime_configured_at: "2026-05-21T00:00:00Z",
+      agent_avatar_id: "jp1-malcolm",
+      system_avatar_id: "system-logo",
       sidebar_position: 7,
       row_version: 1,
     },
@@ -245,6 +276,8 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   assert.equal(good!.row.runtime_model, "gpt-5.5");
   assert.equal(good!.row.runtime_effort, "xhigh");
   assert.equal(good!.row.runtime_configured_at, "2026-05-21T00:00:00Z");
+  assert.equal(good!.row.agent_avatar_id, "jp1-malcolm");
+  assert.equal(good!.row.system_avatar_id, "system-logo");
   assert.equal(good!.row.sidebar_position, 7);
   assert.equal(good!.row.row_version, 1);
 });
