@@ -26,6 +26,14 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   // this to pick the parent session's avatar instead of the human
   // owner's Gravatar. See conversationReducer.applyUserMessage.
   originSessionId?: string;
+  // Severity tag for system-role messages — drives the renderer's
+  // styling. Set on session.status:failed banners; absent on neutral
+  // loading/ready notices. user/assistant messages ignore it.
+  severity?: "info" | "error";
+  // Optional actionable affordance ("Re-sign-in to Codex"). Present on
+  // session.status banners that carry a payload.action; the renderer
+  // surfaces it as a button on the system bubble.
+  action?: { label: string; href: string };
 }
 
 export interface AskUserQuestionAnswer {
@@ -147,6 +155,8 @@ export function projectConversationState(
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,
             ...(message.originSessionId ? { originSessionId: message.originSessionId } : {}),
+            ...(message.severity ? { severity: message.severity } : {}),
+            ...(message.action ? { action: message.action } : {}),
           },
         },
       ];

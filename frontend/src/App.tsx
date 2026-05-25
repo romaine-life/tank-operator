@@ -3799,6 +3799,25 @@ function RunMessageBubble({
   const { user } = useContext(RunContext);
   const text = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
+  // session.status:failed transcripts events carry severity="error" and
+  // an optional action (e.g. "Re-sign-in to Codex"). The renderer
+  // surfaces both: data-severity drives error-bubble styling; action
+  // becomes a button next to the text.
+  const messageSeverity =
+    typeof (entry as Record<string, unknown>).severity === "string"
+      ? ((entry as Record<string, unknown>).severity as "info" | "error")
+      : undefined;
+  const messageAction = (entry as Record<string, unknown>).action as
+    | { label?: unknown; href?: unknown }
+    | undefined;
+  const messageActionLabel =
+    messageAction && typeof messageAction.label === "string" && messageAction.label.length > 0
+      ? messageAction.label
+      : undefined;
+  const messageActionHref =
+    messageAction && typeof messageAction.href === "string" && messageAction.href.length > 0
+      ? messageAction.href
+      : undefined;
   const isSkillAction = messageKind === "skill-action";
   const skillName = (entry as Record<string, unknown>).skillName;
   const skillSupplementalText =
@@ -3823,6 +3842,7 @@ function RunMessageBubble({
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
+      data-severity={variant === "system" ? messageSeverity : undefined}
       data-message-id={entry.id}
       data-highlight={highlighted ? "true" : undefined}
     >
@@ -3859,6 +3879,16 @@ function RunMessageBubble({
             </span>
           ) : (
             <RunMarkdown>{text}</RunMarkdown>
+          )}
+          {variant === "system" && messageActionLabel && messageActionHref && (
+            <a
+              className="run-msg-system-action"
+              href={messageActionHref}
+              target="_self"
+              rel="noopener"
+            >
+              {messageActionLabel}
+            </a>
           )}
         </div>
         <div

@@ -25,6 +25,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
+	"github.com/nelsong6/tank-operator/backend-go/internal/providerhealth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
@@ -116,6 +117,53 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
 	})
+}
+
+// providerHealthEmitter adapts the session-events store + bus to the
+// narrow EventEmitter interface providerhealth.Manager calls when
+// fanning out session.status:failed banner events. Upsert lands the
+// durable row; Wake nudges every open SSE stream on the session.
+type providerHealthEmitter struct {
+	events store.SessionEventStore
+	bus    *sessionbus.Bus
+}
+
+func (e providerHealthEmitter) Upsert(ctx context.Context, event map[string]any) error {
+	if e.events == nil {
+		return nil
+	}
+	return e.events.Upsert(ctx, event)
+}
+
+func (e providerHealthEmitter) Wake(ctx context.Context, storageKey string) {
+	if e.bus == nil || storageKey == "" {
+		return
+	}
+	if err := e.bus.PublishSessionEventWake(ctx, storageKey); err != nil {
+		slog.Warn("providerhealth wake publish failed",
+			"storage_key", storageKey, "error", err)
+	}
+}
+
+// buildProviderHealthConfigs reads CODEX_PROXY_HEALTH_URL (and, when it
+// lands, CLAUDE_PROXY_HEALTH_URL) and returns one ProviderConfig per
+// configured provider. An empty env var disables that provider's
+// banner — useful in tests and local dev where the proxy isn't
+// running. The Action target URL is the canonical re-sign-in flow on
+// auth.romaine.life; the SPA opens it as a top-level navigation.
+func buildProviderHealthConfigs() []providerhealth.ProviderConfig {
+	var configs []providerhealth.ProviderConfig
+	if url := strings.TrimSpace(os.Getenv("CODEX_PROXY_HEALTH_URL")); url != "" {
+		configs = append(configs, providerhealth.ProviderConfig{
+			Provider: "codex",
+			Source:   providerhealth.NewHTTPSource("codex", url, nil),
+			Action: providerhealth.Action{
+				Label: "Re-sign-in to Codex",
+				Href:  envDefault("CODEX_REAUTH_URL", "https://auth.romaine.life/codex"),
+			},
+		})
+	}
+	return configs
 }
 
 func main() {
@@ -315,6 +363,36 @@ func main() {
 		}()
 	}
 
+	// Provider-credential health poller. Reads /health/<provider> on
+	// the in-cluster api-proxy services, debounces sustained failures,
+	// writes provider_credential_health rows, and fans session.status
+	// banner events into every active session whose mode requires the
+	// affected provider. The poller is the durable source of the
+	// transcript-surfaced "Codex sign-in expired" banner (the
+	// designed-and-visible failure surface replacing the deleted SPA
+	// pill). Skipped when pgPool is nil — stub mode has no place to
+	// write the Layer 1 row.
+	var providerHealthManager *providerhealth.Manager
+	if pgPool != nil && sessionEventsStore != nil {
+		providerHealthStore := pgstore.NewProviderCredentialHealthStore(pgPool)
+		providerConfigs := buildProviderHealthConfigs()
+		providerHealthManager = providerhealth.NewManager(providerhealth.ManagerConfig{
+			Store:     providerHealthStore,
+			Pool:      pgPool,
+			Emitter:   providerHealthEmitter{events: sessionEventsStore, bus: sessionBus},
+			Providers: providerConfigs,
+			Scope:     sessionScope,
+			Metrics:   promProviderHealthMetrics{},
+		})
+		if len(providerConfigs) > 0 {
+			go func() {
+				if err := providerHealthManager.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("providerhealth manager stopped", "error", err)
+				}
+			}()
+		}
+	}
+
 	// 12. Register all routes. Internal session handlers authenticate via
 	// the auth.romaine.life service-principal JWT path (#486 Stage 4); the
 	// pre-migration (ns, sa) allowlist env was retired with that change.
@@ -340,6 +418,7 @@ func main() {
 		spawnQuota:               NewSpawnQuotaTracker(),
 		hermesBridge:             buildHermesBridge(sessionEventsStore, sessionScope),
 		mcpGitHub:                buildMCPGitHubClient(),
+		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
 

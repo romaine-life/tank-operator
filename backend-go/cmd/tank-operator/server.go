@@ -22,6 +22,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
+	"github.com/nelsong6/tank-operator/backend-go/internal/providerhealth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
@@ -79,6 +80,14 @@ type appServer struct {
 	// auth.romaine.life-audience projected SA token — the endpoint
 	// then 503s loudly rather than mis-routing the request.
 	mcpGitHub AppServerMCPGitHub
+
+	// providerHealth drives the transcript-surfaced "<provider>
+	// sign-in expired" banner. The poll loop owns Layer 1 and the
+	// post-transition fan-out; this handle is used by handleCreateSession
+	// to backfill a session.status:failed banner on a freshly-created
+	// session whose mode's provider is currently in a failed state.
+	// nil when pgPool is unset (stub mode).
+	providerHealth *providerhealth.Manager
 }
 
 type sessionCommandBus interface {

@@ -190,6 +190,18 @@ spec:
               value: {{ .Values.hermes.authRomaineExchangeURL | quote }}
             - name: HERMES_AUTH_ROMAINE_SA_TOKEN_PATH
               value: "/var/run/secrets/auth.romaine.life/token"
+            # Provider-credential health poller — reads the codex-api-proxy
+            # /health/codex endpoint to drive the transcript-surfaced
+            # "Codex sign-in expired" banner. The poll loop is conditional
+            # on this env var being set; empty disables the banner
+            # surface entirely (useful in test environments). The
+            # re-auth URL is the user-facing affordance the SPA renders
+            # as a button on the system message — point it at the
+            # canonical Codex sign-in flow.
+            - name: CODEX_PROXY_HEALTH_URL
+              value: {{ .Values.providerHealth.codexProxyHealthURL | default "" | quote }}
+            - name: CODEX_REAUTH_URL
+              value: {{ .Values.providerHealth.codexReauthURL | default "https://auth.romaine.life" | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "tank-operator.credentialRefresherConfigSecret" . }}

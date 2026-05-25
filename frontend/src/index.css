@@ -6288,6 +6288,47 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.09);
 }
 
+/* Error-severity system messages — used by session.status:failed banners
+   (provider credential failures, sustained session-level conditions).
+   The bubble reads as a transcript-native error notice, NOT as a
+   floating toast — by design, per docs/features/transcript/contract.md.
+   The avatar takes a danger-tinted variant so the eye lands on the
+   banner without scanning the body. */
+.run-transcript-message[data-variant="system"][data-severity="error"] .run-msg-system-avatar {
+  color: rgba(252, 165, 165, 0.95);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.32);
+}
+
+.run-transcript-message[data-variant="system"][data-severity="error"] .run-transcript-message-text {
+  color: rgba(254, 226, 226, 0.96);
+}
+
+.run-msg-system-action {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.55rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.16);
+  color: #fee2e2;
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-msg-system-action:hover {
+  background: rgba(239, 68, 68, 0.24);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ffffff;
+}
+
 .run-msg-ai-icon {
   width: 2.625rem;
   height: 2.625rem;
