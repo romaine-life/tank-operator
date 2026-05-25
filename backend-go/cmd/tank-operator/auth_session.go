@@ -35,7 +35,7 @@ func (s *appServer) resolveSessionScope(user auth.User, requested string) (strin
 	if scope == local {
 		return scope, http.StatusOK, nil
 	}
-	if user.Role != auth.RoleAdmin {
+	if !hasAdminPower(user) {
 		return "", http.StatusForbidden, errors.New("session scope not allowed")
 	}
 	if local == prodSessionScope || scope != prodSessionScope {
@@ -115,7 +115,7 @@ func (s *appServer) ownerForSessionInScope(ctx context.Context, scope, sessionID
 // someone else's session — admin lift is read-only by construction.
 //
 // Authorization rule:
-//   - role=admin     → allowed for any owner
+//   - admin power    → allowed for any owner
 //   - role=service   → allowed only when info.Owner == user.ActorEmail
 //   - role=user/etc  → allowed only when info.Owner == user.Email
 //
@@ -155,7 +155,7 @@ func (s *appServer) authorizeSessionReadInScope(
 	}
 
 	if scope != s.localSessionScope() {
-		if user.Role == auth.RoleAdmin {
+		if hasAdminPower(user) {
 			sessionOwner, ownerErr := s.ownerForSessionInScope(ctx, scope, sessionID)
 			if ownerErr != nil {
 				return sessions.Info{}, http.StatusInternalServerError, ownerErr
@@ -163,7 +163,7 @@ func (s *appServer) authorizeSessionReadInScope(
 			if sessionOwner != "" {
 				info, err := s.getRegisteredByOwnerInScope(ctx, sessionOwner, sessionID, scope)
 				if err == nil {
-					if !strings.EqualFold(info.Owner, user.Email) {
+					if !strings.EqualFold(info.Owner, owner) {
 						recordAdminCrossUserRead()
 					}
 					return info, http.StatusOK, nil
@@ -183,8 +183,8 @@ func (s *appServer) authorizeSessionReadInScope(
 		}
 		return sessions.Info{}, http.StatusInternalServerError, err
 	}
-	if user.Role == auth.RoleAdmin {
-		if info.Owner != user.Email {
+	if hasAdminPower(user) {
+		if !strings.EqualFold(info.Owner, owner) {
 			recordAdminCrossUserRead()
 		}
 		return info, http.StatusOK, nil
@@ -205,7 +205,7 @@ func (s *appServer) authorizeSessionReadInScope(
 // what unlocks the cross-user path.
 func listSessionsOwner(user auth.User, r *http.Request) string {
 	queryOwner := strings.TrimSpace(r.URL.Query().Get("owner"))
-	if user.Role == auth.RoleAdmin && queryOwner != "" {
+	if hasAdminPower(user) && queryOwner != "" {
 		recordAdminCrossUserList()
 		return queryOwner
 	}
