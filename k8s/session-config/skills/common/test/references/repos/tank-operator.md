@@ -13,6 +13,19 @@ Use `apply_test_slot_hot_swap` for supported artifact kinds, passing the pushed
 git ref and checked-out slot. Record the result with
 `record_test_slot_hot_swap` when the tool does not already do so.
 
+Before treating a hot-swap as validation evidence, run the repo classifier with
+the validation target you intend to prove:
+
+```sh
+node scripts/classify-tank-test-fidelity.mjs --artifact-kind <kind> --validation-target <existing_session|new_session|full_runtime> --enforce
+```
+
+Tank's backend app pods and session runner pods are one distributed runtime.
+Runner hot-swap updates existing session pods only. If the classifier returns
+`hot_swap_partial` or `branch_image_required`, do not cite that single hot-swap
+as proof for the target; use the listed artifact hot-swaps, a future-pod runner
+override, or a branch image plus a fresh-session smoke according to the result.
+
 If the MCP hot-swap tools do not cover the artifact, choose the fastest faithful
 slot update for the change:
 

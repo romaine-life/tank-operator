@@ -123,6 +123,21 @@ const CHECKS = [
     pattern: /"agent_runner"\s*:\s*\{/,
   },
   {
+    id: "readme-fidelity-classifier-entry",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "README test_slot_hot_swap block declares the Tank-specific test fidelity classifier command",
+    kind: "grep-present",
+    pattern: /"fidelity_classifier"[\s\S]{0,300}?"command"\s*:\s*"node scripts\/classify-tank-test-fidelity\.mjs"/,
+  },
+  {
+    id: "tank-fidelity-classifier-self-test",
+    from: "Checkbox 1: hot-swap works",
+    description: "Tank-specific test fidelity classifier self-test exits 0",
+    kind: "exec",
+    command: ["node", "scripts/classify-tank-test-fidelity.mjs", "--self-test"],
+  },
+  {
     id: "readme-agent-runner-source",
     from: "Checkbox 1: hot-swap works",
     file: "README.md",
