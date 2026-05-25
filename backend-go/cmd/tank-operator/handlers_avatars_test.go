@@ -14,16 +14,13 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 )
 
 var tinyPNG = mustDecodeBase64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
 
 func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
-	app := &appServer{
-		verifier:     auth.NewVerifier(testJWT(t)),
-		avatars:      avatarassets.NewMemoryStore(),
-		avatarImages: avatarassets.NewMemoryImageStore(),
-	}
+	app := newAvatarTestServer(t)
 
 	createReq := avatarCreateRequest(t, map[string]string{
 		"kind": "agent",
@@ -42,6 +39,9 @@ func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 	}
 	if created.ID == "" || created.Kind != "agent" || created.Name != "Ada" {
 		t.Fatalf("created = %#v", created)
+	}
+	if created.AttemptID == "" {
+		t.Fatalf("missing upload attempt id: %#v", created)
 	}
 	if created.AvatarURL == "" || created.BackingURL == "" {
 		t.Fatalf("missing image urls: %#v", created)
@@ -109,11 +109,7 @@ func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 
 func TestAvatarCreateAllowsSuperAdminServiceActor(t *testing.T) {
 	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
-	app := &appServer{
-		verifier:     auth.NewVerifier(testJWT(t)),
-		avatars:      avatarassets.NewMemoryStore(),
-		avatarImages: avatarassets.NewMemoryImageStore(),
-	}
+	app := newAvatarTestServer(t)
 	req := avatarCreateRequest(t, map[string]string{
 		"kind": "agent",
 		"name": "Ada",
@@ -137,11 +133,7 @@ func TestAvatarCreateAllowsSuperAdminServiceActor(t *testing.T) {
 
 func TestAvatarCreateRejectsRegularServiceActor(t *testing.T) {
 	t.Setenv("SUPER_ADMIN_EMAILS", adminEmail)
-	app := &appServer{
-		verifier:     auth.NewVerifier(testJWT(t)),
-		avatars:      avatarassets.NewMemoryStore(),
-		avatarImages: avatarassets.NewMemoryImageStore(),
-	}
+	app := newAvatarTestServer(t)
 	req := avatarCreateRequest(t, map[string]string{
 		"kind": "agent",
 		"name": "Ada",
@@ -204,11 +196,7 @@ func TestDefaultAvatarImageFallsBackToBundledStatic(t *testing.T) {
 }
 
 func TestAvatarCreateRejectsInvalidKind(t *testing.T) {
-	app := &appServer{
-		verifier:     auth.NewVerifier(testJWT(t)),
-		avatars:      avatarassets.NewMemoryStore(),
-		avatarImages: avatarassets.NewMemoryImageStore(),
-	}
+	app := newAvatarTestServer(t)
 	req := avatarCreateRequest(t, map[string]string{
 		"kind": "personal",
 		"name": "Ada",
@@ -226,7 +214,99 @@ func TestAvatarCreateRejectsInvalidKind(t *testing.T) {
 	}
 }
 
+func TestAvatarCreateMalformedMultipartRecordsDebugAttempt(t *testing.T) {
+	app := newAvatarTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/avatars", strings.NewReader("not multipart"))
+	req.Header.Set("Content-Type", "text/plain")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	resp := httptest.NewRecorder()
+
+	app.handleCreateAvatar(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Detail    string `json:"detail"`
+		Code      string `json:"code"`
+		AttemptID string `json:"attempt_id"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "wrong_content_type" || body.AttemptID == "" {
+		t.Fatalf("body = %#v", body)
+	}
+
+	debugReq := httptest.NewRequest(http.MethodGet, "/api/debug/avatar-upload-attempts?attempt_id="+body.AttemptID, nil)
+	debugReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	debugResp := httptest.NewRecorder()
+	app.handleDebugAvatarUploadAttempts(debugResp, debugReq)
+	if debugResp.Code != http.StatusOK {
+		t.Fatalf("debug status = %d body = %s", debugResp.Code, debugResp.Body.String())
+	}
+	var debugBody struct {
+		Attempts []avataruploads.Attempt `json:"attempts"`
+	}
+	if err := json.Unmarshal(debugResp.Body.Bytes(), &debugBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(debugBody.Attempts) != 1 {
+		t.Fatalf("attempts = %#v", debugBody.Attempts)
+	}
+	got := debugBody.Attempts[0]
+	if got.ID != body.AttemptID || got.Stage != "parse_multipart" || got.Result != "wrong_media_type" {
+		t.Fatalf("attempt = %#v", got)
+	}
+	if got.ContentTypeClass != "wrong_media_type" || got.Diagnostics["parser_error"] == "" {
+		t.Fatalf("attempt diagnostics = %#v", got)
+	}
+}
+
+func TestAvatarCreateMissingBackingRecordsFieldSummary(t *testing.T) {
+	app := newAvatarTestServer(t)
+	req := avatarCreateRequestWithFiles(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+	}, []string{"avatar"})
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	resp := httptest.NewRecorder()
+
+	app.handleCreateAvatar(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var body struct {
+		Code      string `json:"code"`
+		AttemptID string `json:"attempt_id"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "missing_image_field" || body.AttemptID == "" {
+		t.Fatalf("body = %#v", body)
+	}
+	attempt, err := app.avatarUploads.Get(t.Context(), body.AttemptID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Stage != "read_backing" || attempt.Result != "missing_field" {
+		t.Fatalf("attempt = %#v", attempt)
+	}
+	if !attempt.Fields["avatar"].Present {
+		t.Fatalf("avatar field summary missing: %#v", attempt.Fields)
+	}
+	if attempt.Fields["backing"].Present {
+		t.Fatalf("backing field should be absent: %#v", attempt.Fields)
+	}
+}
+
 func avatarCreateRequest(t *testing.T, fields map[string]string) *http.Request {
+	return avatarCreateRequestWithFiles(t, fields, []string{"avatar", "backing"})
+}
+
+func avatarCreateRequestWithFiles(t *testing.T, fields map[string]string, fileFields []string) *http.Request {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -235,7 +315,7 @@ func avatarCreateRequest(t *testing.T, fields map[string]string) *http.Request {
 			t.Fatal(err)
 		}
 	}
-	for _, field := range []string{"avatar", "backing"} {
+	for _, field := range fileFields {
 		part, err := writer.CreateFormFile(field, field+".png")
 		if err != nil {
 			t.Fatal(err)
@@ -250,6 +330,16 @@ func avatarCreateRequest(t *testing.T, fields map[string]string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/avatars", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
+}
+
+func newAvatarTestServer(t *testing.T) *appServer {
+	t.Helper()
+	return &appServer{
+		verifier:      auth.NewVerifier(testJWT(t)),
+		avatars:       avatarassets.NewMemoryStore(),
+		avatarImages:  avatarassets.NewMemoryImageStore(),
+		avatarUploads: avataruploads.NewMemoryStore(),
+	}
 }
 
 func mustDecodeBase64(raw string) []byte {

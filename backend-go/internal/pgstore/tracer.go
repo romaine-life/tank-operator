@@ -82,7 +82,9 @@ func (t *QueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.T
 //	insert_github_install_states, update_github_install_states,
 //	delete_github_install_states, select_stream_auth_tickets,
 //	insert_stream_auth_tickets, update_stream_auth_tickets,
-//	delete_stream_auth_tickets, select_session_counters, upsert_session_counters,
+//	delete_stream_auth_tickets, select_avatar_upload_attempts,
+//	insert_avatar_upload_attempts, update_avatar_upload_attempts,
+//	delete_avatar_upload_attempts, select_session_counters, upsert_session_counters,
 //	select_conversation_read_state, upsert_conversation_read_state,
 //	migration, advisory_lock, advisory_unlock, ping, other.
 //
@@ -147,6 +149,7 @@ var knownTables = []string{
 	"profiles",
 	"github_install_states",
 	"stream_auth_tickets",
+	"avatar_upload_attempts",
 	"sessions",
 	"session_counters",
 	"conversation_read_state",

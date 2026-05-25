@@ -20,6 +20,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/providerhealth"
@@ -40,6 +41,7 @@ type appServer struct {
 	sessionEvents       store.SessionEventStore
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
+	avatarUploads       avataruploads.Store
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
 	readStates          store.ConversationReadStateStore
@@ -132,6 +134,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/avatar-decks", s.handleGetAvatarDecks)
 	mux.HandleFunc("POST /api/admin/avatars", s.handleCreateAvatar)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
+	// Admin-only durable support surface for avatar upload failures. The
+	// form error returns attempt_id; this endpoint turns that reference into
+	// a curl-able diagnosis without browser devtools.
+	mux.HandleFunc("GET /api/debug/avatar-upload-attempts", s.handleDebugAvatarUploadAttempts)
 
 	// Auth.
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)

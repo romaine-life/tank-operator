@@ -404,6 +404,20 @@ data:
               "legendFormat": "warm-spawn ratio"
             }
           ]
+        },
+        {
+          "id": 23,
+          "title": "Avatar upload attempts by stage/result",
+          "description": "No-devtools avatar upload diagnostic surface. Failed UI saves include an attempt_id; query GET /api/debug/avatar-upload-attempts?attempt_id=<id> for the durable row, then use this panel to see whether the same stage/result is systemic.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 96 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_avatar_upload_attempts_total[5m])) by (stage, result)",
+              "legendFormat": "{{`{{ stage }}`}} {{`{{ result }}`}}"
+            }
+          ]
         }
       ]
     }
