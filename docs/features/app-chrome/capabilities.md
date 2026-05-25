@@ -93,7 +93,8 @@ Status: active
 
 Intent:
 Let administrators curate the durable avatar catalog used by app chrome and
-transcript surfaces without relying on automatic face detection or code edits.
+transcript surfaces from the Settings -> Admin pane without relying on
+automatic face detection or code edits.
 
 Affected contracts:
 - App Chrome
@@ -106,10 +107,11 @@ Contract impact:
 - Non-admin callers can read the active catalog for rendering but cannot mutate
   it.
 - Failure states for auth, upload validation, image reads, and deletes are
-  visible in the admin route.
+  visible in the Settings -> Admin avatar pane.
 
 Evidence:
-- PRs changing avatar admin behavior should verify admin-only writes,
-  authenticated image reads, and reload-safe catalog rendering.
+- PRs changing avatar admin behavior should verify the Settings -> Admin pane,
+  admin-only writes, authenticated image reads, and reload-safe catalog
+  rendering.
 - PRs changing avatar storage should cite the migration and bounded metric
   evidence for avatar create/read/delete outcomes.

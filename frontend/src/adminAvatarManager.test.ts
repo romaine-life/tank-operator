@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchAvatarViews } from "./AdminAvatarsPage";
+import { fetchAvatarViews } from "./AdminAvatarManager";
 
 test("avatar admin keeps usable entries when another avatar image is missing", async () => {
   const originalFetch = globalThis.fetch;

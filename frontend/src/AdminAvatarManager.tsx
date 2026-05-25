@@ -13,15 +13,13 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import { authedFetch } from "./auth";
 import {
   type AvatarCrop,
   clampAvatarCrop,
   cropToSourceRect,
 } from "./adminAvatarCrop";
 import { openAvatarPreview } from "./avatarPreview";
-
-type AdminUser = NonNullable<Awaited<ReturnType<typeof bootstrapAuth>>>;
 
 type AvatarKind = "agent" | "system";
 
@@ -148,6 +146,10 @@ export async function fetchAvatarViews(): Promise<AvatarView[]> {
   return views;
 }
 
+type AdminAvatarManagerProps = {
+  onCatalogChanged?: () => void | Promise<void>;
+};
+
 function isAvatarDeckKind(value: unknown): value is AvatarDeckKind {
   if (!value || typeof value !== "object") return false;
   const deck = value as Record<string, unknown>;
@@ -187,10 +189,7 @@ function containedImageRect(
   };
 }
 
-export function AdminAvatarsPage() {
-  const [user, setUser] = useState<AdminUser | null>(null);
-  const [booted, setBooted] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps) {
   const [entries, setEntries] = useState<AvatarView[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [loadingEntries, setLoadingEntries] = useState(false);
@@ -210,18 +209,6 @@ export function AdminAvatarsPage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const avatarObjectURLsRef = useRef<string[]>([]);
-
-  useEffect(() => {
-    bootstrapAuth()
-      .then((u) => {
-        setUser(u);
-        setBooted(true);
-      })
-      .catch((err) => {
-        setAuthError(err instanceof Error ? err.message : String(err));
-        setBooted(true);
-      });
-  }, []);
 
   const revokeAvatarObjectURLs = useCallback(() => {
     for (const url of avatarObjectURLsRef.current) URL.revokeObjectURL(url);
@@ -244,6 +231,18 @@ export function AdminAvatarsPage() {
       setLoadingEntries(false);
     }
   }, [revokeAvatarObjectURLs]);
+  const notifyCatalogChanged = useCallback(async (
+    surfaceError: (message: string) => void,
+    successContext: string,
+  ) => {
+    if (!onCatalogChanged) return;
+    try {
+      await onCatalogChanged();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      surfaceError(`${successContext}, but active transcript avatars did not refresh: ${detail}`);
+    }
+  }, [onCatalogChanged]);
 
   const reloadDecks = useCallback(async () => {
     setLoadingDeck(true);
@@ -258,11 +257,9 @@ export function AdminAvatarsPage() {
   }, []);
 
   useEffect(() => {
-    if (user?.role === "admin") {
-      void reloadEntries();
-      void reloadDecks();
-    }
-  }, [reloadDecks, reloadEntries, user?.role]);
+    void reloadEntries();
+    void reloadDecks();
+  }, [reloadDecks, reloadEntries]);
 
   useEffect(() => () => revokeAvatarObjectURLs(), [revokeAvatarObjectURLs]);
 
@@ -332,7 +329,6 @@ export function AdminAvatarsPage() {
   }, []);
 
   useEffect(() => {
-    if (user?.role !== "admin") return;
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData;
       if (!data) return;
@@ -343,7 +339,7 @@ export function AdminAvatarsPage() {
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [selectPhoto, user?.role]);
+  }, [selectPhoto]);
 
   async function buildAvatarBlob(): Promise<Blob> {
     const image = imageRef.current;
@@ -415,6 +411,7 @@ export function AdminAvatarsPage() {
       selectPhoto(null);
       await reloadEntries();
       await reloadDecks();
+      await notifyCatalogChanged(setFormError, "Avatar saved");
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -433,34 +430,7 @@ export function AdminAvatarsPage() {
     }
     await reloadEntries();
     await reloadDecks();
-  }
-
-  if (!booted) {
-    return <div className="boot-state"><span className="boot-text">loading...</span></div>;
-  }
-  if (authError) {
-    return (
-      <div className="boot-state">
-        <pre className="error">auth error: {authError}</pre>
-        <button className="btn-secondary" type="button" onClick={() => location.reload()}>retry</button>
-      </div>
-    );
-  }
-  if (!user) {
-    return (
-      <div className="admin-avatar-page admin-avatar-access">
-        <button type="button" className="btn-primary" onClick={startLogin}>Sign in</button>
-      </div>
-    );
-  }
-  if (user.role !== "admin") {
-    return (
-      <div className="admin-avatar-page admin-avatar-access">
-        <h1>Avatar admin</h1>
-        <p>Admin access required.</p>
-        <button type="button" className="btn-secondary" onClick={logout}>Sign out</button>
-      </div>
-    );
+    await notifyCatalogChanged(setListError, "Avatar deleted");
   }
 
   const visibleDeck = decks.find((deck) => deck.kind === kind);
@@ -468,16 +438,8 @@ export function AdminAvatarsPage() {
   const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
 
   return (
-    <div className="admin-avatar-page">
-      <header className="admin-avatar-header">
-        <div>
-          <h1>Avatar admin</h1>
-          <p>{user.email}</p>
-        </div>
-        <a className="btn-secondary admin-avatar-home" href="/">Back to app</a>
-      </header>
-
-      <main className="admin-avatar-layout">
+    <div className="admin-avatar-manager">
+      <div className="admin-avatar-layout">
         <section className="admin-avatar-editor" aria-label="Add avatar">
           <div className="admin-avatar-editor-head">
             <ImagePlusIcon size={18} aria-hidden="true" />
@@ -581,124 +543,124 @@ export function AdminAvatarsPage() {
         </section>
 
         <div className="admin-avatar-stack">
-        <section className="admin-avatar-deck" aria-label="Avatar traversal">
-          <div className="admin-avatar-gallery-head">
-            <h2>{kind === "agent" ? "Agent traversal" : "System traversal"}</h2>
-            {loadingDeck && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
-          </div>
-          {deckError && <div className="admin-avatar-error">{deckError}</div>}
-          {deckEntries.length === 0 ? (
-            <p className="admin-avatar-empty">No {kind} deck yet.</p>
-          ) : (
-            <div className="admin-avatar-deck-list">
-              {deckEntries.map((deckEntry) => {
-                const view = entriesById.get(deckEntry.avatar_id);
-                const disabled = deckEntry.used || !deckEntry.available || !view?.avatarSrc;
-                return (
-                  <button
-                    key={`${deckEntry.position}-${deckEntry.avatar_id}`}
-                    type="button"
-                    className="admin-avatar-deck-row"
-                    data-used={deckEntry.used ? "true" : undefined}
-                    data-available={deckEntry.available ? "true" : "false"}
-                    disabled={disabled}
-                    onClick={(event) => {
-                      if (!view?.avatarSrc) return;
-                      openAvatarPreview({
-                        name: view.name,
-                        avatarSrc: view.avatarSrc,
-                        backingSrc: view.backing_url,
-                        kind: view.kind,
-                      }, event);
-                    }}
-                  >
-                    <span className="admin-avatar-deck-position">{deckEntry.position}</span>
-                    <span className="admin-avatar-card-preview" aria-hidden="true">
-                      {view?.avatarSrc ? (
-                        <img src={view.avatarSrc} alt="" draggable={false} />
-                      ) : (
-                        <ImagePlusIcon size={18} aria-hidden="true" />
-                      )}
-                    </span>
-                    <span className="admin-avatar-deck-body">
-                      <span className="admin-avatar-card-name">{deckEntry.name}</span>
-                      <span className="admin-avatar-card-meta">
-                        {view?.imageError
-                          ? "image unavailable"
-                          : deckEntry.used
-                          ? `used${deckEntry.used_session_id ? ` - ${deckEntry.used_session_id}` : ""}`
-                          : deckEntry.available
-                            ? "remaining"
-                            : "removed"}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+          <section className="admin-avatar-deck" aria-label="Avatar traversal">
+            <div className="admin-avatar-gallery-head">
+              <h2>{kind === "agent" ? "Agent traversal" : "System traversal"}</h2>
+              {loadingDeck && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
             </div>
-          )}
-        </section>
+            {deckError && <div className="admin-avatar-error">{deckError}</div>}
+            {deckEntries.length === 0 ? (
+              <p className="admin-avatar-empty">No {kind} deck yet.</p>
+            ) : (
+              <div className="admin-avatar-deck-list">
+                {deckEntries.map((deckEntry) => {
+                  const view = entriesById.get(deckEntry.avatar_id);
+                  const disabled = deckEntry.used || !deckEntry.available || !view?.avatarSrc;
+                  return (
+                    <button
+                      key={`${deckEntry.position}-${deckEntry.avatar_id}`}
+                      type="button"
+                      className="admin-avatar-deck-row"
+                      data-used={deckEntry.used ? "true" : undefined}
+                      data-available={deckEntry.available ? "true" : "false"}
+                      disabled={disabled}
+                      onClick={(event) => {
+                        if (!view?.avatarSrc) return;
+                        openAvatarPreview({
+                          name: view.name,
+                          avatarSrc: view.avatarSrc,
+                          backingSrc: view.backing_url,
+                          kind: view.kind,
+                        }, event);
+                      }}
+                    >
+                      <span className="admin-avatar-deck-position">{deckEntry.position}</span>
+                      <span className="admin-avatar-card-preview" aria-hidden="true">
+                        {view?.avatarSrc ? (
+                          <img src={view.avatarSrc} alt="" draggable={false} />
+                        ) : (
+                          <ImagePlusIcon size={18} aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className="admin-avatar-deck-body">
+                        <span className="admin-avatar-card-name">{deckEntry.name}</span>
+                        <span className="admin-avatar-card-meta">
+                          {view?.imageError
+                            ? "image unavailable"
+                            : deckEntry.used
+                              ? `used${deckEntry.used_session_id ? ` - ${deckEntry.used_session_id}` : ""}`
+                              : deckEntry.available
+                                ? "remaining"
+                                : "removed"}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
-        <section className="admin-avatar-gallery" aria-label="Avatar gallery">
-          <div className="admin-avatar-gallery-head">
-            <h2>{kind === "agent" ? "Agent avatars" : "System avatars"}</h2>
-            {loadingEntries && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
-          </div>
-          {listError && <div className="admin-avatar-error">{listError}</div>}
-          {visibleEntries.length === 0 ? (
-            <p className="admin-avatar-empty">No {kind} avatars.</p>
-          ) : (
-            <div className="admin-avatar-grid">
-              {visibleEntries.map((entry) => (
-                <div className="admin-avatar-card" key={entry.id}>
-                  <button
-                    type="button"
-                    className="admin-avatar-card-main"
-                    aria-label={`View ${entry.name}`}
-                    disabled={!entry.avatarSrc}
-                    onClick={(event) =>
-                      entry.avatarSrc &&
-                      openAvatarPreview({
-                        name: entry.name,
-                        avatarSrc: entry.avatarSrc,
-                        backingSrc: entry.backing_url,
-                        kind: entry.kind,
-                      }, event)
-                    }
-                  >
-                    <span className="admin-avatar-card-preview" aria-hidden="true">
-                      {entry.avatarSrc ? (
-                        <img src={entry.avatarSrc} alt="" draggable={false} />
-                      ) : (
-                        <ImagePlusIcon size={18} aria-hidden="true" />
-                      )}
-                    </span>
-                    <span className="admin-avatar-card-body">
-                      <span className="admin-avatar-card-name">{entry.name}</span>
-                      <span className="admin-avatar-card-meta">
-                        {entry.imageError ? "image unavailable" : entry.created_by}
-                      </span>
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="admin-avatar-delete"
-                    title="delete avatar"
-                    aria-label={`Delete ${entry.name}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void deleteAvatar(entry);
-                    }}
-                  >
-                    <Trash2Icon size={15} aria-hidden="true" />
-                  </button>
-                </div>
-              ))}
+          <section className="admin-avatar-gallery" aria-label="Avatar gallery">
+            <div className="admin-avatar-gallery-head">
+              <h2>{kind === "agent" ? "Agent avatars" : "System avatars"}</h2>
+              {loadingEntries && <Loader2Icon size={16} className="spin" aria-hidden="true" />}
             </div>
-          )}
-        </section>
+            {listError && <div className="admin-avatar-error">{listError}</div>}
+            {visibleEntries.length === 0 ? (
+              <p className="admin-avatar-empty">No {kind} avatars.</p>
+            ) : (
+              <div className="admin-avatar-grid">
+                {visibleEntries.map((entry) => (
+                  <div className="admin-avatar-card" key={entry.id}>
+                    <button
+                      type="button"
+                      className="admin-avatar-card-main"
+                      aria-label={`View ${entry.name}`}
+                      disabled={!entry.avatarSrc}
+                      onClick={(event) =>
+                        entry.avatarSrc &&
+                        openAvatarPreview({
+                          name: entry.name,
+                          avatarSrc: entry.avatarSrc,
+                          backingSrc: entry.backing_url,
+                          kind: entry.kind,
+                        }, event)
+                      }
+                    >
+                      <span className="admin-avatar-card-preview" aria-hidden="true">
+                        {entry.avatarSrc ? (
+                          <img src={entry.avatarSrc} alt="" draggable={false} />
+                        ) : (
+                          <ImagePlusIcon size={18} aria-hidden="true" />
+                        )}
+                      </span>
+                      <span className="admin-avatar-card-body">
+                        <span className="admin-avatar-card-name">{entry.name}</span>
+                        <span className="admin-avatar-card-meta">
+                          {entry.imageError ? "image unavailable" : entry.created_by}
+                        </span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-avatar-delete"
+                      title="delete avatar"
+                      aria-label={`Delete ${entry.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteAvatar(entry);
+                      }}
+                    >
+                      <Trash2Icon size={15} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
-      </main>
+      </div>
     </div>
   );
 }
