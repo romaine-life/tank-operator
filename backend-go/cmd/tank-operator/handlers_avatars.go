@@ -188,6 +188,10 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 	img, err := s.avatarImages.Get(r.Context(), key)
 	if err != nil {
 		if errors.Is(err, avatarassets.ErrNotFound) {
+			if serveDefaultAvatarAssetImage(w, r, meta) {
+				recordAvatarAssetRequest("read_image", "", "ok")
+				return
+			}
 			recordAvatarAssetRequest("read_image", "", "not_found")
 			writeError(w, http.StatusNotFound, "avatar not found")
 			return
@@ -206,6 +210,21 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(img.Bytes)
+}
+
+func serveDefaultAvatarAssetImage(w http.ResponseWriter, r *http.Request, meta avatarassets.Metadata) bool {
+	file, ok := defaultAvatarAssetFile(meta.ID)
+	if !ok {
+		return false
+	}
+	path, ok := tankStaticFile(tankStaticRoots(), "assets", "avatars", file)
+	if !ok {
+		return false
+	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeFile(w, r, path)
+	return true
 }
 
 func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
