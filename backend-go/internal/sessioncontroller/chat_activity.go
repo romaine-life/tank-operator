@@ -56,6 +56,7 @@ type SessionToOwnerResolver interface {
 //   - "turn_failed": the runner published a provider/agent failure.
 //   - "turn_command_failed": the backend's submit/interrupt command
 //     fabric failed durably.
+//
 // Per docs/quality-timeframes.md "Missing counters for user-trust
 // failures." Without this, a future regression that introduces a new
 // path-to-error (or the historical item.failed inference) is invisible
@@ -136,7 +137,27 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 		// emit; the sidebar dropped the row on session.deleted.
 		return nil
 	}
+	return e.RefreshSessionActivity(ctx, owner, publicID)
+}
 
+// RefreshSessionActivity recomputes and publishes the session row's activity
+// summary from durable chat events plus durable read-state. Chat-event writes
+// call this through EmitChatActivityDelta; read-state updates call it directly
+// so the sidebar's unread badge clears through the same durable sessions row
+// update path instead of waiting for the next turn event.
+func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner, publicID string) error {
+	if e == nil {
+		return nil
+	}
+	metrics := e.Metrics
+	if metrics == nil {
+		metrics = noopLifecycleEmitterMetrics{}
+	}
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	publicID = strings.TrimSpace(publicID)
+	if owner == "" || publicID == "" {
+		return nil
+	}
 	// Read prior activity and pod-status from the sessions row. Phase 4
 	// dropped the lifecycle-store LatestActivity / LatestPodStatus
 	// reads; the row is the only durable source now.

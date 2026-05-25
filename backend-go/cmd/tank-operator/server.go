@@ -43,6 +43,7 @@ type appServer struct {
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
 	readStates          store.ConversationReadStateStore
+	activityRefresher   sessionActivityRefresher
 	verifier            *auth.Verifier
 	gitHubInstallStates gitHubInstallStateStore
 	streamAuthTickets   streamAuthTicketStore

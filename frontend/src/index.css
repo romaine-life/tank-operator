@@ -1859,6 +1859,7 @@ button:disabled {
 .status-dot.status-agent-waiting,
 .status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 .status-dot.status-agent-needs-input { background: var(--status-agent-needs-input); }
+.status-dot.status-agent-stopping { background: var(--status-agent-working); }
 .status-dot.status-agent-error { background: var(--status-error-fg); }
 
 .mode {
@@ -1955,6 +1956,11 @@ button:disabled {
 }
 
 .session-activity-chip.is-running {
+  background: rgba(251, 191, 36, 0.14);
+  color: #fcd34d;
+}
+
+.session-activity-chip.is-stopping {
   background: rgba(251, 191, 36, 0.14);
   color: #fcd34d;
 }
