@@ -13,6 +13,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 )
 
 const (
@@ -41,6 +42,7 @@ type avatarAssetResponse struct {
 	CreatedBy  string            `json:"created_by"`
 	CreatedAt  string            `json:"created_at"`
 	UpdatedAt  string            `json:"updated_at"`
+	AttemptID  string            `json:"attempt_id,omitempty"`
 }
 
 type avatarDeckResponse struct {
@@ -232,60 +234,77 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	attempt, err := s.newAvatarUploadAttempt(r, user)
+	if err != nil {
+		recordAvatarAssetRequest("create", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "avatar upload attempt store unavailable")
+		return
+	}
 	if s.avatars == nil || s.avatarImages == nil {
 		recordAvatarAssetRequest("create", "", "store_unavailable")
-		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusServiceUnavailable, "received", "store_unavailable", "avatar_store_unavailable", "avatar store not configured")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarMultipartBytes)
 	if err := r.ParseMultipartForm(maxAvatarMultipartBytes); err != nil {
+		result, code, detail := classifyAvatarMultipartFailure(err, attempt.ContentTypeClass)
+		attempt.Diagnostics["parser_error"] = avatarUploadDiagnosticValue(err.Error())
 		recordAvatarAssetRequest("create", "", "bad_request")
-		writeError(w, http.StatusBadRequest, "invalid multipart avatar upload")
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "parse_multipart", result, code, detail)
 		return
 	}
+	attempt.Diagnostics["kind_present"] = fmt.Sprintf("%t", strings.TrimSpace(r.FormValue("kind")) != "")
+	attempt.Diagnostics["name_present"] = fmt.Sprintf("%t", strings.TrimSpace(r.FormValue("name")) != "")
+	attempt.Diagnostics["crop_present"] = fmt.Sprintf("%t", strings.TrimSpace(r.FormValue("crop")) != "")
 	kind, ok := avatarassets.NormalizeKind(r.FormValue("kind"))
 	if !ok {
 		recordAvatarAssetRequest("create", "", "bad_request")
-		writeError(w, http.StatusBadRequest, "kind must be agent or system")
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "validate_kind", "invalid_kind", "invalid_kind", "kind must be agent or system")
 		return
 	}
+	attempt.Kind = kind
 	name := strings.TrimSpace(r.FormValue("name"))
 	if name == "" || len(name) > 80 {
 		recordAvatarAssetRequest("create", kind, "bad_request")
-		writeError(w, http.StatusBadRequest, "name is required and must be 80 characters or fewer")
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "validate_name", "invalid_name", "invalid_name", "name is required and must be 80 characters or fewer")
 		return
 	}
 	crop, err := parseAvatarCrop(r.FormValue("crop"))
 	if err != nil {
 		recordAvatarAssetRequest("create", kind, "bad_request")
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "validate_crop", "invalid_crop", "invalid_crop", err.Error())
 		return
 	}
-	avatarBytes, avatarMIME, err := readAvatarUploadField(r, "avatar", maxAvatarCropBytes)
+	avatarBytes, avatarMIME, avatarSummary, result, err := readAvatarUploadField(r, "avatar", maxAvatarCropBytes)
+	attempt.Fields["avatar"] = avatarSummary
 	if err != nil {
 		recordAvatarAssetRequest("create", kind, "bad_request")
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "read_avatar", result, avatarUploadReadErrorCode(result), err.Error())
 		return
 	}
-	backingBytes, backingMIME, err := readAvatarUploadField(r, "backing", maxAvatarBackingBytes)
+	backingBytes, backingMIME, backingSummary, result, err := readAvatarUploadField(r, "backing", maxAvatarBackingBytes)
+	attempt.Fields["backing"] = backingSummary
 	if err != nil {
 		recordAvatarAssetRequest("create", kind, "bad_request")
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusBadRequest, "read_backing", result, avatarUploadReadErrorCode(result), err.Error())
 		return
 	}
 
 	id := "av_" + auth.RandomHex(12)
+	attempt.AvatarID = id
 	avatarKey := newUploadedAvatarBlobKey(id, avatarassets.VariantAvatar, avatarMIME)
 	backingKey := newUploadedAvatarBlobKey(id, avatarassets.VariantBacking, backingMIME)
 	if err := s.avatarImages.Put(r.Context(), avatarKey, avatarassets.Image{MIME: avatarMIME, Bytes: avatarBytes}); err != nil {
+		attempt.Diagnostics["store_error"] = avatarUploadDiagnosticValue(err.Error())
 		recordAvatarAssetRequest("create", kind, "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusInternalServerError, "store_avatar", "store_error", "avatar_store_failed", "failed to store avatar image")
 		return
 	}
 	if err := s.avatarImages.Put(r.Context(), backingKey, avatarassets.Image{MIME: backingMIME, Bytes: backingBytes}); err != nil {
+		attempt.Diagnostics["store_error"] = avatarUploadDiagnosticValue(err.Error())
 		cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, avatarKey)
 		recordAvatarAssetRequest("create", kind, "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusInternalServerError, "store_backing", "store_error", "backing_store_failed", "failed to store backing image")
 		return
 	}
 
@@ -301,13 +320,17 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:      user.OwnerEmail(),
 	})
 	if err != nil {
+		attempt.Diagnostics["store_error"] = avatarUploadDiagnosticValue(err.Error())
 		cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, avatarKey, backingKey)
 		recordAvatarAssetRequest("create", kind, "store_error")
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeAvatarUploadFailure(w, r, &attempt, http.StatusInternalServerError, "create_metadata", "store_error", "avatar_metadata_store_failed", "failed to store avatar metadata")
 		return
 	}
+	s.recordAvatarUploadAttemptState(r, &attempt, "complete", "ok", "avatar saved")
 	recordAvatarAssetRequest("create", kind, "ok")
-	writeJSON(w, http.StatusCreated, avatarAssetResponseFromMeta(meta))
+	resp := avatarAssetResponseFromMeta(meta)
+	resp.AttemptID = attempt.ID
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *appServer) handleDeleteAvatar(w http.ResponseWriter, r *http.Request) {
@@ -393,29 +416,35 @@ func parseAvatarCrop(raw string) (avatarassets.Crop, error) {
 	return crop, nil
 }
 
-func readAvatarUploadField(r *http.Request, field string, limit int64) ([]byte, string, error) {
+func readAvatarUploadField(r *http.Request, field string, limit int64) ([]byte, string, avataruploads.FieldSummary, string, error) {
+	summary := avataruploads.FieldSummary{}
 	file, header, err := r.FormFile(field)
 	if err != nil {
-		return nil, "", fmt.Errorf("%s image is required", field)
+		return nil, "", summary, "missing_field", fmt.Errorf("%s image is required", field)
 	}
 	defer file.Close()
+	summary.Present = true
+	summary.HeaderMIME = strings.TrimSpace(header.Header.Get("Content-Type"))
 	var buf bytes.Buffer
 	written, err := io.Copy(&buf, io.LimitReader(file, limit+1))
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read %s image", field)
+		return nil, "", summary, "read_error", fmt.Errorf("failed to read %s image", field)
 	}
+	summary.SizeBytes = written
 	if written > limit {
-		return nil, "", fmt.Errorf("%s image exceeds %d bytes", field, limit)
+		return nil, "", summary, "field_too_large", fmt.Errorf("%s image exceeds %d bytes", field, limit)
 	}
 	raw := buf.Bytes()
 	if len(raw) == 0 {
-		return nil, "", fmt.Errorf("%s image is empty", field)
+		return nil, "", summary, "empty_file", fmt.Errorf("%s image is empty", field)
 	}
+	summary.DetectedMIME = http.DetectContentType(raw)
 	mime := normalizeAvatarUploadMIME(header.Header.Get("Content-Type"), raw)
 	if mime == "" {
-		return nil, "", fmt.Errorf("%s image must be png, jpeg, webp, gif, avif, or bmp", field)
+		return nil, "", summary, "invalid_mime", fmt.Errorf("%s image must be png, jpeg, webp, gif, avif, or bmp", field)
 	}
-	return raw, mime, nil
+	summary.MIME = mime
+	return raw, mime, summary, "ok", nil
 }
 
 func normalizeAvatarUploadMIME(header string, body []byte) string {

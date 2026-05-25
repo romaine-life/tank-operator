@@ -334,11 +334,26 @@ var avatarAssetRequestsTotal = promauto.NewCounterVec(
 	[]string{"operation", "kind", "result"},
 )
 
+var avatarUploadAttemptsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_avatar_upload_attempts_total",
+		Help: "Avatar upload attempts labeled by bounded server-side stage and result.",
+	},
+	[]string{"stage", "result"},
+)
+
 func recordAvatarAssetRequest(operation, kind, result string) {
 	avatarAssetRequestsTotal.WithLabelValues(
 		avatarAssetOperationLabel(operation),
 		avatarAssetKindLabel(kind),
 		avatarAssetResultLabel(result),
+	).Inc()
+}
+
+func recordAvatarUploadAttempt(stage, result string) {
+	avatarUploadAttemptsTotal.WithLabelValues(
+		avatarUploadStageLabel(stage),
+		avatarUploadResultLabel(result),
 	).Inc()
 }
 
@@ -363,6 +378,24 @@ func avatarAssetKindLabel(kind string) string {
 func avatarAssetResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func avatarUploadStageLabel(stage string) string {
+	switch stage {
+	case "received", "parse_multipart", "validate_kind", "validate_name", "validate_crop", "read_avatar", "read_backing", "store_avatar", "store_backing", "create_metadata", "complete":
+		return stage
+	default:
+		return "other"
+	}
+}
+
+func avatarUploadResultLabel(result string) string {
+	switch result {
+	case "started", "ok", "store_unavailable", "wrong_media_type", "missing_boundary", "parse_error", "body_too_large", "invalid_kind", "invalid_name", "invalid_crop", "missing_field", "empty_file", "field_too_large", "invalid_mime", "read_error", "store_error":
 		return result
 	default:
 		return "other"

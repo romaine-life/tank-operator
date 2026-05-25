@@ -117,6 +117,34 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS avatar_assets_kind_active_created
 		ON avatar_assets (kind, created_at DESC)
 		WHERE deleted_at IS NULL`,
+
+	// avatar_upload_attempts is the durable support surface for avatar
+	// upload failures. It lets an operator diagnose a failed browser
+	// upload from an attempt id without asking the user for devtools.
+	`CREATE TABLE IF NOT EXISTS avatar_upload_attempts (
+		id                 text PRIMARY KEY,
+		operation          text NOT NULL,
+		actor_email        text NOT NULL,
+		actor_role         text NOT NULL,
+		method             text NOT NULL,
+		route              text NOT NULL,
+		content_type       text NOT NULL DEFAULT '',
+		content_type_class text NOT NULL DEFAULT 'unknown',
+		content_length     bigint NOT NULL DEFAULT -1,
+		stage              text NOT NULL,
+		result             text NOT NULL,
+		detail             text NOT NULL DEFAULT '',
+		kind               text NOT NULL DEFAULT '',
+		avatar_id          text NOT NULL DEFAULT '',
+		fields             jsonb NOT NULL DEFAULT '{}'::jsonb,
+		diagnostics        jsonb NOT NULL DEFAULT '{}'::jsonb,
+		created_at         timestamptz NOT NULL DEFAULT now(),
+		updated_at         timestamptz NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS avatar_upload_attempts_created_at
+		ON avatar_upload_attempts (created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS avatar_upload_attempts_actor_created
+		ON avatar_upload_attempts (actor_email, created_at DESC)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,

@@ -45,6 +45,12 @@ All metric names are prefixed `tank_`. The full namespace:
   `stream` (`session-list`, `session-events`), and bounded `result`.
   Store failures are the signature where REST timeline reads still work
   but live SSE streams never open.
+- `tank_avatar_upload_attempts_total` — admin avatar upload attempts
+  labeled by bounded server-side `stage` and `result`. This distinguishes
+  wrong HTTP upload shape (`parse_multipart`), invalid metadata
+  (`validate_*`), image field failures (`read_avatar` / `read_backing`),
+  blob-storage failures (`store_*`), and metadata-write failures
+  (`create_metadata`) without using browser devtools.
 - `tank_chat_scroll_client_*` - browser-reported transcript scroll
   diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
   Labels are server-bucketed only: `event`, `surface`, `session_mode`,
@@ -159,6 +165,31 @@ past pending rows); if `emits_total` climbs on the server but the
 matching browser's `tank_session_event_client_received_total` stays
 flat, the SPA reducer is dropping (candidate C).
 
+## Avatar Upload Debug Surface
+
+`GET /api/debug/avatar-upload-attempts` (admin-only) returns durable
+diagnostic rows for `POST /api/admin/avatars`. A failed avatar upload
+response includes `attempt_id`; pass it as
+`?attempt_id=<attempt_id>` to retrieve the exact server-side stage,
+bounded result, request content-type classification, parsed file-field
+summaries, and safe parser/store diagnostics. Without `attempt_id`,
+the endpoint returns the most recent attempts, capped by `?limit=`
+(maximum 100).
+
+This endpoint is the no-devtools path for avatar upload failures. The
+user-visible form error gives the reference id; the operator queries
+the debug endpoint and then checks
+`tank_avatar_upload_attempts_total{stage,result}` to see whether the
+same failure is isolated or systemic. Parser failures are usually a
+client request-shape bug; `read_*` failures usually mean the client
+sent the wrong field name, empty bytes, an unsupported MIME type, or a
+file over the configured limit; `store_*` and `create_metadata`
+failures point at blob storage or Postgres.
+
+For browser-independent reproduction, `scripts/debug-avatar-upload.sh`
+posts the same multipart contract with `curl -F` and prints the raw
+API response, including `attempt_id` on success or failure.
+
 ## Cardinality rules
 
 These are the rules that keep Prometheus' active-series count bounded
@@ -205,6 +236,10 @@ the middleware extracts).
 declares one rule group per subsystem:
 
 - **HTTP**: 5xx rate, Postgres p99 latency, unmapped operations.
+- **Avatar uploads**: sustained parse/read/validate failures and any
+  storage/metadata failures. The runbook starts from
+  `GET /api/debug/avatar-upload-attempts?attempt_id=...`, using the
+  reference emitted in the UI error.
 - **Session bus / live transport**: schema-rejected events (steady-state
   must be zero), wake-publish failures, stream auth ticket store failures,
   and `turn.interrupt_requested` persist/publish failures (the durable

@@ -138,6 +138,44 @@ spec:
             summary: "tank-operator ran a Postgres query the operationFromSQL extractor did not recognize"
             runbook: "Add the new table to pgstore.knownTables and ship a follow-up; otherwise that query is invisible in latency dashboards."
 
+    - name: tank-operator.avatar-uploads
+      rules:
+        - alert: TankAvatarUploadContractFailures
+          expr: |
+            sum(rate(tank_avatar_upload_attempts_total{stage=~"parse_multipart|validate_kind|validate_name|validate_crop|read_avatar|read_backing",result!="ok"}[10m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "avatar uploads are failing validation or request-shape checks"
+            runbook: |
+              Failed POST /api/admin/avatars responses include an
+              attempt_id. Query
+              GET /api/debug/avatar-upload-attempts?attempt_id=<id>
+              with an admin bot token. parse_multipart failures point
+              at the browser/client FormData contract; validate_* points
+              at metadata shape; read_avatar/read_backing points at
+              missing fields, empty files, unsupported MIME types, or
+              file-size limits. The durable table is
+              avatar_upload_attempts.
+
+        - alert: TankAvatarUploadStoreFailures
+          expr: |
+            sum(rate(tank_avatar_upload_attempts_total{result="store_error"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "avatar uploads are failing during blob or metadata storage"
+            runbook: |
+              Query the latest attempts with
+              GET /api/debug/avatar-upload-attempts?limit=20. Stages
+              store_avatar/store_backing indicate blob-storage writes;
+              create_metadata indicates the avatar_assets Postgres write.
+              The durable source of truth for upload diagnosis is
+              avatar_upload_attempts, with the created avatar id recorded
+              on attempts that reached storage.
+
     - name: tank-operator.session-bus
       rules:
         - alert: TankSessionEventPersistSchemaRejected

@@ -92,3 +92,22 @@ func TestMigrationsPersistAvatarDeckAssignments(t *testing.T) {
 		t.Fatal("sessions table must exist before avatar assignment columns")
 	}
 }
+
+func TestMigrationsPersistAvatarUploadAttempts(t *testing.T) {
+	migrations := strings.Join(schemaMigrations, "\n")
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS avatar_upload_attempts",
+		"content_type_class text NOT NULL",
+		"fields             jsonb NOT NULL",
+		"diagnostics        jsonb NOT NULL",
+		"avatar_upload_attempts_created_at",
+		"avatar_upload_attempts_actor_created",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS avatar_assets") > strings.Index(migrations, "CREATE TABLE IF NOT EXISTS avatar_upload_attempts") {
+		t.Fatal("avatar assets should be declared before avatar upload attempt diagnostics")
+	}
+}

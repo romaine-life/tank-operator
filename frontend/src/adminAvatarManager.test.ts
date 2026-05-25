@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fetchAvatarViews } from "./AdminAvatarManager";
+import { avatarSaveErrorMessage, fetchAvatarViews } from "./AdminAvatarManager";
+
+test("avatar save errors include server attempt references", () => {
+  assert.equal(
+    avatarSaveErrorMessage(400, {
+      detail: "Avatar upload request must use multipart/form-data.",
+      code: "wrong_content_type",
+      attempt_id: "avu_123",
+    }),
+    "Avatar upload request must use multipart/form-data. Reference avu_123.",
+  );
+  assert.equal(
+    avatarSaveErrorMessage(500, {}),
+    "save failed: 500",
+  );
+});
 
 test("avatar admin keeps usable entries when another avatar image is missing", async () => {
   const originalFetch = globalThis.fetch;

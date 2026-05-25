@@ -21,6 +21,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
@@ -206,6 +207,7 @@ func main() {
 	profileStore := buildProfileStore(pgPool)
 	avatarStore := buildAvatarAssetStore(pgPool)
 	avatarImageStore := buildAvatarImageStore(azCred, pgPool)
+	avatarUploadAttemptStore := buildAvatarUploadAttemptStore(pgPool)
 	if pgAvatarStore, ok := avatarStore.(*pgstore.AvatarAssetStore); ok {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if err := migrateLegacyAvatarAssetImages(ctx, pgAvatarStore, avatarImageStore); err != nil {
@@ -425,6 +427,7 @@ func main() {
 		sessionEvents:            sessionEventsStore,
 		avatars:                  avatarStore,
 		avatarImages:             avatarImageStore,
+		avatarUploads:            avatarUploadAttemptStore,
 		pgPool:                   pgPool,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
@@ -556,6 +559,14 @@ func buildAvatarImageStore(azCred *azidentity.DefaultAzureCredential, pool *pgxp
 		os.Exit(1)
 	}
 	return store
+}
+
+func buildAvatarUploadAttemptStore(pool *pgxpool.Pool) avataruploads.Store {
+	if pool == nil {
+		slog.Warn("avatar upload attempt store using in-memory stub; POSTGRES_HOST is unset")
+		return avataruploads.NewMemoryStore()
+	}
+	return pgstore.NewAvatarUploadAttemptStore(pool)
 }
 
 func buildGitHubInstallStateStore(pool *pgxpool.Pool) gitHubInstallStateStore {

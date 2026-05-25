@@ -59,6 +59,12 @@ type AvatarDeckKind = {
   entries: AvatarDeckEntry[];
 };
 
+type AvatarUploadErrorBody = {
+  detail?: unknown;
+  code?: unknown;
+  attempt_id?: unknown;
+};
+
 type ImageRect = {
   left: number;
   top: number;
@@ -161,6 +167,14 @@ function isAvatarDeckKind(value: unknown): value is AvatarDeckKind {
     typeof deck.cycle === "number" &&
     Array.isArray(deck.entries)
   );
+}
+
+export function avatarSaveErrorMessage(status: number, body: AvatarUploadErrorBody): string {
+  const detail = typeof body.detail === "string" ? body.detail : `save failed: ${status}`;
+  const attemptID = typeof body.attempt_id === "string" && body.attempt_id.trim()
+    ? body.attempt_id.trim()
+    : "";
+  return attemptID ? `${detail} Reference ${attemptID}.` : detail;
 }
 
 async function fetchAvatarDecks(): Promise<AvatarDeckKind[]> {
@@ -454,7 +468,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(typeof body.detail === "string" ? body.detail : `save failed: ${res.status}`);
+        throw new Error(avatarSaveErrorMessage(res.status, body));
       }
       setName("");
       selectPhoto(null);
