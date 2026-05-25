@@ -3216,12 +3216,14 @@ button:disabled {
 }
 
 .run-main[aria-label="Transcript"],
-.run-main[aria-label="New session setup"] {
+.run-main[aria-label="New session setup"],
+.demo-workspace[aria-label="New session setup"] {
   transition: box-shadow 120ms ease;
 }
 
 .run-main[aria-label="Transcript"]:focus,
-.run-main[aria-label="New session setup"]:focus {
+.run-main[aria-label="New session setup"]:focus,
+.demo-workspace[aria-label="New session setup"]:focus {
   outline: none;
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.09),

@@ -1585,6 +1585,8 @@ function DemoLanding() {
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
+  const demoBodyRef = useRef<HTMLElement | null>(null);
+  const demoComposerWrapRef = useRef<HTMLDivElement | null>(null);
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
   const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
@@ -1618,6 +1620,56 @@ function DemoLanding() {
     window.addEventListener("keydown", cycleTabs, { capture: true });
     return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
   }, [demoSessions, activeDemoSession]);
+
+  const focusDemoComposerTextarea = useCallback((): boolean => {
+    const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
+      | HTMLTextAreaElement
+      | null;
+    if (!textarea) return false;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    return true;
+  }, []);
+
+  const focusDemoSetupSection = useCallback((): boolean => {
+    if (!demoBodyRef.current) return false;
+    demoBodyRef.current.focus({ preventScroll: true });
+    return document.activeElement === demoBodyRef.current;
+  }, []);
+
+  // Match the authenticated splash Tab toggle on the signed-out preview:
+  // textarea ⇄ setup body. Other controls keep the browser's native tab order.
+  useEffect(() => {
+    if (activeDemoSession !== null) return;
+    const toggleDemoFocus = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Tab" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.isComposing
+      ) {
+        return;
+      }
+      const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | null;
+      const body = demoBodyRef.current;
+      if (!textarea || !body) return;
+      if (event.target === textarea) {
+        if (!focusDemoSetupSection()) return;
+      } else if (event.target === body) {
+        if (!focusDemoComposerTextarea()) return;
+      } else {
+        return;
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", toggleDemoFocus, { capture: true });
+    return () => window.removeEventListener("keydown", toggleDemoFocus, { capture: true });
+  }, [activeDemoSession, focusDemoComposerTextarea, focusDemoSetupSection]);
 
   function setDemoProvider(provider: Provider) {
     const interaction = availableInteractionFor(provider, demoInteraction);
@@ -1771,7 +1823,12 @@ function DemoLanding() {
         </div>
       </aside>
 
-      <main className="workspace demo-workspace">
+      <main
+        ref={demoBodyRef}
+        className="workspace demo-workspace"
+        tabIndex={-1}
+        aria-label={activeDemoSession == null ? "New session setup" : "Transcript preview"}
+      >
         {activeDemoSession == null ? (
           <div className="home">
             <div className="home-inner">
@@ -1916,74 +1973,76 @@ function DemoLanding() {
                   submitting redirects to sign-in instead of creating a
                   session. The icon row mirrors the authenticated home so
                   the demo accurately previews the chat surface. */}
-              <ChatComposer
-                className="run-composer-home run-composer-interactive"
-                placeholder="Sign in to start a session…"
-                onSubmit={() => {
-                  startLogin();
-                }}
-                permissionMode={demoComposerMode}
-                onPermissionModeChange={setDemoComposerMode}
-                sendByCtrlEnter={false}
-                toolButtons={
-                  <>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn"
-                      disabled
-                      aria-label="Attach files"
-                      title="Sign in to attach files"
-                    >
-                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <ComposerUsageRing
-                      tokensUsed={0}
-                      contextWindow={getContextWindow(selectedDemoModelId)}
-                      placeholder
-                      ariaLabel="Context usage preview"
-                      title="Context usage appears after sign in"
-                    />
-                    {GUI_ROLLOUT_MODES.has(selectedMode) && (
+              <div ref={demoComposerWrapRef}>
+                <ChatComposer
+                  className="run-composer-home run-composer-interactive"
+                  placeholder="Sign in to start a session…"
+                  onSubmit={() => {
+                    startLogin();
+                  }}
+                  permissionMode={demoComposerMode}
+                  onPermissionModeChange={setDemoComposerMode}
+                  sendByCtrlEnter={false}
+                  toolButtons={
+                    <>
                       <button
                         type="button"
-                        className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                        className="run-composer-icon-btn"
                         disabled
-                        aria-label="Start rollout"
-                        title="Sign in to use /rollout"
+                        aria-label="Attach files"
+                        title="Sign in to attach files"
                       >
-                        <TankIcon className="run-composer-icon" aria-hidden="true" />
+                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                      disabled
-                      aria-label="Start test skill"
-                      title="Sign in to start a session"
-                    >
-                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show slash commands"
-                      title="Sign in to use slash commands"
-                    >
-                      <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show MCP servers"
-                      title="Sign in to use MCP servers"
-                    >
-                      <McpIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                  </>
-                }
-              />
+                      <ComposerUsageRing
+                        tokensUsed={0}
+                        contextWindow={getContextWindow(selectedDemoModelId)}
+                        placeholder
+                        ariaLabel="Context usage preview"
+                        title="Context usage appears after sign in"
+                      />
+                      {GUI_ROLLOUT_MODES.has(selectedMode) && (
+                        <button
+                          type="button"
+                          className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
+                          disabled
+                          aria-label="Start rollout"
+                          title="Sign in to use /rollout"
+                        >
+                          <TankIcon className="run-composer-icon" aria-hidden="true" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
+                        disabled
+                        aria-label="Start test skill"
+                        title="Sign in to start a session"
+                      >
+                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show slash commands"
+                        title="Sign in to use slash commands"
+                      >
+                        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-composer-icon-btn run-command-menu-btn"
+                        disabled
+                        aria-label="Show MCP servers"
+                        title="Sign in to use MCP servers"
+                      >
+                        <McpIcon className="run-composer-icon" aria-hidden="true" />
+                      </button>
+                    </>
+                  }
+                />
+              </div>
             </div>
           </div>
         ) : (
