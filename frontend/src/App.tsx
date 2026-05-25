@@ -1863,11 +1863,6 @@ function DemoLanding() {
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
-                    <span
-                      className={statusDotClass}
-                      title={s.status}
-                      aria-label={`status: ${s.status}`}
-                    />
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </button>
@@ -1884,6 +1879,11 @@ function DemoLanding() {
                     </button>
                   </div>
                   <div className="session-row-bottom">
+                    <span
+                      className={statusDotClass}
+                      title={s.status}
+                      aria-label={`status: ${s.status}`}
+                    />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {(bootLabel || runtimeLabel) && (
                       <span className="session-stats">
@@ -12109,11 +12109,6 @@ export function App() {
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
-                    <span
-                      className={statusDotClass}
-                      title={statusLabel}
-                      aria-label={`status: ${statusLabel}`}
-                    />
                     {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
                         run-header-title). This avoids the prior
@@ -12137,6 +12132,11 @@ export function App() {
                     </button>
                   </div>
                   <div className="session-row-bottom">
+                    <span
+                      className={statusDotClass}
+                      title={statusLabel}
+                      aria-label={`status: ${statusLabel}`}
+                    />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {(bootLabel || runtimeLabel) && (
                       <span className="session-stats">
