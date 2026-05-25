@@ -3576,6 +3576,38 @@ button:disabled {
   gap: 0.55rem;
 }
 
+.run-settings-tabs {
+  display: inline-flex;
+  width: fit-content;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-settings-tab {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  border: 0;
+  border-radius: calc(var(--radius-md, 0.5rem) - 0.15rem);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-primary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.run-settings-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.run-settings-tab.is-active {
+  color: var(--text-primary);
+  background: rgba(96, 165, 250, 0.16);
+}
+
 .run-settings-title,
 .run-help-title {
   margin: 0 0 0.35rem;
@@ -3586,7 +3618,8 @@ button:disabled {
 }
 
 .run-settings-panel-row,
-.run-settings-toggle {
+.run-settings-toggle,
+.run-settings-link {
   min-height: 2.75rem;
   display: flex;
   align-items: center;
@@ -3611,6 +3644,31 @@ button:disabled {
     color var(--motion-fast, 120ms) ease;
 }
 
+.run-settings-link {
+  text-decoration: none;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease,
+    color var(--motion-fast, 120ms) ease;
+}
+
+.run-settings-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.run-settings-link-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.run-settings-link-icon {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted);
+}
+
 .run-settings-toggle:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.14);
@@ -3620,6 +3678,13 @@ button:disabled {
   border-color: rgba(96, 165, 250, 0.28);
   background: rgba(37, 99, 235, 0.11);
   color: var(--text-primary);
+}
+
+.run-settings-scope-value {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
 }
 
 @media (max-width: 640px) {

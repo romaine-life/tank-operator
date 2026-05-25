@@ -37,7 +37,7 @@ func TestEmitSessionRowPayloadAdvancesCursor(t *testing.T) {
 
 	cursor := int64(10)
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, payload)
+	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
 	if cursor != 17 {
 		t.Fatalf("cursor = %d, want 17 (the row's row_version)", cursor)
 	}
@@ -73,7 +73,7 @@ func TestEmitSessionRowPayloadDropsCrossScope(t *testing.T) {
 
 	cursor := int64(0)
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, payload)
+	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
 	if cursor != 0 {
 		t.Fatalf("cursor advanced to %d, want 0 (cross-scope payload must not move the cursor)", cursor)
 	}
@@ -103,7 +103,7 @@ func TestEmitSessionRowPayloadSkipsStaleCursor(t *testing.T) {
 
 	cursor := int64(10) // ahead of the payload's row_version
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, payload)
+	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
 	if cursor != 10 {
 		t.Fatalf("cursor moved to %d, want 10 (stale payload must not rewind)", cursor)
 	}

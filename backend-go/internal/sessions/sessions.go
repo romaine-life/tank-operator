@@ -30,6 +30,7 @@ var (
 
 type Info struct {
 	ID           string         `json:"id"`
+	SessionScope string         `json:"session_scope,omitempty"`
 	PodName      *string        `json:"pod_name"`
 	Owner        string         `json:"owner"`
 	Status       string         `json:"status"`
@@ -230,8 +231,13 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 	if repos == nil {
 		repos = []string{}
 	}
+	scope := strings.TrimSpace(record.Scope)
+	if scope == "" {
+		scope = "default"
+	}
 	info := Info{
 		ID:                  record.ID,
+		SessionScope:        scope,
 		PodName:             optionalString(record.PodName),
 		Owner:               owner,
 		Status:              status,
@@ -256,6 +262,12 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		info.Activity = activity
 	}
 	return info
+}
+
+// InfoFromRecord exposes the registry-row projection for read-only handlers
+// that need to inspect a scope different from the manager's write scope.
+func InfoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
+	return infoFromRecord(owner, record)
 }
 
 // parseActivitySummary decodes the row's activity_summary jsonb into
@@ -285,8 +297,13 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 	createdAt := timeString(pod.CreationTimestamp.Time)
 	readyAt := readyAt(pod)
 	name := annotationString(pod.Annotations, nameAnnotation)
+	scope := strings.TrimSpace(pod.Labels["tank-operator/session-scope"])
+	if scope == "" {
+		scope = "default"
+	}
 	return Info{
 		ID:           sessionIDFromPod(pod),
+		SessionScope: scope,
 		PodName:      &podName,
 		Owner:        owner,
 		Status:       "Pending",

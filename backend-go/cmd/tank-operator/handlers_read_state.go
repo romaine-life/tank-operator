@@ -35,7 +35,12 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 	// their own. The Set() call below stores under the effective session
 	// owner, so service principals share the human actor's cursor instead
 	// of creating synthetic pod-email rows.
-	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
@@ -51,10 +56,7 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 		return
 	}
 
-	readStates := s.readStates
-	if readStates == nil {
-		readStates = store.NewStubConversationReadStateStore()
-	}
+	readStates := s.readStateStoreForScope(sessionScope)
 	rec, err := readStates.Set(r.Context(), user.OwnerEmail(), sessionID, lastReadOrderKey)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -66,12 +68,20 @@ func (s *appServer) handleUpdateSessionReadState(w http.ResponseWriter, r *http.
 	})
 }
 
-func (s *appServer) getSessionReadState(r *http.Request, email, sessionID string) (*store.ConversationReadStateRecord, error) {
-	readStates := s.readStates
-	if readStates == nil {
-		return nil, nil
-	}
+func (s *appServer) getSessionReadState(r *http.Request, email, sessionID, sessionScope string) (*store.ConversationReadStateRecord, error) {
+	readStates := s.readStateStoreForScope(sessionScope)
 	return readStates.Get(r.Context(), email, sessionID)
+}
+
+func (s *appServer) readStateStoreForScope(scope string) store.ConversationReadStateStore {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() && s.readStates != nil {
+		return s.readStates
+	}
+	if s.pgPool != nil {
+		return store.NewPostgresConversationReadStateStore(s.pgPool, scope)
+	}
+	return store.NewStubConversationReadStateStore()
 }
 
 func sessionReadStateBody(rec *store.ConversationReadStateRecord) *sessionReadStateResponseBody {

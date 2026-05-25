@@ -279,6 +279,7 @@ type ForkSessionRequest = {
 };
 
 type AppPublicConfig = {
+  session_scope?: string;
   fork_session_prompt_template?: string;
 };
 
@@ -298,8 +299,42 @@ const DEFAULT_FORK_SESSION_PROMPT_TEMPLATE = [
 
 let appConfigPromise: Promise<AppPublicConfig> | null = null;
 
+const PROD_SESSION_SCOPE = "default";
+const SESSION_VIEW_SCOPE_KEY = "tank-session-view-scope";
+
+function normalizeSessionScopeValue(scope: unknown): string {
+  const value = typeof scope === "string" ? scope.trim() : "";
+  return value || PROD_SESSION_SCOPE;
+}
+
+function readSessionViewScopePreference(): string {
+  try {
+    return localStorage.getItem(SESSION_VIEW_SCOPE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeSessionViewScopePreference(scope: string): void {
+  try {
+    if (!scope) localStorage.removeItem(SESSION_VIEW_SCOPE_KEY);
+    else localStorage.setItem(SESSION_VIEW_SCOPE_KEY, scope);
+  } catch {
+    // ignore
+  }
+}
+
+function appendQueryParam(path: string, key: string, value: string): string {
+  const [base, query = ""] = path.split("?");
+  const params = new URLSearchParams(query);
+  params.set(key, value);
+  const next = params.toString();
+  return next ? `${base}?${next}` : base;
+}
+
 interface Session {
   id: string;
+  session_scope?: string;
   pod_name: string | null;
   owner: string;
   status: string;
@@ -807,6 +842,7 @@ function normalizeSession(session: Session): Session {
     ? normalizeSessionActivity({ ...session.activity, session_id: session.id })
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
+  next.session_scope = normalizeSessionScopeValue(session.session_scope);
   next.activity = activity;
   // Defend against degraded snapshots (older server, infoFromPod
   // fallback, hand-rolled JSON in tests): repos must always be an
@@ -3858,7 +3894,7 @@ function RunMessageBubble({
   highlighted: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
-  onQuote: (text: string, style: QuoteStyle) => void;
+  onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   canonicalMessage?: boolean;
 }) {
@@ -3969,8 +4005,12 @@ function RunMessageBubble({
           )}
           {variant !== "system" && (
             <>
-              <QuoteButton text={text} style="fence" onQuote={onQuote} />
-              <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+              {onQuote && (
+                <>
+                  <QuoteButton text={text} style="fence" onQuote={onQuote} />
+                  <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+                </>
+              )}
               <CopyButton text={text} />
               {canonicalMessage && !entry.localOnly && (
                 <LinkButton sessionId={sessionId} entryId={entry.id} />
@@ -5244,7 +5284,7 @@ function RunTurnActivityGroup({
   toolExpansionOverrides: Record<string, boolean>;
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
   highlightedEntryId: string | null;
-  onQuote: (text: string, style: QuoteStyle) => void;
+  onQuote?: (text: string, style: QuoteStyle) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
 }) {
   const childGroups = useMemo(
@@ -5433,7 +5473,7 @@ export function RunMessages({
   activeTurnId?: string | null;
   showTimestamps: boolean;
   showDuration: boolean;
-  onQuote: (text: string, style: QuoteStyle) => void;
+  onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
@@ -5781,6 +5821,7 @@ function RunSettingsPanel({
   paneFontScale,
   paneFontScalePct,
   setPaneFontScale,
+  adminControls,
 }: {
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
@@ -5791,10 +5832,84 @@ function RunSettingsPanel({
   paneFontScale: number;
   paneFontScalePct: number;
   setPaneFontScale: (value: number) => void;
+  adminControls?: {
+    visible: boolean;
+    canViewProdSessions: boolean;
+    viewingProdSessions: boolean;
+    currentScope: string;
+    prodScope: string;
+    avatarEditorHref: string;
+    onViewingProdSessionsChange: (value: boolean) => void;
+  };
 }) {
+  const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
+  const showAdminTab = adminControls?.visible === true;
+  useEffect(() => {
+    if (!showAdminTab && settingsTab === "admin") {
+      setSettingsTab("preferences");
+    }
+  }, [settingsTab, showAdminTab]);
+
   return (
     <div className="run-settings-screen">
-      <section className="run-settings-section">
+      {showAdminTab && (
+        <div className="run-settings-tabs" role="tablist" aria-label="Settings sections">
+          <button
+            type="button"
+            className={`run-settings-tab${settingsTab === "preferences" ? " is-active" : ""}`}
+            role="tab"
+            aria-selected={settingsTab === "preferences"}
+            onClick={() => setSettingsTab("preferences")}
+          >
+            Preferences
+          </button>
+          <button
+            type="button"
+            className={`run-settings-tab${settingsTab === "admin" ? " is-active" : ""}`}
+            role="tab"
+            aria-selected={settingsTab === "admin"}
+            onClick={() => setSettingsTab("admin")}
+          >
+            Admin
+          </button>
+        </div>
+      )}
+      {settingsTab === "admin" && showAdminTab ? (
+        <section className="run-settings-section">
+          <h2 className="run-settings-title">Admin Controls</h2>
+          <a className="run-settings-link" href={adminControls.avatarEditorHref}>
+            <span className="run-settings-link-label">
+              <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
+              <span>Avatar editor</span>
+            </span>
+            <ExternalLinkIcon className="run-settings-check" aria-hidden="true" />
+          </a>
+          {adminControls.canViewProdSessions && (
+            <button
+              type="button"
+              className="run-settings-toggle"
+              onClick={() =>
+                adminControls.onViewingProdSessionsChange(
+                  !adminControls.viewingProdSessions,
+                )
+              }
+              aria-pressed={adminControls.viewingProdSessions}
+            >
+              <span>Prod sessions</span>
+              <span className="run-settings-scope-value">
+                {adminControls.viewingProdSessions
+                  ? adminControls.prodScope
+                  : adminControls.currentScope}
+              </span>
+              {adminControls.viewingProdSessions && (
+                <CheckIcon className="run-settings-check" aria-hidden="true" />
+              )}
+            </button>
+          )}
+        </section>
+      ) : (
+        <>
+        <section className="run-settings-section">
         <h2 className="run-settings-title">Composer</h2>
         <button
           type="button"
@@ -5933,6 +6048,8 @@ function RunSettingsPanel({
           </button>
         ))}
       </section>
+      </>
+      )}
     </div>
   );
 }
@@ -5978,6 +6095,9 @@ function ChatPane({
   onAutoFocusComposerConsumed,
   primeTurnCompleteSound,
   playTurnCompleteSound,
+  adminControls,
+  readOnly = false,
+  sessionScope,
   avatarCatalogVersion,
 }: {
   session: Session;
@@ -6006,6 +6126,17 @@ function ChatPane({
   // sound off chat events — see App.tsx commentary at the audio refs.
   primeTurnCompleteSound: () => void;
   playTurnCompleteSound: () => void;
+  adminControls?: {
+    visible: boolean;
+    canViewProdSessions: boolean;
+    viewingProdSessions: boolean;
+    currentScope: string;
+    prodScope: string;
+    avatarEditorHref: string;
+    onViewingProdSessionsChange: (value: boolean) => void;
+  };
+  readOnly?: boolean;
+  sessionScope: string;
   avatarCatalogVersion: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
@@ -6025,11 +6156,11 @@ function ChatPane({
   // current name pre-loaded. We ack via onAutoRenameConsumed so the signal
   // is single-shot and re-runs cleanly on a subsequent F2.
   useEffect(() => {
-    if (!autoRename) return;
+    if (!autoRename || readOnly) return;
     setEditingTitleValue(session.name ?? "");
     setEditingTitle(true);
     onAutoRenameConsumed();
-  }, [autoRename, session.id, session.name, onAutoRenameConsumed]);
+  }, [autoRename, readOnly, session.id, session.name, onAutoRenameConsumed]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
@@ -6044,8 +6175,12 @@ function ChatPane({
   const ready = session.mode === "hermes_gui"
     ? session.status === "Active"
     : sessionContainerAvailable(session);
-  const supportsFileAttachments = sessionModeSupportsWorkspaceFiles(session.mode);
-  const filesAvailable = sessionFilesAvailable(session);
+  const scopedSessionPathForPane = useCallback(
+    (path: string) => appendQueryParam(path, "session_scope", sessionScope),
+    [sessionScope],
+  );
+  const supportsFileAttachments = !readOnly && sessionModeSupportsWorkspaceFiles(session.mode);
+  const filesAvailable = !readOnly && sessionFilesAvailable(session);
   const filesTabTitle = sessionFilesTabTitle(session);
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
@@ -6535,7 +6670,7 @@ function ChatPane({
     sdkReadStateInFlightRef.current = cursor;
     try {
       const res = await authedFetch(
-        `/api/sessions/${encodeURIComponent(session.id)}/read-state`,
+        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/read-state`),
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -6686,7 +6821,7 @@ function ChatPane({
   }, [session.id, visible]);
 
   useEffect(() => {
-    if (!visible || session.status !== "Active") return;
+    if (readOnly || !visible || session.status !== "Active") return;
     const touch = () => {
       void authedFetch(`/api/sessions/${session.id}/touch`, {
         method: "POST",
@@ -6695,7 +6830,7 @@ function ChatPane({
     touch();
     const interval = window.setInterval(touch, 30_000);
     return () => window.clearInterval(interval);
-  }, [session.id, session.status, visible]);
+  }, [readOnly, session.id, session.status, visible]);
 
 
   // Auto-send the next queued message once the current run finishes.
@@ -6789,7 +6924,7 @@ function ChatPane({
         scrollToLatestOnReady,
       });
       const res = await authedFetch(
-        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
       );
       if (!res.ok) {
         logChatScrollEvent("timeline-error", {
@@ -6952,7 +7087,7 @@ function ChatPane({
         limit: "100",
       });
       const res = await authedFetch(
-        `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
       );
       if (!res.ok) {
         setSdkOlderError(`Could not load earlier messages: ${res.status}`);
@@ -7022,7 +7157,7 @@ function ChatPane({
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
     const res = await authedFetch(
-      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
     if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
     const body = (await res.json()) as {
@@ -7076,7 +7211,7 @@ function ChatPane({
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "newest", limit: "200" });
     const res = await authedFetch(
-      `/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`,
+      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
     if (!res.ok) return;
     const body = (await res.json()) as {
@@ -7273,7 +7408,7 @@ function ChatPane({
   }, [filesAvailable, selectedFile?.binary, selectedFile?.path, session.id]);
 
   useEffect(() => {
-    if (session.status !== "Active") {
+    if (readOnly || session.status !== "Active") {
       setMcpServers(null);
       setMcpError(null);
       return;
@@ -7300,10 +7435,10 @@ function ChatPane({
     return () => {
       cancelled = true;
     };
-  }, [session.id, session.status]);
+  }, [readOnly, session.id, session.status]);
 
   useEffect(() => {
-    if (session.status !== "Active") {
+    if (readOnly || session.status !== "Active") {
       setSlashCommands(SLASH_COMMANDS);
       return;
     }
@@ -7332,7 +7467,7 @@ function ChatPane({
     return () => {
       cancelled = true;
     };
-  }, [session.id, session.status]);
+  }, [readOnly, session.id, session.status]);
 
   function openFileEntry(name: string, type: FileEntry["type"]) {
     const next = joinFilesPath(filesPath, name);
@@ -8257,8 +8392,8 @@ function ChatPane({
     let source: EventSource;
     try {
       source = await authedEventSource(
-        `/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`,
-        { stream: "session-events", sessionId: session.id },
+        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`),
+        { stream: "session-events", sessionId: session.id, sessionScope },
       );
     } catch {
       setSdkConnectionState("connection_lost");
@@ -8361,7 +8496,7 @@ function ChatPane({
     };
   // openSdkEventStream closes over the current session cursor and reducer state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyBootstrapped, visible, session.id, session.mode]);
+  }, [historyBootstrapped, visible, session.id, session.mode, sessionScope]);
 
   const submitStatus =
     runStatus === "running" || runStatus === "stopping"
@@ -8408,8 +8543,8 @@ function ChatPane({
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
-      canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
-    [codexBackgroundStopAvailable],
+      !readOnly && canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
+    [codexBackgroundStopAvailable, readOnly],
   );
   const openBackgroundPage = useCallback((entry?: TranscriptEntry) => {
     if (entry?.id) setSelectedBackgroundId(entry.id);
@@ -8599,13 +8734,23 @@ function ChatPane({
   };
 
   return (
-    <RunContext.Provider value={{ openWorkspacePath, sendInputReply, user }}>
+    <RunContext.Provider
+      value={{
+        openWorkspacePath,
+        sendInputReply: readOnly
+          ? async () => {
+              throw new Error("session is read-only");
+            }
+          : sendInputReply,
+        user,
+      }}
+    >
     <WorkspaceShell
       style={chatFontScaleStyle}
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
       bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
-      composerVisible={activeTab === "chat"}
+      composerVisible={!readOnly && activeTab === "chat"}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}
       composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
@@ -8668,8 +8813,16 @@ function ChatPane({
           ) : (
             <button
               className="run-header-name-btn"
-              title={session.name ? `${defaultSessionName(session)} — click to rename` : "click to rename"}
+              title={
+                readOnly
+                  ? sessionDisplayName(session)
+                  : session.name
+                    ? `${defaultSessionName(session)} — click to rename`
+                    : "click to rename"
+              }
+              disabled={readOnly}
               onClick={() => {
+                if (readOnly) return;
                 setEditingTitleValue(session.name ?? "");
                 setEditingTitle(true);
               }}
@@ -9036,6 +9189,7 @@ function ChatPane({
             paneFontScale={paneFontScale}
             paneFontScalePct={paneFontScalePct}
             setPaneFontScale={setPaneFontScale}
+            adminControls={adminControls}
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
@@ -9111,23 +9265,26 @@ function ChatPane({
               activeTurnId={renderedActiveTurnId}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
-              onQuote={appendQuotedMessage}
-              onFork={(forkedEntry) =>
-                onForkMessage({
-                  sourceSession: session,
-                  forkedEntry,
-                  model:
-                    isClaude || isCodex
-                      ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
-                          ? ""
-                          : selectedModelId)
-                      : "",
-                  // Fork inherits the source pane's effort pick so the
-                  // forked pod boots with the same reasoning depth the
-                  // user had been working at.
-                  effort: isClaude || isCodex ? selectedEffortId : "",
-                  permissionMode: composerMode,
-                })
+              onQuote={readOnly ? undefined : appendQuotedMessage}
+              onFork={
+                readOnly
+                  ? undefined
+                  : (forkedEntry) =>
+                      onForkMessage({
+                        sourceSession: session,
+                        forkedEntry,
+                        model:
+                          isClaude || isCodex
+                            ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
+                                ? ""
+                                : selectedModelId)
+                            : "",
+                        // Fork inherits the source pane's effort pick so the
+                        // forked pod boots with the same reasoning depth the
+                        // user had been working at.
+                        effort: isClaude || isCodex ? selectedEffortId : "",
+                        permissionMode: composerMode,
+                      })
               }
               onOpenBackgroundTask={openBackgroundPage}
               scrollParent={transcriptScrollEl}
@@ -9646,6 +9803,7 @@ export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [booted, setBooted] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [sessions, setSessions] = useState<Session[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
@@ -9821,6 +9979,9 @@ export function App() {
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
+  const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
+    readSessionViewScopePreference,
+  );
   // The home composer's permission-mode pick. Carries into the first turn
   // when the user types a prompt and presses Enter from the home screen,
   // so the choice they made on the launch surface persists into the live
@@ -9949,6 +10110,52 @@ export function App() {
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
   );
+  const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
+  const canViewProdSessions =
+    user?.role === "admin" && currentSessionScope !== PROD_SESSION_SCOPE;
+  const effectiveSessionScope =
+    canViewProdSessions && sessionViewScopeOverride === PROD_SESSION_SCOPE
+      ? PROD_SESSION_SCOPE
+      : currentSessionScope;
+  const viewingProdSessions =
+    canViewProdSessions && effectiveSessionScope === PROD_SESSION_SCOPE;
+  const readOnlySessionView = effectiveSessionScope !== currentSessionScope;
+  const scopedSessionPath = useCallback(
+    (path: string) => appendQueryParam(path, "session_scope", effectiveSessionScope),
+    [effectiveSessionScope],
+  );
+  const adminSettingsControls =
+    user?.role === "admin"
+      ? {
+          visible: true,
+          canViewProdSessions,
+          viewingProdSessions,
+          currentScope: currentSessionScope,
+          prodScope: PROD_SESSION_SCOPE,
+          avatarEditorHref: "/admin/avatars",
+          onViewingProdSessionsChange: (value: boolean) => {
+            const next = value ? PROD_SESSION_SCOPE : "";
+            setSessionViewScopeOverride(next);
+            writeSessionViewScopePreference(next);
+          },
+        }
+      : undefined;
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAppPublicConfig().then((config) => {
+      if (!cancelled) setAppConfig(config);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (canViewProdSessions || !sessionViewScopeOverride) return;
+    setSessionViewScopeOverride("");
+    writeSessionViewScopePreference("");
+  }, [canViewProdSessions, sessionViewScopeOverride]);
 
   useEffect(() => {
     bootstrapAuth()
@@ -10101,6 +10308,7 @@ export function App() {
   function rowToSession(row: SessionRow): Session {
     return {
       id: row.id,
+      session_scope: normalizeSessionScopeValue(row.session_scope),
       pod_name: row.pod_name ?? null,
       owner: row.owner,
       status: row.status,
@@ -10126,8 +10334,7 @@ export function App() {
   // infoJSONToSessionRow converts one item from GET /api/sessions
   // into the wire-shape row the SessionStore caches. Field names align
   // one-for-one with the backend rowWireShape (Phase 3) so this is a
-  // copy with snapshot-only defaults (visible=true; session_scope
-  // unused at render).
+  // copy with snapshot-only defaults (visible=true).
   function infoJSONToSessionRow(raw: any): SessionRow {
     const sidebarPosition = Number(raw.sidebar_position);
     const rowVersion = Number(raw.row_version);
@@ -10138,7 +10345,7 @@ export function App() {
       id: String(raw.id ?? ""),
       owner: String(raw.owner ?? ""),
       mode: String(raw.mode ?? "claude_gui"),
-      session_scope: "default",
+      session_scope: normalizeSessionScopeValue(raw.session_scope),
       pod_name: raw.pod_name ?? undefined,
       name: raw.name ?? null,
       visible: true,
@@ -10164,7 +10371,7 @@ export function App() {
 
   async function refresh() {
     try {
-      const res = await authedFetch("/api/sessions");
+      const res = await authedFetch(scopedSessionPath("/api/sessions"));
       if (!res.ok) throw new Error(`list failed: ${res.status}`);
       // Tank-Sessions-Snapshot-Cursor carries MAX(row_version) at
       // snapshot time. Seeding the SessionStore with it closes the
@@ -10226,9 +10433,21 @@ export function App() {
   }
 
   useEffect(() => {
+    sessionStoreRef.current = new SessionStore();
+    activitySnapshotAppliedRef.current = false;
+    lastSoundedOrderKeyRef.current = new Map();
+    setSessions([]);
+    setSessionActivities({});
+    sessionActivitiesRef.current = {};
+    setMounted(new Set());
+    setClosingIds(new Set());
+    setActive(null);
+  }, [effectiveSessionScope]);
+
+  useEffect(() => {
     if (!user) return;
     void refresh();
-  }, [user]);
+  }, [user, effectiveSessionScope]);
 
   // While a pod is booting we need a 1s tick so the ↓ boot label counts up
   // second by second. Once nothing's booting, fall back to the slow tick —
@@ -10329,8 +10548,8 @@ export function App() {
       let nextSource: EventSource;
       try {
         nextSource = await authedEventSource(
-          `/api/sessions/events${query ? `?${query}` : ""}`,
-          { stream: "session-list" },
+          scopedSessionPath(`/api/sessions/events${query ? `?${query}` : ""}`),
+          { stream: "session-list", sessionScope: effectiveSessionScope },
         );
       } catch {
         if (cancelled) return;
@@ -10480,7 +10699,7 @@ export function App() {
     // intentionally stable; closing over them would resubscribe on
     // every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, effectiveSessionScope, scopedSessionPath]);
 
   useEffect(() => {
     if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
@@ -10701,6 +10920,7 @@ export function App() {
   }
 
   function dragSessionStart(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    if (readOnlySessionView) return;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", id);
     setDraggingSessionId(id);
@@ -10708,6 +10928,7 @@ export function App() {
   }
 
   function dragSessionOver(id: string, event: ReactDragEvent<HTMLLIElement>) {
+    if (readOnlySessionView) return;
     if (!draggingSessionId || draggingSessionId === id) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
@@ -10732,6 +10953,7 @@ export function App() {
 
   function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
     event.preventDefault();
+    if (readOnlySessionView) return;
     const movedId = event.dataTransfer.getData("text/plain") || draggingSessionId;
     setDraggingSessionId(null);
     setDragOverSessionId(null);
@@ -11286,7 +11508,7 @@ export function App() {
                   key={s.id}
                   data-session-id={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isClosing}
+                  draggable={!isClosing && !readOnlySessionView}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
                   onDrop={(e) => dropSession(s.id, e)}
@@ -11340,7 +11562,7 @@ export function App() {
                     <button
                       className="session-delete"
                       onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                      disabled={isClosing}
+                      disabled={isClosing || readOnlySessionView}
                       title={isClosing ? "closing session" : "delete session"}
                       aria-label={isClosing ? "closing session" : "delete session"}
                     >
@@ -11364,7 +11586,7 @@ export function App() {
                       <button
                         className="session-action"
                         onClick={(e) => { e.stopPropagation(); saveCredentials(s.id); }}
-                        disabled={busy || !isLive || isClosing}
+                        disabled={busy || !isLive || isClosing || readOnlySessionView}
                         title={
                           s.mode === "codex_config"
                             ? "capture ~/.codex/auth.json from this pod and write it to KV"
@@ -11552,6 +11774,7 @@ export function App() {
                   paneFontScale={paneFontScale}
                   paneFontScalePct={paneFontScalePct}
                   setPaneFontScale={setPaneFontScale}
+                  adminControls={adminSettingsControls}
                 />
               ) : homeActiveTab === "help" ? (
                 <RunHelpScreen />
@@ -11957,6 +12180,9 @@ export function App() {
                       onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
+                      adminControls={adminSettingsControls}
+                      readOnly={readOnlySessionView}
+                      sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
                     />
                   </div>
@@ -11966,7 +12192,18 @@ export function App() {
                     className="run-body"
                     hidden={active !== s.id}
                   >
-                    <CliSession session={s} visible={active === s.id} />
+                    {readOnlySessionView ? (
+                      <section className="run-panel">
+                        <main className="run-main">
+                          <div className="run-empty run-transcript-state" role="status">
+                            <strong>Read-only session</strong>
+                            <span>Terminal attach is unavailable from this scope.</span>
+                          </div>
+                        </main>
+                      </section>
+                    ) : (
+                      <CliSession session={s} visible={active === s.id} />
+                    )}
                   </div>
                 )
               )}
