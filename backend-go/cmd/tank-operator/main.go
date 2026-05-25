@@ -26,6 +26,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstats"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/providerhealth"
@@ -432,6 +433,29 @@ func main() {
 				slog.Error("session controller k8s watch stopped", "error", err)
 			}
 		}()
+	}
+
+	// Postgres connection-saturation poller. Reuses the orchestrator's
+	// AAD-aware pool (no sidecar — the upstream pg_exporter image has
+	// no Entra ID workload-identity path) to read pg_stat_database and
+	// current_setting('max_connections') every 30s. Drives the
+	// TankPgConnectionSaturation alert that wasn't there to catch the
+	// 2026-05-25 SQLSTATE 53300 orchestrator crash-loop. Skipped when
+	// pgPool is nil — stub mode has no real server to poll.
+	if pgPool != nil {
+		poller, err := pgstats.New(pgstats.Config{
+			Pool:    pgPool,
+			Metrics: promPGStatsMetrics{},
+		})
+		if err != nil {
+			slog.Error("pgstats poller init failed", "error", err)
+		} else {
+			go func() {
+				if err := poller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("pgstats poller stopped", "error", err)
+				}
+			}()
+		}
 	}
 
 	// Provider-credential health poller. Reads /health/<provider> on

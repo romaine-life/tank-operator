@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstats"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
@@ -1011,7 +1012,60 @@ var (
 		},
 		[]string{"operation"},
 	)
+
+	// Postgres server-side connection-saturation surface. The
+	// pgQueriesTotal counter above sees this orchestrator's own
+	// pool traffic; these gauges see the SERVER's total backend
+	// count and max_connections ceiling. The 2026-05-25 incident
+	// crash-looped the orchestrator on SQLSTATE 53300 with no
+	// advance signal at all — these gauges + the
+	// TankPgConnectionSaturation alert make the next saturation
+	// approach visible 13+ conns before the cap. Polled every 30s
+	// by internal/pgstats.Poller using the orchestrator's existing
+	// AAD-aware pgxpool; see that package for the auth/scale
+	// rationale.
+	//
+	// Both are unlabeled gauges — the server is a single shared
+	// instance; per-pod resolution would just multiply N identical
+	// series since every orchestrator pod sees the same server
+	// state. Alert PromQL uses max() across pods to dedupe.
+	pgBackendConnectionsGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_pg_backend_connections",
+		Help: "Total Postgres backend connections currently established on the shared Flex Server (sum across all databases). Read every 30s from pg_stat_database. Same value across orchestrator pods — aggregate with max() in PromQL.",
+	})
+	pgMaxConnectionsGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_pg_max_connections",
+		Help: "Postgres server's max_connections cap. Read every 30s from current_setting('max_connections') so an in-place SKU change updates the alert headroom without an orchestrator restart.",
+	})
+	pgStatsPollTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_pg_stats_poll_total",
+		Help: "Outcomes of the pgstats connection-saturation poller. Steady-state expectation: every increment lands on outcome=ok.",
+	}, []string{"outcome"})
 )
+
+// promPGStatsMetrics satisfies pgstats.Metrics so the poller can
+// emit gauges/counters without importing prometheus. Outcome label
+// is validated against the closed set the poller emits — anything
+// else collapses to "other" so a future poller change can't quietly
+// inflate the cardinality.
+type promPGStatsMetrics struct{}
+
+func (promPGStatsMetrics) RecordBackendConnections(count float64) {
+	pgBackendConnectionsGauge.Set(count)
+}
+
+func (promPGStatsMetrics) RecordMaxConnections(count float64) {
+	pgMaxConnectionsGauge.Set(count)
+}
+
+func (promPGStatsMetrics) RecordPollOutcome(outcome string) {
+	switch outcome {
+	case "ok", "query_failed":
+		pgStatsPollTotal.WithLabelValues(outcome).Inc()
+	default:
+		pgStatsPollTotal.WithLabelValues("other").Inc()
+	}
+}
 
 // --- NATS connection metrics ---
 
@@ -1322,6 +1376,7 @@ var (
 	_ sessionbus.WakeMetrics                    = promWakeMetrics{}
 	_ sessionbus.ConnectionMetrics              = promNATSConnectionMetrics{}
 	_ pgstore.SQLMetrics                        = promPGMetrics{}
+	_ pgstats.Metrics                           = promPGStatsMetrics{}
 	_ sessioncontroller.K8sWatchMetrics         = promK8sWatchMetrics{}
 	_ sessioncontroller.RowWriterMetrics        = promRowWriterMetrics{}
 	_ sessioncontroller.LifecycleEmitterMetrics = promLifecycleEmitterMetrics{}
