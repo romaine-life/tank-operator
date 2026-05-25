@@ -5717,6 +5717,7 @@ export function RunMessages({
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
   const consumedScrollToLatestSignalRef = useRef(0);
+  const consumedScrollToOldestSignalRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) => (
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
@@ -5860,6 +5861,8 @@ export function RunMessages({
   ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
+    if (consumedScrollToOldestSignalRef.current === scrollToOldestSignal) return;
+    consumedScrollToOldestSignalRef.current = scrollToOldestSignal;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       surface: telemetrySurface,
       sessionId,
@@ -7324,7 +7327,7 @@ function ChatPane({
         sessionMode: session.mode,
       });
       try {
-        await jumpSdkToOldest();
+        await jumpSdkToOldest("older-missing-cursor");
         setScrollToOldestSignal((value) => value + 1);
       } catch (err) {
         setSdkOlderError(
@@ -7422,13 +7425,32 @@ function ChatPane({
   // dedicated anchor=oldest path added in handlers_session_events.go,
   // which dispatches an indexed ASC scan from the head with
   // FoundOldest=true.
-  async function jumpSdkToOldest(): Promise<void> {
+  async function jumpSdkToOldest(source = "jump-oldest"): Promise<void> {
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "oldest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      throw new Error(`timeline request failed: ${res.status}`);
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7469,6 +7491,19 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
@@ -7477,14 +7512,33 @@ function ChatPane({
   // existing DOM bottom is the live tail, so the caller can just scroll.
   // If the user back-paginated past the live tail, we drop the window
   // and refetch — that's the "stale tail" path mentioned in the plan.
-  async function jumpSdkToLatest(): Promise<void> {
+  async function jumpSdkToLatest(source = "jump-latest"): Promise<void> {
     if (sdkFoundNewestRef.current) return;
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "newest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      return;
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7523,6 +7577,19 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
@@ -7532,7 +7599,7 @@ function ChatPane({
     setSdkOlderError(null);
     try {
       if (!sdkFoundOldestRef.current) {
-        await jumpSdkToOldest();
+        await jumpSdkToOldest("keyboard");
       }
       setScrollToOldestSignal((value) => value + 1);
     } catch (err) {
@@ -7551,7 +7618,7 @@ function ChatPane({
     sdkTranscriptKeyboardNavInFlightRef.current = "newest";
     try {
       if (!sdkFoundNewestRef.current) {
-        await jumpSdkToLatest();
+        await jumpSdkToLatest("keyboard");
       }
       setSdkPendingTailCount(0);
       requestScrollToLatest("smooth", "keyboard");
@@ -8046,10 +8113,32 @@ function ChatPane({
       if (e.key === "Home") {
         e.preventDefault();
         e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "Home",
+          targetEdge: "oldest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
         void scrollTranscriptToConversationStart();
       } else if (e.key === "End") {
         e.preventDefault();
         e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "End",
+          targetEdge: "newest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
         void scrollTranscriptToConversationEnd();
       }
     };
@@ -9718,7 +9807,7 @@ function ChatPane({
           className="run-scroll-to-top"
           onClick={() => {
             const reachOldest = async () => {
-              await jumpSdkToOldest();
+              await jumpSdkToOldest("button");
               setScrollToOldestSignal((value) => value + 1);
             };
             void reachOldest();
@@ -9743,7 +9832,7 @@ function ChatPane({
           }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
             const reachNewest = async () => {
-              await jumpSdkToLatest();
+              await jumpSdkToLatest("button");
               setSdkPendingTailCount(0);
               requestScrollToLatest("smooth", "manual");
             };

@@ -20,6 +20,25 @@ interface ChatScrollMetricPayload {
   event: string;
   surface: string;
   sessionMode: string;
+  sessionId?: string;
+  pagePath?: string;
+  pageSearch?: string;
+  source?: string;
+  anchor?: string;
+  reason?: string;
+  key?: string;
+  targetEdge?: string;
+  navInFlight?: string;
+  signal?: number;
+  status?: number;
+  durationMs?: number;
+  eventCount?: number;
+  canonicalEventCount?: number;
+  foundOldest?: boolean;
+  foundNewest?: boolean;
+  hasPrevCursor?: boolean;
+  hasNextCursor?: boolean;
+  clearRealtime?: boolean;
   atBottom?: boolean;
   hasScrollParent?: boolean;
   scrollTop?: number;
@@ -92,6 +111,30 @@ function enqueueChatScrollMetric(
     event,
     surface: metricString(detail.surface) || inferMetricSurface(),
     sessionMode: metricString(detail.sessionMode) || "unknown",
+    sessionId: metricString(detail.sessionId),
+    pagePath: currentPagePath(),
+    pageSearch: currentPageSearch(),
+    source: metricString(detail.source),
+    anchor: metricString(detail.anchor),
+    reason: metricString(detail.reason),
+    key: metricString(detail.key),
+    targetEdge: metricString(detail.targetEdge),
+    navInFlight: metricString(detail.navInFlight),
+    signal: metricNumber(detail.signal),
+    status: metricNumber(detail.status),
+    durationMs: metricNumber(detail.durationMs),
+    eventCount: metricNumber(detail.eventCount),
+    canonicalEventCount: metricNumber(detail.canonicalEventCount),
+    foundOldest:
+      typeof detail.foundOldest === "boolean" ? detail.foundOldest : undefined,
+    foundNewest:
+      typeof detail.foundNewest === "boolean" ? detail.foundNewest : undefined,
+    hasPrevCursor:
+      typeof detail.hasPrevCursor === "boolean" ? detail.hasPrevCursor : undefined,
+    hasNextCursor:
+      typeof detail.hasNextCursor === "boolean" ? detail.hasNextCursor : undefined,
+    clearRealtime:
+      typeof detail.clearRealtime === "boolean" ? detail.clearRealtime : undefined,
     atBottom: typeof detail.atBottom === "boolean" ? detail.atBottom : undefined,
     hasScrollParent:
       typeof detail.hasScrollParent === "boolean" ? detail.hasScrollParent : undefined,
@@ -142,6 +185,16 @@ function inferMetricSurface(): string {
 function metricString(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim().slice(0, 80);
+}
+
+function currentPagePath(): string {
+  if (typeof window === "undefined") return "";
+  return window.location.pathname.slice(0, 160);
+}
+
+function currentPageSearch(): string {
+  if (typeof window === "undefined") return "";
+  return window.location.search.slice(0, 240);
 }
 
 function metricNumber(value: unknown): number | undefined {

@@ -25,6 +25,9 @@ const bundledQualityTimeframesSource = readSource(
 const bundledMigrationPolicySource = readSource(
   "../../k8s/session-config/docs/migration-policy.md",
 );
+const chatScrollMetricsHandlerSource = readSource(
+  "../../backend-go/cmd/tank-operator/handlers_client_metrics.go",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -344,12 +347,14 @@ test("chat back-pagination keeps an explicit access path", () => {
 test("focused transcript Home and End keys resolve durable conversation edges", () => {
   assert.equal(appSource.includes("scrollTranscriptToConversationStart"), true);
   assert.equal(appSource.includes("scrollTranscriptToConversationEnd"), true);
-  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\(\)/);
-  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\(\)/);
+  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\("keyboard"\)/);
+  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\("keyboard"\)/);
   assert.match(appSource, /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/);
   assert.match(appSource, /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/);
   assert.match(appSource, /requestScrollToLatest\("smooth", "keyboard"\)/);
   assert.equal(appSource.includes("transcriptScrollEl.scrollTop = 0"), false);
+  assert.equal(appSource.includes("consumedScrollToOldestSignalRef"), true);
+  assert.match(appSource, /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/);
 });
 
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
@@ -402,6 +407,14 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
+  assert.equal(appSource.includes('"keyboard-edge-navigation"'), true);
+  assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pagePath: currentPagePath()"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes("logChatScrollClientEvent"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"session_id"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
 });
 
 test("long-chat scroll lab route is admin gated and uses prometheus metrics", () => {
