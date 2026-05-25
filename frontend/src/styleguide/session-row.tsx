@@ -21,19 +21,29 @@ export function StyleguideSessionRow() {
         <BackLink />
         <h1 style={pageTitleStyle}>session row</h1>
         <p style={captionStyle}>
-          One row per session in the sidebar list. Top: status dot + session
-          name + compact boot/runtime stats + delete affordance. Bottom: mode chip +
-          optional inline actions (remote-control, rollout, save-credentials). Active
-          row gets the <code>is-open</code> class; not styled here for brevity.
+          One row per session in the sidebar list. Top: session name + delete
+          affordance. Bottom: status dot + mode chip + compact boot/runtime
+          stats + optional inline actions (remote-control, rollout,
+          save-credentials). Active row gets the <code>is-open</code> class; not
+          styled here for brevity.
         </p>
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 360, listStyle: "none", padding: 0, margin: 0 }}>
             <li>
               <AgentAvatarIcon avatar={getSessionAvatar("my-session")} className="session-avatar" />
               <div className="session-row-top">
-                <span className="status-dot status-active" aria-label="status active" />
                 <span className="session-open">
                   <span className="session-id">my-session</span>
+                </span>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  ×
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-active" aria-label="status active" />
+                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
+                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
+                  <span className="sr-only">claude-cli</span>
                 </span>
                 <span className="session-stats">
                   <span className="session-stat" title="ready 32s after request">
@@ -44,15 +54,6 @@ export function StyleguideSessionRow() {
                     <span aria-hidden="true">↑</span>
                     <span>12m</span>
                   </span>
-                </span>
-                <button className="session-delete" aria-label="delete session" type="button">
-                  ×
-                </button>
-              </div>
-              <div className="session-row-bottom">
-                <span className="mode mode-claude_cli mode-icon-only" title="Claude CLI" aria-label="Claude CLI">
-                  <ProviderIcon provider="anthropic" className="mode-provider-icon" />
-                  <span className="sr-only">claude-cli</span>
                 </span>
                 <button className="session-action session-remote is-icon" type="button" aria-label="remote control">
                   <span>↗</span>
@@ -68,10 +69,16 @@ export function StyleguideSessionRow() {
             <li>
               <AgentAvatarIcon avatar={getSessionAvatar("starting")} className="session-avatar" />
               <div className="session-row-top">
-                <span className="status-dot status-pending" aria-label="status pending" />
                 <span className="session-open">
                   <span className="session-id">starting…</span>
                 </span>
+                <button className="session-delete" aria-label="delete session" type="button">
+                  ×
+                </button>
+              </div>
+              <div className="session-row-bottom">
+                <span className="status-dot status-pending" aria-label="status pending" />
+                <span className="mode mode-api_key">api</span>
                 <span className="session-stats">
                   <span className="session-stat" title="starting for 18s since request">
                     <span aria-hidden="true">↓</span>
@@ -82,12 +89,6 @@ export function StyleguideSessionRow() {
                     <span>&lt;1m</span>
                   </span>
                 </span>
-                <button className="session-delete" aria-label="delete session" type="button">
-                  ×
-                </button>
-              </div>
-              <div className="session-row-bottom">
-                <span className="mode mode-api_key">api</span>
               </div>
             </li>
           </ul>

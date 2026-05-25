@@ -60,8 +60,23 @@ test("session activity drives sidebar labels and dots", () => {
   assert.equal(sessionActivityStatusLabel("Active", true, needsInput ?? undefined), "Needs input");
   assert.deepEqual(
     sessionActivityChips(needsInput ?? undefined).map((chip) => chip.label),
-    ["input", "1 new"],
+    ["input"],
   );
+});
+
+test("running and unread activity stay on the status dot, not sidebar chips", () => {
+  const streaming = normalizeSessionActivity({
+    session_id: "63",
+    status: "streaming",
+    unread_count: 20,
+    needs_input: false,
+    failed: false,
+    active_turn_id: "turn-1",
+  });
+
+  assert.equal(sessionActivityDotStatus("Active", true, streaming ?? undefined), "agent-working");
+  assert.equal(sessionActivityStatusLabel("Active", true, streaming ?? undefined), "Running");
+  assert.deepEqual(sessionActivityChips(streaming ?? undefined), []);
 });
 
 test("stopping status drives Stopping label, agent-stopping dot, and stopping chip", () => {

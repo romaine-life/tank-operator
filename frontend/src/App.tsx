@@ -1879,14 +1879,28 @@ function DemoLanding() {
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
+                    <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
+                      <span className="session-id">{sessionDisplayName(s)}</span>
+                    </button>
+                    <button
+                      className="session-delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deletePreviewSession(s.id);
+                      }}
+                      title="delete session"
+                      aria-label="delete session"
+                    >
+                      <IconClose />
+                    </button>
+                  </div>
+                  <div className="session-row-bottom">
                     <span
                       className={statusDotClass}
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
-                    <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
-                      <span className="session-id">{sessionDisplayName(s)}</span>
-                    </button>
+                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {(bootLabel || runtimeLabel) && (
                       <span className="session-stats">
                         {bootLabel && (
@@ -1903,20 +1917,6 @@ function DemoLanding() {
                         )}
                       </span>
                     )}
-                    <button
-                      className="session-delete"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deletePreviewSession(s.id);
-                      }}
-                      title="delete session"
-                      aria-label="delete session"
-                    >
-                      <IconClose />
-                    </button>
-                  </div>
-                  <div className="session-row-bottom">
-                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {s.mode === "claude_cli" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
@@ -12178,11 +12178,6 @@ export function App() {
                 >
                   <AgentAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
-                    <span
-                      className={statusDotClass}
-                      title={statusLabel}
-                      aria-label={`status: ${statusLabel}`}
-                    />
                     {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
                         run-header-title). This avoids the prior
@@ -12195,6 +12190,23 @@ export function App() {
                     >
                       <span className="session-id">{sessionDisplayName(s)}</span>
                     </span>
+                    <button
+                      className="session-delete"
+                      onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
+                      disabled={isClosing || readOnlySessionView}
+                      title={isClosing ? "closing session" : "delete session"}
+                      aria-label={isClosing ? "closing session" : "delete session"}
+                    >
+                      {isClosing ? <span className="session-delete-spinner" /> : <IconClose />}
+                    </button>
+                  </div>
+                  <div className="session-row-bottom">
+                    <span
+                      className={statusDotClass}
+                      title={statusLabel}
+                      aria-label={`status: ${statusLabel}`}
+                    />
+                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {(bootLabel || runtimeLabel) && (
                       <span className="session-stats">
                         {bootLabel && (
@@ -12219,18 +12231,6 @@ export function App() {
                         )}
                       </span>
                     )}
-                    <button
-                      className="session-delete"
-                      onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                      disabled={isClosing || readOnlySessionView}
-                      title={isClosing ? "closing session" : "delete session"}
-                      aria-label={isClosing ? "closing session" : "delete session"}
-                    >
-                      {isClosing ? <span className="session-delete-spinner" /> : <IconClose />}
-                    </button>
-                  </div>
-                  <div className="session-row-bottom">
-                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
                     {activityChips.map((chip) => (
                       <span
                         key={chip.key}
