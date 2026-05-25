@@ -46,6 +46,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
     name: "scenes",
     entries: [
       { slug: "portfolio-workspace", label: "portfolio: session workspace", sub: "full shell density" },
+      { slug: "portfolio-turn-activity", label: "portfolio: turn activity", sub: "thinking indicator" },
       { slug: "portfolio-onboarding", label: "portfolio: onboarding", sub: "first-run wall" },
       { slug: "portfolio-transcript", label: "portfolio: transcript states", sub: "highlight / active / composer" },
     ],
