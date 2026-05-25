@@ -4232,6 +4232,25 @@ button:disabled {
   color: rgba(255, 255, 255, 0.42);
 }
 
+.run-composer.run-composer-readonly {
+  border-color: rgba(180, 180, 180, 0.2);
+  background: rgba(255, 255, 255, 0.018);
+  box-shadow: none;
+}
+
+.run-composer.run-composer-readonly .run-composer-textarea {
+  cursor: default;
+}
+
+.run-composer.run-composer-readonly .run-composer-hint {
+  color: var(--text-muted);
+}
+
+.run-composer.run-composer-readonly .run-submit-btn {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: var(--text-muted) !important;
+}
+
 .run-mode-pill {
   display: inline-flex;
   align-items: center;
