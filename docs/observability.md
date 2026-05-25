@@ -51,6 +51,13 @@ All metric names are prefixed `tank_`. The full namespace:
   (`validate_*`), image field failures (`read_avatar` / `read_backing`),
   blob-storage failures (`store_*`), and metadata-write failures
   (`create_metadata`) without using browser devtools.
+- `tank_admin_debug_session_event_ledger_reads_total{result}` — admin
+  reads of `GET /api/debug/session-event-ledger` (the durable
+  `session_events` audit surface that bypasses the registry visibility
+  gate). Bounded `result` labels: `ok`, `empty`, `bad_request`,
+  `forbidden`, `store_error`, `not_configured`. `empty` is its own
+  label so a wave of misdirected lookups (wrong scope, wrong id) is
+  visible without grepping the audit slog line.
 - `tank_chat_scroll_client_*` - browser-reported transcript scroll
   diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
   Labels are server-bucketed only: `event`, `surface`, `session_mode`,
@@ -189,6 +196,53 @@ failures point at blob storage or Postgres.
 For browser-independent reproduction, `scripts/debug-avatar-upload.sh`
 posts the same multipart contract with `curl -F` and prints the raw
 API response, including `attempt_id` on success or failure.
+
+## Session Event Ledger Debug Surface
+
+`GET /api/debug/session-event-ledger` (admin-only) returns events from
+the durable `session_events` Postgres table for one tank session,
+bypassing the registry visibility gate. Use this when picking up work
+from a session whose `sessions.visible` row is `false` (the user
+deleted it through the SPA) and whose pod is gone — the user-facing
+`GET /api/sessions/{id}/timeline` returns 404 in that case by design,
+but the underlying `session_events` rows are durable (no FK, no
+cascade) and recoverable through this surface.
+
+Query params:
+
+- `session_id` (required) — public session id (e.g., `203`).
+- `session_scope` — defaults to this orchestrator's scope (`default`
+  in prod). Admin power can target a different scope.
+- `limit` — page size, default 200, max 500.
+- `after_order_key` — forward-paginate ASC strictly after this key.
+- `before_order_key` — backward-paginate DESC strictly before this
+  key. At most one of `after_order_key` / `before_order_key`.
+- `direction` — `asc` (default) or `desc`. `desc` with no cursor
+  returns the tail (latest events).
+
+Response: `events[]` is always ASC by `order_key`. `has_more`,
+`found_oldest`, and `found_newest` let the caller decide when to stop
+paginating. `storage_key` is the underlying partition key (`scope:
+session_id`) for cross-referencing the raw `session_events` table.
+
+Standard workflow for "pick up a deleted session":
+
+1. `GET /api/debug/session-list-state?owner=<email>` to locate the
+   `visible=false` row and confirm the session id.
+2. `GET /api/debug/session-event-ledger?session_id=<id>` to read the
+   chat. Page with `after_order_key=<next_order_key>` if needed.
+
+This is the admin counterpart to the deliberate visibility gate on the
+user-facing timeline (the SPA tombstones soft-deleted sessions; an
+admin pickup-the-prior-codex-pod workflow shouldn't have to
+un-soft-delete or open a one-off `psql` pod to recover the chat).
+
+Counts as an admin cross-user audit read. Emits a structured `slog`
+line per call (`caller_email`, `session_id`, `session_scope`,
+`limit`, cursor fields, `result`, `count`) and increments
+`tank_admin_debug_session_event_ledger_reads_total{result}` at
+`/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
+`forbidden`, `store_error`, `not_configured`.
 
 ## Cardinality rules
 

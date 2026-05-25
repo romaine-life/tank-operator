@@ -709,7 +709,38 @@ var (
 		Name: "tank_admin_cross_user_session_lists_total",
 		Help: "Times a Tank admin-power caller passed `?owner=<email>` to list sessions or session-list events for another user.",
 	})
+
+	// debugSessionEventLedgerReadsTotal is the volume signal for the
+	// admin-only `GET /api/debug/session-event-ledger` surface.
+	// `result` labels: ok, empty, bad_request, forbidden, store_error,
+	// not_configured. Pair with the audit slog line per call; the
+	// counter answers "is this being used at scale", the slog line
+	// answers "who read what, and when". `result=empty` is its own
+	// label so a wave of misdirected lookups (wrong scope, wrong id)
+	// is visible without grepping logs.
+	debugSessionEventLedgerReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_debug_session_event_ledger_reads_total",
+			Help: "Admin reads of /api/debug/session-event-ledger, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
 )
+
+func recordDebugSessionEventLedgerRead(result string) {
+	debugSessionEventLedgerReadsTotal.WithLabelValues(
+		debugSessionEventLedgerResultLabel(result),
+	).Inc()
+}
+
+func debugSessionEventLedgerResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
 
 func recordAdminCrossUserRead() {
 	adminCrossUserReadsTotal.Inc()
