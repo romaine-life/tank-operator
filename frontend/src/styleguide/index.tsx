@@ -47,6 +47,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
     entries: [
       { slug: "portfolio-workspace", label: "portfolio: session workspace", sub: "full shell density" },
       { slug: "portfolio-onboarding", label: "portfolio: onboarding", sub: "first-run wall" },
+      { slug: "portfolio-transcript", label: "portfolio: transcript states", sub: "highlight / active / composer" },
     ],
   },
   {
