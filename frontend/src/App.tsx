@@ -95,6 +95,7 @@ import {
   REPO_SUPPORTED_MODES,
   addRepoSlug,
   isValidRepoSlug,
+  recentRepoShortcutSlugs,
   removeRepoSlug,
 } from "./repos";
 import {
@@ -187,8 +188,26 @@ type AskUserQuestionAnswer = {
   notes?: string;
   preview?: string;
 };
+type TurnActivitySummary = {
+  turnId?: string;
+  status?: "active" | "completed" | string;
+  active?: boolean;
+  toolCount?: number;
+  progressNoteCount?: number;
+  reasoningCount?: number;
+  backgroundTaskCount?: number;
+  errorCount?: number;
+  childCount?: number;
+  compactedCount?: number;
+  compactedEntryIds?: string[];
+  startedAt?: string;
+  completedAt?: string;
+  startOrderKey?: string;
+  endOrderKey?: string;
+  sourceEventId?: string;
+};
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
-  kind: SandboxTranscriptEntry["kind"] | "background_task";
+  kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
   role?: "user" | "assistant" | "system";
   toolKind?: ToolKind;
   toolServer?: string;
@@ -231,6 +250,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   taskDurationMs?: number;
   taskRawItem?: unknown;
   lastToolName?: string;
+  activity?: TurnActivitySummary;
+  activityIds?: string[];
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
@@ -252,6 +273,7 @@ type SdkHistoryRefreshResult = {
 };
 type SdkHistoryRefreshSource =
   | "history"
+  | "projected-refresh"
   | "visible-reactivation"
   | "resync"
   | "terminal-refresh";
@@ -3026,6 +3048,16 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
+      if (entry.kind === "turn_activity") {
+        return {
+          kind: entry.kind,
+          id: entry.id,
+          turnId: entry.turnId,
+          activity: entry.activity,
+          activityIds: entry.activityIds,
+          orderKey: entry.orderKey,
+        };
+      }
       if (entry.kind === "message") {
         return {
           kind: entry.kind,
@@ -3090,6 +3122,98 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
       };
     }),
   );
+}
+
+function projectedTranscriptEntriesFromTimelineBody(body: {
+  transcript?: unknown;
+}): TranscriptEntry[] {
+  const transcript = body.transcript;
+  if (!transcript || typeof transcript !== "object" || Array.isArray(transcript)) {
+    throw new Error("timeline response missing server transcript projection");
+  }
+  const entries = (transcript as { entries?: unknown }).entries;
+  if (!Array.isArray(entries)) {
+    throw new Error("timeline transcript projection missing entries");
+  }
+  return normalizeProjectedTranscriptEntries(entries);
+}
+
+function normalizeProjectedTranscriptEntries(entries: unknown[]): TranscriptEntry[] {
+  return entries
+    .map(normalizeProjectedTranscriptEntry)
+    .filter((entry): entry is TranscriptEntry => entry !== null);
+}
+
+function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const kind = typeof record.kind === "string" ? record.kind : "";
+  const id = typeof record.id === "string" ? record.id : "";
+  if (!id) return null;
+  if (
+    kind !== "message" &&
+    kind !== "tool" &&
+    kind !== "reasoning" &&
+    kind !== "meta" &&
+    kind !== "background_task" &&
+    kind !== "turn_activity"
+  ) {
+    return null;
+  }
+  if (kind === "turn_activity") {
+    return {
+      ...record,
+      id,
+      kind,
+      turnId: stringRecordValue(record, "turnId"),
+      activity: normalizeTurnActivitySummary(record.activity),
+      activityIds: normalizeStringArray(record.activityIds),
+    } as TranscriptEntry;
+  }
+  return {
+    ...record,
+    id,
+    kind,
+  } as TranscriptEntry;
+}
+
+function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  return {
+    turnId: stringRecordValue(record, "turnId"),
+    status: stringRecordValue(record, "status"),
+    active: typeof record.active === "boolean" ? record.active : undefined,
+    toolCount: numericRecordValue(record, "toolCount"),
+    progressNoteCount: numericRecordValue(record, "progressNoteCount"),
+    reasoningCount: numericRecordValue(record, "reasoningCount"),
+    backgroundTaskCount: numericRecordValue(record, "backgroundTaskCount"),
+    errorCount: numericRecordValue(record, "errorCount"),
+    childCount: numericRecordValue(record, "childCount"),
+    compactedCount: numericRecordValue(record, "compactedCount"),
+    compactedEntryIds: normalizeStringArray(record.compactedEntryIds),
+    startedAt: stringRecordValue(record, "startedAt"),
+    completedAt: stringRecordValue(record, "completedAt"),
+    startOrderKey: stringRecordValue(record, "startOrderKey"),
+    endOrderKey: stringRecordValue(record, "endOrderKey"),
+    sourceEventId: stringRecordValue(record, "sourceEventId"),
+  };
+}
+
+function normalizeStringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  return out.length > 0 ? out : undefined;
+}
+
+function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numericRecordValue(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function entryMessageFingerprint(entry: TranscriptEntry): string | null {
@@ -3209,6 +3333,21 @@ function mergeSdkTranscript(
   return dedupeAdjacentAssistantEchoes([...server, ...extra]);
 }
 
+function mergeProjectedTranscriptWindows(
+  older: TranscriptEntry[],
+  current: TranscriptEntry[],
+): TranscriptEntry[] {
+  const seen = new Set<string>();
+  const out: TranscriptEntry[] = [];
+  for (const entry of [...older, ...current]) {
+    const key = entry.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out;
+}
+
 function countTranscriptMessages(entries: TranscriptEntry[]): number {
   return entries.filter((entry) => entry.kind === "message").length;
 }
@@ -3281,6 +3420,8 @@ type EntryGroup =
       entries: TranscriptEntry[];
       compactedEntryIds: string[];
       active?: boolean;
+      shell?: TranscriptEntry;
+      loaded?: boolean;
     };
 type FlatEntryGroup = Exclude<EntryGroup, { kind: "activity" }>;
 
@@ -3316,6 +3457,30 @@ function pushTranscriptEntryGroup(
   else groups.push({ kind: "meta", entry });
 }
 
+function isTurnActivityEntry(entry: TranscriptEntry): boolean {
+  return entry.kind === "turn_activity" && Boolean(entry.turnId);
+}
+
+function pushTurnActivityEntryGroup(
+  groups: EntryGroup[],
+  entry: TranscriptEntry,
+  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+): void {
+  const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+  if (!turnId) return;
+  const entries = activityEntriesByTurn[turnId] ?? [];
+  groups.push({
+    kind: "activity",
+    id: entry.id,
+    turnId,
+    entries,
+    compactedEntryIds: entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
+    active: entry.activity?.active === true || entry.activity?.status === "active",
+    shell: entry,
+    loaded: Boolean(activityEntriesByTurn[turnId]),
+  });
+}
+
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -3339,10 +3504,24 @@ function groupTranscriptEntries(
   entries: TranscriptEntry[],
   condenseCompletedTurns = true,
   activeTurnId: string | null = null,
+  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined> = {},
 ): EntryGroup[] {
-  if (!condenseCompletedTurns) return groupFlatTranscriptEntries(entries);
+  const hasProjectedTurnActivity = entries.some(isTurnActivityEntry);
+  if (!condenseCompletedTurns && !hasProjectedTurnActivity) return groupFlatTranscriptEntries(entries);
   const groups: EntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
+  if (hasProjectedTurnActivity) {
+    for (const entry of entries) {
+      if (isTurnActivityEntry(entry)) {
+        flushTranscriptToolBucket(groups, bucket);
+        pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn);
+        continue;
+      }
+      pushTranscriptEntryGroup(groups, entry, bucket);
+    }
+    flushTranscriptToolBucket(groups, bucket);
+    return groups;
+  }
   for (const group of compactCompletedTurnEntries(entries, true, activeTurnId)) {
     if (group.kind === "activity") {
       flushTranscriptToolBucket(groups, bucket);
@@ -5256,6 +5435,24 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   return parts.length > 0 ? parts.join(" / ") : plural(entries.length, "update");
 }
 
+function turnActivityShellSummary(summary: TurnActivitySummary | undefined): string {
+  if (!summary) return "Activity";
+  const parts: string[] = [];
+  if ((summary.toolCount ?? 0) > 0) parts.push(plural(summary.toolCount ?? 0, "tool call"));
+  if ((summary.backgroundTaskCount ?? 0) > 0) {
+    parts.push(plural(summary.backgroundTaskCount ?? 0, "background task"));
+  }
+  if ((summary.progressNoteCount ?? 0) > 0) {
+    parts.push(plural(summary.progressNoteCount ?? 0, "progress note"));
+  }
+  if ((summary.reasoningCount ?? 0) > 0) {
+    parts.push(plural(summary.reasoningCount ?? 0, "reasoning block"));
+  }
+  if ((summary.errorCount ?? 0) > 0) parts.push(plural(summary.errorCount ?? 0, "error", "errors"));
+  const childCount = summary.childCount ?? 0;
+  return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
+}
+
 function RunTurnActivityGroup({
   group,
   open,
@@ -5274,6 +5471,7 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onOpenBackgroundTask,
+  loading,
 }: {
   group: Extract<EntryGroup, { kind: "activity" }>;
   open: boolean;
@@ -5292,6 +5490,7 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  loading?: boolean;
 }) {
   const childGroups = useMemo(
     () => groupFlatTranscriptEntries(group.entries),
@@ -5305,6 +5504,7 @@ function RunTurnActivityGroup({
   const completedAt = [...group.entries]
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
+  const shellSummary = group.shell?.activity;
   return (
     <div
       className="run-turn-activity"
@@ -5325,11 +5525,14 @@ function RunTurnActivityGroup({
           <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
         </span>
         <span className="run-turn-activity-label">Turn activity</span>
-        <span className="run-turn-activity-summary">{turnActivitySummary(group.entries)}</span>
+        <span className="run-turn-activity-summary">
+          {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+        </span>
         {showTimestamps && (
           <ToolTiming
-            startedAt={startedAt?.startedAt ?? startedAt?.time}
+            startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
             completedAt={
+              shellSummary?.completedAt ??
               completedAt?.completedAt ??
               completedAt?.turnTerminalAt ??
               completedAt?.time
@@ -5347,7 +5550,12 @@ function RunTurnActivityGroup({
       </button>
       {open && (
         <div className="run-turn-activity-body">
-          {childGroups.map((child) => {
+          {group.shell && !group.loaded ? (
+            <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
+              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+              <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
+            </div>
+          ) : childGroups.map((child) => {
             if (child.kind === "tools") {
               const childGroupKey = toolGroupStateKey(child.entries);
               return (
@@ -5457,6 +5665,9 @@ export function RunMessages({
   scrollToLatestReason = "manual",
   onScrollToLatestConsumed,
   scrollToOldestSignal,
+  activityEntriesByTurn = {},
+  loadingActivityTurns = {},
+  onActivityOpen,
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar;
@@ -5490,10 +5701,13 @@ export function RunMessages({
   scrollToLatestReason?: ScrollToLatestReason;
   onScrollToLatestConsumed?: () => void;
   scrollToOldestSignal?: number;
+  activityEntriesByTurn?: Record<string, TranscriptEntry[] | undefined>;
+  loadingActivityTurns?: Record<string, boolean | undefined>;
+  onActivityOpen?: (turnId: string) => void;
 }) {
   const groups = useMemo(
-    () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId),
-    [activeTurnId, condenseCompletedTurns, entries],
+    () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
+    [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
@@ -5541,6 +5755,7 @@ export function RunMessages({
         const contains = g.compactedEntryIds.includes(target);
         if (contains) {
           activityGroupKey = entryGroupKey(g);
+          if (g.shell) onActivityOpen?.(g.turnId);
           const targetEntry = g.entries.find((entry) => entry.id === target);
           if (targetEntry?.kind === "tool") {
             const childToolGroup = groupFlatTranscriptEntries(g.entries).find(
@@ -5583,6 +5798,7 @@ export function RunMessages({
     pendingScrollMessageId,
     groups,
     onScrollConsumed,
+    onActivityOpen,
     setActivityOpen,
     setToolExpanded,
     setToolGroupOpen,
@@ -5711,7 +5927,10 @@ export function RunMessages({
           <RunTurnActivityGroup
             group={g}
             open={activityOpenOverrides[groupKey] ?? false}
-            onOpenChange={(open) => setActivityOpen(groupKey, open)}
+            onOpenChange={(open) => {
+              if (open && g.shell) onActivityOpen?.(g.turnId);
+              setActivityOpen(groupKey, open);
+            }}
             avatar={avatar}
             systemAvatar={systemAvatar}
             sessionId={sessionId}
@@ -5726,6 +5945,7 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onOpenBackgroundTask={onOpenBackgroundTask}
+            loading={loadingActivityTurns[g.turnId] === true}
           />
         );
       }
@@ -5749,7 +5969,9 @@ export function RunMessages({
       avatar,
       systemAvatar,
       highlightedEntryId,
+      loadingActivityTurns,
       onFork,
+      onActivityOpen,
       onOpenBackgroundTask,
       onQuote,
       setActivityOpen,
@@ -6146,8 +6368,13 @@ function ChatPane({
   avatarCatalogVersion: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
+  const [activityEntriesByTurn, setActivityEntriesByTurn] =
+    useState<Record<string, TranscriptEntry[] | undefined>>({});
+  const [loadingActivityTurns, setLoadingActivityTurns] =
+    useState<Record<string, boolean | undefined>>({});
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
+  const sdkServerProjectedEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerEventsRef = useRef<TankConversationEvent[]>([]);
   const sdkRealtimeEventsRef = useRef<TankConversationEvent[]>([]);
@@ -6381,6 +6608,7 @@ function ChatPane({
   const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
+  const sdkProjectedRefreshTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -6462,9 +6690,11 @@ function ChatPane({
     const state = reduceSdkConversationState();
     sdkConversationStateRef.current = state;
     const projection = projectConversationState(state);
-    sdkServerEntriesRef.current = applySdkAssistantDurations(
-      conversationEntriesToTranscript(projection.entries),
-    );
+    const serverEntries =
+      sdkServerProjectedEntriesRef.current.length > 0
+        ? sdkServerProjectedEntriesRef.current
+        : conversationEntriesToTranscript(projection.entries);
+    sdkServerEntriesRef.current = applySdkAssistantDurations(serverEntries);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
       sdkRealtimeEntriesRef.current,
@@ -6526,8 +6756,10 @@ function ChatPane({
   function replaceSdkServerEvents(
     serverEvents: TankConversationEvent[],
     clearRealtime = false,
+    projectedEntries: TranscriptEntry[] = [],
   ): void {
     sdkServerEventsRef.current = serverEvents;
+    sdkServerProjectedEntriesRef.current = projectedEntries;
     if (clearRealtime) {
       sdkRealtimeEventsRef.current = [];
       sdkRealtimeEntriesRef.current = [];
@@ -6572,6 +6804,7 @@ function ChatPane({
       sdkEventReconnectTimerRef.current = null;
     }
     sdkServerEntriesRef.current = [];
+    sdkServerProjectedEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
     sdkServerEventsRef.current = [];
     sdkRealtimeEventsRef.current = [];
@@ -6591,6 +6824,8 @@ function ChatPane({
     setSdkPendingTailCount(0);
     setSdkOlderError(null);
     setEntries([]);
+    setActivityEntriesByTurn({});
+    setLoadingActivityTurns({});
     setSdkConnectionState("idle");
     dispatchTimelineBootstrap({
       type: "reset",
@@ -6736,6 +6971,7 @@ function ChatPane({
       }
     }
     syncSdkRenderedEntries();
+    if (!alreadySeen) scheduleProjectedTimelineRefresh();
 
     const run = currentRunRef.current;
     const terminal = sdkTerminalResult(event);
@@ -6743,6 +6979,19 @@ function ChatPane({
       finalizeSdkRun(run, terminal, { refreshHistory: false });
     }
   }
+
+  function scheduleProjectedTimelineRefresh(): void {
+    if (sdkServerProjectedEntriesRef.current.length === 0) return;
+    if (!sdkAtBottomRef.current) return;
+    if (sdkProjectedRefreshTimerRef.current !== null) {
+      window.clearTimeout(sdkProjectedRefreshTimerRef.current);
+    }
+    sdkProjectedRefreshTimerRef.current = window.setTimeout(() => {
+      sdkProjectedRefreshTimerRef.current = null;
+      void refreshSdkRunHistoryResult(false, undefined, "projected-refresh");
+    }, 500);
+  }
+
   // handleSdkAtBottomChange is the durable boolean source from Virtuoso
   // for "is the user viewing the live tail." Replaces the prior 24px
   // scrollTop hysteresis listener. Two side effects:
@@ -6788,6 +7037,10 @@ function ChatPane({
       if (sdkReadStateTimerRef.current !== null) {
         window.clearTimeout(sdkReadStateTimerRef.current);
         sdkReadStateTimerRef.current = null;
+      }
+      if (sdkProjectedRefreshTimerRef.current !== null) {
+        window.clearTimeout(sdkProjectedRefreshTimerRef.current);
+        sdkProjectedRefreshTimerRef.current = null;
       }
     };
   }, []);
@@ -6950,6 +7203,7 @@ function ChatPane({
       const body = (await res.json()) as {
         session_id?: string;
         events?: unknown[];
+        transcript?: unknown;
         next_order_key?: string;
         prev_order_key?: string;
         has_more?: boolean;
@@ -6979,6 +7233,15 @@ function ChatPane({
       }
       if (!Array.isArray(body.events)) {
         return { replayed: false, error: "timeline response did not include events" };
+      }
+      let projectedEntries: TranscriptEntry[];
+      try {
+        projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
+      } catch (err) {
+        return {
+          replayed: false,
+          error: String((err as Error).message ?? err),
+        };
       }
       const canonicalEvents: TankConversationEvent[] = [];
       for (const ev of body.events) {
@@ -7011,10 +7274,6 @@ function ChatPane({
       const terminal = clientNonce
         ? sdkHistoryTerminalForRun(body.events, clientNonce)
         : undefined;
-      const projection = projectConversationState(
-        reduceConversationEvents(orderedConversationEvents(canonicalEvents)),
-      );
-      const projectedEntries = conversationEntriesToTranscript(projection.entries);
       logChatScrollEntries("timeline-loaded", projectedEntries, {
         surface: "session",
         sessionId: refreshSessionId,
@@ -7038,6 +7297,7 @@ function ChatPane({
       replaceSdkServerEvents(
         canonicalEvents,
         clearRealtime && canClearSdkRealtime(canonicalEvents, clearRealtimeCursor),
+        projectedEntries,
       );
       if (scrollToLatestOnReady) {
         timelineBootstrapScrollToLatestRef.current = false;
@@ -7101,11 +7361,19 @@ function ChatPane({
       }
       const body = (await res.json()) as {
         events?: unknown[];
+        transcript?: unknown;
         prev_order_key?: string;
         found_oldest?: boolean;
       };
       if (sessionIdRef.current !== refreshSessionId) return;
       if (!Array.isArray(body.events)) return;
+      let projectedOlderEntries: TranscriptEntry[];
+      try {
+        projectedOlderEntries = projectedTranscriptEntriesFromTimelineBody(body);
+      } catch (err) {
+        setSdkOlderError(`Could not load earlier messages: ${String((err as Error).message ?? err)}`);
+        return;
+      }
       const olderEvents: TankConversationEvent[] = [];
       for (const ev of body.events) {
         if (isTankConversationEvent(ev)) olderEvents.push(ev);
@@ -7119,13 +7387,14 @@ function ChatPane({
           ...olderEvents,
           ...sdkServerEventsRef.current,
         ]);
-        syncSdkRenderedEntries();
-        const projection = projectConversationState(
-          reduceConversationEvents(sdkServerEventsRef.current),
+        sdkServerProjectedEntriesRef.current = mergeProjectedTranscriptWindows(
+          projectedOlderEntries,
+          sdkServerProjectedEntriesRef.current,
         );
+        syncSdkRenderedEntries();
         logChatScrollEntries(
           "older-loaded",
-          conversationEntriesToTranscript(projection.entries),
+          sdkServerProjectedEntriesRef.current,
           {
             surface: "session",
             sessionId: refreshSessionId,
@@ -7168,6 +7437,7 @@ function ChatPane({
     if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
     const body = (await res.json()) as {
       events?: unknown[];
+      transcript?: unknown;
       next_order_key?: string;
       prev_order_key?: string;
       found_oldest?: boolean;
@@ -7177,6 +7447,7 @@ function ChatPane({
     if (!Array.isArray(body.events)) {
       throw new Error("timeline response did not include events");
     }
+    const projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
     const canonicalEvents: TankConversationEvent[] = [];
     for (const ev of body.events) {
       if (isTankConversationEvent(ev)) {
@@ -7204,7 +7475,7 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
-    replaceSdkServerEvents(canonicalEvents, false);
+    replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
   // jumpSdkToLatest resets the window to the live tail. If the SPA never
@@ -7222,6 +7493,7 @@ function ChatPane({
     if (!res.ok) return;
     const body = (await res.json()) as {
       events?: unknown[];
+      transcript?: unknown;
       next_order_key?: string;
       prev_order_key?: string;
       found_oldest?: boolean;
@@ -7229,6 +7501,12 @@ function ChatPane({
     };
     if (sessionIdRef.current !== refreshSessionId) return;
     if (!Array.isArray(body.events)) return;
+    let projectedEntries: TranscriptEntry[];
+    try {
+      projectedEntries = projectedTranscriptEntriesFromTimelineBody(body);
+    } catch {
+      return;
+    }
     const canonicalEvents: TankConversationEvent[] = [];
     for (const ev of body.events) {
       if (isTankConversationEvent(ev)) {
@@ -7251,7 +7529,7 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
-    replaceSdkServerEvents(canonicalEvents, false);
+    replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
   useEffect(() => {
@@ -8546,6 +8824,30 @@ function ChatPane({
     ],
     [activeBackgroundEntries, detachedShellEntries],
   );
+  const ensureTurnActivityLoaded = useCallback((turnId: string) => {
+    const trimmedTurnId = turnId.trim();
+    if (!trimmedTurnId) return;
+    if (activityEntriesByTurn[trimmedTurnId]) return;
+    if (loadingActivityTurns[trimmedTurnId]) return;
+    setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
+    void authedFetch(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
+        const body = (await res.json()) as { entries?: unknown[] };
+        const loaded = normalizeProjectedTranscriptEntries(
+          Array.isArray(body.entries) ? body.entries : [],
+        );
+        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: loaded }));
+      })
+      .catch(() => {
+        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: [] }));
+      })
+      .finally(() => {
+        setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
+      });
+  }, [activityEntriesByTurn, loadingActivityTurns, session.id]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
@@ -8756,7 +9058,7 @@ function ChatPane({
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
       bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
-      composerVisible={!readOnly && activeTab === "chat"}
+      composerVisible={activeTab === "chat"}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}
       composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
@@ -9305,6 +9607,9 @@ function ChatPane({
               scrollToLatestReason={scrollToLatestRequest.reason}
               onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
+              activityEntriesByTurn={activityEntriesByTurn}
+              loadingActivityTurns={loadingActivityTurns}
+              onActivityOpen={ensureTurnActivityLoaded}
             />
           </>
         )}
@@ -9585,15 +9890,28 @@ function ChatPane({
       </>)}
       composer={(
         <ChatComposer
-          className="run-composer-runpane run-composer-interactive"
-          placeholder={RUN_COMPOSER_PLACEHOLDER}
-          onSubmit={(args) => handleSubmit({ text: args.text, files: [] })}
+          className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
+          placeholder={
+            readOnly
+              ? "Production sessions are read-only in this test slot"
+              : RUN_COMPOSER_PLACEHOLDER
+          }
+          onSubmit={(args) => {
+            if (readOnly) return;
+            handleSubmit({ text: args.text, files: [] });
+          }}
           permissionMode={composerMode}
           onPermissionModeChange={setComposerMode}
           sendByCtrlEnter={runPrefs.sendByCtrlEnter}
           hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-          canSubmit={ready}
-          controlsDisabled={!ready}
+          hintOverride={
+            readOnly
+              ? "Read-only production view. Switch back to this slot's sessions in Settings to send messages."
+              : undefined
+          }
+          disabled={readOnly}
+          canSubmit={!readOnly && ready}
+          controlsDisabled={readOnly || !ready}
           submitStatus={submitStatus}
           onStop={cancelRun}
           isStopping={runStatus === "stopping"}
@@ -10080,6 +10398,10 @@ export function App() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
+  const recentRepoShortcuts = useMemo(
+    () => recentRepoShortcutSlugs(recentRepos),
+    [recentRepos],
+  );
   // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
@@ -10284,6 +10606,55 @@ export function App() {
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
+
+  const selectExclusiveRepo = useCallback((rawSlug: string) => {
+    const result = addRepoSlug([], rawSlug);
+    if (result.ok) {
+      setSelectedRepos(result.next);
+      setRepoInput("");
+      setRepoError(null);
+    } else {
+      setRepoError(result.error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      active !== null ||
+      homeActiveTab !== "chat" ||
+      !REPO_SUPPORTED_MODES.has(defaultSessionMode)
+    ) {
+      return;
+    }
+    const selectRecentRepoByNumber = (event: KeyboardEvent) => {
+      if (
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        event.isComposing ||
+        event.target !== homeBodyRef.current ||
+        !/^[1-9]$/.test(event.key)
+      ) {
+        return;
+      }
+      const slug = recentRepoShortcuts[Number(event.key) - 1];
+      if (!slug) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectExclusiveRepo(slug);
+    };
+    window.addEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+    };
+  }, [
+    active,
+    defaultSessionMode,
+    homeActiveTab,
+    recentRepoShortcuts,
+    selectExclusiveRepo,
+  ]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
   // attribute so a single listener can route by which menu is open.
@@ -11998,6 +12369,7 @@ export function App() {
                           setRepoError(result.error);
                         }
                       }}
+                      onSelectExclusive={selectExclusiveRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);
