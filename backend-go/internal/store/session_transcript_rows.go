@@ -14,6 +14,7 @@ import (
 )
 
 const transcriptRowCursorSeparator = "\x1f"
+const transcriptRowBackfillVersion = 1
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
@@ -82,6 +83,16 @@ func (s *transcriptRowStore) ReplaceForSession(ctx context.Context, tankSessionI
 		return err
 	}
 	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO session_transcript_row_backfills (
+			tank_session_id, projection_version, completed_at
+		) VALUES ($1, $2, now())
+		ON CONFLICT (tank_session_id) DO UPDATE
+		SET projection_version = EXCLUDED.projection_version,
+			completed_at = now()
+	`, storageKey, transcriptRowBackfillVersion); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -218,9 +229,9 @@ func (s *transcriptRowStore) BackfillSessionIDs(ctx context.Context) ([]string, 
 		scope = "default"
 	}
 	scopeClause := "AND position(':' in se.tank_session_id) = 0"
-	args := []any{}
+	args := []any{transcriptRowBackfillVersion}
 	if scope != "default" {
-		scopeClause = "AND left(se.tank_session_id, length($1)) = $1"
+		scopeClause = "AND left(se.tank_session_id, length($2)) = $2"
 		args = append(args, scope+":")
 	}
 	q := `
@@ -230,8 +241,9 @@ func (s *transcriptRowStore) BackfillSessionIDs(ctx context.Context) ([]string, 
 			` + scopeClause + `
 			AND NOT EXISTS (
 				SELECT 1
-				FROM session_transcript_rows tr
-				WHERE tr.tank_session_id = se.tank_session_id
+				FROM session_transcript_row_backfills bf
+				WHERE bf.tank_session_id = se.tank_session_id
+					AND bf.projection_version = $1
 			)
 		ORDER BY 1
 	`

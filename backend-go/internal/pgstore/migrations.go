@@ -373,6 +373,11 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS session_transcript_rows_activity_ids
 		ON session_transcript_rows USING gin ((payload -> 'activityIds'))
 		WHERE payload ? 'activityIds'`,
+	`CREATE TABLE IF NOT EXISTS session_transcript_row_backfills (
+		tank_session_id    text PRIMARY KEY,
+		projection_version integer NOT NULL,
+		completed_at       timestamptz NOT NULL DEFAULT now()
+	)`,
 	`CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
 		p_email text,
 		p_scope text,

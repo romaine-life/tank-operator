@@ -240,15 +240,6 @@ func main() {
 		events: sessionEventsStore,
 		rows:   transcriptRowsStore,
 	}
-	if pgPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		if err := transcriptMaterializer.Backfill(ctx); err != nil {
-			cancel()
-			slog.Error("transcript row backfill failed", "error", err)
-			os.Exit(1)
-		}
-		cancel()
-	}
 
 	// 7. Init NATS JetStream session bus for SDK commands/events.
 	sessionBus := buildSessionBus(sessionScope)
@@ -472,6 +463,9 @@ func main() {
 		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
+	if pgPool != nil {
+		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
+	}
 
 	// 14. Listen and serve. Every request flows through
 	// httpInstrumentationMiddleware so 5xx errors carry method, route,

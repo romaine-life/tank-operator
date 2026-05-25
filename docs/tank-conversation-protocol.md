@@ -812,6 +812,10 @@ Storage:
 - Keep the Postgres `session_transcript_rows` table as the `/timeline` read
   model, keyed by opaque transcript row cursors and refreshed from
   `session_events` on each durable event write.
+- Mark completed transcript-row backfills in
+  `session_transcript_row_backfills`. Migration-created status rows are
+  visible transcript rows, but they are not proof that historical turns have
+  been projected.
 - Use NATS JetStream as the durable command/event fabric, not as the product
   history database. Commands are acked only after durable terminal events are
   published; events are acknowledged by the backend persister after the
