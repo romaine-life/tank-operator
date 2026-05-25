@@ -267,6 +267,43 @@ spec:
               orchestrator and the browser, not in the wake fabric.
               Likely surface: ingress / load balancer idle timeout.
 
+        - alert: TankBrowserQueuedFollowupBlockedAfterTerminal
+          expr: |
+            sum by (session_mode) (
+              increase(tank_session_event_client_events_total{event="queued_followup_blocked_after_terminal"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "browser queued a follow-up after durable state already reached terminal on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The SPA observed a user-visible local latch: a follow-up
+              submit was placed in the browser-only queuedMessages list
+              while the durable conversation projection was no longer
+              active. This is not a missing terminal event and not a
+              wake-delivery issue. Check recent terminal correlation
+              telemetry (`terminal_matched_by_turn_id` /
+              `terminal_local_run_mismatch`) and inspect the relevant
+              frontend/src/App.tsx currentRunRef/finalizeSdkRun path.
+
+        - alert: TankBrowserTerminalLocalRunMismatch
+          expr: |
+            sum by (session_mode) (
+              increase(tank_session_event_client_events_total{event="terminal_local_run_mismatch"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "browser received a terminal event that matched no open local run on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The browser saw a durable turn terminal while currentRunRef
+              was open, but the event matched neither client_nonce nor
+              turn_id. This is a frontend correlation bug or a producer
+              identity bug. Start with the terminal producer's event_id /
+              turn_id construction and the App.tsx terminal matching path.
+
         # Candidate C — reducer drop. Server emits a Tank event the
         # browser never confirms receiving. Threshold: 5% sustained
         # divergence on the same event_type for 10m. Sum across
@@ -320,6 +357,28 @@ spec:
               server load (memory pressure on the JetStream stream,
               slow consumer warnings). Diagnostic only — does not
               page.
+
+        - alert: TankTurnTerminalMissingClientNonce
+          expr: |
+            sum by (source, event_type) (
+              increase(tank_turn_terminal_missing_client_nonce_total[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "durable terminal {{`{{ $labels.event_type }}`}} from {{`{{ $labels.source }}`}} is missing client_nonce"
+            runbook: |
+              A producer wrote a durable terminal turn event without
+              client_nonce. The server-side lifecycle is closed, so
+              TankTurnSilentStranding will not fire, but an already-open
+              browser tab may fail to correlate the terminal to its local
+              currentRunRef and keep follow-up input queued until refresh.
+              Fix the producer to carry the submitted client_nonce on
+              turn.completed / turn.failed / turn.command_failed /
+              turn.interrupted. Pair with
+              TankBrowserQueuedFollowupBlockedAfterTerminal for the
+              user-visible browser symptom.
 
         - alert: TankStreamAuthTicketStoreFailures
           expr: rate(tank_stream_auth_ticket_total{result=~"store_unavailable|store_error"}[10m]) > 0

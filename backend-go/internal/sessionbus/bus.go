@@ -107,6 +107,13 @@ type PersisterMetrics interface {
 	// minutes of deploy instead of a user bug report. Non-lifecycle event
 	// types are dropped at the implementation; the label set is bounded.
 	RecordTurnLifecyclePersisted(eventType string)
+	// RecordTurnTerminalMissingClientNonce increments when a durable
+	// terminal turn event lands without client_nonce. The terminal row still
+	// closes the server-side lifecycle, but the browser's already-open tab
+	// uses client_nonce to release local run state and queued follow-ups.
+	// Missing nonce is therefore a producer contract violation that must be
+	// visible even when no browser is open.
+	RecordTurnTerminalMissingClientNonce(source string, eventType string)
 }
 
 type noopPersisterMetrics struct{}
@@ -115,6 +122,8 @@ func (noopPersisterMetrics) RecordSchemaRejected()                     {}
 func (noopPersisterMetrics) RecordTransientFailure()                   {}
 func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string) {}
 func (noopPersisterMetrics) RecordTurnLifecyclePersisted(string)       {}
+func (noopPersisterMetrics) RecordTurnTerminalMissingClientNonce(string, string) {
+}
 
 // WakeMetrics receives counters for wake/event publish failures, the
 // success path, and the end-to-end persist→wake latency. The bus
@@ -590,6 +599,13 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics Per
 	// records.
 	if conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
 		metrics.RecordTurnLifecyclePersisted(eventType)
+	}
+	if conversation.IsTurnTerminalEvent(conversation.EventType(eventType)) && strings.TrimSpace(stringField(event, "client_nonce")) == "" {
+		source := strings.TrimSpace(stringField(event, "source"))
+		if source == "" {
+			source = "unknown"
+		}
+		metrics.RecordTurnTerminalMissingClientNonce(source, eventType)
 	}
 	upsertedAt := time.Now()
 	storageKey, _ := event["tank_session_id"].(string)

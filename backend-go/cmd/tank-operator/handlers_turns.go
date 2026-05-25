@@ -64,6 +64,13 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 	if eventType := stringMapField(event, "type"); conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
 		recordTurnLifecyclePersisted(eventType)
 	}
+	if eventType := stringMapField(event, "type"); conversation.IsTurnTerminalEvent(conversation.EventType(eventType)) && stringMapField(event, "client_nonce") == "" {
+		source := stringMapField(event, "source")
+		if source == "" {
+			source = "unknown"
+		}
+		recordTurnTerminalMissingClientNonce(source, eventType)
+	}
 	if s.sessionBus != nil && storageKey != "" {
 		if err := s.sessionBus.PublishSessionEventWake(ctx, storageKey); err != nil {
 			slog.Warn("session event wake publish failed",

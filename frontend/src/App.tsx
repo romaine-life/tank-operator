@@ -2417,7 +2417,23 @@ function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
       detail: typeof error === "string" ? error : shortJson(event.payload ?? event),
     };
   }
+  if (type === "turn.command_failed") {
+    const reason = event.payload?.reason;
+    return {
+      status: "error",
+      detail: typeof reason === "string" ? reason : shortJson(event.payload ?? event),
+    };
+  }
   return null;
+}
+
+function turnIdForBrowserClientNonce(clientNonce: string): string {
+  const trimmed = clientNonce.trim();
+  let safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "-");
+  safe = safe.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  if (safe.length >= 6 && safe.length <= 80) return `turn_${safe}`;
+  if (safe.length > 80) return `turn_${safe.slice(0, 64)}`;
+  return `turn_${trimmed}`;
 }
 
 function isClaudeRunMode(mode: SessionMode): boolean {
@@ -6747,6 +6763,7 @@ function ChatPane({
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
     id: string;
+    turnId: string;
     prompt: string;
     skillName?: string;
     followUp: boolean;
@@ -6761,6 +6778,8 @@ function ChatPane({
     turnStart: number;
     submitAccepted: boolean;
   } | null>(null);
+  const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
+  const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
   // Mirror of the durable projection's active turn — read, not written.
   // Run status itself comes from the projection (see applySdkProjectionToUi
   // and the turn.interrupt_requested handling in conversationReducer), not
@@ -7100,8 +7119,23 @@ function ChatPane({
 
     const run = currentRunRef.current;
     const terminal = sdkTerminalResult(event);
-    if (run && terminal && event.client_nonce === run.id) {
-      finalizeSdkRun(run, terminal, { refreshHistory: false });
+    if (run && terminal) {
+      const matchedByClientNonce = event.client_nonce === run.id;
+      const matchedByTurnId = event.turn_id === run.turnId;
+      const reportKey = `${run.id}:${event.event_id}`;
+      if (!matchedByClientNonce && !terminalCorrelationReportedRef.current.has(reportKey)) {
+        terminalCorrelationReportedRef.current.add(reportKey);
+        logSessionEventStreamEvent(
+          matchedByTurnId ? "terminal_matched_by_turn_id" : "terminal_local_run_mismatch",
+          {
+            sessionMode: session.mode,
+            eventType: event.type,
+          },
+        );
+      }
+      if (matchedByClientNonce || matchedByTurnId) {
+        finalizeSdkRun(run, terminal, { refreshHistory: false });
+      }
     }
   }
 
@@ -7227,6 +7261,23 @@ function ChatPane({
   // useEffect's closure gives us the fresh version when deps actually change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, queuedMessages]);
+
+  useEffect(() => {
+    const run = currentRunRef.current;
+    if (!run || !running || queuedMessages.length === 0) return;
+    if (queuedFollowupBlockedReportedRef.current === run.id) return;
+    const projection = projectConversationState(sdkConversationStateRef.current);
+    const durableActive =
+      projection.runStatus === "submitted" ||
+      projection.runStatus === "streaming" ||
+      projection.runStatus === "needs_input" ||
+      projection.runStatus === "stopping";
+    if (durableActive) return;
+    queuedFollowupBlockedReportedRef.current = run.id;
+    logSessionEventStreamEvent("queued_followup_blocked_after_terminal", {
+      sessionMode: session.mode,
+    });
+  }, [queuedMessages.length, running, session.mode]);
 
   // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
   // keeps the user pinned to the live tail when at-bottom, and
@@ -8769,6 +8820,10 @@ function ChatPane({
       }
       throw new Error(detail);
     }
+    const body = (await res.json().catch(() => null)) as { turn_id?: unknown } | null;
+    if (typeof body?.turn_id === "string" && body.turn_id.trim()) {
+      run.turnId = body.turn_id.trim();
+    }
   }
 
   async function markTestState(state: TestState) {
@@ -8837,8 +8892,10 @@ function ChatPane({
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
+    const id = newRunId();
     const run = {
-      id: newRunId(),
+      id,
+      turnId: turnIdForBrowserClientNonce(id),
       prompt: trimmed,
       skillName,
       followUp,
@@ -8851,6 +8908,8 @@ function ChatPane({
       submitAccepted: false,
     };
     currentRunRef.current = run;
+    terminalCorrelationReportedRef.current = new Set();
+    queuedFollowupBlockedReportedRef.current = null;
     const optimisticTime = nowIso();
     if (skillName) {
       appendSdkRealtimeEntries(

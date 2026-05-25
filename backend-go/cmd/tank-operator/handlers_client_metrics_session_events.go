@@ -2,7 +2,8 @@
 // stream consumer. Pairs with frontend/src/sessionEventStreamTelemetry.ts.
 // The browser emits semantic events (opened, tank_event_received,
 // stream_silent_while_running, resync_required, stream_error,
-// closed); the orchestrator buckets them into bounded Prometheus
+// closed, plus terminal/local-run correlation regressions); the
+// orchestrator buckets them into bounded Prometheus
 // labels — the SPA never sets labels directly so a misbehaving
 // client can't blow the active-series budget.
 //
@@ -96,15 +97,18 @@ func validSessionEventStreamMetricNumbers(event sessionEventStreamMetricEvent) b
 }
 
 var sessionEventStreamClientEventLabels = map[string]struct{}{
-	"opened":                      {},
-	"tank_event_received":         {},
-	"ready":                       {},
-	"stream_silent_while_running": {},
-	"resync_required":             {},
-	"stream_error":                {},
-	"closed_unmount":              {},
-	"closed_error":                {},
-	"reconnect_scheduled":         {},
+	"opened":                                 {},
+	"tank_event_received":                    {},
+	"ready":                                  {},
+	"stream_silent_while_running":            {},
+	"terminal_matched_by_turn_id":            {},
+	"terminal_local_run_mismatch":            {},
+	"queued_followup_blocked_after_terminal": {},
+	"resync_required":                        {},
+	"stream_error":                           {},
+	"closed_unmount":                         {},
+	"closed_error":                           {},
+	"reconnect_scheduled":                    {},
 }
 
 func sessionEventStreamClientEventLabel(raw string) string {

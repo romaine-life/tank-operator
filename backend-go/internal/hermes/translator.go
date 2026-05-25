@@ -384,15 +384,16 @@ func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventTy
 		payload["reason"] = "provider_failure"
 	}
 	event := t.stamp(map[string]any{
-		"event_id":   t.cfg.TurnID + ":" + string(eventType),
-		"session_id": t.cfg.SessionID,
-		"turn_id":    t.cfg.TurnID,
-		"actor":      string(conversation.ActorRunner),
-		"source":     string(conversation.SourceHermes),
-		"type":       string(eventType),
-		"created_at": t.nowRFC3339(),
-		"producer":   t.producer(),
-		"visibility": string(conversation.VisibilityDurable),
+		"event_id":     t.cfg.TurnID + ":" + string(eventType),
+		"session_id":   t.cfg.SessionID,
+		"turn_id":      t.cfg.TurnID,
+		"client_nonce": t.cfg.ClientNonce,
+		"actor":        string(conversation.ActorRunner),
+		"source":       string(conversation.SourceHermes),
+		"type":         string(eventType),
+		"created_at":   t.nowRFC3339(),
+		"producer":     t.producer(),
+		"visibility":   string(conversation.VisibilityDurable),
 	})
 	if len(payload) > 0 {
 		event["payload"] = payload
