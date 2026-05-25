@@ -77,8 +77,8 @@ var (
 	})
 	// sessionEventTimelineRequestTotal labels each /timeline read by the
 	// anchor shape the SPA chose. The tail-first navigation cutover makes
-	// `newest` the default bootstrap, with `around` used only for explicit
-	// transcript links and `before` used for back-pagination.
+	// `newest` the default bootstrap, with `timeline_id` used for explicit
+	// transcript links and `before_cursor` used for row back-pagination.
 	sessionEventTimelineRequestTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_session_event_timeline_request_total",
 		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",

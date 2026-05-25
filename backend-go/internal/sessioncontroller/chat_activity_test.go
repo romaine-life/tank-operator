@@ -129,10 +129,6 @@ func (s *activityEventStore) LatestEvents(_ context.Context, _ string, _ int) (s
 	return store.SessionEventPage{}, nil
 }
 
-func (s *activityEventStore) EventsAround(_ context.Context, _ string, _ string, _ int, _ int) (store.SessionEventPage, error) {
-	return store.SessionEventPage{}, nil
-}
-
 func (s *activityEventStore) EventsForTurn(_ context.Context, _ string, _ string, _ int) (store.SessionEventPage, error) {
 	return store.SessionEventPage{}, nil
 }

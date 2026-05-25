@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ConversationReadStateStore persists the per-user render cursor for a Tank
-// conversation. The cursor is the same render-order value used by /timeline,
-// not any storage primary key.
+// ConversationReadStateStore persists the per-user live-event cursor for a
+// Tank conversation. The cursor is a session_events order_key, not the
+// transcript-row cursor used for historical /timeline pagination.
 type ConversationReadStateStore interface {
 	Get(ctx context.Context, email, sessionID string) (*ConversationReadStateRecord, error)
 	Set(ctx context.Context, email, sessionID, lastReadOrderKey string) (ConversationReadStateRecord, error)

@@ -49,6 +49,9 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 		}
 		return err
 	}
+	if err := s.refreshTranscriptRowsForEvent(ctx, event); err != nil {
+		return err
+	}
 	// Silent-stranding observability: bump the lifecycle counter for the
 	// five bounding types after the durable write commits. The
 	// backend-direct path writes user_message.created + turn.submitted
@@ -69,6 +72,16 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 	}
 	s.refreshActivityForBackendEvent(ctx, storageKey, event)
 	return nil
+}
+
+func (s *appServer) refreshTranscriptRowsForEvent(ctx context.Context, event map[string]any) error {
+	if s == nil || s.sessionEvents == nil || s.transcriptRows == nil {
+		return nil
+	}
+	return (transcriptRowsMaterializer{
+		events: s.sessionEvents,
+		rows:   s.transcriptRows,
+	}).RefreshEvent(ctx, event)
 }
 
 func (s *appServer) refreshActivityForBackendEvent(ctx context.Context, storageKey string, event map[string]any) {

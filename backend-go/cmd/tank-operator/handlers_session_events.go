@@ -21,25 +21,10 @@ const (
 	sessionEventStreamHeartbeat = 15 * time.Second
 )
 
-// handleListSessionEvents reads canonical SDK events from the session_events
-// Postgres table for the SPA's durable history path. The anchor query param
-// selects the shape of the read:
-//
-//   - anchor=newest                — last N events (tail).
-//   - anchor=oldest                — first N events (head of ledger). Powers
-//     the SPA's "jump to start" affordance —
-//     Discord/Slack-style symmetric pair with
-//     anchor=newest.
-//   - anchor=<order_key>           — page centered on that order_key.
-//   - before_order_key=<order_key> — strictly older than the cursor (DESC).
-//   - after_order_key=<order_key>  — strictly newer than the cursor (ASC).
-//     Used for "catch up forward" inside a
-//     bounded forward-paginate from the SPA.
-//   - none of the above            — same as anchor=newest.
-//
-// num_before / num_after govern the symmetric anchor reads; limit governs
-// before/after cursor reads and the tail. Unknown cursors are explicit 409
-// resync errors per docs/product-inspirations.md.
+// handleListSessionEvents returns the projected transcript-row read model.
+// The durable session_events ledger remains the source for live SSE,
+// replay, and Turn activity detail, but main transcript navigation pages
+// session_transcript_rows so the browser never asks for raw event windows.
 func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -63,102 +48,52 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, user auth.User, sessionID, sessionScope string) (map[string]any, int, error) {
-	if _, status, err := s.authorizeSessionReadInScope(ctx, user, sessionID, sessionScope); err != nil {
+	info, status, err := s.authorizeSessionReadInScope(ctx, user, sessionID, sessionScope)
+	if err != nil {
 		return nil, status, err
 	}
 
 	eventStore := s.sessionEventStoreForScope(sessionScope)
+	rowStore := s.sessionTranscriptRowStoreForScope(sessionScope)
 	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID, sessionScope)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 
-	intent := sessionEventReadIntentFromRequest(r)
-	recordSessionEventTimelineRequest(intent.metricLabel)
-	if status, err := resolveSessionEventTimelineAnchor(ctx, eventStore, sessionID, &intent); err != nil {
+	intent, status, err := sessionTranscriptReadIntentFromRequest(r)
+	if err != nil {
 		return nil, status, err
 	}
-
-	// Cursor-existence validation: only meaningful for caller-supplied
-	// order_keys (after/before/anchor=<key>). Tail and timeline_id anchors
-	// have no caller-supplied cursor to validate.
-	if intent.validateCursor != "" {
-		if ok, err := eventStore.HasOrderKey(ctx, sessionID, intent.validateCursor); err != nil {
-			return nil, http.StatusInternalServerError, err
-		} else if !ok {
-			return nil, http.StatusConflict, fmt.Errorf("event cursor not found; reload timeline")
-		}
-	}
-
-	page, err := s.runSessionEventRead(ctx, eventStore, sessionID, intent)
+	recordSessionEventTimelineRequest(intent.metricLabel)
+	page, targetCursor, status, err := runSessionTranscriptRowRead(ctx, rowStore, sessionID, intent)
 	if err != nil {
+		return nil, status, err
+	}
+	liveOrderKey := ""
+	if live, err := eventStore.LatestEvents(ctx, sessionID, 1); err == nil && len(live.Events) > 0 {
+		liveOrderKey = transcriptString(live.Events[len(live.Events)-1], "order_key")
+	} else if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if page.Events == nil {
-		page.Events = []map[string]any{}
-	}
-	projectionEvents, err := s.sessionTranscriptProjectionEvents(ctx, eventStore, sessionID, page.Events)
-	if err != nil {
-		return nil, http.StatusInternalServerError, err
-	}
-	transcript := projectTranscriptEvents(projectionEvents)
 	body := map[string]any{
 		"session_id":      sessionID,
-		"events":          page.Events,
-		"transcript":      map[string]any{"entries": transcript.Entries, "projection": "server_turn_activity_v1"},
-		"next_order_key":  page.NextOrderKey,
-		"prev_order_key":  page.PrevOrderKey,
-		"has_more":        page.HasMore,
+		"rows":            page.Rows,
+		"projection":      "server_transcript_rows_v1",
+		"next_cursor":     page.NextCursor,
+		"prev_cursor":     page.PrevCursor,
 		"found_oldest":    page.FoundOldest,
 		"found_newest":    page.FoundNewest,
 		"anchor":          intent.responseAnchor,
-		"cursor_semantic": "order_key",
+		"cursor_semantic": "transcript_row",
+		"live_order_key":  liveOrderKey,
+		"activity":        info.Activity,
 		"read_state":      sessionReadStateBody(readState),
 	}
 	if intent.timelineID != "" {
 		body["target_timeline_id"] = intent.timelineID
-		body["target_order_key"] = intent.anchorOrderKey
+		body["target_cursor"] = targetCursor
 	}
 	return body, http.StatusOK, nil
-}
-
-func (s *appServer) sessionTranscriptProjectionEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID string, pageEvents []map[string]any) ([]map[string]any, error) {
-	eventsByKey := make(map[string]map[string]any, len(pageEvents))
-	turnIDs := make(map[string]bool)
-	for _, event := range pageEvents {
-		if key := transcriptProjectionEventKey(event); key != "" {
-			eventsByKey[key] = event
-		}
-		if turnID := transcriptString(event, "turn_id"); turnID != "" {
-			turnIDs[turnID] = true
-		}
-	}
-	for turnID := range turnIDs {
-		page, err := eventStore.EventsForTurn(ctx, sessionID, turnID, turnActivityEventLimit)
-		if err != nil {
-			return nil, err
-		}
-		for _, event := range page.Events {
-			if key := transcriptProjectionEventKey(event); key != "" {
-				eventsByKey[key] = event
-			}
-		}
-	}
-	out := make([]map[string]any, 0, len(eventsByKey))
-	for _, event := range eventsByKey {
-		out = append(out, event)
-	}
-	return orderedTranscriptEvents(out), nil
-}
-
-func transcriptProjectionEventKey(event map[string]any) string {
-	if key := transcriptString(event, "event_id"); key != "" {
-		return "event:" + key
-	}
-	if key := transcriptString(event, "order_key"); key != "" {
-		return "order:" + key
-	}
-	return ""
 }
 
 func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +362,17 @@ func (s *appServer) sessionEventStoreForScope(scope string) store.SessionEventSt
 	return store.StubSessionEventStore{}
 }
 
+func (s *appServer) sessionTranscriptRowStoreForScope(scope string) store.SessionTranscriptRowStore {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() && s.transcriptRows != nil {
+		return s.transcriptRows
+	}
+	if s.pgPool != nil {
+		return store.NewPostgresSessionTranscriptRowStore(s.pgPool, scope)
+	}
+	return store.StubSessionTranscriptRowStore{}
+}
+
 func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
 	if lastEventID := strings.TrimSpace(r.Header.Get("Last-Event-ID")); lastEventID != "" {
 		return store.SessionEventCursor{AfterOrderKey: lastEventID}
@@ -440,44 +386,55 @@ func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {
 	return store.SessionEventCursor{}
 }
 
-// sessionEventReadKind enumerates the shapes the /timeline read can take.
-// Centralized so the metric label and the dispatcher stay in sync.
-type sessionEventReadKind int
+type sessionTranscriptReadKind int
 
 const (
-	sessionEventReadTail sessionEventReadKind = iota
-	// sessionEventReadHead is the symmetric counterpart of sessionEventReadTail:
-	// the FIRST N events of the ledger in ASC order. Indexed seek (same plan
-	// as an empty-cursor ascending scan, but exposed as a named anchor with
-	// its own metric label) — dispatched by anchor=oldest from the SPA's
-	// "jump to start" button.
-	sessionEventReadHead
-	sessionEventReadAround
-	sessionEventReadAfter
-	sessionEventReadBefore
+	sessionTranscriptReadTail sessionTranscriptReadKind = iota
+	sessionTranscriptReadHead
+	sessionTranscriptReadAround
+	sessionTranscriptReadBefore
 )
 
-// sessionEventReadIntent is the parsed shape of one /timeline request.
-// It carries the dispatch decision plus the cursor (if any) that needs the
-// 409-resync existence check, plus the metric label and the anchor string
-// echoed back in the response so the SPA can confirm what it got.
-type sessionEventReadIntent struct {
-	kind           sessionEventReadKind
-	limit          int
-	numBefore      int
-	numAfter       int
-	anchorOrderKey string
-	afterOrderKey  string
-	beforeOrderKey string
-	validateCursor string
+const (
+	sessionTranscriptRowsDefault       = 24
+	sessionTranscriptOlderRowsDefault  = 8
+	sessionTranscriptRowsMax           = 80
+	sessionTranscriptAroundRowsDefault = 12
+	sessionTranscriptAroundRowsMax     = 40
+)
+
+type sessionTranscriptReadIntent struct {
+	kind           sessionTranscriptReadKind
+	rows           int
+	rowsBefore     int
+	rowsAfter      int
+	beforeCursor   string
 	timelineID     string
 	metricLabel    string
 	responseAnchor string
 }
 
-func sessionEventReadIntentFromRequest(r *http.Request) sessionEventReadIntent {
+func sessionTranscriptReadIntentFromRequest(r *http.Request) (sessionTranscriptReadIntent, int, error) {
 	q := r.URL.Query()
+	for _, name := range []string{
+		"limit",
+		"before_order_key",
+		"after_order_key",
+		"last_order_key",
+		"num_before",
+		"num_after",
+		"min_transcript_entries",
+	} {
+		if _, ok := q[name]; ok {
+			return sessionTranscriptReadIntent{}, http.StatusBadRequest, fmt.Errorf("%s is not supported by /timeline; use transcript row cursors", name)
+		}
+	}
+	if strings.TrimSpace(r.Header.Get("Last-Event-ID")) != "" {
+		return sessionTranscriptReadIntent{}, http.StatusBadRequest, fmt.Errorf("Last-Event-ID is not supported by /timeline")
+	}
+
 	anchor := strings.TrimSpace(q.Get("anchor"))
+	beforeCursor := strings.TrimSpace(q.Get("before_cursor"))
 	timelineID := strings.TrimSpace(q.Get("timeline_id"))
 	if timelineID == "" {
 		timelineID = strings.TrimSpace(q.Get("message_id"))
@@ -485,149 +442,110 @@ func sessionEventReadIntentFromRequest(r *http.Request) sessionEventReadIntent {
 	if timelineID == "" {
 		timelineID = strings.TrimSpace(q.Get("message"))
 	}
-	beforeOrderKey := strings.TrimSpace(q.Get("before_order_key"))
-	afterOrderKey := strings.TrimSpace(q.Get("after_order_key"))
-	if afterOrderKey == "" {
-		afterOrderKey = strings.TrimSpace(q.Get("last_order_key"))
-	}
-	if afterOrderKey == "" {
-		afterOrderKey = strings.TrimSpace(r.Header.Get("Last-Event-ID"))
-	}
 
-	limit := parseSessionEventIntParam(q.Get("limit"), 200, 1, 1000)
-	numBefore := parseSessionEventIntParam(q.Get("num_before"), 100, 0, 250)
-	numAfter := parseSessionEventIntParam(q.Get("num_after"), 100, 0, 250)
-
-	// Resolution precedence: explicit before_order_key wins (back-paginate),
-	// then explicit transcript timeline_id/message anchors, then named
-	// newest/oldest anchors or explicit order_key anchors, then
-	// after_order_key (forward catch-up), then tail fallback.
-	if beforeOrderKey != "" {
-		return sessionEventReadIntent{
-			kind:           sessionEventReadBefore,
-			limit:          limit,
-			beforeOrderKey: beforeOrderKey,
-			validateCursor: beforeOrderKey,
-			metricLabel:    "before",
-			responseAnchor: "before:" + beforeOrderKey,
-		}
+	specifiedShapes := 0
+	if beforeCursor != "" {
+		specifiedShapes++
 	}
 	if timelineID != "" {
-		return sessionEventReadIntent{
-			kind:           sessionEventReadAround,
-			numBefore:      numBefore,
-			numAfter:       numAfter,
+		specifiedShapes++
+	}
+	if anchor != "" {
+		specifiedShapes++
+	}
+	if specifiedShapes > 1 {
+		return sessionTranscriptReadIntent{}, http.StatusBadRequest, fmt.Errorf("specify only one timeline anchor")
+	}
+
+	if beforeCursor != "" {
+		if _, err := store.DecodeTranscriptRowCursor(beforeCursor); err != nil {
+			return sessionTranscriptReadIntent{}, http.StatusBadRequest, err
+		}
+		return sessionTranscriptReadIntent{
+			kind:           sessionTranscriptReadBefore,
+			rows:           parseSessionTranscriptIntParam(q.Get("rows"), sessionTranscriptOlderRowsDefault, 1, sessionTranscriptRowsMax),
+			beforeCursor:   beforeCursor,
+			metricLabel:    "before_cursor",
+			responseAnchor: "before_cursor",
+		}, http.StatusOK, nil
+	}
+	if timelineID != "" {
+		return sessionTranscriptReadIntent{
+			kind:           sessionTranscriptReadAround,
+			rowsBefore:     parseSessionTranscriptIntParam(q.Get("rows_before"), sessionTranscriptAroundRowsDefault, 0, sessionTranscriptAroundRowsMax),
+			rowsAfter:      parseSessionTranscriptIntParam(q.Get("rows_after"), sessionTranscriptAroundRowsDefault, 0, sessionTranscriptAroundRowsMax),
 			timelineID:     timelineID,
 			metricLabel:    "timeline_id",
 			responseAnchor: "timeline_id:" + timelineID,
-		}
+		}, http.StatusOK, nil
 	}
 
 	switch anchor {
-	case "newest":
-		return sessionEventReadIntent{
-			kind:           sessionEventReadTail,
-			limit:          limit,
+	case "", "newest":
+		return sessionTranscriptReadIntent{
+			kind:           sessionTranscriptReadTail,
+			rows:           parseSessionTranscriptIntParam(q.Get("rows"), sessionTranscriptRowsDefault, 1, sessionTranscriptRowsMax),
 			metricLabel:    "newest",
 			responseAnchor: "newest",
-		}
+		}, http.StatusOK, nil
 	case "oldest":
-		// Head of ledger, ASC. Uses an empty cursor ascending scan, exposed
-		// as a named, intentional
-		// anchor so the metric label and the SPA contract reflect the
-		// "jump to start" semantics. Sets FoundOldest=true; FoundNewest
-		// when the ledger has <=limit events.
-		return sessionEventReadIntent{
-			kind:           sessionEventReadHead,
-			limit:          limit,
+		return sessionTranscriptReadIntent{
+			kind:           sessionTranscriptReadHead,
+			rows:           parseSessionTranscriptIntParam(q.Get("rows"), sessionTranscriptRowsDefault, 1, sessionTranscriptRowsMax),
 			metricLabel:    "oldest",
 			responseAnchor: "oldest",
-		}
-	case "":
-		// no-op; falls through
+		}, http.StatusOK, nil
 	default:
-		// Treat any non-keyword anchor as an order_key.
-		return sessionEventReadIntent{
-			kind:           sessionEventReadAround,
-			numBefore:      numBefore,
-			numAfter:       numAfter,
-			anchorOrderKey: anchor,
-			validateCursor: anchor,
-			metricLabel:    "around",
-			responseAnchor: "around:" + anchor,
-		}
-	}
-
-	if afterOrderKey != "" {
-		return sessionEventReadIntent{
-			kind:           sessionEventReadAfter,
-			limit:          limit,
-			afterOrderKey:  afterOrderKey,
-			validateCursor: afterOrderKey,
-			metricLabel:    "after",
-			responseAnchor: "after:" + afterOrderKey,
-		}
-	}
-
-	return sessionEventReadIntent{
-		kind:           sessionEventReadTail,
-		limit:          limit,
-		metricLabel:    "newest",
-		responseAnchor: "newest",
+		return sessionTranscriptReadIntent{}, http.StatusBadRequest, fmt.Errorf("unsupported timeline anchor %q", anchor)
 	}
 }
 
-func resolveSessionEventTimelineAnchor(
-	ctx context.Context,
-	eventStore store.SessionEventStore,
-	sessionID string,
-	intent *sessionEventReadIntent,
-) (int, error) {
-	if intent == nil || strings.TrimSpace(intent.timelineID) == "" {
-		return http.StatusOK, nil
+func runSessionTranscriptRowRead(ctx context.Context, rowStore store.SessionTranscriptRowStore, sessionID string, intent sessionTranscriptReadIntent) (store.TranscriptRowPage, string, int, error) {
+	if rowStore == nil {
+		rowStore = store.StubSessionTranscriptRowStore{}
 	}
-	orderKey, err := eventStore.OrderKeyForTimelineID(ctx, sessionID, intent.timelineID)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-	if orderKey == "" {
-		return http.StatusNotFound, fmt.Errorf("timeline target not found")
-	}
-	intent.anchorOrderKey = orderKey
-	intent.validateCursor = ""
-	intent.responseAnchor = "timeline_id:" + intent.timelineID
-	return http.StatusOK, nil
-}
-
-func (s *appServer) runSessionEventRead(ctx context.Context, eventStore store.SessionEventStore, sessionID string, intent sessionEventReadIntent) (store.SessionEventPage, error) {
 	switch intent.kind {
-	case sessionEventReadTail:
-		return eventStore.LatestEvents(ctx, sessionID, intent.limit)
-	case sessionEventReadHead:
-		// ASC from the head of the ledger. The empty cursor lands on the
-		// `default` branch of ListBySession's switch, which is
-		// `ORDER BY order_key ASC LIMIT $1` — the indexed forward scan.
-		// sessionEventPageFromAscendingScan then stamps
-		// FoundOldest=true (no AfterOrderKey/BeforeOrderKey was supplied)
-		// and FoundNewest=!hasMore (no row beyond limit fetched).
-		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{}, intent.limit)
-	case sessionEventReadAround:
-		return eventStore.EventsAround(ctx, sessionID, intent.anchorOrderKey, intent.numBefore, intent.numAfter)
-	case sessionEventReadBefore:
-		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{
-			BeforeOrderKey: intent.beforeOrderKey,
-			Direction:      "desc",
-		}, intent.limit)
-	case sessionEventReadAfter:
-		return eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{
-			AfterOrderKey: intent.afterOrderKey,
-		}, intent.limit)
+	case sessionTranscriptReadTail:
+		page, err := rowStore.ListLatest(ctx, sessionID, intent.rows)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		return page, "", http.StatusOK, nil
+	case sessionTranscriptReadHead:
+		page, err := rowStore.ListOldest(ctx, sessionID, intent.rows)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		return page, "", http.StatusOK, nil
+	case sessionTranscriptReadBefore:
+		page, err := rowStore.ListBefore(ctx, sessionID, intent.beforeCursor, intent.rows)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		return page, "", http.StatusOK, nil
+	case sessionTranscriptReadAround:
+		targetCursor, err := rowStore.ResolveCursorForTimelineID(ctx, sessionID, intent.timelineID)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		if targetCursor == "" {
+			return store.TranscriptRowPage{}, "", http.StatusNotFound, fmt.Errorf("timeline target not found")
+		}
+		page, err := rowStore.ListAround(ctx, sessionID, targetCursor, intent.rowsBefore, intent.rowsAfter)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		return page, targetCursor, http.StatusOK, nil
 	default:
-		return eventStore.LatestEvents(ctx, sessionID, intent.limit)
+		page, err := rowStore.ListLatest(ctx, sessionID, sessionTranscriptRowsDefault)
+		if err != nil {
+			return store.TranscriptRowPage{}, "", http.StatusInternalServerError, err
+		}
+		return page, "", http.StatusOK, nil
 	}
 }
 
-func parseSessionEventIntParam(raw string, fallback, min, max int) int {
+func parseSessionTranscriptIntParam(raw string, fallback, min, max int) int {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return fallback

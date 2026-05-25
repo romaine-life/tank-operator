@@ -19,8 +19,15 @@ yanking the viewport away from a user reading history.
 
 ## Sources Of Truth
 
-- `session_events.order_key` owns durable transcript position.
-- Server timeline pages own bounded windows around durable cursors.
+- `session_events.order_key` owns durable live-stream position.
+- `session_transcript_rows.row_cursor` owns `/timeline` historical transcript
+  position.
+- `session_transcript_row_backfills` owns whether a session's historical
+  `session_events` ledger has been projected into transcript rows for the
+  current projection version. Status rows alone do not satisfy backfill.
+- Server timeline pages own bounded windows of top-level transcript rows. Raw
+  events inside a collapsed Turn activity row are loaded only through the
+  explicit Turn activity endpoint.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - Durable read state owns unread/new indicators when the indicator affects
@@ -50,6 +57,9 @@ yanking the viewport away from a user reading history.
   message cursor.
 - Manual back-pagination prepends older messages while preserving the user's
   visual anchor.
+- A manual back-pagination action should either add visible projected rows,
+  reach the durable oldest edge, or emit telemetry that zero new visible rows
+  were returned.
 - Manual forward-pagination appends newer historical messages without jumping
   the anchor unexpectedly.
 - New live messages append at the tail without moving the viewport when the

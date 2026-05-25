@@ -61,16 +61,16 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 	}
 	timelineQuery := url.Values{}
 	timelineQuery.Set("message", timelineID)
-	timelineQuery.Set("num_before", "100")
-	timelineQuery.Set("num_after", "100")
+	timelineQuery.Set("rows_before", "12")
+	timelineQuery.Set("rows_after", "12")
 	timelineURL.RawQuery = timelineQuery.Encode()
 	sessionURL := &url.URL{Path: "/api/sessions/" + url.PathEscape(sessionID)}
 	beforeURL := &url.URL{
 		Path: "/api/sessions/" + url.PathEscape(sessionID) + "/timeline",
 	}
 	beforeQuery := url.Values{}
-	beforeQuery.Set("before_order_key", "<prev_order_key>")
-	beforeQuery.Set("limit", "200")
+	beforeQuery.Set("before_cursor", "<prev_cursor>")
+	beforeQuery.Set("rows", "8")
 	beforeURL.RawQuery = beforeQuery.Encode()
 
 	return map[string]any{
@@ -104,7 +104,7 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 			},
 			{
 				"step":    "4",
-				"purpose": "If the returned timeline has found_oldest=false and you need earlier context, keep paging backward with prev_order_key until found_oldest=true or you have enough context.",
+				"purpose": "If the returned timeline has found_oldest=false and you need earlier context, keep paging backward with prev_cursor until found_oldest=true or you have enough context.",
 				"curl":    "curl -fsS " + shellQuoteForDocs(absoluteURL(origin, beforeURL)) + " -H \"Authorization: Bearer $AUTH_JWT\"",
 			},
 		},
@@ -112,7 +112,7 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 			"Use the timeline_url with Tank authentication to fetch a bounded durable transcript page around the linked message.",
 			"Equivalently, request this same URL with Accept: application/json or ?format=json; authenticated callers receive the resolved timeline payload inline.",
 			"From a Tank session pod, exchange /run/secrets/auth.romaine.life/token at https://auth.romaine.life/api/auth/exchange/k8s using Authorization: Bearer <service-account-token>, then call timeline_url with Authorization: Bearer <auth-token>.",
-			"If found_oldest is false, use prev_order_key as before_order_key to page backward for earlier transcript context.",
+			"If found_oldest is false, use prev_cursor as before_cursor to page backward for earlier transcript context.",
 		},
 	}
 }
@@ -159,8 +159,8 @@ func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request
 	body["authenticated"] = true
 	body["resolved"] = true
 	body["timeline"] = timeline
-	if v, ok := timeline["target_order_key"]; ok {
-		body["target_order_key"] = v
+	if v, ok := timeline["target_cursor"]; ok {
+		body["target_cursor"] = v
 	}
 	writeJSON(w, http.StatusOK, body)
 }
