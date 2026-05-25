@@ -18,8 +18,9 @@ var tinyPNG = mustDecodeBase64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA
 
 func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 	app := &appServer{
-		verifier: auth.NewVerifier(testJWT(t)),
-		avatars:  avatarassets.NewMemoryStore(),
+		verifier:     auth.NewVerifier(testJWT(t)),
+		avatars:      avatarassets.NewMemoryStore(),
+		avatarImages: avatarassets.NewMemoryImageStore(),
 	}
 
 	createReq := avatarCreateRequest(t, map[string]string{
@@ -106,8 +107,9 @@ func TestAvatarAssetAdminCreateListReadDelete(t *testing.T) {
 
 func TestAvatarCreateRejectsInvalidKind(t *testing.T) {
 	app := &appServer{
-		verifier: auth.NewVerifier(testJWT(t)),
-		avatars:  avatarassets.NewMemoryStore(),
+		verifier:     auth.NewVerifier(testJWT(t)),
+		avatars:      avatarassets.NewMemoryStore(),
+		avatarImages: avatarassets.NewMemoryImageStore(),
 	}
 	req := avatarCreateRequest(t, map[string]string{
 		"kind": "personal",

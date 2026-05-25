@@ -25,8 +25,8 @@ var defaultAgentAvatarAssets = []defaultAvatarAsset{
 	{id: "jp1-arnold", name: "Ray Arnold", file: "jp1-arnold.png"},
 }
 
-func seedDefaultAvatarAssets(ctx context.Context, store avatarassets.Store, roots tankStaticRootSet) {
-	if store == nil {
+func seedDefaultAvatarAssets(ctx context.Context, store avatarassets.Store, images avatarassets.ImageStore, roots tankStaticRootSet) {
+	if store == nil || images == nil {
 		return
 	}
 	if !roots.enabled() {
@@ -44,16 +44,21 @@ func seedDefaultAvatarAssets(ctx context.Context, store avatarassets.Store, root
 			slog.Warn("default avatar asset read failed", "id", entry.id, "path", path, "error", err)
 			continue
 		}
+		key := defaultAvatarBlobKey(entry.id)
+		if err := images.Put(ctx, key, avatarassets.Image{MIME: "image/png", Bytes: body}); err != nil {
+			slog.Warn("default avatar asset image seed failed", "id", entry.id, "key", key, "error", err)
+			continue
+		}
 		if err := store.Ensure(ctx, avatarassets.NewAsset{
-			ID:           entry.id,
-			Kind:         avatarassets.KindAgent,
-			Name:         entry.name,
-			Crop:         avatarassets.Crop{CenterX: 0.5, CenterY: 0.5, Size: 1},
-			AvatarMIME:   "image/png",
-			AvatarBytes:  body,
-			BackingMIME:  "image/png",
-			BackingBytes: body,
-			CreatedBy:    "tank-operator",
+			ID:             entry.id,
+			Kind:           avatarassets.KindAgent,
+			Name:           entry.name,
+			Crop:           avatarassets.Crop{CenterX: 0.5, CenterY: 0.5, Size: 1},
+			AvatarMIME:     "image/png",
+			AvatarBlobKey:  key,
+			BackingMIME:    "image/png",
+			BackingBlobKey: key,
+			CreatedBy:      "tank-operator",
 		}); err != nil {
 			slog.Warn("default avatar asset seed failed", "id", entry.id, "error", err)
 		}

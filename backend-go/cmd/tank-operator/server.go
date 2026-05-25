@@ -39,6 +39,7 @@ type appServer struct {
 	profiles            profilesStore
 	sessionEvents       store.SessionEventStore
 	avatars             avatarassets.Store
+	avatarImages        avatarassets.ImageStore
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
 	readStates          store.ConversationReadStateStore

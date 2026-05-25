@@ -23,7 +23,8 @@ func TestSeedDefaultAvatarAssets(t *testing.T) {
 	}
 
 	store := avatarassets.NewMemoryStore()
-	seedDefaultAvatarAssets(context.Background(), store, tankStaticRootSet{base: root})
+	images := avatarassets.NewMemoryImageStore()
+	seedDefaultAvatarAssets(context.Background(), store, images, tankStaticRootSet{base: root})
 
 	metas, err := store.List(context.Background())
 	if err != nil {
@@ -32,11 +33,18 @@ func TestSeedDefaultAvatarAssets(t *testing.T) {
 	if len(metas) != len(defaultAgentAvatarAssets) {
 		t.Fatalf("seeded avatar count = %d, want %d", len(metas), len(defaultAgentAvatarAssets))
 	}
-	img, err := store.GetImage(context.Background(), "jp1-raptor", "avatar")
+	meta, err := store.Get(context.Background(), "jp1-raptor")
 	if err != nil {
 		t.Fatal(err)
 	}
-	backing, err := store.GetImage(context.Background(), "jp1-raptor", "backing")
+	if meta.AvatarBlobKey == "" || meta.BackingBlobKey == "" {
+		t.Fatalf("seeded blob keys missing: %#v", meta)
+	}
+	img, err := images.Get(context.Background(), meta.AvatarBlobKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backing, err := images.Get(context.Background(), meta.BackingBlobKey)
 	if err != nil {
 		t.Fatal(err)
 	}

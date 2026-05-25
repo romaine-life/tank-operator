@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,7 +78,7 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
-	if s.avatars == nil {
+	if s.avatars == nil || s.avatarImages == nil {
 		recordAvatarAssetRequest("read_image", "", "store_unavailable")
 		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
 		return
@@ -88,7 +89,7 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "missing avatar id")
 		return
 	}
-	img, err := s.avatars.GetImage(r.Context(), id, variant)
+	meta, err := s.avatars.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, avatarassets.ErrNotFound) {
 			recordAvatarAssetRequest("read_image", "", "not_found")
@@ -98,6 +99,26 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 		recordAvatarAssetRequest("read_image", "", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	key, fallbackMIME, err := meta.ImageRef(variant)
+	if err != nil || strings.TrimSpace(key) == "" {
+		recordAvatarAssetRequest("read_image", "", "not_found")
+		writeError(w, http.StatusNotFound, "avatar not found")
+		return
+	}
+	img, err := s.avatarImages.Get(r.Context(), key)
+	if err != nil {
+		if errors.Is(err, avatarassets.ErrNotFound) {
+			recordAvatarAssetRequest("read_image", "", "not_found")
+			writeError(w, http.StatusNotFound, "avatar not found")
+			return
+		}
+		recordAvatarAssetRequest("read_image", "", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if strings.TrimSpace(img.MIME) == "" {
+		img.MIME = fallbackMIME
 	}
 	recordAvatarAssetRequest("read_image", "", "ok")
 	w.Header().Set("Content-Type", img.MIME)
@@ -113,7 +134,7 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.avatars == nil {
+	if s.avatars == nil || s.avatarImages == nil {
 		recordAvatarAssetRequest("create", "", "store_unavailable")
 		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
 		return
@@ -155,18 +176,34 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	id := "av_" + auth.RandomHex(12)
+	avatarKey := newUploadedAvatarBlobKey(id, avatarassets.VariantAvatar, avatarMIME)
+	backingKey := newUploadedAvatarBlobKey(id, avatarassets.VariantBacking, backingMIME)
+	if err := s.avatarImages.Put(r.Context(), avatarKey, avatarassets.Image{MIME: avatarMIME, Bytes: avatarBytes}); err != nil {
+		recordAvatarAssetRequest("create", kind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.avatarImages.Put(r.Context(), backingKey, avatarassets.Image{MIME: backingMIME, Bytes: backingBytes}); err != nil {
+		cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, avatarKey)
+		recordAvatarAssetRequest("create", kind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	meta, err := s.avatars.Create(r.Context(), avatarassets.NewAsset{
-		ID:           "av_" + auth.RandomHex(12),
-		Kind:         kind,
-		Name:         name,
-		Crop:         crop,
-		AvatarMIME:   avatarMIME,
-		AvatarBytes:  avatarBytes,
-		BackingMIME:  backingMIME,
-		BackingBytes: backingBytes,
-		CreatedBy:    user.Email,
+		ID:             id,
+		Kind:           kind,
+		Name:           name,
+		Crop:           crop,
+		AvatarMIME:     avatarMIME,
+		AvatarBlobKey:  avatarKey,
+		BackingMIME:    backingMIME,
+		BackingBlobKey: backingKey,
+		CreatedBy:      user.Email,
 	})
 	if err != nil {
+		cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, avatarKey, backingKey)
 		recordAvatarAssetRequest("create", kind, "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -180,7 +217,7 @@ func (s *appServer) handleDeleteAvatar(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.avatars == nil {
+	if s.avatars == nil || s.avatarImages == nil {
 		recordAvatarAssetRequest("delete", "", "store_unavailable")
 		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
 		return
@@ -191,7 +228,8 @@ func (s *appServer) handleDeleteAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing avatar id")
 		return
 	}
-	if err := s.avatars.Delete(r.Context(), id); err != nil {
+	meta, err := s.avatars.Delete(r.Context(), id)
+	if err != nil {
 		if errors.Is(err, avatarassets.ErrNotFound) {
 			recordAvatarAssetRequest("delete", "", "not_found")
 			writeError(w, http.StatusNotFound, "avatar not found")
@@ -201,6 +239,7 @@ func (s *appServer) handleDeleteAvatar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	cleanupAvatarImageKeys(contextWithoutCancel(r.Context()), s.avatarImages, meta.AvatarBlobKey, meta.BackingBlobKey)
 	recordAvatarAssetRequest("delete", "", "ok")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -296,4 +335,11 @@ func normalizeAvatarUploadMIME(header string, body []byte) string {
 		}
 	}
 	return ""
+}
+
+func contextWithoutCancel(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }

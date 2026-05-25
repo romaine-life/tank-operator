@@ -205,9 +205,24 @@ func main() {
 	// 4. Init profile store.
 	profileStore := buildProfileStore(pgPool)
 	avatarStore := buildAvatarAssetStore(pgPool)
+	avatarImageStore := buildAvatarImageStore(azCred, pgPool)
+	if pgAvatarStore, ok := avatarStore.(*pgstore.AvatarAssetStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := migrateLegacyAvatarAssetImages(ctx, pgAvatarStore, avatarImageStore); err != nil {
+			cancel()
+			slog.Error("avatar image blob migration failed", "error", err)
+			os.Exit(1)
+		}
+		if err := pgAvatarStore.EnsureBlobConstraints(ctx); err != nil {
+			cancel()
+			slog.Error("avatar asset blob constraint migration failed", "error", err)
+			os.Exit(1)
+		}
+		cancel()
+	}
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		seedDefaultAvatarAssets(ctx, avatarStore, tankStaticRoots())
+		seedDefaultAvatarAssets(ctx, avatarStore, avatarImageStore, tankStaticRoots())
 		cancel()
 	}
 
@@ -409,6 +424,7 @@ func main() {
 		profiles:                 profileStore,
 		sessionEvents:            sessionEventsStore,
 		avatars:                  avatarStore,
+		avatarImages:             avatarImageStore,
 		pgPool:                   pgPool,
 		sessionBus:               sessionBus,
 		readStates:               readStateStore,
@@ -505,6 +521,41 @@ func buildAvatarAssetStore(pool *pgxpool.Pool) avatarassets.Store {
 		return avatarassets.NewMemoryStore()
 	}
 	return pgstore.NewAvatarAssetStore(pool)
+}
+
+func buildAvatarImageStore(azCred *azidentity.DefaultAzureCredential, pool *pgxpool.Pool) avatarassets.ImageStore {
+	if dir := strings.TrimSpace(os.Getenv("AVATAR_FILE_STORE_DIR")); dir != "" {
+		store, err := avatarassets.NewFileImageStore(dir)
+		if err != nil {
+			slog.Error("avatar file image store init failed", "dir", dir, "error", err)
+			os.Exit(1)
+		}
+		slog.Warn("avatar image store using filesystem backend", "dir", dir)
+		return store
+	}
+	accountURL := strings.TrimSpace(os.Getenv("AVATAR_BLOB_ACCOUNT_URL"))
+	container := strings.TrimSpace(os.Getenv("AVATAR_BLOB_CONTAINER"))
+	if accountURL == "" || container == "" {
+		if pool == nil {
+			slog.Warn("avatar image store using in-memory stub; AVATAR_BLOB_ACCOUNT_URL/AVATAR_BLOB_CONTAINER and POSTGRES_HOST are unset")
+			return avatarassets.NewMemoryImageStore()
+		}
+		slog.Error("avatar blob storage env vars missing while Postgres is enabled",
+			"AVATAR_BLOB_ACCOUNT_URL_set", accountURL != "",
+			"AVATAR_BLOB_CONTAINER_set", container != "",
+		)
+		os.Exit(1)
+	}
+	if azCred == nil {
+		slog.Error("avatar blob storage configured but Azure credential unavailable")
+		os.Exit(1)
+	}
+	store, err := avatarassets.NewAzureImageStore(accountURL, container, azCred)
+	if err != nil {
+		slog.Error("avatar blob image store init failed", "error", err)
+		os.Exit(1)
+	}
+	return store
 }
 
 func buildGitHubInstallStateStore(pool *pgxpool.Pool) gitHubInstallStateStore {

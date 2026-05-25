@@ -63,26 +63,57 @@ var schemaMigrations = []string{
 	`CREATE INDEX IF NOT EXISTS stream_auth_tickets_expires_at
 		ON stream_auth_tickets (expires_at)`,
 
-	// `avatar_assets` stores administrator-curated avatar images. The
-	// small circular crop (`avatar_bytes`) drives compact UI surfaces;
-	// the original backing image is what the browser reveals in the
-	// lightbox when a user clicks the avatar. Assets are private to
-	// authenticated Tank callers, so bytes stay in Postgres instead of
-	// being emitted as unauthenticated static files.
+	// `avatar_assets` stores administrator-curated avatar metadata. The
+	// actual image bytes live in private blob storage; the backend reads
+	// those blobs through authenticated API routes so uploaded backing
+	// photos are not exposed as public static files.
+	//
+	// avatar_bytes/backing_bytes are nullable legacy columns kept only so
+	// startup can migrate branch/test databases that already inserted
+	// bytes before blob storage existed. New writes use *_blob_key.
 	`CREATE TABLE IF NOT EXISTS avatar_assets (
 		id            text PRIMARY KEY,
 		kind          text NOT NULL CHECK (kind IN ('agent', 'system')),
 		name          text NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
 		avatar_mime   text NOT NULL,
-		avatar_bytes  bytea NOT NULL CHECK (octet_length(avatar_bytes) <= 1048576),
+		avatar_blob_key text,
+		avatar_bytes  bytea CHECK (octet_length(avatar_bytes) <= 1048576),
 		backing_mime  text NOT NULL,
-		backing_bytes bytea NOT NULL CHECK (octet_length(backing_bytes) <= 8388608),
+		backing_blob_key text,
+		backing_bytes bytea CHECK (octet_length(backing_bytes) <= 8388608),
 		crop          jsonb NOT NULL DEFAULT '{}'::jsonb,
 		created_by    text NOT NULL,
 		created_at    timestamptz NOT NULL DEFAULT now(),
 		updated_at    timestamptz NOT NULL DEFAULT now(),
 		deleted_at    timestamptz
 	)`,
+	`ALTER TABLE avatar_assets
+		ADD COLUMN IF NOT EXISTS avatar_blob_key text`,
+	`ALTER TABLE avatar_assets
+		ADD COLUMN IF NOT EXISTS backing_blob_key text`,
+	`DO $$
+	BEGIN
+		IF EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_name = 'avatar_assets'
+			  AND column_name = 'avatar_bytes'
+			  AND is_nullable = 'NO'
+		) THEN
+			ALTER TABLE avatar_assets
+				ALTER COLUMN avatar_bytes DROP NOT NULL;
+		END IF;
+		IF EXISTS (
+			SELECT 1
+			FROM information_schema.columns
+			WHERE table_name = 'avatar_assets'
+			  AND column_name = 'backing_bytes'
+			  AND is_nullable = 'NO'
+		) THEN
+			ALTER TABLE avatar_assets
+				ALTER COLUMN backing_bytes DROP NOT NULL;
+		END IF;
+	END $$`,
 	`CREATE INDEX IF NOT EXISTS avatar_assets_kind_active_created
 		ON avatar_assets (kind, created_at DESC)
 		WHERE deleted_at IS NULL`,

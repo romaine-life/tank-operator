@@ -137,6 +137,14 @@ spec:
               value: {{ .Values.postgres.database | quote }}
             - name: POSTGRES_USER
               value: {{ .Values.postgres.user | quote }}
+            # Private avatar image object storage. Postgres stores only
+            # metadata/blob keys; the orchestrator reads and writes blobs
+            # through workload identity and serves them via authenticated
+            # API routes.
+            - name: AVATAR_BLOB_ACCOUNT_URL
+              value: {{ .Values.avatarAssets.blobAccountURL | quote }}
+            - name: AVATAR_BLOB_CONTAINER
+              value: {{ .Values.avatarAssets.blobContainer | quote }}
             - name: NATS_URL
               value: {{ .Values.sessionBus.url | quote }}
             - name: NATS_STREAM
