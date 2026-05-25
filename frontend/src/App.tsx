@@ -278,7 +278,7 @@ type SdkHistoryRefreshSource =
   | "resync"
   | "terminal-refresh";
 type ScrollToLatestBehavior = "auto" | "smooth";
-type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual";
+type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual" | "keyboard";
 type ScrollToLatestRequest = {
   signal: number;
   behavior: ScrollToLatestBehavior;
@@ -5718,6 +5718,7 @@ export function RunMessages({
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
   const consumedScrollToLatestSignalRef = useRef(0);
+  const consumedScrollToOldestSignalRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) => (
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
@@ -5861,6 +5862,8 @@ export function RunMessages({
   ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
+    if (consumedScrollToOldestSignalRef.current === scrollToOldestSignal) return;
+    consumedScrollToOldestSignalRef.current = scrollToOldestSignal;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       surface: telemetrySurface,
       sessionId,
@@ -6579,6 +6582,7 @@ function ChatPane({
   const sdkOldestLoadedOrderKeyRef = useRef<string | null>(null);
   const sdkFoundOldestRef = useRef(false);
   const sdkFoundNewestRef = useRef(false);
+  const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -7590,6 +7594,42 @@ function ChatPane({
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
+  async function scrollTranscriptToConversationStart(): Promise<void> {
+    if (sdkTranscriptKeyboardNavInFlightRef.current) return;
+    sdkTranscriptKeyboardNavInFlightRef.current = "oldest";
+    setSdkOlderError(null);
+    try {
+      if (!sdkFoundOldestRef.current) {
+        await jumpSdkToOldest("keyboard");
+      }
+      setScrollToOldestSignal((value) => value + 1);
+    } catch (err) {
+      setSdkOlderError(
+        `Could not load beginning of conversation: ${String((err as Error).message ?? err)}`,
+      );
+    } finally {
+      if (sdkTranscriptKeyboardNavInFlightRef.current === "oldest") {
+        sdkTranscriptKeyboardNavInFlightRef.current = null;
+      }
+    }
+  }
+
+  async function scrollTranscriptToConversationEnd(): Promise<void> {
+    if (sdkTranscriptKeyboardNavInFlightRef.current) return;
+    sdkTranscriptKeyboardNavInFlightRef.current = "newest";
+    try {
+      if (!sdkFoundNewestRef.current) {
+        await jumpSdkToLatest("keyboard");
+      }
+      setSdkPendingTailCount(0);
+      requestScrollToLatest("smooth", "keyboard");
+    } finally {
+      if (sdkTranscriptKeyboardNavInFlightRef.current === "newest") {
+        sdkTranscriptKeyboardNavInFlightRef.current = null;
+      }
+    }
+  }
+
   useEffect(() => {
     if (!visible || !CHAT_MODES.has(session.mode)) return;
     if (timelineBootstrap.status !== "idle") return;
@@ -8048,6 +8088,70 @@ function ChatPane({
     focusTranscriptSection,
     mcpOpen,
     mentionOpen,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
+
+  // When the transcript region has focus, Home/End should target the
+  // conversation ledger edges, not just the current virtualized window.
+  useEffect(() => {
+    if (!visible || activeTab !== "chat" || !transcriptScrollEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.target !== transcriptScrollEl ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      if (e.key === "Home") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "Home",
+          targetEdge: "oldest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
+        void scrollTranscriptToConversationStart();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        logChatScrollEvent("keyboard-edge-navigation", {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          key: "End",
+          targetEdge: "newest",
+          navInFlight: sdkTranscriptKeyboardNavInFlightRef.current ?? "",
+          foundOldest: sdkFoundOldestRef.current,
+          foundNewest: sdkFoundNewestRef.current,
+          ...chatScrollElementSnapshot(transcriptScrollEl),
+        });
+        void scrollTranscriptToConversationEnd();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    sessionScope,
     slashOpen,
     transcriptScrollEl,
     visible,

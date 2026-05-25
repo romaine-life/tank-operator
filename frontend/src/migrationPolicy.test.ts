@@ -344,6 +344,19 @@ test("chat back-pagination keeps an explicit access path", () => {
   assert.equal(appSource.includes("older-missing-cursor"), true);
 });
 
+test("focused transcript Home and End keys resolve durable conversation edges", () => {
+  assert.equal(appSource.includes("scrollTranscriptToConversationStart"), true);
+  assert.equal(appSource.includes("scrollTranscriptToConversationEnd"), true);
+  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\("keyboard"\)/);
+  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\("keyboard"\)/);
+  assert.match(appSource, /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/);
+  assert.match(appSource, /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/);
+  assert.match(appSource, /requestScrollToLatest\("smooth", "keyboard"\)/);
+  assert.equal(appSource.includes("transcriptScrollEl.scrollTop = 0"), false);
+  assert.equal(appSource.includes("consumedScrollToOldestSignalRef"), true);
+  assert.match(appSource, /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/);
+});
+
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
@@ -394,6 +407,7 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
+  assert.equal(appSource.includes('"keyboard-edge-navigation"'), true);
   assert.equal(appSource.includes('jumpSdkToOldest("button")'), true);
   assert.equal(appSource.includes('jumpSdkToLatest("button")'), true);
   assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
