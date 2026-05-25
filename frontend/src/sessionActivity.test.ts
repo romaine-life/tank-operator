@@ -61,8 +61,23 @@ test("session activity drives sidebar labels and dots", () => {
   assert.equal(sessionActivityStatusLabel("Active", true, needsInput ?? undefined), "Needs input");
   assert.deepEqual(
     sessionActivityChips(needsInput ?? undefined).map((chip) => chip.label),
-    ["input", "1 new"],
+    ["input"],
   );
+});
+
+test("running and unread activity stay on the status dot, not sidebar chips", () => {
+  const streaming = normalizeSessionActivity({
+    session_id: "63",
+    status: "streaming",
+    unread_count: 20,
+    needs_input: false,
+    failed: false,
+    active_turn_id: "turn-1",
+  });
+
+  assert.equal(sessionActivityDotStatus("Active", true, streaming ?? undefined), "agent-working");
+  assert.equal(sessionActivityStatusLabel("Active", true, streaming ?? undefined), "Running");
+  assert.deepEqual(sessionActivityChips(streaming ?? undefined), []);
 });
 
 test("stopping status drives Stopping label, agent-stopping dot, and stopping chip", () => {
@@ -93,12 +108,11 @@ test("session activity legend mirrors sidebar dot and chip mappings", () => {
     chip: { label: string; tone: string } | null;
   }> = [
     { key: "ready", activity: summary("ready"), dot: "agent-waiting", chip: null },
-    { key: "running", activity: summary("streaming"), dot: "agent-working", chip: { label: "running", tone: "running" } },
+    { key: "running", activity: summary("streaming"), dot: "agent-working", chip: null },
     { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input", chip: { label: "input", tone: "input" } },
     { key: "stopping", activity: summary("stopping"), dot: "agent-stopping", chip: { label: "stopping", tone: "stopping" } },
     { key: "stopped", activity: summary("stopped"), dot: "agent-waiting", chip: { label: "stopped", tone: "stopped" } },
     { key: "failed", activity: summary("error"), dot: "agent-error", chip: { label: "failed", tone: "failed" } },
-    { key: "unread", activity: summary("ready", { unread_count: 3 }), dot: null, chip: { label: "3 new", tone: "unread" } },
   ];
 
   assert.equal(byKey.size, cases.length);
@@ -118,11 +132,7 @@ test("session activity legend mirrors sidebar dot and chip mappings", () => {
 
   assert.deepEqual(
     sessionActivityChips(summary("ready", { unread_count: 3 })).map((chip) => chip.label),
-    ["3 new"],
-  );
-  assert.deepEqual(
-    sessionActivityChips(summary("ready", { unread_count: 3 })).map((chip) => chip.tone),
-    ["unread"],
+    [],
   );
 });
 

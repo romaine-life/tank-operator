@@ -55,7 +55,7 @@ test("session activity status states have explicit sidebar styles", () => {
       `missing status-dot style for ${state}`,
     );
   }
-  for (const state of ["running", "input", "failed", "stopping", "stopped", "unread"]) {
+  for (const state of ["input", "failed", "stopping", "stopped"]) {
     assert.equal(
       indexCssSource.includes(`.session-activity-chip.is-${state}`),
       true,

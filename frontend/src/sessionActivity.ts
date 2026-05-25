@@ -19,10 +19,10 @@ export interface SessionActivitySummary {
 }
 
 export interface SessionActivityChip {
-  key: "state" | "unread";
+  key: "state";
   label: string;
   title: string;
-  tone: "failed" | "input" | "running" | "stopping" | "stopped" | "unread";
+  tone: "failed" | "input" | "stopping" | "stopped";
 }
 
 export interface SessionActivityLegendItem {
@@ -46,7 +46,7 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     label: "Submitted / running",
     detail: "The agent has queued or active work.",
     dotStatus: "agent-working",
-    chip: { label: "running", tone: "running" },
+    chip: null,
   },
   {
     key: "needs-input",
@@ -75,13 +75,6 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     detail: "The latest turn ended with an error.",
     dotStatus: "agent-error",
     chip: { label: "failed", tone: "failed" },
-  },
-  {
-    key: "unread",
-    label: "Unread updates",
-    detail: "New activity since you last viewed that session.",
-    dotStatus: null,
-    chip: { label: "3 new", tone: "unread" },
   },
 ];
 
@@ -213,20 +206,8 @@ export function sessionActivityChips(
     chips.push({ key: "state", label: "input", title: "Needs input", tone: "input" });
   } else if (activity.status === "stopping") {
     chips.push({ key: "state", label: "stopping", title: "Stopping", tone: "stopping" });
-  } else if (activity.status === "submitted" || activity.status === "streaming") {
-    chips.push({ key: "state", label: "running", title: "Running", tone: "running" });
   } else if (activity.status === "stopped") {
     chips.push({ key: "state", label: "stopped", title: "Stopped", tone: "stopped" });
-  }
-
-  if (activity.unread_count > 0) {
-    const capped = activity.unread_count > 99 ? "99+" : String(activity.unread_count);
-    chips.push({
-      key: "unread",
-      label: `${capped} new`,
-      title: `${activity.unread_count} unread update${activity.unread_count === 1 ? "" : "s"}`,
-      tone: "unread",
-    });
   }
   return chips;
 }
