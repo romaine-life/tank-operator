@@ -5450,6 +5450,10 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(255, 255, 255, 0.022);
 }
 
+.run-turn-activity[data-state="open"] {
+  overflow: visible;
+}
+
 .run-turn-activity-header {
   display: flex;
   align-items: center;
@@ -5466,8 +5470,22 @@ textarea.run-files-viewer-editor:focus {
   cursor: pointer;
 }
 
+.run-turn-activity[data-state="open"] .run-turn-activity-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-radius: calc(0.625rem - 1px) calc(0.625rem - 1px) 0 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(22, 22, 22, 0.96);
+  backdrop-filter: blur(10px);
+}
+
 .run-turn-activity-header:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.run-turn-activity[data-state="open"] .run-turn-activity-header:hover {
+  background: rgba(32, 32, 32, 0.96);
 }
 
 .run-turn-activity-icon {

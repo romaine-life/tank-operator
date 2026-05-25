@@ -172,14 +172,16 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "turn_id is required")
 		return
 	}
-	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
-	eventStore := s.sessionEvents
-	if eventStore == nil {
-		eventStore = store.StubSessionEventStore{}
-	}
+	eventStore := s.sessionEventStoreForScope(sessionScope)
 	page, err := eventStore.EventsForTurn(r.Context(), sessionID, turnID, turnActivityEventLimit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
