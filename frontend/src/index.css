@@ -1849,13 +1849,13 @@ button:disabled {
  * Status used to be a text pill ("Active" / "Pending" / "Failed") rendered in
  * the same row as the name and action chips. With actions added (remote, save,
  * clear), the row got too crowded and the name was being clipped off entirely.
- * Status is now a 6px colored dot in the metadata row before the provider
+ * Status is now a 12px colored dot in the metadata row before the provider
  * icon — the word adds no information the color can't, and the name reclaims
  * the title row width. */
 
 .status-dot {
-  width: 6px;
-  height: 6px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--text-faint);
