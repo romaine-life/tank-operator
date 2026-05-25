@@ -76,7 +76,7 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   fakeStorage["auth-romaine-jwt"] = "token-123";
   const listeners: Record<string, EventListener> = {};
   (globalThis as { window?: unknown }).window = {
-    location: { pathname: "/sessions/101" },
+    location: { pathname: "/sessions/101", search: "?session=101" },
     setTimeout: () => 1,
     addEventListener: (event: string, listener: EventListener) => {
       listeners[event] = listener;
@@ -84,6 +84,11 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   };
   logChatScrollEvent("at-bottom-change", {
     sessionMode: "codex_gui",
+    sessionId: "101",
+    source: "keyboard",
+    anchor: "oldest",
+    key: "Home",
+    targetEdge: "oldest",
     atBottom: false,
     bottomDistance: 240,
   });
@@ -93,6 +98,17 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   assert.equal(fetchCalls[0]?.input, "/api/client-metrics/chat-scroll");
   assert.equal(fetchCalls[0]?.init?.method, "POST");
   assert.equal(new Headers(fetchCalls[0]?.init?.headers).get("Authorization"), "Bearer token-123");
-  assert.match(String(fetchCalls[0]?.init?.body), /"event":"at-bottom-change"/);
-  assert.match(String(fetchCalls[0]?.init?.body), /"sessionMode":"codex_gui"/);
+  const payload = JSON.parse(String(fetchCalls[0]?.init?.body)) as {
+    events: Array<Record<string, unknown>>;
+  };
+  const event = payload.events[0]!;
+  assert.equal(event.event, "at-bottom-change");
+  assert.equal(event.sessionMode, "codex_gui");
+  assert.equal(event.sessionId, "101");
+  assert.equal(event.pagePath, "/sessions/101");
+  assert.equal(event.pageSearch, "?session=101");
+  assert.equal(event.source, "keyboard");
+  assert.equal(event.anchor, "oldest");
+  assert.equal(event.key, "Home");
+  assert.equal(event.targetEdge, "oldest");
 });

@@ -7324,7 +7324,7 @@ function ChatPane({
         sessionMode: session.mode,
       });
       try {
-        await jumpSdkToOldest();
+        await jumpSdkToOldest("older-missing-cursor");
         setScrollToOldestSignal((value) => value + 1);
       } catch (err) {
         setSdkOlderError(
@@ -7422,13 +7422,32 @@ function ChatPane({
   // dedicated anchor=oldest path added in handlers_session_events.go,
   // which dispatches an indexed ASC scan from the head with
   // FoundOldest=true.
-  async function jumpSdkToOldest(): Promise<void> {
+  async function jumpSdkToOldest(source = "jump-oldest"): Promise<void> {
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "oldest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) throw new Error(`timeline request failed: ${res.status}`);
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "oldest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      throw new Error(`timeline request failed: ${res.status}`);
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7469,6 +7488,19 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "oldest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
@@ -7477,14 +7509,33 @@ function ChatPane({
   // existing DOM bottom is the live tail, so the caller can just scroll.
   // If the user back-paginated past the live tail, we drop the window
   // and refetch — that's the "stale tail" path mentioned in the plan.
-  async function jumpSdkToLatest(): Promise<void> {
+  async function jumpSdkToLatest(source = "jump-latest"): Promise<void> {
     if (sdkFoundNewestRef.current) return;
     const refreshSessionId = session.id;
     const params = new URLSearchParams({ anchor: "newest", limit: "200" });
+    const startedAt = performance.now();
+    logChatScrollEvent("timeline-request", {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+    });
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
     );
-    if (!res.ok) return;
+    if (!res.ok) {
+      logChatScrollEvent("timeline-error", {
+        surface: "session",
+        sessionId: refreshSessionId,
+        sessionMode: session.mode,
+        source,
+        anchor: "newest",
+        status: res.status,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+      return;
+    }
     const body = (await res.json()) as {
       events?: unknown[];
       transcript?: unknown;
@@ -7523,6 +7574,19 @@ function ChatPane({
     sdkFoundNewestRef.current = body.found_newest === true;
     setSdkFoundOldest(body.found_oldest === true);
     setSdkFoundNewest(body.found_newest === true);
+    logChatScrollEntries("timeline-loaded", projectedEntries, {
+      surface: "session",
+      sessionId: refreshSessionId,
+      sessionMode: session.mode,
+      source,
+      anchor: "newest",
+      eventCount: canonicalEvents.length,
+      foundOldest: body.found_oldest === true,
+      foundNewest: body.found_newest === true,
+      hasPrevCursor: Boolean(prevAfter),
+      hasNextCursor: Boolean(nextAfter),
+      durationMs: Math.round(performance.now() - startedAt),
+    });
     replaceSdkServerEvents(canonicalEvents, false, projectedEntries);
   }
 
@@ -9640,7 +9704,7 @@ function ChatPane({
           className="run-scroll-to-top"
           onClick={() => {
             const reachOldest = async () => {
-              await jumpSdkToOldest();
+              await jumpSdkToOldest("button");
               setScrollToOldestSignal((value) => value + 1);
             };
             void reachOldest();
@@ -9665,7 +9729,7 @@ function ChatPane({
           }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
             const reachNewest = async () => {
-              await jumpSdkToLatest();
+              await jumpSdkToLatest("button");
               setSdkPendingTailCount(0);
               requestScrollToLatest("smooth", "manual");
             };

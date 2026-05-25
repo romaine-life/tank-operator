@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,6 +45,66 @@ func TestHandleChatScrollMetricsRecordsPrometheus(t *testing.T) {
 		if !strings.Contains(metrics, want) {
 			t.Fatalf("scrape missing %s\n%s", want, metrics)
 		}
+	}
+}
+
+func TestHandleChatScrollMetricsLogsBoundedTraceContext(t *testing.T) {
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [{
+			"event": "keyboard-edge-navigation",
+			"surface": "session",
+			"sessionMode": "codex_gui",
+			"sessionId": "188",
+			"pagePath": "/",
+			"pageSearch": "?session=188",
+			"key": "Home",
+			"targetEdge": "oldest",
+			"navInFlight": "oldest",
+			"signal": 2,
+			"foundOldest": false,
+			"foundNewest": true,
+			"hasScrollParent": true,
+			"scrollTop": 640,
+			"bottomDistance": 320
+		}]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"msg":"browser chat scroll event"`,
+		`"event":"keyboard-edge-navigation"`,
+		`"session_id":"188"`,
+		`"page_search":"?session=188"`,
+		`"key":"Home"`,
+		`"target_edge":"oldest"`,
+		`"nav_in_flight":"oldest"`,
+		`"found_oldest":false`,
+		`"found_newest":true`,
+		`"bottom_distance":320`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	if strings.Contains(metrics, "?session=188") ||
+		strings.Contains(metrics, `session_id="188"`) ||
+		strings.Contains(metrics, `sessionId`) {
+		t.Fatalf("scrape leaked high-cardinality trace context:\n%s", metrics)
 	}
 }
 
