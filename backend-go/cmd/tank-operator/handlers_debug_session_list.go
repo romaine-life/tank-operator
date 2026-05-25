@@ -5,8 +5,8 @@
 // the user constraint that drove the redesign's observability shape
 // per memory/feedback_no_devtools_build_surfaces_instead.md.
 //
-// Auth: admin role required (cross-user reads). Cardinality bounded
-// by the caller's owner; no scan.
+// Auth: Tank admin power required (cross-user reads). Cardinality bounded
+// by the requested owner; no scan.
 package main
 
 import (
@@ -22,8 +22,8 @@ func (s *appServer) handleDebugSessionListState(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	if user.Role != "admin" {
-		writeError(w, http.StatusForbidden, "admin role required")
+	if !hasAdminPower(user) {
+		writeError(w, http.StatusForbidden, "admin access required")
 		return
 	}
 	owner := strings.TrimSpace(r.URL.Query().Get("owner"))

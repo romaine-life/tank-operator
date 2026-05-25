@@ -448,15 +448,15 @@ func (b *Bus) RunEventPersister(ctx context.Context, store EventStore, metrics P
 		metrics = noopPersisterMetrics{}
 	}
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.stream, jetstream.ConsumerConfig{
-		Name:          "tank-session-event-persister",
-		Durable:       "tank-session-event-persister",
+		Name:          EventPersisterConsumerName(b.scope),
+		Durable:       EventPersisterConsumerName(b.scope),
 		Description:   "Persists session bus events to the Postgres session_events ledger",
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       60 * time.Second,
 		MaxDeliver:    20,
 		MaxAckPending: 200,
-		FilterSubject: subjectRoot + ".*.events",
+		FilterSubject: EventSubjectFilter(b.scope),
 	})
 	if err != nil {
 		return err

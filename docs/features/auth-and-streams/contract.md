@@ -15,6 +15,10 @@ product state.
 
 - auth.romaine.life JWTs own caller identity and role.
 - `/api/auth/me` owns Tank's current acceptance decision for the browser.
+- `/api/auth/me.is_admin` owns Tank admin power. Service-principal callers
+  keep `role=service`; when their `actor_email` is a configured super admin,
+  Tank treats them as admin for Tank-admin surfaces without rewriting the
+  upstream role.
 - `profiles` owns per-user profile and GitHub installation state.
 - Stream tickets are short-lived carriers for browser-native EventSource only.
 - Durable feature tables and event ledgers own product state; streams deliver
@@ -35,6 +39,9 @@ product state.
 
 - Protected fetches use the current auth.romaine.life bearer token and recover
   from stale stored tokens through the bootstrap/refresh path.
+- Browser admin gates use `/api/auth/me.is_admin`, not local role
+  reinterpretation. `role` remains the platform identity used for service
+  onboarding bypass and auth diagnostics.
 - Browser EventSource streams mint scoped opaque stream tickets through normal
   bearer auth before opening.
 - Stream handlers authenticate the ticket, bind it to the requested stream
@@ -71,6 +78,9 @@ product state.
 - Stream tickets are scoped and single-purpose enough to prevent cross-stream
   or cross-session use.
 - A stale stored JWT refreshes before protected fetches and ticket minting.
+- A service-principal token with a configured super-admin `actor_email`
+  receives `/api/auth/me` with `role=service` and `is_admin=true`, and the SPA
+  exposes the same Tank admin panes as a human admin.
 - With a stream already open, later durable events are emitted without
   reconnect.
 - Unknown cursor and invalid ticket paths produce explicit resync/auth failure

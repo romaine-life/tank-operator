@@ -32,7 +32,7 @@ func (s *appServer) newAvatarUploadAttempt(r *http.Request, user auth.User) (ava
 		ID:               "avu_" + auth.RandomHex(12),
 		Operation:        "create",
 		ActorEmail:       strings.ToLower(strings.TrimSpace(user.OwnerEmail())),
-		ActorRole:        effectiveRole(user),
+		ActorRole:        avatarUploadActorRole(user),
 		Method:           r.Method,
 		Route:            avatarUploadRoute,
 		ContentType:      strings.TrimSpace(r.Header.Get("Content-Type")),
@@ -168,7 +168,7 @@ func (s *appServer) handleDebugAvatarUploadAttempts(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	if !isEffectiveAdmin(user) {
+	if !hasAdminPower(user) {
 		writeError(w, http.StatusForbidden, "admin role required")
 		return
 	}
@@ -207,4 +207,11 @@ func (s *appServer) handleDebugAvatarUploadAttempts(w http.ResponseWriter, r *ht
 		"count":       len(attempts),
 		"fetched_at":  time.Now().UTC().Format(time.RFC3339Nano),
 	})
+}
+
+func avatarUploadActorRole(user auth.User) string {
+	if hasAdminPower(user) {
+		return auth.RoleAdmin
+	}
+	return user.Role
 }

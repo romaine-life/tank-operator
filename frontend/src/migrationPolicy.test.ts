@@ -38,6 +38,32 @@ test("session activity is not refreshed by a steady interval", () => {
   assert.equal(/setInterval\(\s*refreshSessionActivity/.test(appSource), false);
 });
 
+test("session activity status states have explicit sidebar styles", () => {
+  for (const state of [
+    "active",
+    "failed",
+    "pending",
+    "agent-working",
+    "agent-waiting",
+    "agent-needs-input",
+    "agent-stopping",
+    "agent-error",
+  ]) {
+    assert.equal(
+      indexCssSource.includes(`.status-dot.status-${state}`),
+      true,
+      `missing status-dot style for ${state}`,
+    );
+  }
+  for (const state of ["input", "failed", "stopping", "stopped"]) {
+    assert.equal(
+      indexCssSource.includes(`.session-activity-chip.is-${state}`),
+      true,
+      `missing session-activity-chip style for ${state}`,
+    );
+  }
+});
+
 test("chat transcript UI does not use the retired agent-ws route", () => {
   assert.equal(appSource.includes("agent-ws"), false);
 });
@@ -445,6 +471,14 @@ test("long-chat scroll lab route is admin gated and uses prometheus metrics", ()
   assert.equal(mainSource.includes("LongChatDebugPage"), true);
   assert.equal(mainSource.includes("tank.chatScrollEvents"), false);
   assert.equal(longChatDebugSource.includes("bootstrapAuth"), true);
-  assert.equal(longChatDebugSource.includes('(user.effective_role ?? user.role) === "admin"'), true);
+  assert.equal(longChatDebugSource.includes("user.is_admin"), true);
   assert.equal(longChatDebugSource.includes("readChatScrollEvents"), false);
+});
+
+test("admin browser gates use Tank is_admin contract, not effective_role", () => {
+  assert.equal(appSource.includes("effective_role"), false);
+  assert.equal(authSource.includes("effective_role"), false);
+  assert.equal(longChatDebugSource.includes("effective_role"), false);
+  assert.equal(appSource.includes("is_admin"), true);
+  assert.equal(authSource.includes("is_admin"), true);
 });

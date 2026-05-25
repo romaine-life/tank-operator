@@ -343,6 +343,7 @@ func main() {
 	// activity_summary updates on each indicator-affecting chat event.
 	// Done after the session bus + lifecycle store + RowWriter are
 	// built, before the persister goroutine starts.
+	var activityEmitter *sessioncontroller.ChatActivityEmitter
 	if sessionBus != nil && rowWriter != nil {
 		emitter := &sessioncontroller.ChatActivityEmitter{
 			Writer:     rowWriter,
@@ -353,6 +354,7 @@ func main() {
 			Metrics:    promLifecycleEmitterMetrics{},
 			Scope:      sessionScope,
 		}
+		activityEmitter = emitter
 		sessionBus.SetLifecycleEmitter(emitter)
 		go func() {
 			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, promPersisterMetrics{}); err != nil {
@@ -420,17 +422,23 @@ func main() {
 	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:                      k8sClient,
-		restCfg:                  restCfg,
-		mgr:                      mgr,
-		profiles:                 profileStore,
-		sessionEvents:            sessionEventsStore,
-		avatars:                  avatarStore,
-		avatarImages:             avatarImageStore,
-		avatarUploads:            avatarUploadAttemptStore,
-		pgPool:                   pgPool,
-		sessionBus:               sessionBus,
-		readStates:               readStateStore,
+		k8s:           k8sClient,
+		restCfg:       restCfg,
+		mgr:           mgr,
+		profiles:      profileStore,
+		sessionEvents: sessionEventsStore,
+		avatars:       avatarStore,
+		avatarImages:  avatarImageStore,
+		avatarUploads: avatarUploadAttemptStore,
+		pgPool:        pgPool,
+		sessionBus:    sessionBus,
+		readStates:    readStateStore,
+		activityRefresher: &scopedSessionActivityRefresher{
+			pool:       pgPool,
+			publisher:  sessionBus,
+			localScope: sessionScope,
+			local:      activityEmitter,
+		},
 		verifier:                 verifier,
 		gitHubInstallStates:      gitHubInstallStates,
 		streamAuthTickets:        streamAuthTickets,

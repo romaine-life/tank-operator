@@ -37,15 +37,16 @@ type gitHubInstallStateStore interface {
 // `role` rides along so the SPA's OnboardingWall can skip itself for callers
 // that do not need a user-facing GitHub installation: admins (covered by the
 // host installation) and service principals (platform-internal test/session
-// automation). `effective_role` is the UI authorization role after local
-// tank-operator policy such as service-principal actor admin checks.
-func userResponseBody(sub, email, name, role, effectiveRole string, profile profiles.Profile) map[string]any {
+// automation). `is_admin` is Tank's local admin-power decision; admin-owned
+// service principals keep role=service but get the same Tank admin access as
+// their actor.
+func userResponseBody(sub, email, name, role string, isAdmin bool, profile profiles.Profile) map[string]any {
 	return map[string]any{
 		"sub":             sub,
 		"email":           email,
 		"name":            name,
 		"role":            role,
-		"effective_role":  effectiveRole,
+		"is_admin":        isAdmin,
 		"avatar_url":      auth.GravatarURL(email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
@@ -65,7 +66,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, effectiveRole(user), profile))
+	writeJSON(w, http.StatusOK, userResponseBody(user.Sub, user.Email, user.Name, user.Role, hasAdminPower(user), profile))
 }
 
 // handleUpdatePrefs persists the SPA's run-pane preferences (chat font
@@ -290,6 +291,6 @@ func (s *appServer) handleGitHubInstallComplete(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user": userResponseBody(user.Sub, user.Email, user.Name, user.Role, effectiveRole(user), profile),
+		"user": userResponseBody(user.Sub, user.Email, user.Name, user.Role, hasAdminPower(user), profile),
 	})
 }

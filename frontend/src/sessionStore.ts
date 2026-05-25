@@ -351,6 +351,8 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,
       runtime_effort: stringField(rowRaw, "runtime_effort") ?? undefined,
       runtime_configured_at: stringField(rowRaw, "runtime_configured_at") ?? undefined,
+      agent_avatar_id: stringField(rowRaw, "agent_avatar_id") ?? undefined,
+      system_avatar_id: stringField(rowRaw, "system_avatar_id") ?? undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     },

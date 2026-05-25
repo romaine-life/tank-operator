@@ -106,6 +106,7 @@ import {
 } from "./homeRepos";
 import { ProviderIcon } from "./providerIcons";
 import {
+  SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
   sessionActivityChips,
@@ -970,8 +971,8 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function effectiveUserRole(user: SessionUser | null | undefined): SessionRole | undefined {
-  return user?.effective_role ?? user?.role;
+function userIsAdmin(user: SessionUser | null | undefined): boolean {
+  return user?.is_admin === true;
 }
 
 interface SessionUser {
@@ -983,7 +984,7 @@ interface SessionUser {
   // caller. auth.romaine.life mints `pending` by default; tank-operator
   // rejects that role on direct JWT verification.
   role: SessionRole;
-  effective_role?: SessionRole;
+  is_admin: boolean;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -6357,6 +6358,31 @@ function RunHelpScreen() {
           </div>
         </div>
       </section>
+      <section className="run-help-section" aria-labelledby="run-help-sidebar-status-title">
+        <h2 className="run-help-title" id="run-help-sidebar-status-title">Sidebar Status</h2>
+        <div className="run-help-status-list">
+          {SESSION_ACTIVITY_STATUS_LEGEND.map((item) => (
+            <div className="run-help-status-row" key={item.key}>
+              <div className="run-help-status-sample" aria-hidden="true">
+                {item.dotStatus ? (
+                  <span className={`status-dot status-${item.dotStatus}`} />
+                ) : (
+                  <span className="run-help-status-spacer" />
+                )}
+                {item.chip ? (
+                  <span className={`session-activity-chip is-${item.chip.tone}`}>
+                    {item.chip.label}
+                  </span>
+                ) : null}
+              </div>
+              <div className="run-help-status-copy">
+                <span className="run-help-status-label">{item.label}</span>
+                <span className="run-help-status-detail">{item.detail}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -10692,9 +10718,9 @@ export function App() {
     readGlimmungLaunchContext()
   );
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
-  const userEffectiveRole = effectiveUserRole(user);
+  const hasAdminAccess = userIsAdmin(user);
   const canViewProdSessions =
-    user?.role === "admin" && currentSessionScope !== PROD_SESSION_SCOPE;
+    hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
     canViewProdSessions && sessionViewScopeOverride === PROD_SESSION_SCOPE
       ? PROD_SESSION_SCOPE
@@ -10707,7 +10733,7 @@ export function App() {
     [effectiveSessionScope],
   );
   const adminSettingsControls =
-    userEffectiveRole === "admin"
+    hasAdminAccess
       ? {
           visible: true,
           canViewProdSessions,

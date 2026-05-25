@@ -370,7 +370,7 @@ func (s *appServer) requireAdmin(w http.ResponseWriter, r *http.Request, operati
 	if !ok {
 		return auth.User{}, false
 	}
-	if !isEffectiveAdmin(user) {
+	if !hasAdminPower(user) {
 		recordAvatarAssetRequest(operation, "", "forbidden")
 		writeError(w, http.StatusForbidden, "route requires admin access")
 		return auth.User{}, false

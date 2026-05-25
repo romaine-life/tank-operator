@@ -1,6 +1,7 @@
 // Tank-event sink for the Claude runner. Wraps the JetStream session bus and
 // publishes durable Tank conversation events. The runner is the producer;
-// the backend persister consumes from `tank.session.<id>.events` and writes
+// the backend persister consumes from
+// `tank.session.<scope-token>.<session-token>.events` and writes
 // the session-events ledger after validating against the schema.
 
 import type { Config } from "./config.js";

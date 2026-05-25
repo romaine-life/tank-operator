@@ -26,6 +26,12 @@ authenticated platform callers and does not require a user-facing GitHub App
 installation; the OnboardingWall is skipped for `role=service`. Do not install
 the GitHub App for a service account just to run browser automation.
 
+`role` is still the auth.romaine.life platform identity. Tank's local admin
+decision is `/api/auth/me.is_admin`: a service-principal token owned by a
+configured super admin keeps `role=service` and returns `is_admin=true`, so
+admin browser automation sees the same Settings/Admin surfaces as that human
+owner without mutating the upstream role claim.
+
 End-to-end exchange from a session pod:
 
 ```sh
@@ -34,7 +40,7 @@ AUTH_JWT=$(curl -sS -X POST https://auth.romaine.life/api/auth/exchange/k8s \
   -H "Authorization: Bearer $SA" -H 'Content-Type: application/json' -d '{}' \
   | jq -r .token)                                       # role=service + actor_email
 curl -sS https://tank-operator-slot-1.tank.dev.romaine.life/api/auth/me \
-  -H "Authorization: Bearer $AUTH_JWT"                  # 200, role=service
+  -H "Authorization: Bearer $AUTH_JWT"                  # 200, role=service, is_admin mirrors actor
 ```
 
 The same auth.romaine.life JWT powers authenticated browser automation against
@@ -56,7 +62,8 @@ caller. The tool exposes injection knobs that map directly to Playwright's
 Recommended pattern for the chat UI: mint the auth.romaine.life service token
 above, then seed it into the SPA's localStorage. Playwright lands on the slot
 URL already signed in as the service principal, and the SPA's bootstrap path
-validates the token via `/api/auth/me`.
+validates the token via `/api/auth/me`. Admin-only panes are available when
+that response carries `is_admin=true`.
 
 ```python
 inspect_browser_url(
@@ -72,5 +79,6 @@ inspect_browser_url(
 
 This is the production-correct path. Do not work around an old "stub
 `/api/auth/me` in Playwright" pattern; the backend bypass for `role=service`
-is live and the inspector now plumbs localStorage through, so the real auth
-path is always available.
+is live, `is_admin` carries Tank's local admin-power decision, and the
+inspector now plumbs localStorage through, so the real auth path is always
+available.

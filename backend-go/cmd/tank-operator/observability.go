@@ -659,8 +659,8 @@ var (
 
 // --- Admin cross-user read metrics ---
 //
-// Counts every time a role=admin caller reads a session whose Owner !=
-// their email, or lists sessions for a different owner via
+// Counts every time a Tank admin-power caller reads a session whose Owner !=
+// their owner email, or lists sessions for a different owner via
 // `?owner=<email>`. Single-counter shape (no labels) keeps cardinality
 // at 2 series total — the operational signal is "is this happening at
 // all" plus per-rate alerting if it ever spikes outside expected admin
@@ -671,11 +671,11 @@ var (
 var (
 	adminCrossUserReadsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_admin_cross_user_session_reads_total",
-		Help: "Times an admin-role caller read a session belonging to another user (per-session read endpoints).",
+		Help: "Times a Tank admin-power caller read a session belonging to another user (per-session read endpoints).",
 	})
 	adminCrossUserListsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_admin_cross_user_session_lists_total",
-		Help: "Times an admin-role caller passed `?owner=<email>` to list sessions or session-list events for another user.",
+		Help: "Times a Tank admin-power caller passed `?owner=<email>` to list sessions or session-list events for another user.",
 	})
 )
 

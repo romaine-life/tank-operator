@@ -13,6 +13,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,7 +55,53 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 				"storage_key", storageKey, "event_type", event["type"], "error", err)
 		}
 	}
+	s.refreshActivityForBackendEvent(ctx, storageKey, event)
 	return nil
+}
+
+func (s *appServer) refreshActivityForBackendEvent(ctx context.Context, storageKey string, event map[string]any) {
+	if s == nil || s.activityRefresher == nil || event == nil {
+		return
+	}
+	eventType := strings.TrimSpace(stringMapField(event, "type"))
+	if !sessionactivity.IsLifecycleChatEventType(eventType) {
+		return
+	}
+	owner := strings.ToLower(strings.TrimSpace(stringMapField(event, "email")))
+	if owner == "" {
+		return
+	}
+	if eventStorageKey := stringMapField(event, "tank_session_id"); eventStorageKey != "" {
+		storageKey = eventStorageKey
+	}
+	scope := s.sessionScope
+	sessionID := ""
+	if strings.TrimSpace(storageKey) != "" {
+		scope, sessionID = sessionbus.StorageScopeAndSessionID(storageKey)
+	}
+	if publicID := stringMapField(event, "session_id"); publicID != "" {
+		sessionID = publicID
+	}
+	if strings.TrimSpace(scope) == "" {
+		scope = s.sessionScope
+	}
+	if sessionID == "" {
+		return
+	}
+	if err := s.activityRefresher.RefreshSessionActivity(ctx, owner, scope, sessionID); err != nil {
+		slog.Warn("backend-event activity refresh failed",
+			"storage_key", storageKey,
+			"event_type", eventType,
+			"session_id", sessionID,
+			"scope", scope,
+			"error", err,
+		)
+	}
+}
+
+func stringMapField(values map[string]any, key string) string {
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
 }
 
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime

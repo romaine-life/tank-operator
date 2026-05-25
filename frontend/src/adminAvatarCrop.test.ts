@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   avatarCropDragOffset,
+  avatarCropContainsPoint,
   avatarCropFromImagePoint,
   clampAvatarCrop,
   cropToSourceRect,
@@ -35,6 +36,27 @@ test("cropToSourceRect can place a tall-image crop at the top source edge", () =
   );
 });
 
+test("cropToSourceRect can place a wide-image crop at the top source edge", () => {
+  assert.deepEqual(
+    cropToSourceRect({ center_x: 0.5, center_y: 0, size: 0.5 }, 800, 400),
+    { sx: 300, sy: 0, side: 200 },
+  );
+});
+
+test("avatarCropContainsPoint separates circle drags from background drags", () => {
+  const crop = { center_x: 0.5, center_y: 0.5, size: 0.5 };
+
+  assert.equal(avatarCropContainsPoint(crop, 400, 800, 200, 450), true);
+  assert.equal(avatarCropContainsPoint(crop, 400, 800, 200, 50), false);
+});
+
+test("avatarCropContainsPoint has drag slop near the circle edge", () => {
+  const crop = { center_x: 0.5, center_y: 0.5, size: 0.5 };
+
+  assert.equal(avatarCropContainsPoint(crop, 400, 800, 200, 506), false);
+  assert.equal(avatarCropContainsPoint(crop, 400, 800, 200, 506, 12), true);
+});
+
 test("avatar crop drag preserves the pointer offset when starting inside the circle", () => {
   const crop = { center_x: 0.5, center_y: 0.5, size: 0.5 };
   const offset = avatarCropDragOffset(crop, 400, 800, 200, 450);
@@ -43,6 +65,16 @@ test("avatar crop drag preserves the pointer offset when starting inside the cir
   assert.deepEqual(
     avatarCropFromImagePoint(crop, 400, 800, 200, 550, offset),
     { center_x: 0.5, center_y: 0.625, size: 0.5 },
+  );
+});
+
+test("avatar crop drag can latch and move the circle to the top edge", () => {
+  const crop = { center_x: 0.5, center_y: 0.5, size: 0.5 };
+  const offset = avatarCropDragOffset(crop, 400, 800, 200, 450);
+
+  assert.deepEqual(
+    avatarCropFromImagePoint(crop, 400, 800, 200, 40, offset),
+    { center_x: 0.5, center_y: 0.125, size: 0.5 },
   );
 });
 
