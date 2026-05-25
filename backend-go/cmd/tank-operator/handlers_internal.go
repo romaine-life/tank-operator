@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 
@@ -75,10 +74,9 @@ func (s *appServer) handleInternalGitHubInstallation(w http.ResponseWriter, r *h
 		return
 	}
 
-	hostEmail := strings.ToLower(strings.TrimSpace(os.Getenv("HOST_EMAIL")))
-	superAdmins := parseEmailSet(envDefault("SUPER_ADMIN_EMAILS", hostEmail))
+	hostEmail := hostAdminEmail()
 	isHost := hostEmail != "" && email == hostEmail
-	isSuperAdmin := superAdmins[email]
+	isSuperAdmin := configuredSuperAdmins()[email]
 
 	resp := map[string]any{
 		"email":          email,

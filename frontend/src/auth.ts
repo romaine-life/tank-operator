@@ -16,6 +16,7 @@ interface SessionUser {
   /** Platform role from the auth.romaine.life JWT. `admin` and `service`
    *  bypass the GitHub install wall; `user` is the standard signed-in caller. */
   role: SessionRole;
+  effective_role?: SessionRole;
   avatar_url: string;
   github_login: string | null;
   installation_id: number | null;
