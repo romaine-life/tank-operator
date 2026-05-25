@@ -24,9 +24,9 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
     name: "elements",
     entries: [
       { slug: "buttons", label: "buttons", sub: "primary, secondary, link" },
-      { slug: "status-dot", label: "status dot", sub: "active / pending / error" },
-      { slug: "mode-chip", label: "mode chip", sub: "claude / api / config / codex" },
-      { slug: "tool-icons", label: "tool icons", sub: "transcript glyphs" },
+      { slug: "status-dot", label: "status dot", sub: "lifecycle + agent states" },
+      { slug: "mode-chip", label: "mode chip", sub: "provider + GUI/CLI chips" },
+      { slug: "tool-icons", label: "tool icons", sub: "current tool families" },
       { slug: "mcp-icon", label: "mcp icon", sub: "MCP servers + tool calls" },
     ],
   },

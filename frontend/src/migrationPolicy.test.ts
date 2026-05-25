@@ -277,6 +277,8 @@ test("settings admin exposes the design portfolio catalog", () => {
 test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(styleguideIndexSource.includes("new session row"), false);
   assert.equal(styleguideIndexSource.includes("mode dropdown"), false);
+  assert.equal(styleguideIndexSource.includes("active / pending / error"), false);
+  assert.equal(styleguideIndexSource.includes("claude / api / config / codex"), false);
   assert.equal(styleguideIndexSource.includes("session launcher"), true);
   assert.equal(styleguideIndexSource.includes("runtime controls"), true);
   assert.equal(styleguideSessionLauncherSource.includes("home-initial-grid"), true);
