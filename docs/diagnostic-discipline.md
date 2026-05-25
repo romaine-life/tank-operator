@@ -41,9 +41,28 @@ When a user reports "X didn't work":
    evidence you write down should be from Postgres (or the equivalent durable
    surface for the area), not from logs or metrics.
 
-3. **Then live signals.** Metrics, logs, JetStream consumer info,
-   `kubectl describe`. These are how you explain *why* the durable ledger
-   shows what it shows.
+3. **Then live signals — firing alerts first.** Before code-walking,
+   query Grafana for what's already firing in the subsystem. Alert
+   names mirror the candidate failure classes in `observability.md`
+   (e.g. `TankSessionEventBrowserStreamSilent` → candidate B "zombie
+   SSE"; `TankSessionEventClientEmitDivergence` → candidate C "reducer
+   drop"). A firing alert whose subsystem matches the symptom *is*
+   the diagnosis surface — its `runbook` field names the code path.
+   Only after exhausting firing alerts do you reach for raw metrics,
+   structured logs, JetStream consumer info, or `kubectl describe`.
+
+   ```
+   curl -H "Authorization: Bearer $JWT" \
+     https://grafana.romaine.life/api/datasources/proxy/uid/prometheus/api/v1/alerts \
+     | jq '.data.alerts[] | select(.state=="firing") | .labels.alertname' \
+     | sort -u
+   ```
+
+   `$JWT` is the auth.romaine.life admin bot token from the break-glass
+   flow in `CLAUDE.md`. Grafana's `[auth.jwt]` block validates the same
+   JWKS, so one token covers both `tank.romaine.life` and
+   `grafana.romaine.life`. Full scripted-diagnosis recipes live in
+   `observability.md → "Scripted access via Grafana"`.
 
 4. **Map evidence to the claim, not the other way around.** If the loudest
    signal (log spam, alert firing) doesn't directly contradict the user's
@@ -52,7 +71,7 @@ When a user reports "X didn't work":
 
 ## When you find a likely cause
 
-5. **Walk the three policy docs as a checklist.** Specifically:
+5. **Walk the policy docs as a checklist.** Specifically:
    - `product-inspirations.md` — "A control such as Stop is only complete when
      the durable terminal event arrives." If the proposed cause involves a
      user-visible state that doesn't have a corresponding durable terminal,
@@ -63,6 +82,11 @@ When a user reports "X didn't work":
      it" or "Missing counters for user-trust failures."
    - `migration-policy.md` — If the proposed fix preserves an old behavior
      "for safety," it is not a fix.
+   - `observability.md` — the named-alert taxonomy. If a firing alert's
+     `runbook` already names the candidate, don't reconstruct the cause
+     from code; cite the alert. A new fix that adds a metric or alert
+     must respect the cardinality rules and pair with a runbook entry,
+     not be added "just to see."
 
 6. **Read the closed `session-log` issues for the area.** Stop / interrupt /
    refresh / rollout / auth — each has a small library of post-mortems with

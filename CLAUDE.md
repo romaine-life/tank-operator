@@ -175,6 +175,8 @@ Microsoft sign-in is delegated to **auth.romaine.life** (Better Auth + Microsoft
 
 **Break-glass CLI auth (admin only).** When tank's UI is broken and an admin needs to reach the API from a curl: load `https://auth.romaine.life/admin` -> click **Mint bot token** -> copy the 24h JWT -> `curl -H "Authorization: Bearer <jwt>" https://tank.romaine.life/api/sessions/8/events`. The bot token carries `role=admin` + `purpose=bot` and goes through the same auth.romaine.life JWKS verifier; admin cross-user reads (below) accept it for any session. Revoke before natural expiry with `az keyvault key rotate auth-jwt-signing`, which rolls the auth-side signing key and invalidates every outstanding JWT. See `nelsong6/auth/README.md -> "Admin bot tokens"`.
 
+**Grafana scripted access (same bot token).** The same auth.romaine.life bot token authenticates against `https://grafana.romaine.life` directly — Grafana's `[auth.jwt]` block validates the same JWKS, so there is no separate Grafana SA token to mint. Hit firing alerts with `curl -H "Authorization: Bearer <jwt>" https://grafana.romaine.life/api/datasources/proxy/uid/prometheus/api/v1/alerts`. This is the canonical scripted-diagnosis path that [docs/diagnostic-discipline.md](docs/diagnostic-discipline.md) step 3 invokes; full recipes (PromQL queries, Alertmanager view) live in [docs/observability.md](docs/observability.md) → "Scripted access via Grafana".
+
 ## In-cluster MCP servers
 
 The HTTP MCP servers live in standalone repos. Each MCP repo owns its Python

@@ -6,6 +6,7 @@ import type { SessionRole } from "./authPolicy";
 
 interface AppConfig {
   auth_url: string;
+  session_scope?: string;
 }
 
 interface SessionUser {
@@ -123,8 +124,8 @@ async function refreshStoredToken(): Promise<string | null> {
 }
 
 export type StreamTicketRequest =
-  | { stream: "session-list" }
-  | { stream: "session-events"; sessionId: string };
+  | { stream: "session-list"; sessionScope?: string }
+  | { stream: "session-events"; sessionId: string; sessionScope?: string };
 
 export async function authedEventSourceURL(
   path: string,
@@ -135,6 +136,7 @@ export async function authedEventSourceURL(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       stream: request.stream,
+      ...(request.sessionScope ? { session_scope: request.sessionScope } : {}),
       ...(request.stream === "session-events" ? { session_id: request.sessionId } : {}),
     }),
   });

@@ -46,7 +46,12 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	body, status, err := s.sessionTimelineBody(r.Context(), r, user, sessionID)
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	body, status, err := s.sessionTimelineBody(r.Context(), r, user, sessionID, sessionScope)
 	if err != nil {
 		if status >= 500 {
 			recordSessionEventTimelineFailure()
@@ -57,16 +62,13 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, body)
 }
 
-func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, user auth.User, sessionID string) (map[string]any, int, error) {
-	if _, status, err := s.authorizeSessionRead(ctx, user, sessionID); err != nil {
+func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, user auth.User, sessionID, sessionScope string) (map[string]any, int, error) {
+	if _, status, err := s.authorizeSessionReadInScope(ctx, user, sessionID, sessionScope); err != nil {
 		return nil, status, err
 	}
 
-	eventStore := s.sessionEvents
-	if eventStore == nil {
-		eventStore = store.StubSessionEventStore{}
-	}
-	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID)
+	eventStore := s.sessionEventStoreForScope(sessionScope)
+	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID, sessionScope)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -211,14 +213,15 @@ func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request
 // resume from Last-Event-ID without relying on runner-local websocket state.
 func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	user, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionEvents, sessionID)
+	user, sessionScope, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionEvents, sessionID)
 	if !ok {
 		return
 	}
-	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
+	eventStore := s.sessionEventStoreForScope(sessionScope)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -232,7 +235,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	cursor := sessionEventCursorFromRequest(r)
-	if ok, err := s.sessionEventCursorExists(r.Context(), sessionID, cursor); err != nil {
+	if ok, err := s.sessionEventCursorExists(r.Context(), eventStore, sessionID, cursor); err != nil {
 		recordSessionEventStreamError()
 		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 			"reason": "cursor_check_failed",
@@ -271,7 +274,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	// any callbacks so the first wake (which can race the subscribe
 	// in low-latency clusters) lands on a registered state object.
 	streamID := auth.RandomHex(16)
-	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	storageKey := sessionmodel.SessionStorageKey(sessionScope, sessionID)
 	state := sessionstream.NewStreamState(
 		streamID,
 		sessionID,
@@ -287,7 +290,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	unsubscribe := func() {}
 	if s.sessionBus != nil {
 		var err error
-		notify, unsubscribe, err = s.sessionBus.SubscribeWakesWithRecorder(r.Context(), sessionID, state)
+		notify, unsubscribe, err = s.sessionBus.SubscribeWakesForStorageKey(r.Context(), storageKey, state)
 		if err != nil {
 			sessionEventWakeSubscribeFailures.Add(1)
 			recordSessionEventStreamError()
@@ -326,7 +329,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 
 	for {
 		cursorBefore := cursor.AfterOrderKey
-		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, sessionID, &cursor, state)
+		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, eventStore, sessionID, &cursor, state)
 		if err != nil {
 			recordSessionEventStreamError()
 			slog.Warn("session event stream page failed",
@@ -372,8 +375,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
-	eventStore := s.sessionEvents
+func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, eventStore store.SessionEventStore, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
 	}
@@ -402,15 +404,25 @@ func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.Resp
 	return page.HasMore, count, nil
 }
 
-func (s *appServer) sessionEventCursorExists(ctx context.Context, sessionID string, cursor store.SessionEventCursor) (bool, error) {
+func (s *appServer) sessionEventCursorExists(ctx context.Context, eventStore store.SessionEventStore, sessionID string, cursor store.SessionEventCursor) (bool, error) {
 	if strings.TrimSpace(cursor.AfterOrderKey) == "" {
 		return true, nil
 	}
-	eventStore := s.sessionEvents
 	if eventStore == nil {
 		eventStore = store.StubSessionEventStore{}
 	}
 	return eventStore.HasOrderKey(ctx, sessionID, cursor.AfterOrderKey)
+}
+
+func (s *appServer) sessionEventStoreForScope(scope string) store.SessionEventStore {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() && s.sessionEvents != nil {
+		return s.sessionEvents
+	}
+	if s.pgPool != nil {
+		return store.NewPostgresSessionEventStore(s.pgPool, scope)
+	}
+	return store.StubSessionEventStore{}
 }
 
 func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {

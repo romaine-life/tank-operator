@@ -316,14 +316,14 @@ func (s *appServer) rollbackCreatedSession(ctx context.Context, owner, sessionID
 // Phase 3 of docs/session-list-redesign.md made this the only
 // session-list cursor on the wire; the pre-Phase-3 ledger-tip
 // header was retired in the same PR.
-func (s *appServer) stampSnapshotCursorHeader(ctx context.Context, w http.ResponseWriter, owner string) {
+func (s *appServer) stampSnapshotCursorHeader(ctx context.Context, w http.ResponseWriter, owner, scope string) {
 	if s.pgPool == nil {
 		return
 	}
-	cursor, err := queryRowVersionTip(ctx, s.pgPool, owner, s.sessionScope)
+	cursor, err := queryRowVersionTip(ctx, s.pgPool, owner, scope)
 	if err != nil {
 		slog.Warn("list sessions: snapshot cursor lookup failed",
-			"owner", owner, "scope", s.sessionScope, "error", err)
+			"owner", owner, "scope", scope, "error", err)
 		return
 	}
 	if cursor == 0 {
@@ -357,15 +357,20 @@ func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	owner := listSessionsOwner(user, r)
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
 
 	// Stamp Tank-Sessions-Snapshot-Cursor BEFORE listing sessions so
 	// the cursor is conservative (older than every row included in the
 	// snapshot). The SPA hands this to the SSE handler as its initial
 	// cursor; the row-update catch-up then covers anything that
 	// changed during the snapshot query itself.
-	s.stampSnapshotCursorHeader(r.Context(), w, owner)
+	s.stampSnapshotCursorHeader(r.Context(), w, owner, sessionScope)
 
-	infos, err := s.mgr.ListSessions(r.Context(), owner)
+	infos, err := s.listSessionsInScope(r.Context(), owner, sessionScope)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -386,7 +391,7 @@ func (s *appServer) handleListSessions(w http.ResponseWriter, r *http.Request) {
 // The SPA's SessionStore is a row cache that replaces-by-id on each
 // delivery — no event-type switch, no placeholder synthesis.
 func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionList, "")
+	user, sessionScope, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionList, "")
 	if !ok {
 		return
 	}
@@ -414,7 +419,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	// the snapshot response, so the catch-up still covers any row
 	// updates that landed between the snapshot query and the SSE open.
 	if cursor == 0 && s.pgPool != nil {
-		tip, err := queryRowVersionTip(r.Context(), s.pgPool, owner, s.sessionScope)
+		tip, err := queryRowVersionTip(r.Context(), s.pgPool, owner, sessionScope)
 		if err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
@@ -439,10 +444,10 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 		sessionListStreamReconnectTotal.Inc()
 	}
 
-	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionRowUpdates(r.Context(), owner, s.sessionScope)
+	natsCh, unsubscribe, err := s.sessionBus.SubscribeSessionRowUpdates(r.Context(), owner, sessionScope)
 	if err != nil {
 		recordSessionListStreamError()
-		slog.Warn("session row updates subscribe failed", "caller", user.Email, "owner", owner, "scope", s.sessionScope, "error", err)
+		slog.Warn("session row updates subscribe failed", "caller", user.Email, "owner", owner, "scope", sessionScope, "error", err)
 		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
 			"reason": "subscribe_failed",
 			"detail": err.Error(),
@@ -457,7 +462,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	// capped at listEventStreamPageLimit; we loop until the page is
 	// short.
 	for {
-		hasMore, written, err := s.writeSessionRowUpdatesPage(r.Context(), w, owner, &cursor)
+		hasMore, written, err := s.writeSessionRowUpdatesPage(r.Context(), w, owner, sessionScope, &cursor)
 		if err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
@@ -493,7 +498,7 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return
 			}
-			s.emitSessionRowPayload(w, &cursor, payload)
+			s.emitSessionRowPayload(w, &cursor, sessionScope, payload)
 			flusher.Flush()
 		case <-keepalive.C:
 			sessionListStreamHeartbeatTotal.Inc()

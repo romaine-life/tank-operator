@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-c66e4e3d2f13d5d97747458f805a14704abc54ee16bbc835e0d99c3e6c71a97e"
+  tag: "app-27f7bd000506ef5d72875f3286f5607feba11d6befed0fc2a31915dfcd7448bb"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -179,6 +179,14 @@ postgres:
   database: tank-operator
   # AAD-issued Postgres role name; equals the UAMI's display name.
   user: claude-credentials-refresher-identity
+
+avatarAssets:
+  # Private Azure Blob container provisioned by infra/avatar_assets.tf.
+  # The backend reads/writes it through the same workload identity used
+  # for Postgres and Key Vault; browsers still go through authenticated
+  # /api/avatars/{id}/image|backing routes.
+  blobAccountURL: "https://romainetankavatars.blob.core.windows.net"
+  blobContainer: avatar-assets
 
 sessionBus:
   stream: TANK_SESSION_BUS

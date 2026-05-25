@@ -96,9 +96,9 @@ type PersisterMetrics interface {
 
 type noopPersisterMetrics struct{}
 
-func (noopPersisterMetrics) RecordSchemaRejected()                      {}
-func (noopPersisterMetrics) RecordTransientFailure()                    {}
-func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string)  {}
+func (noopPersisterMetrics) RecordSchemaRejected()                     {}
+func (noopPersisterMetrics) RecordTransientFailure()                   {}
+func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string) {}
 
 // WakeMetrics receives counters for wake/event publish failures, the
 // success path, and the end-to-end persist→wake latency. The bus
@@ -125,10 +125,10 @@ type WakeMetrics interface {
 
 type noopWakeMetrics struct{}
 
-func (noopWakeMetrics) RecordSessionEventWakePublishFailed()           {}
-func (noopWakeMetrics) RecordSessionListEventPublishFailed()           {}
-func (noopWakeMetrics) RecordSessionEventWakePublished()               {}
-func (noopWakeMetrics) RecordSessionEventWakeReceived()                {}
+func (noopWakeMetrics) RecordSessionEventWakePublishFailed()            {}
+func (noopWakeMetrics) RecordSessionListEventPublishFailed()            {}
+func (noopWakeMetrics) RecordSessionEventWakePublished()                {}
+func (noopWakeMetrics) RecordSessionEventWakeReceived()                 {}
 func (noopWakeMetrics) RecordSessionEventPersistToWakeDuration(float64) {}
 
 // WakeRecorder is the optional per-stream hook SubscribeWakes calls
@@ -396,10 +396,22 @@ func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan stru
 // SubscribeWakes (no recorder) is preserved for tests and any
 // caller that doesn't need per-stream attribution.
 func (b *Bus) SubscribeWakesWithRecorder(ctx context.Context, sessionID string, recorder WakeRecorder) (<-chan struct{}, func(), error) {
+	storageKey := sessionmodel.SessionStorageKey(b.scope, sessionID)
+	return b.SubscribeWakesForStorageKey(ctx, storageKey, recorder)
+}
+
+// SubscribeWakesForStorageKey subscribes to a fully-resolved Tank session
+// storage key. Most callers should use SubscribeWakesWithRecorder; this is
+// for read-only cross-scope views where the public session id belongs to a
+// different registry scope than this process writes to.
+func (b *Bus) SubscribeWakesForStorageKey(ctx context.Context, sessionStorageKey string, recorder WakeRecorder) (<-chan struct{}, func(), error) {
 	if b == nil {
 		return nil, func() {}, fmt.Errorf("session bus unavailable")
 	}
-	storageKey := sessionmodel.SessionStorageKey(b.scope, sessionID)
+	storageKey := strings.TrimSpace(sessionStorageKey)
+	if storageKey == "" {
+		return nil, func() {}, fmt.Errorf("session storage key is required")
+	}
 	ch := make(chan struct{}, 1)
 	sub, err := b.nc.Subscribe(WakeSubject(storageKey), func(msg *nats.Msg) {
 		b.wakeMetrics.RecordSessionEventWakeReceived()

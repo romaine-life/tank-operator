@@ -119,23 +119,29 @@ func (s *appServer) requireAuth(w http.ResponseWriter, r *http.Request) (user au
 // request. Native EventSource callers cannot attach Authorization headers, so
 // only these handlers accept a short-lived opaque stream_ticket minted through
 // a normal Authorization-bearing fetch.
-func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Request, streamKind, sessionID string) (user auth.User, ok bool) {
+func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Request, streamKind, sessionID string) (user auth.User, sessionScope string, ok bool) {
 	if s.streamAuthTickets == nil {
 		recordStreamAuthTicket("validate", streamKind, "store_unavailable")
 		writeError(w, http.StatusServiceUnavailable, "stream auth ticket store not configured")
-		return auth.User{}, false
+		return auth.User{}, "", false
 	}
 	token := strings.TrimSpace(r.URL.Query().Get("stream_ticket"))
-	ticket, err := s.streamAuthTickets.Validate(r.Context(), token, streamKind, s.sessionScope, sessionID)
+	requestedScope := strings.TrimSpace(r.URL.Query().Get("session_scope"))
+	if requestedScope == "" {
+		requestedScope = s.localSessionScope()
+	} else {
+		requestedScope = normalizeSessionScope(requestedScope)
+	}
+	ticket, err := s.streamAuthTickets.Validate(r.Context(), token, streamKind, requestedScope, sessionID)
 	if err != nil {
 		if errors.Is(err, pgstore.ErrStreamAuthTicketInvalid) {
 			recordStreamAuthTicket("validate", streamKind, "invalid")
 			writeError(w, http.StatusUnauthorized, err.Error())
-			return auth.User{}, false
+			return auth.User{}, "", false
 		}
 		recordStreamAuthTicket("validate", streamKind, "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
-		return auth.User{}, false
+		return auth.User{}, "", false
 	}
 	recordStreamAuthTicket("validate", streamKind, "ok")
 	user = auth.User{
@@ -145,8 +151,13 @@ func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Requ
 		Role:       ticket.Role,
 		ActorEmail: ticket.ActorEmail,
 	}
+	resolvedScope, status, scopeErr := s.resolveSessionScope(user, requestedScope)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return auth.User{}, "", false
+	}
 	attachAuthToRequest(r, user)
-	return user, true
+	return user, resolvedScope, true
 }
 
 // requireWSAuth extracts the user from a WebSocket upgrade request.

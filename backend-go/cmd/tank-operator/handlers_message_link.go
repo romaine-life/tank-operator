@@ -144,7 +144,13 @@ func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request
 	attachAuthToRequest(r, user)
 
 	sessionID, _ := tankMessageLinkParts(r)
-	timeline, status, err := s.sessionTimelineBody(r.Context(), r, user, sessionID)
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		body["detail"] = scopeErr.Error()
+		writeJSON(w, status, body)
+		return
+	}
+	timeline, status, err := s.sessionTimelineBody(r.Context(), r, user, sessionID, sessionScope)
 	if err != nil {
 		body["detail"] = err.Error()
 		writeJSON(w, status, body)

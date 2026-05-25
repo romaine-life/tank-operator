@@ -41,11 +41,11 @@ const (
 // SessionStore tombstones the id on receipt, so a session deleted
 // during the disconnect window is correctly removed from the cache
 // on reconnect.
-func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.ResponseWriter, owner string, cursor *int64) (bool, int, error) {
+func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.ResponseWriter, owner, scope string, cursor *int64) (bool, int, error) {
 	if s.pgPool == nil {
 		return false, 0, nil
 	}
-	records, err := fetchSessionRowsAfter(ctx, s.pgPool, owner, s.sessionScope, *cursor, listEventStreamPageLimit+1)
+	records, err := fetchSessionRowsAfter(ctx, s.pgPool, owner, scope, *cursor, listEventStreamPageLimit+1)
 	if err != nil {
 		return false, 0, err
 	}
@@ -58,7 +58,7 @@ func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.Respo
 		payload, err := sessioncontroller.MarshalRowUpdate(record)
 		if err != nil {
 			slog.Warn("session row updates page: marshal failed",
-				"owner", owner, "scope", s.sessionScope,
+				"owner", owner, "scope", scope,
 				"session_id", record.ID, "error", err)
 			continue
 		}
@@ -170,7 +170,7 @@ func unmarshalJSONBField(raw []byte) map[string]any {
 //
 // A payload whose cursor is ≤ the current cursor was already streamed
 // during catch-up or is a duplicate — skip rather than re-emit.
-func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, cursor *int64, payload []byte) {
+func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, cursor *int64, expectedScope string, payload []byte) {
 	var probe struct {
 		Cursor string `json:"cursor"`
 		Row    struct {
@@ -180,10 +180,10 @@ func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, cursor *int64, 
 	if err := json.Unmarshal(payload, &probe); err != nil {
 		return
 	}
-	if scope := strings.TrimSpace(probe.Row.SessionScope); scope != "" && scope != s.sessionScope {
+	if scope := strings.TrimSpace(probe.Row.SessionScope); scope != "" && scope != expectedScope {
 		sessionListCrossScopeEventsDroppedTotal.Inc()
 		slog.Warn("session row payload dropped: scope mismatch",
-			"expected_scope", s.sessionScope,
+			"expected_scope", expectedScope,
 			"payload_scope", scope,
 			"cursor", probe.Cursor,
 		)
