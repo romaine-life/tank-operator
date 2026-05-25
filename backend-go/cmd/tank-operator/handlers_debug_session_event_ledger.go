@@ -1,0 +1,205 @@
+// Admin-only debug surface for the durable session_events ledger.
+// Returns event rows by tank session id without going through the
+// registry visibility gate, so an operator (or the AI support agent)
+// can audit a deleted session's chat history through curl without
+// flipping `sessions.visible=true` first.
+//
+// The user-facing per-session timeline (`GET /api/sessions/{id}/timeline`)
+// intentionally 404s once a session row is soft-deleted (visible=false)
+// — the SPA should tombstone it and never render it again. The
+// `session_events` rows themselves are durable (no FK, no cascade) so
+// the chat is recoverable in principle, just not through the public
+// surface. This endpoint closes that observability gap so admin
+// pickup-the-prior-codex-pod workflows don't require a one-off psql
+// pod or an un-soft-delete write.
+//
+// Pair with `/api/debug/session-list-state` to find an invisible
+// session's id, then call this endpoint with that id. Pair with
+// `tank_admin_debug_session_event_ledger_reads_total{result}` at
+// /metrics to monitor usage volume.
+//
+// Auth: Tank admin power required. Counts as an admin cross-user
+// read; emits a structured slog audit line per call.
+package main
+
+import (
+	"errors"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+)
+
+// debugSessionEventLedgerMaxLimit caps a single page so a runaway
+// request can't pull a giant ledger into one response. The underlying
+// store also normalizes via normalizeSessionEventLimit (1000 hard cap
+// inside the store), but we cap lower at the surface for predictability.
+const debugSessionEventLedgerMaxLimit = 500
+
+// debugSessionEventLedgerDefaultLimit is the page size when the caller
+// does not pass `?limit=`. Matches the store's default of 200.
+const debugSessionEventLedgerDefaultLimit = 200
+
+func (s *appServer) handleDebugSessionEventLedger(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	if !hasAdminPower(user) {
+		recordDebugSessionEventLedgerRead("forbidden")
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	sessionID := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sessionID == "" {
+		recordDebugSessionEventLedgerRead("bad_request")
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+
+	scope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		recordDebugSessionEventLedgerRead("forbidden")
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+
+	limit := debugSessionEventLedgerDefaultLimit
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed <= 0 {
+			recordDebugSessionEventLedgerRead("bad_request")
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > debugSessionEventLedgerMaxLimit {
+		limit = debugSessionEventLedgerMaxLimit
+	}
+
+	direction := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("direction")))
+	if direction != "" && direction != "asc" && direction != "desc" {
+		recordDebugSessionEventLedgerRead("bad_request")
+		writeError(w, http.StatusBadRequest, "direction must be asc or desc")
+		return
+	}
+
+	cursor := store.SessionEventCursor{
+		AfterOrderKey:  strings.TrimSpace(r.URL.Query().Get("after_order_key")),
+		BeforeOrderKey: strings.TrimSpace(r.URL.Query().Get("before_order_key")),
+		Direction:      direction,
+	}
+	if cursor.AfterOrderKey != "" && cursor.BeforeOrderKey != "" {
+		recordDebugSessionEventLedgerRead("bad_request")
+		writeError(w, http.StatusBadRequest, "specify at most one of after_order_key / before_order_key")
+		return
+	}
+
+	eventStore := s.sessionEventStoreForScope(scope)
+	if eventStore == nil {
+		recordDebugSessionEventLedgerRead("not_configured")
+		writeError(w, http.StatusServiceUnavailable, "session event store not configured")
+		return
+	}
+	if _, ok := eventStore.(store.StubSessionEventStore); ok {
+		recordDebugSessionEventLedgerRead("not_configured")
+		writeError(w, http.StatusServiceUnavailable, "session event store running in stub mode")
+		return
+	}
+
+	page, err := eventStore.ListBySession(r.Context(), sessionID, cursor, limit)
+	if err != nil {
+		recordDebugSessionEventLedgerRead("store_error")
+		slog.Error("debug session-event ledger read failed",
+			"caller_email", user.Email,
+			"session_id", sessionID,
+			"session_scope", scope,
+			"limit", limit,
+			"after_order_key", cursor.AfterOrderKey,
+			"before_order_key", cursor.BeforeOrderKey,
+			"direction", cursor.Direction,
+			"error", err,
+		)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := "ok"
+	if len(page.Events) == 0 {
+		result = "empty"
+	}
+	recordDebugSessionEventLedgerRead(result)
+	slog.Info("debug session-event ledger read",
+		"caller_email", user.Email,
+		"session_id", sessionID,
+		"session_scope", scope,
+		"limit", limit,
+		"after_order_key", cursor.AfterOrderKey,
+		"before_order_key", cursor.BeforeOrderKey,
+		"direction", cursor.Direction,
+		"count", len(page.Events),
+		"has_more", page.HasMore,
+		"result", result,
+	)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"description":      debugSessionEventLedgerDescription,
+		"session_id":       sessionID,
+		"session_scope":    scope,
+		"storage_key":      sessionmodel.SessionStorageKey(scope, sessionID),
+		"count":            len(page.Events),
+		"events":           page.Events,
+		"has_more":         page.HasMore,
+		"next_order_key":   page.NextOrderKey,
+		"prev_order_key":   page.PrevOrderKey,
+		"found_oldest":     page.FoundOldest,
+		"found_newest":     page.FoundNewest,
+		"fetched_at":       time.Now().UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// errDebugSessionEventLedgerNotConfigured surfaces the stub-store case
+// to tests without coupling them to the string body. Kept package-level
+// so the test file can assert against it.
+var errDebugSessionEventLedgerNotConfigured = errors.New("session event store not configured")
+
+// debugSessionEventLedgerDescription is rendered into the JSON response
+// so an operator running `curl | jq` sees the meaning of each field
+// without leaving the terminal. Per docs/quality-timeframes.md
+// "Observability exists for the bugs a user would otherwise have to
+// guess about." Pair with docs/observability.md → "Session Event Ledger
+// Debug Surface" for the playbook.
+const debugSessionEventLedgerDescription = `Durable session_events ledger for one tank session, bypassing the visibility gate.
+
+Use this when you need to audit chat events for a session whose
+sessions.visible row is false (the user deleted it through the SPA)
+and whose pod is gone. The user-facing GET /api/sessions/{id}/timeline
+returns 404 in that case by design — this endpoint is the operator
+counterpart for "I deleted the session, but the codex agent's chat is
+the input I need to pick up the work."
+
+Query params:
+  session_id        Required. Public session id (e.g., "203").
+  session_scope     Optional. Defaults to this orchestrator's scope.
+  limit             Optional. Default 200, max 500.
+  after_order_key   Optional. Forward-paginate ASC strictly after this key.
+  before_order_key  Optional. Backward-paginate DESC strictly before this key.
+  direction         Optional. "asc" (default) or "desc"; "desc" with no cursor
+                    returns the tail (latest events). Specify at most one of
+                    after_order_key / before_order_key.
+
+Response: events[] is always returned ASC by order_key. has_more / found_oldest
+/ found_newest let the caller decide whether to paginate further. storage_key
+is the underlying partition key (scope:session_id) for cross-referencing the
+raw session_events table.
+
+Counts as an admin cross-user audit read. Emits a structured slog line per
+call (caller_email, session_id, session_scope, limit, cursor, result, count)
+and increments tank_admin_debug_session_event_ledger_reads_total{result} at
+/metrics.`
