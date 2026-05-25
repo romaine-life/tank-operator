@@ -17,6 +17,7 @@ import { authedFetch } from "./auth";
 import {
   type AvatarCrop,
   type AvatarCropDragOffset,
+  avatarCropContainsPoint,
   avatarCropDragOffset,
   avatarCropFromImagePoint,
   clampAvatarCrop,
@@ -66,6 +67,13 @@ type ImageRect = {
   height: number;
 };
 
+type PendingCropPlacement = {
+  pointerId: number;
+  x: number;
+  y: number;
+  moved: boolean;
+};
+
 const defaultCrop: AvatarCrop = {
   center_x: 0.5,
   center_y: 0.5,
@@ -73,6 +81,8 @@ const defaultCrop: AvatarCrop = {
 };
 
 const avatarCanvasSize = 512;
+const cropDragHitSlopPx = 18;
+const cropPlacementMoveThresholdPx = 6;
 
 function extensionForImageType(type: string): string {
   switch (type) {
@@ -192,6 +202,10 @@ function containedImageRect(
   };
 }
 
+function imageRectContainsPoint(rect: ImageRect, point: { x: number; y: number }): boolean {
+  return point.x >= 0 && point.x <= rect.width && point.y >= 0 && point.y <= rect.height;
+}
+
 export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps) {
   const [entries, setEntries] = useState<AvatarView[]>([]);
   const [listError, setListError] = useState<string | null>(null);
@@ -213,6 +227,8 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   const imageRef = useRef<HTMLImageElement | null>(null);
   const avatarObjectURLsRef = useRef<string[]>([]);
   const cropDragOffsetRef = useRef<AvatarCropDragOffset>({ x: 0, y: 0 });
+  const cropDragActiveRef = useRef(false);
+  const pendingCropPlacementRef = useRef<PendingCropPlacement | null>(null);
 
   const revokeAvatarObjectURLs = useCallback(() => {
     for (const url of avatarObjectURLsRef.current) URL.revokeObjectURL(url);
@@ -332,18 +348,19 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     );
   }, [imagePointFromPointer, imageRect]);
 
-  const startCropDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const startCropMove = useCallback((event: ReactPointerEvent<HTMLDivElement>, point: { x: number; y: number }) => {
     if (!imageRect) return;
-    const point = imagePointFromPointer(event);
-    if (!point) return;
     event.preventDefault();
+    pendingCropPlacementRef.current = null;
     cropDragOffsetRef.current = avatarCropDragOffset(
       crop,
       imageRect.width,
       imageRect.height,
       point.x,
       point.y,
+      cropDragHitSlopPx,
     );
+    cropDragActiveRef.current = true;
     setDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     setCrop((current) =>
@@ -356,15 +373,80 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
         cropDragOffsetRef.current,
       ),
     );
-  }, [crop, imagePointFromPointer, imageRect]);
+  }, [crop, imageRect]);
 
-  const endCropDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+  const startCropPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!imageRect) return;
+    const point = imagePointFromPointer(event);
+    if (!point) return;
+    if (avatarCropContainsPoint(
+      crop,
+      imageRect.width,
+      imageRect.height,
+      point.x,
+      point.y,
+      cropDragHitSlopPx,
+    )) {
+      startCropMove(event, point);
+      return;
+    }
+    if (!imageRectContainsPoint(imageRect, point)) return;
+
+    event.preventDefault();
+    pendingCropPlacementRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [crop, imagePointFromPointer, imageRect, startCropMove]);
+
+  const updateCropPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (cropDragActiveRef.current) {
+      event.preventDefault();
+      updateCropFromPointer(event);
+      return;
+    }
+
+    const pending = pendingCropPlacementRef.current;
+    if (!pending || pending.pointerId !== event.pointerId) return;
+    if (
+      Math.hypot(event.clientX - pending.x, event.clientY - pending.y) >
+      cropPlacementMoveThresholdPx
+    ) {
+      pending.moved = true;
+    }
+  }, [updateCropFromPointer]);
+
+  const endCropPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (cropDragActiveRef.current) {
+      cropDragActiveRef.current = false;
+      setDragging(false);
+      cropDragOffsetRef.current = { x: 0, y: 0 };
+    } else {
+      const pending = pendingCropPlacementRef.current;
+      if (pending && pending.pointerId === event.pointerId && !pending.moved && imageRect) {
+        const point = imagePointFromPointer(event);
+        if (point && imageRectContainsPoint(imageRect, point)) {
+          setCrop((current) =>
+            avatarCropFromImagePoint(
+              current,
+              imageRect.width,
+              imageRect.height,
+              point.x,
+              point.y,
+            ),
+          );
+        }
+      }
+    }
+    pendingCropPlacementRef.current = null;
     setDragging(false);
-    cropDragOffsetRef.current = { x: 0, y: 0 };
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-  }, []);
+  }, [imagePointFromPointer, imageRect]);
 
   const selectPhoto = useCallback((file: File | null) => {
     setFormError(null);
@@ -532,14 +614,10 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                 ref={stageRef}
                 className="admin-avatar-crop-stage"
                 data-dragging={dragging ? "true" : undefined}
-                onPointerDown={startCropDrag}
-                onPointerMove={(event) => {
-                  if (!dragging) return;
-                  event.preventDefault();
-                  updateCropFromPointer(event);
-                }}
-                onPointerUp={endCropDrag}
-                onPointerCancel={endCropDrag}
+                onPointerDown={startCropPointer}
+                onPointerMove={updateCropPointer}
+                onPointerUp={endCropPointer}
+                onPointerCancel={endCropPointer}
               >
                 <img
                   ref={imageRef}
