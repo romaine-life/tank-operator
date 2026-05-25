@@ -135,6 +135,14 @@ import {
   chatScrollElementSnapshot,
   logChatScrollEvent,
 } from "./chatScrollTelemetry";
+import {
+  clusterHealthHeadline,
+  clusterHealthIssueText,
+  clusterHealthNatsLoadLabel,
+  clusterHealthStatusClass,
+  type ClusterHealthResponse,
+  type ClusterHealthStatus,
+} from "./clusterHealth";
 import { compactCompletedTurnEntries } from "./turnCompaction";
 import {
   isDurableTankConversationEvent,
@@ -1704,6 +1712,72 @@ function Avatar({ user }: { user: SessionUser }) {
     >
       <img src={user.avatar_url} alt="" onError={() => setFailed(true)} />
     </span>
+  );
+}
+
+function ClusterHealthWidget({
+  health,
+  error,
+  loading,
+  onRefresh,
+}: {
+  health: ClusterHealthResponse | null;
+  error: string | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const status: ClusterHealthStatus = error ? "unknown" : health?.status ?? "unknown";
+  const headline = error ? "Cluster unknown" : clusterHealthHeadline(health);
+  const issue = error || clusterHealthIssueText(health);
+  const nodes = health?.nodes;
+  const sessions = health?.sessions;
+  const nats = health?.nats;
+  return (
+    <section
+      className={`cluster-health ${clusterHealthStatusClass(status)}`}
+      aria-label="Cluster health"
+    >
+      <button
+        type="button"
+        className="cluster-health-main"
+        onClick={onRefresh}
+        title={issue}
+        aria-label={`${headline}: ${issue}`}
+      >
+        <span className="cluster-health-status" aria-hidden="true">
+          {loading ? (
+            <Loader2Icon className="cluster-health-spin" />
+          ) : status === "healthy" ? (
+            <CheckIcon />
+          ) : status === "critical" ? (
+            <AlertCircleIcon />
+          ) : (
+            <ActivityIcon />
+          )}
+        </span>
+        <span className="cluster-health-body">
+          <span className="cluster-health-title">{headline}</span>
+          <span className="cluster-health-sub">{issue}</span>
+        </span>
+        <span className="cluster-health-refresh" aria-hidden="true">
+          <RotateCcwIcon />
+        </span>
+      </button>
+      <div className="cluster-health-metrics" aria-hidden={health ? undefined : "true"}>
+        <span title="Ready Kubernetes nodes">
+          <MonitorIcon />
+          <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
+        </span>
+        <span title="Ready Tank session pods">
+          <SquareTerminalIcon />
+          <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+        </span>
+        <span title="NATS JetStream memory utilization">
+          <ActivityIcon />
+          <span>{clusterHealthNatsLoadLabel(nats)}</span>
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -10663,6 +10737,37 @@ export function App() {
     await loadRuntimeAvatarCatalog();
     setAvatarCatalogVersion((version) => version + 1);
   }, []);
+  const [clusterHealth, setClusterHealth] = useState<ClusterHealthResponse | null>(null);
+  const [clusterHealthError, setClusterHealthError] = useState<string | null>(null);
+  const [clusterHealthLoading, setClusterHealthLoading] = useState(false);
+  const loadClusterHealth = useCallback(async () => {
+    if (!user) return;
+    setClusterHealthLoading(true);
+    try {
+      const res = await authedFetch("/api/cluster-health");
+      if (!res.ok) throw new Error(`cluster health failed: ${res.status}`);
+      setClusterHealth((await res.json()) as ClusterHealthResponse);
+      setClusterHealthError(null);
+    } catch (err) {
+      setClusterHealthError(errorMessage(err));
+    } finally {
+      setClusterHealthLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setClusterHealth(null);
+      setClusterHealthError(null);
+      setClusterHealthLoading(false);
+      return;
+    }
+    void loadClusterHealth();
+    const interval = window.setInterval(() => {
+      void loadClusterHealth();
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [loadClusterHealth, user]);
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -12530,6 +12635,15 @@ export function App() {
             })}
           </ul>
         </div>
+
+        <ClusterHealthWidget
+          health={clusterHealth}
+          error={clusterHealthError}
+          loading={clusterHealthLoading}
+          onRefresh={() => {
+            void loadClusterHealth();
+          }}
+        />
 
         <div className="sidebar-footer" data-menu="profile">
           <button

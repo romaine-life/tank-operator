@@ -153,6 +153,8 @@ spec:
               value: {{ .Values.sessionBus.streamReplicas | quote }}
             - name: NATS_AUTH_SECRET
               value: {{ .Values.sessionBus.authSecret | quote }}
+            - name: NATS_MONITOR_URLS
+              value: {{ join "," .Values.sessionBus.monitorURLs | quote }}
             - name: NATS_TOKEN
               valueFrom:
                 secretKeyRef:

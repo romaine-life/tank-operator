@@ -200,6 +200,10 @@ sessionBus:
   streamReplicas: 3
   authSecret: tank-nats-auth
   tokenKvKey: tank-nats-token
+  monitorURLs:
+    - http://tank-nats-0.tank-nats-headless.nats.svc.cluster.local:8222
+    - http://tank-nats-1.tank-nats-headless.nats.svc.cluster.local:8222
+    - http://tank-nats-2.tank-nats-headless.nats.svc.cluster.local:8222
   # NATS lives in its own namespace, deployed by infra-bootstrap's nats
   # chart. tank-operator chart no longer owns the NATS sub-chart; the
   # ExternalSecret template in k8s/templates/externalsecret-nats.yaml
