@@ -62,6 +62,54 @@ func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _,
 	return "", nil
 }
 
+func TestPersistBackendEventRefreshesActivityForLifecycleEvent(t *testing.T) {
+	refresher := &recordingActivityRefresher{}
+	app := &appServer{
+		sessionEvents:     &recordingSessionEventStore{},
+		sessionScope:      "tank-operator-slot-3",
+		activityRefresher: refresher,
+	}
+	event := map[string]any{
+		"type":            "turn.completed",
+		"email":           "User@Example.COM",
+		"session_id":      "17",
+		"tank_session_id": "tank-operator-slot-3:17",
+	}
+
+	if err := app.persistBackendEvent(context.Background(), "tank-operator-slot-3:17", event); err != nil {
+		t.Fatalf("persistBackendEvent returned error: %v", err)
+	}
+	if len(refresher.calls) != 1 {
+		t.Fatalf("activity refresh calls = %d, want 1", len(refresher.calls))
+	}
+	call := refresher.calls[0]
+	if call.owner != "user@example.com" || call.scope != "tank-operator-slot-3" || call.sessionID != "17" {
+		t.Fatalf("activity refresh call = %+v, want owner=user@example.com scope=tank-operator-slot-3 sessionID=17", call)
+	}
+}
+
+func TestPersistBackendEventSkipsActivityRefreshForNonLifecycleEvent(t *testing.T) {
+	refresher := &recordingActivityRefresher{}
+	app := &appServer{
+		sessionEvents:     &recordingSessionEventStore{},
+		sessionScope:      "tank-operator-slot-3",
+		activityRefresher: refresher,
+	}
+	event := map[string]any{
+		"type":            "user_message.created",
+		"email":           "user@example.com",
+		"session_id":      "17",
+		"tank_session_id": "tank-operator-slot-3:17",
+	}
+
+	if err := app.persistBackendEvent(context.Background(), "tank-operator-slot-3:17", event); err != nil {
+		t.Fatalf("persistBackendEvent returned error: %v", err)
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("activity refresh calls = %d, want 0", len(refresher.calls))
+	}
+}
+
 func (b *recordingSessionBus) PublishCommand(_ context.Context, command sessionbus.Command) error {
 	if b.err != nil {
 		return b.err

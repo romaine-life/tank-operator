@@ -59,3 +59,58 @@ func TestSessionRowUpdateSubjectFormat(t *testing.T) {
 		t.Fatalf("scope token must not contain '.', the NATS separator; got %q", parts[4])
 	}
 }
+
+func TestStorageScopeAndSessionID(t *testing.T) {
+	scope, sessionID := StorageScopeAndSessionID("tank-operator-slot-3:17")
+	if scope != "tank-operator-slot-3" || sessionID != "17" {
+		t.Fatalf("scoped storage key parsed as (%q, %q), want (tank-operator-slot-3, 17)", scope, sessionID)
+	}
+
+	scope, sessionID = StorageScopeAndSessionID("17")
+	if scope != "default" || sessionID != "17" {
+		t.Fatalf("default storage key parsed as (%q, %q), want (default, 17)", scope, sessionID)
+	}
+}
+
+func TestSessionBusSubjectsIncludeScopeAndSessionTokens(t *testing.T) {
+	prod := SessionEventSubject("17")
+	slot := SessionEventSubject("tank-operator-slot-3:17")
+
+	if prod == slot {
+		t.Fatalf("event subjects must differ across scopes; got %q for both", prod)
+	}
+	if prod != "tank.session.ZGVmYXVsdA.MTc.events" {
+		t.Fatalf("default event subject = %q, want scoped token shape", prod)
+	}
+	if slot != "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.events" {
+		t.Fatalf("slot event subject = %q, want scoped token shape", slot)
+	}
+
+	legacySlotSubject := "tank.session." + StorageToken("tank-operator-slot-3:17") + ".events"
+	if slot == legacySlotSubject {
+		t.Fatalf("event subject must not use legacy storage-token-only shape %q", legacySlotSubject)
+	}
+}
+
+func TestEventPersisterConsumerIsScopePartitioned(t *testing.T) {
+	prodFilter := EventSubjectFilter("default")
+	slotFilter := EventSubjectFilter("tank-operator-slot-3")
+	if prodFilter == slotFilter {
+		t.Fatalf("persister filters must differ across scopes; got %q for both", prodFilter)
+	}
+	if prodFilter == subjectRoot+".*.events" || slotFilter == subjectRoot+".*.events" {
+		t.Fatalf("persister filter must not use legacy broad filter; got prod=%q slot=%q", prodFilter, slotFilter)
+	}
+	if slotFilter != "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.*.events" {
+		t.Fatalf("slot persister filter = %q, want scope-token wildcard", slotFilter)
+	}
+
+	prodConsumer := EventPersisterConsumerName("default")
+	slotConsumer := EventPersisterConsumerName("tank-operator-slot-3")
+	if prodConsumer == slotConsumer {
+		t.Fatalf("persister durable names must differ across scopes; got %q for both", prodConsumer)
+	}
+	if prodConsumer == "tank-session-event-persister" || slotConsumer == "tank-session-event-persister" {
+		t.Fatalf("persister durable name must not use legacy shared consumer name")
+	}
+}

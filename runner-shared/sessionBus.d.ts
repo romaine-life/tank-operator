@@ -148,7 +148,10 @@ export function buildWakeupSubmitTurnCommand(args: {
 }): SessionCommand;
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
+export function commandSubject(sessionStorageKey: string, provider: string): string;
 export function controlSubject(sessionStorageKey: string, provider: string): string;
+export function eventSubject(sessionStorageKey: string): string;
+export function eventSubjectFilter(scope: string): string;
 export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function isStopBackgroundTaskCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;

@@ -8,6 +8,7 @@ import (
 
 const (
 	defaultStream = "TANK_SESSION_BUS"
+	defaultScope  = "default"
 	subjectRoot   = "tank.session"
 	liveRoot      = "tank.live"
 )
@@ -24,8 +25,57 @@ func StorageToken(sessionStorageKey string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(strings.TrimSpace(sessionStorageKey)))
 }
 
+// StorageScopeAndSessionID splits a Tank session storage key into the
+// registry scope and public session id. The default-scope storage key is just
+// the public id; non-default scopes are encoded by sessionmodel as
+// "<scope>:<session_id>".
+func StorageScopeAndSessionID(sessionStorageKey string) (string, string) {
+	sessionStorageKey = strings.TrimSpace(sessionStorageKey)
+	if sessionStorageKey == "" {
+		return defaultScope, ""
+	}
+	scope, sessionID, ok := strings.Cut(sessionStorageKey, ":")
+	if !ok {
+		return defaultScope, sessionStorageKey
+	}
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = defaultScope
+	}
+	return scope, strings.TrimSpace(sessionID)
+}
+
+func ScopeToken(scope string) string {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = defaultScope
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(scope))
+}
+
+func SessionIDToken(sessionID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(strings.TrimSpace(sessionID)))
+}
+
+func ScopedSessionSubjectPrefix(sessionStorageKey string) string {
+	scope, sessionID := StorageScopeAndSessionID(sessionStorageKey)
+	return fmt.Sprintf("%s.%s.%s", subjectRoot, ScopeToken(scope), SessionIDToken(sessionID))
+}
+
+func SessionEventSubject(sessionStorageKey string) string {
+	return fmt.Sprintf("%s.events", ScopedSessionSubjectPrefix(sessionStorageKey))
+}
+
+func EventSubjectFilter(scope string) string {
+	return fmt.Sprintf("%s.%s.*.events", subjectRoot, ScopeToken(scope))
+}
+
+func EventPersisterConsumerName(scope string) string {
+	return "tank-session-event-persister-" + ScopeToken(scope)
+}
+
 func CommandSubject(sessionStorageKey, provider string) string {
-	return fmt.Sprintf("%s.%s.commands.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
+	return fmt.Sprintf("%s.commands.%s", ScopedSessionSubjectPrefix(sessionStorageKey), sanitizeSubjectToken(provider))
 }
 
 // ControlSubject names the per-session/per-provider control-plane subject
@@ -38,7 +88,7 @@ func CommandSubject(sessionStorageKey, provider string) string {
 // docs/tank-conversation-protocol.md → "Durable turn interruption" for
 // the contract and the reason data plane and control plane are split.
 func ControlSubject(sessionStorageKey, provider string) string {
-	return fmt.Sprintf("%s.%s.control.%s", subjectRoot, StorageToken(sessionStorageKey), sanitizeSubjectToken(provider))
+	return fmt.Sprintf("%s.control.%s", ScopedSessionSubjectPrefix(sessionStorageKey), sanitizeSubjectToken(provider))
 }
 
 // SubjectForCommand selects the publish subject for a command based on its
