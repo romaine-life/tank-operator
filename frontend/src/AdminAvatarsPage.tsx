@@ -475,7 +475,8 @@ export function AdminAvatarsPage() {
                     <div className="admin-avatar-card" key={entry.id}>
                       <button
                         type="button"
-                        className="admin-avatar-card-preview"
+                        className="admin-avatar-card-main"
+                        aria-label={`View ${entry.name}`}
                         onClick={(event) =>
                           openAvatarPreview({
                             name: entry.name,
@@ -485,12 +486,14 @@ export function AdminAvatarsPage() {
                           }, event)
                         }
                       >
-                        <img src={entry.avatarSrc} alt="" draggable={false} />
+                        <span className="admin-avatar-card-preview" aria-hidden="true">
+                          <img src={entry.avatarSrc} alt="" draggable={false} />
+                        </span>
+                        <span className="admin-avatar-card-body">
+                          <span className="admin-avatar-card-name">{entry.name}</span>
+                          <span className="admin-avatar-card-meta">{entry.created_by}</span>
+                        </span>
                       </button>
-                      <div className="admin-avatar-card-body">
-                        <span className="admin-avatar-card-name">{entry.name}</span>
-                        <span className="admin-avatar-card-meta">{entry.created_by}</span>
-                      </div>
                       <button
                         type="button"
                         className="admin-avatar-delete"
