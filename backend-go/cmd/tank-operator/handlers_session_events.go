@@ -97,9 +97,15 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 	if page.Events == nil {
 		page.Events = []map[string]any{}
 	}
+	projectionEvents, err := s.sessionTranscriptProjectionEvents(ctx, eventStore, sessionID, page.Events)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	transcript := projectTranscriptEvents(projectionEvents)
 	body := map[string]any{
 		"session_id":      sessionID,
 		"events":          page.Events,
+		"transcript":      map[string]any{"entries": transcript.Entries, "projection": "server_turn_activity_v1"},
 		"next_order_key":  page.NextOrderKey,
 		"prev_order_key":  page.PrevOrderKey,
 		"has_more":        page.HasMore,
@@ -114,6 +120,88 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 		body["target_order_key"] = intent.anchorOrderKey
 	}
 	return body, http.StatusOK, nil
+}
+
+func (s *appServer) sessionTranscriptProjectionEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID string, pageEvents []map[string]any) ([]map[string]any, error) {
+	eventsByKey := make(map[string]map[string]any, len(pageEvents))
+	turnIDs := make(map[string]bool)
+	for _, event := range pageEvents {
+		if key := transcriptProjectionEventKey(event); key != "" {
+			eventsByKey[key] = event
+		}
+		if turnID := transcriptString(event, "turn_id"); turnID != "" {
+			turnIDs[turnID] = true
+		}
+	}
+	for turnID := range turnIDs {
+		page, err := eventStore.EventsForTurn(ctx, sessionID, turnID, turnActivityEventLimit)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range page.Events {
+			if key := transcriptProjectionEventKey(event); key != "" {
+				eventsByKey[key] = event
+			}
+		}
+	}
+	out := make([]map[string]any, 0, len(eventsByKey))
+	for _, event := range eventsByKey {
+		out = append(out, event)
+	}
+	return orderedTranscriptEvents(out), nil
+}
+
+func transcriptProjectionEventKey(event map[string]any) string {
+	if key := transcriptString(event, "event_id"); key != "" {
+		return "event:" + key
+	}
+	if key := transcriptString(event, "order_key"); key != "" {
+		return "order:" + key
+	}
+	return ""
+}
+
+func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	turnID := strings.TrimSpace(r.PathValue("turn_id"))
+	if turnID == "" {
+		writeError(w, http.StatusBadRequest, "turn_id is required")
+		return
+	}
+	if _, status, err := s.authorizeSessionRead(r.Context(), user, sessionID); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	eventStore := s.sessionEvents
+	if eventStore == nil {
+		eventStore = store.StubSessionEventStore{}
+	}
+	page, err := eventStore.EventsForTurn(r.Context(), sessionID, turnID, turnActivityEventLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	projection := projectTranscriptEvents(page.Events)
+	body := map[string]any{
+		"session_id":          sessionID,
+		"turn_id":             turnID,
+		"entries":             []map[string]any{},
+		"compacted_entry_ids": []string{},
+		"summary":             map[string]any{},
+		"has_more":            page.HasMore,
+		"cursor_semantic":     "order_key",
+		"projection":          "server_turn_activity_v1",
+	}
+	if activity, ok := projection.ActivityBodies[turnID]; ok {
+		body["entries"] = activity.Entries
+		body["compacted_entry_ids"] = activity.CompactedEntryIDs
+		body["summary"] = activity.Summary
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
