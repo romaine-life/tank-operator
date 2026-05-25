@@ -91,15 +91,30 @@ export function avatarCropDragOffset(
 ): AvatarCropDragOffset {
   if (!usableDimensions(imageWidth, imageHeight)) return { x: 0, y: 0 };
   const normalized = clampAvatarCrop(crop, imageWidth, imageHeight);
-  const side = normalized.size * Math.min(imageWidth, imageHeight);
   const centerX = normalized.center_x * imageWidth;
   const centerY = normalized.center_y * imageHeight;
   const x = pointerX - centerX;
   const y = pointerY - centerY;
-  if (Math.hypot(x, y) <= side / 2 + tolerancePx) {
+  if (avatarCropContainsPoint(crop, imageWidth, imageHeight, pointerX, pointerY, tolerancePx)) {
     return { x, y };
   }
   return { x: 0, y: 0 };
+}
+
+export function avatarCropContainsPoint(
+  crop: AvatarCrop,
+  imageWidth: number,
+  imageHeight: number,
+  pointerX: number,
+  pointerY: number,
+  tolerancePx = 0,
+): boolean {
+  if (!usableDimensions(imageWidth, imageHeight)) return false;
+  const normalized = clampAvatarCrop(crop, imageWidth, imageHeight);
+  const side = normalized.size * Math.min(imageWidth, imageHeight);
+  const centerX = normalized.center_x * imageWidth;
+  const centerY = normalized.center_y * imageHeight;
+  return Math.hypot(pointerX - centerX, pointerY - centerY) <= side / 2 + tolerancePx;
 }
 
 export function avatarCropFromImagePoint(
