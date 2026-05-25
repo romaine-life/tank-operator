@@ -25,6 +25,9 @@ const bundledQualityTimeframesSource = readSource(
 const bundledMigrationPolicySource = readSource(
   "../../k8s/session-config/docs/migration-policy.md",
 );
+const chatScrollMetricsHandlerSource = readSource(
+  "../../backend-go/cmd/tank-operator/handlers_client_metrics.go",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -391,6 +394,15 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
+  assert.equal(appSource.includes('jumpSdkToOldest("button")'), true);
+  assert.equal(appSource.includes('jumpSdkToLatest("button")'), true);
+  assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pagePath: currentPagePath()"), true);
+  assert.equal(chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes("logChatScrollClientEvent"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"session_id"'), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
 });
 
 test("long-chat scroll lab route is admin gated and uses prometheus metrics", () => {
