@@ -379,7 +379,7 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 		FROM session_events
 		WHERE tank_session_id = $1
 			AND turn_id = $2
-			AND event_type IN ($3, $4, $5)
+			AND event_type IN ($3, $4, $5, $6)
 		ORDER BY order_key DESC
 		LIMIT 1
 	`
@@ -387,6 +387,7 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 	err := s.pool.QueryRow(ctx, q, storageKey, turnID,
 		string(conversation.EventTurnCompleted),
 		string(conversation.EventTurnFailed),
+		string(conversation.EventTurnCommandFailed),
 		string(conversation.EventTurnInterrupted),
 	).Scan(&payload)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -321,6 +321,31 @@ var (
 		[]string{"terminal"},
 	)
 
+	hermesRunEventTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_run_event_total",
+			Help: "Hermes /v1/runs event-stream events observed by the bridge, by bounded upstream event type.",
+		},
+		[]string{"event_type"},
+	)
+
+	hermesRunDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "tank_hermes_run_duration_seconds",
+			Help:    "Wall-clock duration from Hermes run creation or recovery pointer timestamp to terminal handling.",
+			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600},
+		},
+		[]string{"terminal"},
+	)
+
+	hermesCapabilityCheckTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_hermes_capability_check_total",
+			Help: "Hermes /v1/capabilities startup checks by bounded result.",
+		},
+		[]string{"result"},
+	)
+
 	hermesTranslatorErrorTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tank_hermes_translator_error_total",
@@ -1217,6 +1242,56 @@ func sessionEventSourceLabel(raw string) string {
 		return raw
 	default:
 		return "unknown"
+	}
+}
+
+func hermesTerminalLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "completed", "failed", "interrupted", "command_failed", "lost":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesRunEventTypeLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "response.created",
+		"run.created",
+		"run.started",
+		"response.output_text.delta",
+		"message.delta",
+		"response.output_item.added",
+		"response.output_item.done",
+		"response.completed",
+		"run.completed",
+		"response.failed",
+		"response.error",
+		"run.failed",
+		"response.cancelled",
+		"run.cancelled",
+		"hermes.tool.progress":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesCapabilityResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "error", "missing_required":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
+}
+
+func hermesTranslatorErrorLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "decode", "unhandled_type":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
 	}
 }
 

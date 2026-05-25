@@ -138,6 +138,52 @@ spec:
             summary: "tank-operator ran a Postgres query the operationFromSQL extractor did not recognize"
             runbook: "Add the new table to pgstore.knownTables and ship a follow-up; otherwise that query is invisible in latency dashboards."
 
+    - name: tank-operator.hermes
+      rules:
+        - alert: TankHermesCapabilityProbeFailing
+          expr: increase(tank_hermes_capability_check_total{result=~"error|missing_required"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Hermes bridge startup capability probe is failing"
+            runbook: |
+              hermes_gui sessions will return 503 while the bridge is
+              disabled. Inspect orchestrator logs for `hermes bridge
+              disabled` and query Hermes /v1/capabilities. Required
+              features are run_submission, run_status, run_events_sse,
+              and run_stop. The durable recovery pointer lives on
+              sessions.hermes_active_run.
+
+        - alert: TankHermesRunCreateFailures
+          expr: rate(tank_hermes_run_total{outcome="failed_to_create"}[10m]) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Hermes run creation is failing"
+            runbook: |
+              Tank accepted hermes_gui turns but POST /v1/runs failed.
+              The bridge writes turn.command_failed with
+              reason=hermes_create_failed, so the UI should resolve to an
+              error instead of hanging. Check Hermes API availability,
+              auth.romaine.life service-JWT exchange, and the orchestrator
+              HERMES_* env vars.
+
+        - alert: TankHermesTranslatorErrors
+          expr: rate(tank_hermes_translator_error_total[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Hermes event translation is seeing unmapped or malformed upstream shapes"
+            runbook: |
+              Non-zero decode/unhandled_type means Hermes' /v1/runs SSE
+              schema drifted ahead of Tank's translator. Inspect
+              orchestrator logs for `hermes bridge unhandled event types`
+              or `hermes bridge translator errors`, then update
+              backend-go/internal/hermes/translator.go and its tests.
+
     - name: tank-operator.avatar-uploads
       rules:
         - alert: TankAvatarUploadContractFailures

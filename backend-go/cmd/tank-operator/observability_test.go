@@ -18,6 +18,9 @@ import (
 // old expvar surface) must return 404.
 func TestMetricsEndpointServesPrometheus(t *testing.T) {
 	srv := newTestServerForHTTPMiddleware()
+	promHermesRecorder{}.RunEvent("run.completed")
+	promHermesRecorder{}.RunDuration("completed", 1)
+	promHermesRecorder{}.CapabilityCheck("ok")
 
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -25,8 +28,15 @@ func TestMetricsEndpointServesPrometheus(t *testing.T) {
 		t.Fatalf("GET /metrics status = %d, want 200", rr.Code)
 	}
 	body, _ := io.ReadAll(rr.Body)
-	if !bytes.Contains(body, []byte("tank_session_event_stream_open_total")) {
-		t.Fatalf("/metrics body missing tank_ metric, got first 400 bytes: %q", string(body[:min(len(body), 400)]))
+	for _, want := range [][]byte{
+		[]byte("tank_session_event_stream_open_total"),
+		[]byte("tank_hermes_run_event_total"),
+		[]byte("tank_hermes_run_duration_seconds"),
+		[]byte("tank_hermes_capability_check_total"),
+	} {
+		if !bytes.Contains(body, want) {
+			t.Fatalf("/metrics body missing %s, got first 400 bytes: %q", want, string(body[:min(len(body), 400)]))
+		}
 	}
 
 	rr = httptest.NewRecorder()

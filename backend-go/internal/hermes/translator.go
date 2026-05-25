@@ -92,6 +92,32 @@ func (t *Translator) Translate(evt RunEvent) []map[string]any {
 	return out
 }
 
+// TranslateRunStatus maps a GET /v1/runs/:id terminal response through the
+// same terminal code path as SSE. This is used during orchestrator restart
+// recovery when Hermes has already finished the run before Tank can reattach
+// to /events.
+func (t *Translator) TranslateRunStatus(status RunStatus) []map[string]any {
+	eventType := ""
+	switch strings.TrimSpace(status.Status) {
+	case "completed":
+		eventType = "run.completed"
+	case "failed":
+		eventType = "run.failed"
+	case "cancelled", "canceled":
+		eventType = "run.cancelled"
+	default:
+		t.UnhandledCount++
+		t.UnhandledTypes["run.status."+strings.TrimSpace(status.Status)]++
+		return nil
+	}
+	data, err := json.Marshal(terminalPayload{Output: status.Output})
+	if err != nil {
+		t.TranslatorErrors = append(t.TranslatorErrors, fmt.Errorf("run status marshal: %w", err))
+		return nil
+	}
+	return t.Translate(RunEvent{Type: eventType, Data: data})
+}
+
 func (t *Translator) translate(evt RunEvent) ([]map[string]any, error) {
 	switch evt.Type {
 	case "response.created", "run.created", "run.started":
