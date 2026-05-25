@@ -418,6 +418,51 @@ data:
               "legendFormat": "{{`{{ stage }}`}} {{`{{ result }}`}}"
             }
           ]
+        },
+        {
+          "id": 24,
+          "title": "Hermes run starts, terminals, and events",
+          "description": "hermes_gui bridge volume and terminal mix. Event type is bounded at the bridge before labels reach Prometheus.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 104 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(tank_hermes_run_total[5m])) by (outcome)",
+              "legendFormat": "run {{`{{ outcome }}`}}"
+            },
+            {
+              "expr": "sum(rate(tank_hermes_run_terminal_total[5m])) by (terminal)",
+              "legendFormat": "terminal {{`{{ terminal }}`}}"
+            },
+            {
+              "expr": "sum(rate(tank_hermes_run_event_total[5m])) by (event_type)",
+              "legendFormat": "event {{`{{ event_type }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 25,
+          "title": "Hermes run duration p50 / p95 / p99",
+          "description": "Duration from run creation or recovered active-run timestamp to durable terminal handling.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 104 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, terminal) (rate(tank_hermes_run_duration_seconds_bucket[10m])))",
+              "legendFormat": "p50 {{`{{ terminal }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, terminal) (rate(tank_hermes_run_duration_seconds_bucket[10m])))",
+              "legendFormat": "p95 {{`{{ terminal }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le, terminal) (rate(tank_hermes_run_duration_seconds_bucket[10m])))",
+              "legendFormat": "p99 {{`{{ terminal }}`}}"
+            }
+          ]
         }
       ]
     }

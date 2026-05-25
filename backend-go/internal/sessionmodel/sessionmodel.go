@@ -172,6 +172,25 @@ type SessionRecord struct {
 	RowVersion      int64
 }
 
+// HermesActiveRun is the durable pointer from a hermes_gui Tank turn to the
+// upstream Hermes /v1/runs row currently driving it. It lives on the sessions
+// row, not in bridge memory, so an orchestrator restart can reattach to the
+// run stream or reconcile a terminal status without leaving the UI stranded.
+type HermesActiveRun struct {
+	Owner       string `json:"owner,omitempty"`
+	SessionID   string `json:"session_id"`
+	TurnID      string `json:"turn_id"`
+	ClientNonce string `json:"client_nonce"`
+	RunID       string `json:"run_id"`
+	StartedAt   string `json:"started_at,omitempty"`
+}
+
+func (r HermesActiveRun) Valid() bool {
+	return strings.TrimSpace(r.SessionID) != "" &&
+		strings.TrimSpace(r.TurnID) != "" &&
+		strings.TrimSpace(r.RunID) != ""
+}
+
 type SessionAvatarAssignment struct {
 	AgentAvatarID  string
 	SystemAvatarID string
