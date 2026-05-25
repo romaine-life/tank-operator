@@ -17,6 +17,7 @@ import {
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { AdminAvatarManager } from "./AdminAvatarManager";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -6060,20 +6061,30 @@ function RunSettingsPanel({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
-    avatarEditorHref: string;
+    onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
 }) {
   const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
+  const [adminView, setAdminView] = useState<"controls" | "avatars">("controls");
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
       setSettingsTab("preferences");
     }
   }, [settingsTab, showAdminTab]);
+  useEffect(() => {
+    if (!showAdminTab || settingsTab !== "admin") {
+      setAdminView("controls");
+    }
+  }, [settingsTab, showAdminTab]);
+  const settingsScreenClassName =
+    settingsTab === "admin" && showAdminTab && adminView === "avatars"
+      ? "run-settings-screen run-settings-screen-wide"
+      : "run-settings-screen";
 
   return (
-    <div className="run-settings-screen">
+    <div className={settingsScreenClassName}>
       {showAdminTab && (
         <div className="run-settings-tabs" role="tablist" aria-label="Settings sections">
           <button
@@ -6097,38 +6108,63 @@ function RunSettingsPanel({
         </div>
       )}
       {settingsTab === "admin" && showAdminTab ? (
-        <section className="run-settings-section">
-          <h2 className="run-settings-title">Admin Controls</h2>
-          <a className="run-settings-link" href={adminControls.avatarEditorHref}>
-            <span className="run-settings-link-label">
-              <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
-              <span>Avatar editor</span>
-            </span>
-            <ExternalLinkIcon className="run-settings-check" aria-hidden="true" />
-          </a>
-          {adminControls.canViewProdSessions && (
+        adminView === "avatars" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setAdminView("controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Avatar editor</h2>
+              </div>
+            </section>
+            <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
+          </>
+        ) : (
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Admin Controls</h2>
             <button
               type="button"
-              className="run-settings-toggle"
-              onClick={() =>
-                adminControls.onViewingProdSessionsChange(
-                  !adminControls.viewingProdSessions,
-                )
-              }
-              aria-pressed={adminControls.viewingProdSessions}
+              className="run-settings-link"
+              onClick={() => setAdminView("avatars")}
             >
-              <span>Prod sessions</span>
-              <span className="run-settings-scope-value">
-                {adminControls.viewingProdSessions
-                  ? adminControls.prodScope
-                  : adminControls.currentScope}
+              <span className="run-settings-link-label">
+                <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
+                <span>Avatar editor</span>
               </span>
-              {adminControls.viewingProdSessions && (
-                <CheckIcon className="run-settings-check" aria-hidden="true" />
-              )}
+              <span className="run-settings-scope-value">
+                Manage
+              </span>
             </button>
-          )}
-        </section>
+            {adminControls.canViewProdSessions && (
+              <button
+                type="button"
+                className="run-settings-toggle"
+                onClick={() =>
+                  adminControls.onViewingProdSessionsChange(
+                    !adminControls.viewingProdSessions,
+                  )
+                }
+                aria-pressed={adminControls.viewingProdSessions}
+              >
+                <span>Prod sessions</span>
+                <span className="run-settings-scope-value">
+                  {adminControls.viewingProdSessions
+                    ? adminControls.prodScope
+                    : adminControls.currentScope}
+                </span>
+                {adminControls.viewingProdSessions && (
+                  <CheckIcon className="run-settings-check" aria-hidden="true" />
+                )}
+              </button>
+            )}
+          </section>
+        )
       ) : (
         <>
         <section className="run-settings-section">
@@ -6354,7 +6390,7 @@ function ChatPane({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
-    avatarEditorHref: string;
+    onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
   readOnly?: boolean;
@@ -10220,6 +10256,10 @@ export function App() {
     audio.currentTime = 0;
     void audio.play().catch(() => undefined);
   }, [getTurnCompleteAudio]);
+  const refreshRuntimeAvatarCatalog = useCallback(async () => {
+    await loadRuntimeAvatarCatalog();
+    setAvatarCatalogVersion((version) => version + 1);
+  }, []);
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -10454,7 +10494,7 @@ export function App() {
           viewingProdSessions,
           currentScope: currentSessionScope,
           prodScope: PROD_SESSION_SCOPE,
-          avatarEditorHref: "/admin/avatars",
+          onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
           onViewingProdSessionsChange: (value: boolean) => {
             const next = value ? PROD_SESSION_SCOPE : "";
             setSessionViewScopeOverride(next);

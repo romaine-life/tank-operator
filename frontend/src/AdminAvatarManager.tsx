@@ -13,15 +13,13 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import { authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import { authedFetch } from "./auth";
 import {
   type AvatarCrop,
   clampAvatarCrop,
   cropToSourceRect,
 } from "./adminAvatarCrop";
 import { openAvatarPreview } from "./avatarPreview";
-
-type AdminUser = NonNullable<Awaited<ReturnType<typeof bootstrapAuth>>>;
 
 type AvatarKind = "agent" | "system";
 
@@ -123,6 +121,10 @@ async function fetchAvatarViews(): Promise<AvatarView[]> {
   return views;
 }
 
+type AdminAvatarManagerProps = {
+  onCatalogChanged?: () => void | Promise<void>;
+};
+
 function containedImageRect(
   stageWidth: number,
   stageHeight: number,
@@ -143,10 +145,7 @@ function containedImageRect(
   };
 }
 
-export function AdminAvatarsPage() {
-  const [user, setUser] = useState<AdminUser | null>(null);
-  const [booted, setBooted] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps) {
   const [entries, setEntries] = useState<AvatarView[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [loadingEntries, setLoadingEntries] = useState(false);
@@ -163,18 +162,6 @@ export function AdminAvatarsPage() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const avatarObjectURLsRef = useRef<string[]>([]);
-
-  useEffect(() => {
-    bootstrapAuth()
-      .then((u) => {
-        setUser(u);
-        setBooted(true);
-      })
-      .catch((err) => {
-        setAuthError(err instanceof Error ? err.message : String(err));
-        setBooted(true);
-      });
-  }, []);
 
   const revokeAvatarObjectURLs = useCallback(() => {
     for (const url of avatarObjectURLsRef.current) URL.revokeObjectURL(url);
@@ -195,10 +182,22 @@ export function AdminAvatarsPage() {
       setLoadingEntries(false);
     }
   }, [revokeAvatarObjectURLs]);
+  const notifyCatalogChanged = useCallback(async (
+    surfaceError: (message: string) => void,
+    successContext: string,
+  ) => {
+    if (!onCatalogChanged) return;
+    try {
+      await onCatalogChanged();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      surfaceError(`${successContext}, but active transcript avatars did not refresh: ${detail}`);
+    }
+  }, [onCatalogChanged]);
 
   useEffect(() => {
-    if (user?.role === "admin") void reloadEntries();
-  }, [reloadEntries, user?.role]);
+    void reloadEntries();
+  }, [reloadEntries]);
 
   useEffect(() => () => revokeAvatarObjectURLs(), [revokeAvatarObjectURLs]);
 
@@ -268,7 +267,6 @@ export function AdminAvatarsPage() {
   }, []);
 
   useEffect(() => {
-    if (user?.role !== "admin") return;
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData;
       if (!data) return;
@@ -279,7 +277,7 @@ export function AdminAvatarsPage() {
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
-  }, [selectPhoto, user?.role]);
+  }, [selectPhoto]);
 
   async function buildAvatarBlob(): Promise<Blob> {
     const image = imageRef.current;
@@ -350,6 +348,7 @@ export function AdminAvatarsPage() {
       setName("");
       selectPhoto(null);
       await reloadEntries();
+      await notifyCatalogChanged(setFormError, "Avatar saved");
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -367,47 +366,12 @@ export function AdminAvatarsPage() {
       return;
     }
     await reloadEntries();
-  }
-
-  if (!booted) {
-    return <div className="boot-state"><span className="boot-text">loading...</span></div>;
-  }
-  if (authError) {
-    return (
-      <div className="boot-state">
-        <pre className="error">auth error: {authError}</pre>
-        <button className="btn-secondary" type="button" onClick={() => location.reload()}>retry</button>
-      </div>
-    );
-  }
-  if (!user) {
-    return (
-      <div className="admin-avatar-page admin-avatar-access">
-        <button type="button" className="btn-primary" onClick={startLogin}>Sign in</button>
-      </div>
-    );
-  }
-  if (user.role !== "admin") {
-    return (
-      <div className="admin-avatar-page admin-avatar-access">
-        <h1>Avatar admin</h1>
-        <p>Admin access required.</p>
-        <button type="button" className="btn-secondary" onClick={logout}>Sign out</button>
-      </div>
-    );
+    await notifyCatalogChanged(setListError, "Avatar deleted");
   }
 
   return (
-    <div className="admin-avatar-page">
-      <header className="admin-avatar-header">
-        <div>
-          <h1>Avatar admin</h1>
-          <p>{user.email}</p>
-        </div>
-        <a className="btn-secondary admin-avatar-home" href="/">Back to app</a>
-      </header>
-
-      <main className="admin-avatar-layout">
+    <div className="admin-avatar-manager">
+      <div className="admin-avatar-layout">
         <section className="admin-avatar-editor" aria-label="Add avatar">
           <div className="admin-avatar-editor-head">
             <ImagePlusIcon size={18} aria-hidden="true" />
@@ -560,7 +524,7 @@ export function AdminAvatarsPage() {
             </div>
           )}
         </section>
-      </main>
+      </div>
     </div>
   );
 }

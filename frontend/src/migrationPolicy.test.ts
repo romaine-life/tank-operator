@@ -12,6 +12,7 @@ const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
+const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
 const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
@@ -208,6 +209,17 @@ test("home splash test action stays disabled on the splash page", () => {
     appSource.includes("disabled={busy || !CHAT_MODES.has(defaultSessionMode)}"),
     false,
   );
+});
+
+test("avatar editor is embedded in Settings admin, not a standalone app route", () => {
+  assert.equal(mainSource.includes("/admin/avatars"), false);
+  assert.equal(mainSource.includes("AdminAvatarsPage"), false);
+  assert.equal(appSource.includes("avatarEditorHref"), false);
+  assert.equal(appSource.includes("<AdminAvatarManager"), true);
+  assert.equal(indexCssSource.includes("admin-avatar-page"), false);
+  assert.equal(indexCssSource.includes("admin-avatar-home"), false);
+  assert.equal(adminAvatarManagerSource.includes("bootstrapAuth"), false);
+  assert.equal(adminAvatarManagerSource.includes("Back to app"), false);
 });
 
 test("files tab is gated until the session container is available", () => {
