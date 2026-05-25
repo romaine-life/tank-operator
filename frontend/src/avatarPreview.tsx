@@ -119,21 +119,26 @@ export function AvatarPreviewHost() {
         >
           <XIcon size={18} aria-hidden="true" />
         </button>
-        <div className="avatar-lightbox-media">
-          {resolvedSrc ? (
-            <img src={resolvedSrc} alt={preview.name} />
-          ) : error ? (
-            <div className="avatar-lightbox-error">{error}</div>
-          ) : (
-            <div className="avatar-lightbox-loading">loading...</div>
-          )}
+        <div className="avatar-lightbox-content" data-has-backing={preview.backingSrc ? "true" : "false"}>
+          <figure className="avatar-lightbox-figure avatar-lightbox-figure-full">
+            <div className="avatar-lightbox-media">
+              {resolvedSrc ? (
+                <img src={resolvedSrc} alt={preview.name} />
+              ) : error ? (
+                <div className="avatar-lightbox-error">{error}</div>
+              ) : (
+                <div className="avatar-lightbox-loading">loading...</div>
+              )}
+            </div>
+            <figcaption>{preview.backingSrc ? "Full image" : "Image"}</figcaption>
+          </figure>
           {preview.backingSrc && (
-            <img
-              className="avatar-lightbox-crop"
-              src={preview.avatarSrc}
-              alt=""
-              aria-hidden="true"
-            />
+            <figure className="avatar-lightbox-figure avatar-lightbox-figure-icon">
+              <div className="avatar-lightbox-icon-frame">
+                <img src={preview.avatarSrc} alt={`${preview.name} icon`} draggable={false} />
+              </div>
+              <figcaption>Avatar icon</figcaption>
+            </figure>
           )}
         </div>
         <div className="avatar-lightbox-caption">
