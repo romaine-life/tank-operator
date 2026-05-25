@@ -513,7 +513,7 @@ button:disabled {
   border: 1px solid var(--border-muted);
   overflow: hidden;
   touch-action: none;
-  cursor: grab;
+  cursor: crosshair;
 }
 
 .admin-avatar-crop-stage[data-dragging="true"] {
@@ -536,7 +536,13 @@ button:disabled {
   box-shadow:
     0 0 0 999px rgba(0, 0, 0, 0.46),
     0 0 0 1px rgba(0, 0, 0, 0.55) inset;
-  pointer-events: none;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.admin-avatar-crop-stage[data-dragging="true"] .admin-avatar-crop-ring {
+  cursor: grabbing;
 }
 
 .admin-avatar-slider input {

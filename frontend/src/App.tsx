@@ -969,6 +969,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function effectiveUserRole(user: SessionUser | null | undefined): SessionRole | undefined {
+  return user?.effective_role ?? user?.role;
+}
+
 interface SessionUser {
   sub: string;
   email: string;
@@ -978,6 +982,7 @@ interface SessionUser {
   // caller. auth.romaine.life mints `pending` by default; tank-operator
   // rejects that role on direct JWT verification.
   role: SessionRole;
+  effective_role?: SessionRole;
   avatar_url: string;
   // Profile fields from /api/auth/me. Null until the user completes the
   // GitHub App install. installation_id presence drives the onboarding
@@ -10647,6 +10652,7 @@ export function App() {
     readGlimmungLaunchContext()
   );
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
+  const userEffectiveRole = effectiveUserRole(user);
   const canViewProdSessions =
     user?.role === "admin" && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -10661,7 +10667,7 @@ export function App() {
     [effectiveSessionScope],
   );
   const adminSettingsControls =
-    user?.role === "admin"
+    userEffectiveRole === "admin"
       ? {
           visible: true,
           canViewProdSessions,
