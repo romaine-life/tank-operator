@@ -9056,7 +9056,9 @@ function ChatPane({
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
     void authedFetch(
-      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
+      ),
     )
       .then(async (res) => {
         if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
@@ -9072,7 +9074,7 @@ function ChatPane({
       .finally(() => {
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
-  }, [activityEntriesByTurn, loadingActivityTurns, session.id]);
+  }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
