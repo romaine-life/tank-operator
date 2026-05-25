@@ -180,6 +180,22 @@ var (
 		Name: "tank_session_list_event_publish_failure_total",
 		Help: "Per-owner typed session-list event publishes that failed against NATS.",
 	})
+	// sessionBusCommandPublishFailureTotal covers the JetStream Publish
+	// path for runner commands (submit_turn / interrupt_turn /
+	// input_reply / stop_background_task). The two counters above
+	// cover the raw nc.Publish wake fabric; this counter covers the
+	// js.Publish command fabric. Both are needed: the 2026-05-25
+	// incident produced a sustained js.Publish failure (JetStream
+	// quorum loss → `nats: no response from stream`) while the wake
+	// counters above stayed quiet, because raw nc.Publish does not
+	// wait for a stream ack. Labels: kind from the closed Command.Type
+	// set (4 series), reason from classifyPublishError (5 series) =
+	// 20 series total. The TankSessionBusPublishFailing alert in
+	// k8s/templates/observability.yaml pages on any non-zero rate.
+	sessionBusCommandPublishFailureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_bus_command_publish_failure_total",
+		Help: "Session-bus JetStream command publishes (submit_turn/interrupt_turn/input_reply/stop_background_task) that failed, labeled by kind and classified reason.",
+	}, []string{"kind", "reason"})
 	// Wake success counters + persist→wake latency. The published vs
 	// received delta is the candidate-A stethoscope (see
 	// docs/quality-timeframes.md observability requirement and the
@@ -1103,6 +1119,39 @@ func (promWakeMetrics) RecordSessionEventPersistToWakeDuration(seconds float64) 
 		seconds = 0
 	}
 	sessionEventPersistToWakeSeconds.Observe(seconds)
+}
+
+func (promWakeMetrics) RecordCommandPublishFailed(kind string, reason string) {
+	sessionBusCommandPublishFailureTotal.WithLabelValues(
+		sessionBusCommandKindLabel(kind),
+		sessionBusCommandReasonLabel(reason),
+	).Inc()
+}
+
+// sessionBusCommandKindLabel is the prom-side validator for the kind
+// label. The bus already buckets via commandKindLabel; this guard
+// catches a future schema drift where a new Command.Type slips through
+// without a matching bucket update, so cardinality stays bounded.
+func sessionBusCommandKindLabel(kind string) string {
+	switch kind {
+	case "submit_turn", "interrupt_turn", "input_reply", "stop_background_task", "other":
+		return kind
+	default:
+		return "other"
+	}
+}
+
+// sessionBusCommandReasonLabel mirrors classifyPublishError's bounded
+// output. Validation is intentionally redundant with the bus's own
+// classifier so a future bus change can't silently widen this label
+// set without touching the prom layer too.
+func sessionBusCommandReasonLabel(reason string) string {
+	switch reason {
+	case "no_response_from_stream", "connection", "timeout", "canceled", "other":
+		return reason
+	default:
+		return "other"
+	}
 }
 
 // recordSessionEventStreamEmittedByType is the per-event-type bump that

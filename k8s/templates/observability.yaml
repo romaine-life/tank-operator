@@ -510,6 +510,113 @@ spec:
             summary: "tank-operator's NATS client is reconnecting faster than 6/min"
             runbook: "JetStream session bus is unstable. Check the nats namespace's pod health and ServerCertificate."
 
+        # Per-command publish-failure observability. The wake/event-list
+        # publish counters above cover the raw nc.Publish path; this
+        # alert covers the js.Publish command path the orchestrator uses
+        # for submit_turn / interrupt_turn / input_reply /
+        # stop_background_task. The 2026-05-25 NATS quorum incident
+        # produced sustained reason="no_response_from_stream" on
+        # kind="submit_turn" — every chat submission failed silently,
+        # the user only learned via the durable turn.command_failed
+        # event the SPA rendered. Pages on any non-zero rate because
+        # each failure is a user-visible "Submit failed" banner.
+        - alert: TankSessionBusPublishFailing
+          expr: sum(rate(tank_session_bus_command_publish_failure_total[5m])) by (kind, reason) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session-bus js.Publish failing kind={{`{{ $labels.kind }}`}} reason={{`{{ $labels.reason }}`}}"
+            runbook: |
+              Every failed publish here is a stranded user submission:
+              the backend persisted user_message.created + turn.submitted
+              to the durable ledger, then could not publish the runner
+              command. kind=submit_turn failures surface as
+              turn.command_failed in the transcript and "Submit failed" /
+              "Turn failed" banners to the user. kind=interrupt_turn
+              failures surface as Stop not landing.
+
+              reason="no_response_from_stream" — JetStream cluster has
+              lost quorum or the stream is overloaded. Pair with
+              TankJetStreamRaftAtRisk below and the NATS server-side
+              "NO quorum, stalled" warnings in the `nats` namespace.
+
+              reason="connection" — tank-operator's NATS client is
+              unable to reach tank-nats. Pair with TankNATSReconnectStorm.
+
+              reason="timeout" / "canceled" — the publish context
+              expired before the stream ack arrived. Usually a
+              symptom of upstream pressure, not a transport bug.
+
+        # JetStream consumer stalled: pending messages with no delivery
+        # progress. Catches the per-session consumer regression shape
+        # where a runner consumer exists but is not draining work — the
+        # orchestrator keeps publishing submit_turn commands that the
+        # runner never receives. Compare with the prior 2026-05-25
+        # incident: the cluster-level "NO quorum" warnings appear at
+        # the producer side (TankSessionBusPublishFailing above), but a
+        # post-quorum-recovery world can still have individual
+        # consumers stuck due to redelivery storms, orphaned
+        # consumers, etc.
+        - alert: TankJetStreamConsumerStalled
+          expr: |
+            sum by (stream_name, consumer_name) (nats_consumer_num_pending{stream_name="TANK_SESSION_BUS"})
+              > 0
+              unless on(stream_name, consumer_name)
+                (changes(nats_consumer_delivered_consumer_seq{stream_name="TANK_SESSION_BUS"}[5m]) > 0)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "JetStream consumer {{`{{ $labels.consumer_name }}`}} on {{`{{ $labels.stream_name }}`}} has pending messages with no delivery progress for 5m"
+            runbook: |
+              Either the consuming runner pod is gone (a session was
+              deleted but the durable consumer was orphaned), or the
+              cluster lost write quorum and acks cannot land. Check NATS
+              server logs in the nats namespace for "has NO quorum,
+              stalled" warnings. If quorum is healthy, enumerate active
+              session pods and remove orphan consumers via the nats CLI
+              in nats-box. The consumer naming convention is
+              "{provider}_{storage_key}" for data-plane and
+              "{provider}_control_{storage_key}" for control-plane —
+              see backend-go/internal/sessionbus/subjects.go.
+
+        # JetStream Raft at risk: cluster-level signals that quorum is
+        # in danger BEFORE consumers actually stall. The 2026-05-25
+        # incident's early warning was that one NATS pod's readloop
+        # processing time climbed to 2-3s under host CPU pressure;
+        # the per-server prom exporter does not expose readloop
+        # processing time directly, but two adjacent signals do:
+        # meta_pending climbs when Raft replication falls behind, and
+        # slow_consumers > 0 indicates the server is struggling to
+        # drain subscribers (which under enough pressure produces the
+        # same Raft-stall outcome).
+        - alert: TankJetStreamRaftAtRisk
+          expr: |
+            max(nats_varz_jetstream_meta_pending) > 50
+              or max(nats_varz_slow_consumers) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "NATS JetStream Raft is backlogged (meta_pending > 50 or slow_consumers > 0)"
+            runbook: |
+              The 2026-05-25 chat-submission outage started here: a
+              single NATS replica got starved of CPU on a saturated
+              node, its Raft readloop fell behind, the R=2 cluster
+              lost quorum, every TANK_SESSION_BUS command publish
+              failed for ~10 minutes. The infra-bootstrap chart now
+              runs cluster.replicas: 3 with required-hostname
+              podAntiAffinity and Burstable QoS to prevent the
+              co-tenancy + CPU-starvation shape, but this alert is
+              the early warning: by the time
+              TankJetStreamConsumerStalled or TankSessionBusPublishFailing
+              fires, users are already seeing "Submit failed".
+              Check `kubectl top nodes` for the node hosting the
+              affected tank-nats pod and verify each NATS replica is
+              on its own node (anti-affinity guarantees this but a
+              drain/upgrade window can temporarily violate it).
+
     - name: tank-operator.api-proxy
       rules:
         - alert: TankApiProxyRefreshStorm

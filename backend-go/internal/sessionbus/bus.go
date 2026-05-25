@@ -137,6 +137,19 @@ type WakeMetrics interface {
 	RecordSessionEventWakePublished()
 	RecordSessionEventWakeReceived()
 	RecordSessionEventPersistToWakeDuration(seconds float64)
+	// RecordCommandPublishFailed increments when js.Publish on a
+	// session-bus command subject returns an error — submit_turn,
+	// interrupt_turn, or input_reply commands that the orchestrator
+	// could not hand to the runner because JetStream itself failed.
+	// Steady-state expectation is zero. The 2026-05-25 NATS quorum
+	// incident produced sustained `reason="no_response_from_stream"`
+	// across `kind="submit_turn"` — every chat submission failed
+	// silently until the SPA rendered the durable turn.command_failed
+	// event the orchestrator wrote at handlers_turns.go:798. The
+	// TankSessionBusPublishFailing alert pages on any non-zero rate;
+	// `kind` and `reason` labels are bounded by the bus's own
+	// classifyPublishError + the closed Command.Type set.
+	RecordCommandPublishFailed(kind string, reason string)
 }
 
 type noopWakeMetrics struct{}
@@ -146,6 +159,7 @@ func (noopWakeMetrics) RecordSessionListEventPublishFailed()            {}
 func (noopWakeMetrics) RecordSessionEventWakePublished()                {}
 func (noopWakeMetrics) RecordSessionEventWakeReceived()                 {}
 func (noopWakeMetrics) RecordSessionEventPersistToWakeDuration(float64) {}
+func (noopWakeMetrics) RecordCommandPublishFailed(string, string)       {}
 
 // WakeRecorder is the optional per-stream hook SubscribeWakes calls
 // from the NATS message callback. The SSE handler passes its
@@ -240,7 +254,14 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 		b.scope = "default"
 	}
 	if b.replicas <= 0 {
-		b.replicas = 2
+		// JetStream Raft requires R ∈ {1, 3, 5}; R=2 has no tiebreaker
+		// and halts on a single slow member. The production chart sets
+		// sessionBus.streamReplicas: 3 and exports it as
+		// NATS_STREAM_REPLICAS; this default is a defense-in-depth
+		// safety net only — if the env is unset for any reason, the
+		// stream is still created with a sane quorum size rather than
+		// regressing to the 2026-05-25 incident shape.
+		b.replicas = 3
 	}
 	if b.wakeMetrics == nil {
 		b.wakeMetrics = noopWakeMetrics{}
@@ -289,7 +310,62 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 	// single decision point so the routing rule is unit-testable without
 	// touching JetStream.
 	_, err = b.js.Publish(ctx, SubjectForCommand(command), raw, jetstream.WithMsgID(command.CommandID))
+	if err != nil {
+		// The 2026-05-25 incident shape: JetStream lost quorum and
+		// returned `nats: no response from stream`, every submit_turn
+		// failed, and the only signal was the per-session
+		// turn.command_failed event the handler writes below. The
+		// counter here is the observability surface the
+		// TankSessionBusPublishFailing alert reads — without it,
+		// re-occurrence stays invisible to Grafana until a user
+		// screenshots the failure.
+		b.wakeMetrics.RecordCommandPublishFailed(
+			commandKindLabel(command.Type),
+			classifyPublishError(err),
+		)
+	}
 	return err
+}
+
+// classifyPublishError maps a js.Publish error into a bounded reason
+// label for the publish-failure counter. The jetstream package exports
+// the two transport-layer sentinels that map cleanly to operational
+// causes; context errors are stdlib; everything else collapses to
+// "other" so a future nats.go release can't quietly inflate the
+// label cardinality.
+func classifyPublishError(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, jetstream.ErrNoStreamResponse):
+		return "no_response_from_stream"
+	case errors.Is(err, jetstream.ErrConnectionClosed),
+		errors.Is(err, nats.ErrConnectionClosed):
+		return "connection"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "other"
+	}
+}
+
+// commandKindLabel buckets Command.Type against the closed set of
+// commands this bus publishes today. The set is enumerated at
+// internal/sessionbus/commands.go; any addition there should mirror
+// here so the metric stays path-independent. Unknown types collapse
+// to "other".
+func commandKindLabel(commandType string) string {
+	switch commandType {
+	case CommandSubmitTurn,
+		CommandInterrupt,
+		CommandInputReply,
+		CommandStopBackgroundTask:
+		return commandType
+	default:
+		return "other"
+	}
 }
 
 // PublishSessionEventWake signals SSE subscribers on
