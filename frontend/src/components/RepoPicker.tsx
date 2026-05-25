@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
-import { isValidRepoSlug, recentRepoPreviewSlugs } from "../repos";
+import { isValidRepoSlug, recentRepoShortcutSlugs } from "../repos";
 
 /** allRepos surfaces the user's full GitHub App installation, sourced
  *  from /api/github/repos. The picker filters this list by
@@ -68,6 +68,7 @@ export interface RepoPickerProps {
   onClose: () => void;
   onInputChange: (value: string) => void;
   onAdd: (slug: string) => void;
+  onSelectExclusive: (slug: string) => void;
   onRemove: (slug: string) => void;
 }
 
@@ -87,6 +88,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     onClose,
     onInputChange,
     onAdd,
+    onSelectExclusive,
     onRemove,
   } = props;
 
@@ -112,10 +114,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
-  const recentPreview = useMemo(
-    () => recentRepoPreviewSlugs(recent, selected),
-    [recent, selected],
-  );
+  const recentPreview = useMemo(() => recentRepoShortcutSlugs(recent), [recent]);
 
   // Close on Escape or outside-click — matches the profile menu shape
   // used elsewhere in App.tsx (data-menu attribute on the root).
@@ -177,19 +176,31 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
         <div className="home-repos-preview" aria-label="Recent repositories">
           <div className="home-repos-recent-label">Recent</div>
           <ul className="home-repos-recent-list" role="list">
-            {recentPreview.map((slug) => (
-              <li key={`preview:${slug}`} className="home-repos-recent-item">
-                <button
-                  type="button"
-                  className="home-repos-recent-chip"
-                  onClick={() => onAdd(slug)}
-                  disabled={busy}
-                  title={slug}
-                >
-                  {slug}
-                </button>
-              </li>
-            ))}
+            {recentPreview.map((slug, index) => {
+              const selectedRecent = selectedLower.current.has(slug.toLowerCase());
+              return (
+                <li key={`preview:${slug}`} className="home-repos-recent-item">
+                  <button
+                    type="button"
+                    className={
+                      "home-repos-recent-chip home-repos-recent-shortcut" +
+                      (selectedRecent ? " is-selected" : "")
+                    }
+                    onClick={() => onSelectExclusive(slug)}
+                    disabled={busy}
+                    title={slug}
+                    aria-pressed={selectedRecent}
+                    aria-keyshortcuts={String(index + 1)}
+                    aria-label={`Select recent repository ${index + 1}: ${slug}`}
+                  >
+                    <span className="home-repos-recent-key" aria-hidden="true">
+                      {index + 1}
+                    </span>
+                    <span>{slug}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

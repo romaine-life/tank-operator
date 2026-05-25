@@ -408,6 +408,8 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
   assert.equal(appSource.includes('"keyboard-edge-navigation"'), true);
+  assert.equal(appSource.includes('jumpSdkToOldest("button")'), true);
+  assert.equal(appSource.includes('jumpSdkToLatest("button")'), true);
   assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
   assert.equal(chatScrollTelemetrySource.includes("pagePath: currentPagePath()"), true);
   assert.equal(chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"), true);
