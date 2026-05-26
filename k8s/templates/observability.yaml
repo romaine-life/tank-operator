@@ -138,6 +138,77 @@ spec:
             summary: "tank-operator ran a Postgres query the operationFromSQL extractor did not recognize"
             runbook: "Add the new table to pgstore.knownTables and ship a follow-up; otherwise that query is invisible in latency dashboards."
 
+        # Postgres connection-cap saturation. The 2026-05-25 incident
+        # crash-looped the orchestrator on SQLSTATE 53300 ("remaining
+        # connection slots are reserved for roles with the SUPERUSER
+        # attribute") with no advance signal — the cap was hit and the
+        # crash was the first observation. With the pgstats poller in
+        # place, this alert fires at 70% utilization, leaving ~30% of
+        # the cap as headroom for the operator to act before the next
+        # crash. Both gauges are unlabeled aggregates of server-side
+        # state — max() across pods dedupes the N orchestrator pods'
+        # views of the same single shared server.
+        - alert: TankPgConnectionSaturation
+          expr: |
+            (max(tank_pg_backend_connections) / max(tank_pg_max_connections)) > 0.7
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Postgres backend connections at {{`{{ humanizePercentage $value }}`}} of max_connections for 5m"
+            runbook: |
+              The Flex Server connection cap is the next thing to
+              crash-loop the orchestrator (SQLSTATE 53300, the
+              2026-05-25 shape). Remediations in order of effort:
+
+              (1) Bump SKU in infra/postgres.tf. B1ms's cap is 50;
+                  B2s is 100, B2ms is 100 with more RAM, D2ds_v5 is
+                  859. In-place resize via tofu apply causes a
+                  ~60-90s connection drop on switchover.
+              (2) Add a PgBouncer sidecar to the orchestrator
+                  deployment so N pods × pgstore.MaxConns frontend
+                  connections funnel into ~5-10 backend connections.
+                  Decouples slot fleet size from the server cap
+                  entirely; doesn't help CPU/IO.
+              (3) Lower pgstore.MaxConns further (currently 4); only
+                  buys time against slot growth and increases
+                  per-pool contention.
+
+              Diagnose distribution: per-pod query rate is
+                sum by (pod) (rate(tank_pg_queries_total{outcome="ok"}[5m]))
+              from kube-state-metrics' pod labels — a single pod
+              dramatically over its share is a runaway query, not
+              cluster-wide pressure.
+
+        # Poller self-test. If this fires, tank_pg_backend_connections
+        # and tank_pg_max_connections are stale; the saturation alert
+        # above is silently disabled. Diagnostic-only — does not page.
+        - alert: TankPgConnectionPollFailing
+          expr: rate(tank_pg_stats_poll_total{outcome!="ok"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: info
+          annotations:
+            summary: "pgstats poller is failing to read connection stats from Postgres"
+            runbook: |
+              The orchestrator's pgstats poller cannot query
+              pg_stat_database or current_setting('max_connections').
+              tank_pg_backend_connections / tank_pg_max_connections
+              are stale; TankPgConnectionSaturation can't fire.
+              Inspect orchestrator slog for "pgstats backend
+              connections poll failed" or "pgstats max_connections
+              poll failed". Likely causes:
+              (1) AAD token blip — the pool's BeforeConnect is
+                  rejecting the workload-identity token. Other pool
+                  traffic (tank_pg_queries_total) would also show
+                  outcome=failed.
+              (2) Postgres rejecting reads on the system views —
+                  permission regression on the orchestrator's
+                  managed-identity grants.
+              (3) Postgres down — the bigger problem here is every
+                  other tank_pg_* metric is also broken; this is
+                  collateral, not the root cause.
+
     - name: tank-operator.hermes
       rules:
         - alert: TankHermesCapabilityProbeFailing
