@@ -21,7 +21,7 @@ type AvatarCatalogEntry = {
   backing_url: string;
 };
 
-// JP1 cast: 1 dino + 7 humans (brachiosaurus was dropped — the
+// Built-in JP1 cast: 1 dino + 7 humans (brachiosaurus was dropped — the
 // JP-Brachiosaur scene still didn't survive the 42px circle clip; the
 // dino body alone wasn't recognizable as a brachio, and the wider crop
 // that kept the iconic neck visible read as a bright sky tile instead of
@@ -37,21 +37,21 @@ type AvatarCatalogEntry = {
 // put the dark subject in the circle and push bright sky / clothing out
 // of frame — anything brighter than the sidebar bg reads as a filled
 // tile at 42px instead of a floating token.
-function fallbackAgentAvatar(id: string, name: string, src: string): AgentAvatar {
+function builtInAgentAvatar(id: string, name: string, src: string): AgentAvatar {
   return { id, kind: "agent", name, src, backingSrc: src };
 }
 
 export const AGENT_AVATARS: AgentAvatar[] = [
   // Dinos
-  fallbackAgentAvatar("jp1-raptor", "Velociraptor", "/assets/avatars/jp1-raptor.png"),
+  builtInAgentAvatar("jp1-raptor", "Velociraptor", "/assets/avatars/jp1-raptor.png"),
   // Humans
-  fallbackAgentAvatar("jp1-grant", "Dr. Alan Grant", "/assets/avatars/jp1-grant.png"),
-  fallbackAgentAvatar("jp1-sattler", "Dr. Ellie Sattler", "/assets/avatars/jp1-sattler.png"),
-  fallbackAgentAvatar("jp1-malcolm", "Dr. Ian Malcolm", "/assets/avatars/jp1-malcolm.png"),
-  fallbackAgentAvatar("jp1-hammond", "John Hammond", "/assets/avatars/jp1-hammond.png"),
-  fallbackAgentAvatar("jp1-nedry", "Dennis Nedry", "/assets/avatars/jp1-nedry.png"),
-  fallbackAgentAvatar("jp1-muldoon", "Robert Muldoon", "/assets/avatars/jp1-muldoon.png"),
-  fallbackAgentAvatar("jp1-arnold", "Ray Arnold", "/assets/avatars/jp1-arnold.png"),
+  builtInAgentAvatar("jp1-grant", "Dr. Alan Grant", "/assets/avatars/jp1-grant.png"),
+  builtInAgentAvatar("jp1-sattler", "Dr. Ellie Sattler", "/assets/avatars/jp1-sattler.png"),
+  builtInAgentAvatar("jp1-malcolm", "Dr. Ian Malcolm", "/assets/avatars/jp1-malcolm.png"),
+  builtInAgentAvatar("jp1-hammond", "John Hammond", "/assets/avatars/jp1-hammond.png"),
+  builtInAgentAvatar("jp1-nedry", "Dennis Nedry", "/assets/avatars/jp1-nedry.png"),
+  builtInAgentAvatar("jp1-muldoon", "Robert Muldoon", "/assets/avatars/jp1-muldoon.png"),
+  builtInAgentAvatar("jp1-arnold", "Ray Arnold", "/assets/avatars/jp1-arnold.png"),
 ];
 
 let runtimeAgentAvatars: AgentAvatar[] = [];
@@ -128,46 +128,25 @@ export function getAgentAvatarPool(): AgentAvatar[] {
   ];
 }
 
-function hashString(value: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function chooseAvatar(pool: AgentAvatar[], seed: string): AgentAvatar | null {
-  let best: AgentAvatar | null = null;
-  let bestScore = -1;
-  for (const avatar of pool) {
-    const score = hashString(`${seed}\x1f${avatar.id}`);
-    if (score > bestScore) {
-      best = avatar;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
 function findAvatarByID(pool: AgentAvatar[], avatarId?: string | null): AgentAvatar | null {
   if (!avatarId) return null;
   return pool.find((avatar) => avatar.id === avatarId) ?? null;
 }
 
-export function getSessionAvatar(sessionId: string, assignedAvatarId?: string | null): AgentAvatar {
-  const assigned = findAvatarByID(getAgentAvatarPool(), assignedAvatarId);
-  if (assigned) return assigned;
-  if (runtimeAgentAvatars.length === 0) {
-    return AGENT_AVATARS[hashString(sessionId) % AGENT_AVATARS.length];
-  }
-  return chooseAvatar(getAgentAvatarPool(), sessionId) ?? AGENT_AVATARS[0];
+export function getSessionAvatar(_sessionId: string, assignedAvatarId?: string | null): AgentAvatar | null {
+  return findAvatarByID(getAgentAvatarPool(), assignedAvatarId);
 }
 
-export function getSystemAvatar(seed: string, assignedAvatarId?: string | null): AgentAvatar | null {
-  const assigned = findAvatarByID(runtimeSystemAvatars, assignedAvatarId);
-  if (assigned) return assigned;
-  return chooseAvatar(runtimeSystemAvatars, seed);
+export function requireSessionAvatar(sessionId: string, assignedAvatarId: string): AgentAvatar {
+  const avatar = getSessionAvatar(sessionId, assignedAvatarId);
+  if (!avatar) {
+    throw new Error(`assigned session avatar is unavailable: ${assignedAvatarId}`);
+  }
+  return avatar;
+}
+
+export function getSystemAvatar(_seed: string, assignedAvatarId?: string | null): AgentAvatar | null {
+  return findAvatarByID(runtimeSystemAvatars, assignedAvatarId);
 }
 
 export function AgentAvatarIcon({

@@ -16,6 +16,7 @@ const sessionListDebugSource = readSource("./sessionListDebug.ts");
 const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
 const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
+const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -263,6 +264,15 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugRecorderSource.includes("event-sample"), true);
   assert.equal(appSource.includes("Session-list diagnostics"), true);
   assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
+});
+
+test("session rows do not fall back to client-hashed avatar identity", () => {
+  assert.equal(sessionAvatarsSource.includes("hashString"), false);
+  assert.equal(sessionAvatarsSource.includes("chooseAvatar"), false);
+  assert.equal(sessionAvatarsSource.includes("Math.imul"), false);
+  assert.match(sessionAvatarsSource, /getSessionAvatar\([\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
+  assert.match(sessionAvatarsSource, /getSystemAvatar\([\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
+  assert.equal(appSource.includes("session-avatar-missing"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {

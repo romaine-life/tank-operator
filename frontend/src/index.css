@@ -1951,6 +1951,21 @@ button:disabled {
   z-index: 0;
 }
 
+.session-avatar.session-avatar-missing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: initial;
+  color: rgba(207, 218, 232, 0.72);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.session-avatar.session-avatar-missing svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar.is-collapsed .session-avatar {
   display: block;
   position: static;
@@ -1963,6 +1978,15 @@ button:disabled {
 
 .sidebar.is-collapsed .sessions li.is-open:not(.is-closing) .session-avatar {
   opacity: 1;
+}
+
+.sidebar.is-collapsed .session-avatar.session-avatar-missing {
+  display: inline-flex;
+}
+
+.sidebar.is-collapsed .session-avatar.session-avatar-missing svg {
+  width: 12px;
+  height: 12px;
 }
 
 .session-closing-chip {
@@ -7050,6 +7074,21 @@ textarea.run-files-viewer-editor:focus {
   display: block;
   border-radius: 999px;
   object-fit: contain;
+}
+
+.run-msg-ai-icon.session-avatar-missing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: initial;
+  color: rgba(207, 218, 232, 0.72);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.run-msg-ai-icon.session-avatar-missing svg {
+  width: 17px;
+  height: 17px;
 }
 
 .run-transcript-message[data-variant="assistant"]::before {

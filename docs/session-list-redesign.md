@@ -124,7 +124,9 @@ every visible create/update write preserves those IDs. A client must
 never observe a new visible row with empty avatar IDs and then receive a
 different assigned avatar in a later row update; that transition is a
 user-visible identity change even when the final database state is
-correct.
+correct. The frontend must not repair that class of backend fault by
+hashing or defaulting to a local avatar identity; an incomplete row is
+rendered as incomplete and captured by diagnostics.
 
 ### Wire shape: per-row UPDATE, not typed events
 

@@ -30,10 +30,9 @@ export interface ConversationMessage {
   createdAt?: string;
   // Originating tank-operator session id for user messages authored by
   // a sibling session via the mcp-tank-operator send_prompt /
-  // spawn_run_session handoff path. Drives the user-bubble avatar in the
-  // renderer: when set, the parent session's deterministic avatar
-  // replaces the human owner's Gravatar so the handoff reads as
-  // agent-authored. Absent for normal human-typed turns.
+  // spawn_run_session handoff path. The renderer treats this as an
+  // agent-authored signal, but avatar identity still has to come from a
+  // durable assigned avatar id rather than a client-side hash.
   originSessionId?: string;
   // Severity tag for system-role messages. session.status:failed events
   // with the extended payload (failure_scope=provider) carry this so

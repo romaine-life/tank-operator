@@ -222,7 +222,7 @@ export function LongChatDebugPage() {
     }, 120);
   }, [atBottom, running, scrollParent]);
 
-  const avatar = getSessionAvatar(DEBUG_SESSION_ID);
+  const avatar = getSessionAvatar(DEBUG_SESSION_ID, "jp1-malcolm");
 
   if (access === "loading") {
     return <DebugAccessScreen title="Loading debug session..." />;

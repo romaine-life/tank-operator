@@ -329,9 +329,9 @@ var schemaMigrations = []string{
 
 	// Session-pinned avatar assignment. The avatar deck is mutable as
 	// administrators add/delete assets, but an existing session's visible
-	// identity should not reshuffle on refresh. These columns are nullable so
-	// older rows and no-avatar system pools can continue to render through the
-	// frontend fallback path.
+	// identity should not reshuffle on refresh. These columns stay nullable so
+	// no-avatar system pools can be represented explicitly; the frontend must
+	// not synthesize a session identity when an assigned agent avatar is absent.
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS agent_avatar_id text`,
 	`ALTER TABLE sessions

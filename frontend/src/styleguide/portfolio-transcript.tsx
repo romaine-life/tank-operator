@@ -56,7 +56,7 @@ function TranscriptMessage({
   highlighted?: boolean;
   children: ReactNode;
 }) {
-  const avatar = getSessionAvatar("portfolio-transcript-state");
+  const avatar = getSessionAvatar("portfolio-transcript-state", "jp1-malcolm");
   return (
     <div
       className="run-transcript-message"
@@ -68,7 +68,7 @@ function TranscriptMessage({
       data-design-state={highlighted ? "highlighted" : variant}
       data-inspectable
     >
-      {variant === "assistant" && (
+      {variant === "assistant" && avatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>

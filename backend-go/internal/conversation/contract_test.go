@@ -85,10 +85,11 @@ func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
 	// Origin-stamping case: a sibling tank-operator session posted this
 	// turn via the mcp-tank-operator handoff path. The orchestrator
 	// stamps `origin_session_id` on both emitted events so the frontend
-	// can pick the parent session's deterministic avatar for the user
-	// bubble. Self-handoff (origin == target) and absent origin both
-	// leave the field off, mirroring how a human-typed browser turn
-	// looks today.
+	// can distinguish an agent-authored handoff from a human-typed turn.
+	// Avatar identity still has to come from a durable assigned avatar id,
+	// not a client-side hash. Self-handoff (origin == target) and absent
+	// origin both leave the field off, mirroring how a human-typed browser
+	// turn looks today.
 	target := "63"
 	tests := []struct {
 		name     string
@@ -249,11 +250,11 @@ func TestValidateEventMapAcceptsSessionStatusFailedExtension(t *testing.T) {
 		"created_at":  "2026-05-24T18:48:30.000Z",
 		"visibility":  "durable",
 		"payload": map[string]any{
-			"status":           "failed",
-			"text":             "Codex sign-in expired. Re-authenticate to continue.",
-			"failure_scope":    "provider",
-			"failure_subject":  "codex",
-			"failure_reason":   "refresh_token_reused",
+			"status":          "failed",
+			"text":            "Codex sign-in expired. Re-authenticate to continue.",
+			"failure_scope":   "provider",
+			"failure_subject": "codex",
+			"failure_reason":  "refresh_token_reused",
 			"action": map[string]any{
 				"label": "Re-sign-in to Codex",
 				"href":  "/api/auth/codex/login",

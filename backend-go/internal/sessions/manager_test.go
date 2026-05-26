@@ -278,6 +278,38 @@ func TestManagerCreateWritesReservedAvatarsBeforeVisibleRow(t *testing.T) {
 	}
 }
 
+func TestManagerCreateFailsBeforeVisibleRowWithoutReservedAgentAvatar(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{nextID: "43"}
+	emitter := &recordingRowEmitter{}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, emitter, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	_, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no agent avatars available") {
+		t.Fatalf("Create error = %v, want no-agent-avatar error", err)
+	}
+	if len(registry.upserts) != 0 {
+		t.Fatalf("registry upserts = %#v, want none before avatar reservation succeeds", registry.upserts)
+	}
+	pods, listErr := client.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("created pods = %d, want none before avatar reservation succeeds", len(pods.Items))
+	}
+	if len(emitter.ids) != 0 {
+		t.Fatalf("published rows = %#v, want none", emitter.ids)
+	}
+}
+
 func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
 	registry := &managerTestRegistry{
 		records: []sessionmodel.SessionRecord{

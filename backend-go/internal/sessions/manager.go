@@ -364,7 +364,13 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	// On pod-create failure after the registry write succeeds, we mark
 	// the row visible=false so the snapshot stops returning it.
 	podName := "session-" + sessionID
-	assignment := m.reserveSessionAvatars(ctx, owner, sessionID)
+	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if reserved && assignment.AgentAvatarID == "" {
+		return Info{}, fmt.Errorf("reserve session avatars: no agent avatars available")
+	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
 			ID:             sessionID,
@@ -447,7 +453,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		}
 	}
 
-	if assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "" {
+	if !reserved && (assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "") {
 		assignment = m.assignSessionAvatars(ctx, owner, sessionID)
 		info.AgentAvatarID = assignment.AgentAvatarID
 		info.SystemAvatarID = assignment.SystemAvatarID
@@ -506,7 +512,13 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 	// resolveSessionPod returns 4xx, handleSubmitTurn checks the mode and
 	// routes to the external backend bridge instead of NATS.
 	now := nowISO()
-	assignment := m.reserveSessionAvatars(ctx, owner, sessionID)
+	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if reserved && assignment.AgentAvatarID == "" {
+		return Info{}, fmt.Errorf("reserve no-pod session avatars: no agent avatars available")
+	}
 	rec := sessionmodel.SessionRecord{
 		ID:             sessionID,
 		Email:          owner,
@@ -530,7 +542,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 			return Info{}, fmt.Errorf("no-pod session registry upsert: %w", regErr)
 		}
 	}
-	if assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "" {
+	if !reserved && (assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "") {
 		assignment = m.assignSessionAvatars(ctx, owner, sessionID)
 	}
 
@@ -671,18 +683,18 @@ type sessionAvatarAssigner interface {
 	AssignSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
 }
 
-func (m *Manager) reserveSessionAvatars(ctx context.Context, owner, sessionID string) sessionmodel.SessionAvatarAssignment {
+func (m *Manager) reserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, bool, error) {
 	reserver, ok := m.registry.(sessionAvatarReserver)
 	if !ok {
-		return sessionmodel.SessionAvatarAssignment{}
+		return sessionmodel.SessionAvatarAssignment{}, false, nil
 	}
 	assignment, err := reserver.ReserveSessionAvatars(ctx, owner, sessionID)
 	if err != nil {
 		slog.Warn("session avatar reservation failed",
 			"session_id", sessionID, "owner", owner, "error", err)
-		return sessionmodel.SessionAvatarAssignment{}
+		return sessionmodel.SessionAvatarAssignment{}, true, fmt.Errorf("reserve session avatars: %w", err)
 	}
-	return assignment
+	return assignment, true, nil
 }
 
 func (m *Manager) assignSessionAvatars(ctx context.Context, owner, sessionID string) sessionmodel.SessionAvatarAssignment {
