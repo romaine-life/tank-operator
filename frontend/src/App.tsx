@@ -164,6 +164,10 @@ import {
 } from "./clusterHealth";
 import { compactCompletedTurnEntries } from "./turnCompaction";
 import {
+  turnActivityGroupIsActive,
+  turnActivityShellIsDurablyActive,
+} from "./turnActivityState";
+import {
   isDurableTankConversationEvent,
   isTankConversationEvent,
   type TankConversationEvent,
@@ -3881,7 +3885,7 @@ function createTurnActivityEntryGroup(
     turnId,
     entries,
     compactedEntryIds: entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
-    active: turnId === (activeTurnId?.trim() ?? ""),
+    active: turnActivityGroupIsActive(entry.activity, turnId, activeTurnId),
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
   };
@@ -3955,14 +3959,18 @@ function groupTranscriptEntries(
 function chatScrollGroupSnapshot(
   groups: EntryGroup[],
   entryCount: number,
+  sourceEntries?: TranscriptEntry[],
 ): Record<string, unknown> {
   let messages = 0;
   let reasoning = 0;
   let meta = 0;
   let backgroundTasks = 0;
+  let thinkingGroups = 0;
   let toolGroups = 0;
   let toolEntries = 0;
   let activityGroups = 0;
+  let activeActivityGroups = 0;
+  let durableActiveActivityGroups = 0;
   let activityEntries = 0;
   for (const group of groups) {
     if (group.kind === "tools") {
@@ -3976,13 +3984,30 @@ function chatScrollGroupSnapshot(
       reasoning += 1;
     } else if (group.kind === "background_task") {
       backgroundTasks += 1;
+    } else if (group.kind === "thinking") {
+      thinkingGroups += 1;
     } else if (group.kind === "activity") {
       activityGroups += 1;
+      if (group.active) activeActivityGroups += 1;
+      if (group.shell && turnActivityShellIsDurablyActive(group.shell.activity)) {
+        durableActiveActivityGroups += 1;
+      }
       activityEntries += group.entries.length;
       toolEntries += group.entries.filter((entry) => entry.kind === "tool").length;
       backgroundTasks += group.entries.filter((entry) => entry.kind === "background_task").length;
     } else {
       meta += 1;
+    }
+  }
+  let turnActivityShells = 0;
+  let durableActiveTurnActivityShells = 0;
+  if (sourceEntries) {
+    for (const entry of sourceEntries) {
+      if (!isTurnActivityEntry(entry)) continue;
+      turnActivityShells += 1;
+      if (turnActivityShellIsDurablyActive(entry.activity)) {
+        durableActiveTurnActivityShells += 1;
+      }
     }
   }
   return {
@@ -3992,17 +4017,22 @@ function chatScrollGroupSnapshot(
     reasoning,
     meta,
     backgroundTasks,
+    thinkingGroups,
     toolGroups,
     toolEntries,
     activityGroups,
+    activeActivityGroups,
+    durableActiveActivityGroups,
     activityEntries,
+    turnActivityShells,
+    durableActiveTurnActivityShells,
     firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
     lastGroupKey: groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
   };
 }
 
 function chatScrollEntrySnapshot(entries: TranscriptEntry[]): Record<string, unknown> {
-  return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length);
+  return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length, entries);
 }
 
 function chatScrollSnapshotNumber(
@@ -6662,6 +6692,7 @@ export function RunMessages({
   );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
+  const thinkingInvariantRef = useRef<string>("");
   // Keep disclosure choices above virtualized row components so streaming
   // events and offscreen remounts do not reset expanded tool details.
   const [activityOpenOverrides, setActivityOpenOverrides] = useState<Record<string, boolean>>({});
@@ -6691,6 +6722,42 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
     ));
   }, []);
+  useEffect(() => {
+    const snapshot = chatScrollGroupSnapshot(groups, entries.length, entries);
+    const durableActiveActivityGroups = chatScrollSnapshotNumber(
+      snapshot,
+      "durableActiveActivityGroups",
+    );
+    const durableActiveTurnActivityShells = chatScrollSnapshotNumber(
+      snapshot,
+      "durableActiveTurnActivityShells",
+    );
+    const durableActivePlaceholders = Math.max(
+      durableActiveActivityGroups,
+      durableActiveTurnActivityShells,
+    );
+    const thinkingGroups = chatScrollSnapshotNumber(snapshot, "thinkingGroups");
+    if (durableActivePlaceholders <= thinkingGroups) {
+      thinkingInvariantRef.current = "";
+      return;
+    }
+    const key = [
+      sessionId,
+      chatScrollSnapshotString(snapshot, "lastGroupKey"),
+      durableActiveActivityGroups,
+      durableActiveTurnActivityShells,
+      thinkingGroups,
+    ].join("\u001f");
+    if (thinkingInvariantRef.current === key) return;
+    thinkingInvariantRef.current = key;
+    logChatScrollEvent("thinking-row-missing", {
+      surface: telemetrySurface,
+      sessionId,
+      sessionMode,
+      ...snapshot,
+      ...chatScrollElementSnapshot(scrollParent),
+    });
+  }, [entries, groups, scrollParent, sessionId, sessionMode, telemetrySurface]);
   useEffect(() => {
     const target = pendingScrollMessageId;
     if (!target) return;

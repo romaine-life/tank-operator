@@ -301,6 +301,11 @@ counts, compacted child ids, order range, timestamps, status, and error count.
 The child entries for a Turn activity row are fetched only when the row is
 expanded through the turn activity endpoint. This keeps previous-conversation
 navigation bounded while preserving a durable replay path for deep links.
+When a projected shell carries `active: true` or `status: "active"`, that shell
+also owns the main transcript's running `...` placeholder. The browser may also
+learn the active turn from the session activity summary, but the shell's durable
+active flag is sufficient; timeline refresh ordering must not briefly remove
+the placeholder while another activity payload catches up.
 
 For an active turn, the client may condense assistant progress notes,
 provisional assistant text, tool rows, reasoning blocks, background-task rows,

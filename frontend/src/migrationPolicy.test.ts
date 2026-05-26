@@ -16,6 +16,7 @@ const sessionListDebugSource = readSource("./sessionListDebug.ts");
 const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
 const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
+const turnActivityStateSource = readSource("./turnActivityState.ts");
 const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
@@ -229,17 +230,19 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
-test("replayed turn activity shells do not own active state", () => {
+test("server-projected active turn activity shells own thinking row active state", () => {
   assert.equal(
-    appSource.includes('entry.activity?.active === true || entry.activity?.status === "active"'),
-    false,
+    turnActivityStateSource.includes('summary?.active === true || summary?.status === "active"'),
+    true,
   );
-  assert.equal(
-    appSource.includes('shellSummary?.active === true || shellSummary?.status === "active"'),
-    false,
-  );
-  assert.equal(appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'), true);
+  assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
+  assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
+  assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
+  assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);
+  assert.equal(appSource.includes('logChatScrollEvent("thinking-row-missing"'), true);
+  assert.equal(appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'), false);
   assert.equal(appSource.includes("active: turnId === active,"), true);
+  assert.equal(chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'), true);
 });
 
 test("turn internals move out of the transcript into a turn view", () => {
