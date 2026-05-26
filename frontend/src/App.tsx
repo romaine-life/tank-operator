@@ -18,6 +18,13 @@ import {
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
@@ -6352,21 +6359,34 @@ function RunTurnActivityScreen({
           <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
           <h2>Turns</h2>
         </div>
-        <select
-          className="run-turn-view-select"
+        <Select
           value={selected?.turnId ?? ""}
-          onChange={(event) => onSelectTurn(event.target.value)}
+          onValueChange={onSelectTurn}
           disabled={turns.length === 0}
-          aria-label="Select turn"
         >
-          {turns.length === 0 ? (
-            <option value="">No turns</option>
-          ) : turns.map((turn) => (
-            <option key={turn.turnId} value={turn.turnId}>
-              {turn.label}{turn.active ? " (running)" : ""}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger
+            className="run-turn-view-select"
+            size="sm"
+            aria-label="Select turn"
+          >
+            <SelectValue placeholder="No turns" />
+          </SelectTrigger>
+          <SelectContent
+            className="run-turn-view-select-menu"
+            position="popper"
+            align="end"
+          >
+            {turns.map((turn) => (
+              <SelectItem
+                key={turn.turnId}
+                value={turn.turnId}
+                className="run-turn-view-select-item"
+              >
+                {turn.label}{turn.active ? " (running)" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       {selected ? (
         <>

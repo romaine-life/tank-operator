@@ -16,6 +16,13 @@ import {
 import { ChatComposer, type RunComposerMode } from "../ChatComposer";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { AgentAvatarIcon, getSessionAvatarByID } from "../sessionAvatars";
 import {
   BackLink,
@@ -201,11 +208,30 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
           <h2>Turns</h2>
         </div>
-        <select className="run-turn-view-select" value="turn-3" aria-label="Select turn" onChange={() => {}}>
-          <option value="turn-1">Turn 1</option>
-          <option value="turn-2">Turn 2</option>
-          <option value="turn-3">Turn 3 (running)</option>
-        </select>
+        <Select value="turn-3" onValueChange={() => {}}>
+          <SelectTrigger
+            className="run-turn-view-select"
+            size="sm"
+            aria-label="Select turn"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent
+            className="run-turn-view-select-menu"
+            position="popper"
+            align="end"
+          >
+            <SelectItem value="turn-1" className="run-turn-view-select-item">
+              Turn 1
+            </SelectItem>
+            <SelectItem value="turn-2" className="run-turn-view-select-item">
+              Turn 2
+            </SelectItem>
+            <SelectItem value="turn-3" className="run-turn-view-select-item">
+              Turn 3 (running)
+            </SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <div className="run-turn-view-summary">
         <span data-active="true">running</span>
