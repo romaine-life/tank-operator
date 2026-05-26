@@ -104,10 +104,11 @@ export function clusterHealthIssueText(health: ClusterHealthResponse | null): st
   return "all checks passing";
 }
 
-export function clusterHealthNatsLoadLabel(nats: ClusterNATSHealth | undefined): string {
-  const util = nats?.jetstream?.memory_utilization;
-  if (typeof util !== "number" || !Number.isFinite(util) || util <= 0) return "n/a";
-  return `${Math.round(util * 100)}%`;
+export function clusterHealthNatsReachabilityLabel(nats: ClusterNATSHealth | undefined): string {
+  if (!nats) return "-/-";
+  const expected = nats.expected_servers || nats.configured_monitor_urls;
+  if (expected <= 0) return `${nats.reachable_servers}/?`;
+  return `${nats.reachable_servers}/${expected}`;
 }
 
 export function clusterHealthStatusClass(status: ClusterHealthStatus | undefined): string {

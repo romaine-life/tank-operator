@@ -4,7 +4,7 @@ import test from "node:test";
 import {
   clusterHealthHeadline,
   clusterHealthIssueText,
-  clusterHealthNatsLoadLabel,
+  clusterHealthNatsReachabilityLabel,
   type ClusterHealthResponse,
 } from "./clusterHealth";
 
@@ -94,9 +94,12 @@ test("cluster health issue text uses a non-label healthy summary", () => {
   assert.equal(clusterHealthIssueText(baseHealth()), "all checks passing");
 });
 
-test("cluster health NATS load formats utilization", () => {
-  assert.equal(clusterHealthNatsLoadLabel(baseHealth().nats), "50%");
+test("cluster health NATS reachability formats monitor availability", () => {
+  assert.equal(clusterHealthNatsReachabilityLabel(baseHealth().nats), "3/3");
   const health = baseHealth();
-  health.nats.jetstream.memory_utilization = 0;
-  assert.equal(clusterHealthNatsLoadLabel(health.nats), "n/a");
+  health.nats.reachable_servers = 2;
+  assert.equal(clusterHealthNatsReachabilityLabel(health.nats), "2/3");
+  health.nats.expected_servers = 0;
+  health.nats.configured_monitor_urls = 0;
+  assert.equal(clusterHealthNatsReachabilityLabel(health.nats), "2/?");
 });

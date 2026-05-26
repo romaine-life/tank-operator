@@ -138,7 +138,7 @@ import {
 import {
   clusterHealthHeadline,
   clusterHealthIssueText,
-  clusterHealthNatsLoadLabel,
+  clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
   type ClusterHealthResponse,
   type ClusterHealthStatus,
@@ -1782,11 +1782,11 @@ function ClusterHealthWidget({
             <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
           </dd>
         </div>
-        <div className="cluster-health-metric" title="NATS JetStream memory utilization">
+        <div className="cluster-health-metric" title="Reachable NATS monitors">
           <dt>NATS</dt>
           <dd>
             <ActivityIcon aria-hidden="true" />
-            <span>{clusterHealthNatsLoadLabel(nats)}</span>
+            <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
           </dd>
         </div>
       </dl>
