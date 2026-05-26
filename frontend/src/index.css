@@ -7921,6 +7921,11 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
 }
 
+.debug-muted {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .debug-empty {
   padding: var(--space-4);
   color: var(--text-muted);

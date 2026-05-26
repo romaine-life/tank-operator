@@ -153,8 +153,8 @@ import {
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
-  getSessionAvatar,
-  getSystemAvatar,
+  getSessionAvatarByID,
+  getSystemAvatarByID,
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
@@ -1168,16 +1168,30 @@ function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
   return (session.pod_name ?? session.id).replace(/^session-/, "").slice(0, 8);
 }
 
+type SessionDisplayNameSource = "durable" | "generated";
+
+function sessionDisplayNameParts(session: Session): {
+  value: string;
+  source: SessionDisplayNameSource;
+} {
+  if (session.name != null) {
+    return { value: session.name, source: "durable" };
+  }
+  return { value: defaultSessionName(session), source: "generated" };
+}
+
 function sessionDisplayName(session: Session): string {
-  return session.name ?? defaultSessionName(session);
+  return sessionDisplayNameParts(session).value;
 }
 
 function sessionListDebugRow(session: Session): SessionListDebugRow {
-  const avatar = getSessionAvatar(session.id, session.agent_avatar_id);
+  const avatar = getSessionAvatarByID(session.agent_avatar_id);
+  const displayName = sessionDisplayNameParts(session);
   return {
     id: session.id,
     name: session.name,
-    display_name: sessionDisplayName(session),
+    display_name: displayName.value,
+    display_name_source: displayName.source,
     pod_name: session.pod_name,
     mode: session.mode,
     status: session.status,
@@ -2038,7 +2052,7 @@ function DemoLanding() {
               const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               return (
                 <li
                   key={s.id}
@@ -4454,7 +4468,7 @@ function RunMessageBubble({
               data-origin-session-id={originId}
             >
               <SessionAvatarIcon
-                avatar={getSessionAvatar(originId)}
+                avatar={getSessionAvatarByID(null)}
                 className="run-msg-ai-icon"
               />
             </span>
@@ -9304,12 +9318,12 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(
-    () => getSessionAvatar(session.id, session.agent_avatar_id),
-    [avatarCatalogVersion, session.agent_avatar_id, session.id],
+    () => getSessionAvatarByID(session.agent_avatar_id),
+    [avatarCatalogVersion, session.agent_avatar_id],
   );
   const systemAvatar = useMemo(
-    () => getSystemAvatar(session.id, session.system_avatar_id),
-    [avatarCatalogVersion, session.id, session.system_avatar_id],
+    () => getSystemAvatarByID(session.system_avatar_id),
+    [avatarCatalogVersion, session.system_avatar_id],
   );
   useEffect(() => {
     if (!visible) return;
@@ -12592,7 +12606,7 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const activityChips = sessionActivityChips(sessionActivities[s.id]);

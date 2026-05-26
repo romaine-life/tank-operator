@@ -69,7 +69,7 @@ function PortfolioWorkspaceScene() {
           </div>
           <ul className="sessions">
             <li className="is-open">
-              <AgentAvatarIcon avatar={requireSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">design-showcase</span>
@@ -100,7 +100,7 @@ function PortfolioWorkspaceScene() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={requireSessionAvatar("avatar-review", "jp1-sattler")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">avatar-review</span>
@@ -122,7 +122,7 @@ function PortfolioWorkspaceScene() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={requireSessionAvatar("pi-review", "jp1-grant")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">pi-review</span>

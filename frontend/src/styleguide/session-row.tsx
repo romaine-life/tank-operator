@@ -46,7 +46,7 @@ export function StyleguideSessionRow() {
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
             <li className="is-open is-skill-test">
-              <AgentAvatarIcon avatar={requireSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="design-showcase">
                   <span className="session-id">design-showcase</span>
@@ -71,7 +71,7 @@ export function StyleguideSessionRow() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={requireSessionAvatar("needs-input", "jp1-sattler")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="migration-plan">
                   <span className="session-id">migration-plan</span>
@@ -89,7 +89,7 @@ export function StyleguideSessionRow() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={requireSessionAvatar("codex-config", "jp1-malcolm")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-malcolm")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="codex-login">
                   <span className="session-id">codex-login</span>
@@ -109,7 +109,7 @@ export function StyleguideSessionRow() {
               </div>
             </li>
             <li className="is-closing">
-              <AgentAvatarIcon avatar={requireSessionAvatar("closing", "jp1-grant")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="session is closing">
                   <span className="session-id">cleanup-session</span>

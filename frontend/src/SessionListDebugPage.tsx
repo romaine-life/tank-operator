@@ -219,7 +219,12 @@ function SessionRowsTable({ rows }: { rows: SessionListDebugRow[] }) {
           {rows.map((row) => (
             <tr key={row.id}>
               <td><code>{row.id}</code></td>
-              <td>{row.display_name ?? row.name ?? row.pod_name ?? ""}</td>
+              <td>
+                {row.display_name ?? row.name ?? row.pod_name ?? ""}
+                {row.display_name_source ? (
+                  <span className="debug-muted"> {row.display_name_source}</span>
+                ) : null}
+              </td>
               <td>{row.status ?? ""}</td>
               <td>
                 <code>{row.agent_avatar_id ?? "none"}</code>

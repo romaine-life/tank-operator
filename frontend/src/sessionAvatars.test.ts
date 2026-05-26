@@ -3,8 +3,8 @@ import test from "node:test";
 import {
   AGENT_AVATARS,
   getAgentAvatarPool,
-  getSessionAvatar,
-  getSystemAvatar,
+  getSessionAvatarByID,
+  getSystemAvatarByID,
   setRuntimeAvatarsForTest,
   type AgentAvatar,
 } from "./sessionAvatars";
@@ -45,7 +45,7 @@ test("runtime avatars replace built-in avatars with the same id", () => {
   assert.equal(matching[0].src, "blob:seeded-agent");
 });
 
-test("assigned agent avatar wins over hash selection", () => {
+test("assigned agent avatar resolves by durable id", () => {
   const custom: AgentAvatar = {
     id: "assigned-agent",
     kind: "agent",
@@ -55,14 +55,14 @@ test("assigned agent avatar wins over hash selection", () => {
   };
   setRuntimeAvatarsForTest([custom]);
 
-  assert.equal(getSessionAvatar("session-1", custom.id)?.id, custom.id);
+  assert.equal(getSessionAvatarByID(custom.id)?.id, custom.id);
 });
 
 test("session avatars require a durable assigned avatar id", () => {
   setRuntimeAvatarsForTest([]);
 
-  assert.equal(getSessionAvatar("session-1"), null);
-  assert.equal(getSessionAvatar("session-1", "unknown-avatar"), null);
+  assert.equal(getSessionAvatarByID(), null);
+  assert.equal(getSessionAvatarByID("unknown-avatar"), null);
 });
 
 test("system avatars are separate from agent avatars", () => {
@@ -75,7 +75,7 @@ test("system avatars are separate from agent avatars", () => {
   };
   setRuntimeAvatarsForTest([system]);
 
-  assert.equal(getSystemAvatar("session-1"), null);
-  assert.equal(getSystemAvatar("session-2", "custom-system")?.id, "custom-system");
+  assert.equal(getSystemAvatarByID(), null);
+  assert.equal(getSystemAvatarByID("custom-system")?.id, "custom-system");
   assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === system.id), false);
 });

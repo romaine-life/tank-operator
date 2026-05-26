@@ -11,6 +11,7 @@ export type SessionListDebugRow = {
   id: string;
   name?: string | null;
   display_name?: string | null;
+  display_name_source?: "durable" | "generated" | string | null;
   pod_name?: string | null;
   mode?: string | null;
   status?: string | null;
@@ -25,6 +26,21 @@ export type SessionListDebugRow = {
   requested_at?: string | null;
   created_at?: string | null;
   ready_at?: string | null;
+};
+
+export type SessionListDebugIssue = {
+  code: string;
+  surface: string;
+  session_id: string;
+  field?: string;
+  expected?: string | null;
+  actual?: string | null;
+};
+
+export type SessionListDebugDiagnostics = {
+  issue_count: number;
+  issues: SessionListDebugIssue[];
+  generated_display_names: string[];
 };
 
 export type SessionListDebugEvent = {
@@ -105,6 +121,7 @@ export function summarizeSessionListRow(value: unknown): SessionListDebugRow | n
     id,
     name: nullableStringField(value, "name"),
     display_name: nullableStringField(value, "display_name"),
+    display_name_source: nullableStringField(value, "display_name_source"),
     pod_name: nullableStringField(value, "pod_name"),
     mode: nullableStringField(value, "mode"),
     status: nullableStringField(value, "status"),
@@ -212,6 +229,21 @@ export function getSessionListDebugSnapshot(): SessionListDebugSnapshot {
   };
 }
 
+export function analyzeSessionListDebugSnapshot(
+  snapshot: SessionListDebugSnapshot,
+): SessionListDebugDiagnostics {
+  const issues: SessionListDebugIssue[] = [];
+  const generatedDisplayNames = new Set<string>();
+  analyzeSessionListRows("store", snapshot.store?.rows ?? [], issues, generatedDisplayNames);
+  analyzeSessionListRows("render", snapshot.render?.sessions ?? [], issues, generatedDisplayNames);
+  analyzeStoreRenderIdentity(snapshot, issues);
+  return {
+    issue_count: issues.length,
+    issues,
+    generated_display_names: [...generatedDisplayNames].sort(),
+  };
+}
+
 export function subscribeSessionListDebug(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -244,6 +276,8 @@ export async function captureSessionListDebugSnapshot(
     active_id: activeID,
     detail: input.detail,
   });
+  const payloadSnapshot = getSessionListDebugSnapshot();
+  const diagnostics = analyzeSessionListDebugSnapshot(payloadSnapshot);
 
   const payload: SessionListDebugCapturePayload = {
     reason,
@@ -252,8 +286,8 @@ export async function captureSessionListDebugSnapshot(
     active_id: activeID,
     location: currentLocation(),
     client_seq: state.seq,
-    detail: compactValue(input.detail ?? {}, 0),
-    snapshot: getSessionListDebugSnapshot(),
+    detail: captureDetailWithDiagnostics(input.detail, diagnostics),
+    snapshot: payloadSnapshot,
   };
 
   try {
@@ -281,6 +315,122 @@ export async function captureSessionListDebugSnapshot(
     });
     throw error;
   }
+}
+
+function analyzeSessionListRows(
+  surface: string,
+  rows: readonly SessionListDebugRow[],
+  issues: SessionListDebugIssue[],
+  generatedDisplayNames: Set<string>,
+): void {
+  for (const row of rows) {
+    const assignedAvatarID = normalizedString(row.agent_avatar_id);
+    const renderedAvatarID = normalizedString(row.rendered_avatar_id);
+    if (!assignedAvatarID) {
+      issues.push({
+        code: "missing_agent_avatar_assignment",
+        surface,
+        session_id: row.id,
+        field: "agent_avatar_id",
+        expected: "durable assigned avatar id",
+        actual: null,
+      });
+      if (renderedAvatarID) {
+        issues.push({
+          code: "rendered_avatar_without_assignment",
+          surface,
+          session_id: row.id,
+          field: "rendered_avatar_id",
+          expected: null,
+          actual: renderedAvatarID,
+        });
+      }
+    } else if (!renderedAvatarID && surface === "render") {
+      issues.push({
+        code: "unresolved_agent_avatar_assignment",
+        surface,
+        session_id: row.id,
+        field: "rendered_avatar_id",
+        expected: assignedAvatarID,
+        actual: null,
+      });
+    } else if (renderedAvatarID && renderedAvatarID !== assignedAvatarID) {
+      issues.push({
+        code: "rendered_avatar_mismatch",
+        surface,
+        session_id: row.id,
+        field: "rendered_avatar_id",
+        expected: assignedAvatarID,
+        actual: renderedAvatarID,
+      });
+    }
+    if (row.display_name_source === "generated") {
+      generatedDisplayNames.add(row.id);
+    }
+  }
+}
+
+function analyzeStoreRenderIdentity(
+  snapshot: SessionListDebugSnapshot,
+  issues: SessionListDebugIssue[],
+): void {
+  const storeRows = new Map<string, SessionListDebugRow>();
+  for (const row of snapshot.store?.rows ?? []) {
+    storeRows.set(row.id, row);
+  }
+  for (const renderRow of snapshot.render?.sessions ?? []) {
+    const storeRow = storeRows.get(renderRow.id);
+    if (!storeRow) continue;
+    compareIdentityField("agent_avatar_id", storeRow, renderRow, issues);
+    compareIdentityField("system_avatar_id", storeRow, renderRow, issues);
+    compareIdentityField("name", storeRow, renderRow, issues);
+  }
+}
+
+function compareIdentityField(
+  field: "agent_avatar_id" | "system_avatar_id" | "name",
+  storeRow: SessionListDebugRow,
+  renderRow: SessionListDebugRow,
+  issues: SessionListDebugIssue[],
+): void {
+  const expected = normalizedString(storeRow[field]);
+  const actual = normalizedString(renderRow[field]);
+  if (expected === actual) return;
+  issues.push({
+    code: "store_render_identity_mismatch",
+    surface: "store/render",
+    session_id: renderRow.id,
+    field,
+    expected,
+    actual,
+  });
+}
+
+function captureDetailWithDiagnostics(
+  detail: unknown,
+  diagnostics: SessionListDebugDiagnostics,
+): unknown {
+  const compactDetail = compactValue(detail ?? {}, 0);
+  const debugDiagnostics = {
+    issue_count: diagnostics.issue_count,
+    issues: diagnostics.issues,
+    generated_display_names: diagnostics.generated_display_names,
+  };
+  if (isRecord(compactDetail)) {
+    return {
+      ...compactDetail,
+      session_list_debug_diagnostics: debugDiagnostics,
+    };
+  }
+  return {
+    input_detail: compactDetail,
+    session_list_debug_diagnostics: debugDiagnostics,
+  };
+}
+
+function normalizedString(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function emptySnapshot(): SessionListDebugSnapshot {

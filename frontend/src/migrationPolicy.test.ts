@@ -270,9 +270,11 @@ test("session rows do not fall back to client-hashed avatar identity", () => {
   assert.equal(sessionAvatarsSource.includes("hashString"), false);
   assert.equal(sessionAvatarsSource.includes("chooseAvatar"), false);
   assert.equal(sessionAvatarsSource.includes("Math.imul"), false);
-  assert.match(sessionAvatarsSource, /getSessionAvatar\([\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
-  assert.match(sessionAvatarsSource, /getSystemAvatar\([\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
+  assert.equal(sessionAvatarsSource.includes("getSessionAvatar("), false);
+  assert.match(sessionAvatarsSource, /getSessionAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
+  assert.match(sessionAvatarsSource, /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
   assert.equal(appSource.includes("session-avatar-missing"), true);
+  assert.equal(appSource.includes("display_name_source"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {

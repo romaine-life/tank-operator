@@ -16,7 +16,7 @@ import {
 import { ChatComposer, type RunComposerMode } from "../ChatComposer";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
-import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
+import { AgentAvatarIcon, getSessionAvatarByID } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
@@ -56,7 +56,7 @@ function TranscriptMessage({
   highlighted?: boolean;
   children: ReactNode;
 }) {
-  const avatar = getSessionAvatar("portfolio-transcript-state", "jp1-malcolm");
+  const avatar = getSessionAvatarByID("jp1-malcolm");
   return (
     <div
       className="run-transcript-message"

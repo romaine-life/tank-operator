@@ -119,14 +119,15 @@ Terminating/Failed/Removed transitions update the row's
 they are dropped at the controller.
 
 The first visible row must be render-complete. Create paths reserve the
-session's agent and system avatar IDs before writing `visible=true`, and
-every visible create/update write preserves those IDs. A client must
-never observe a new visible row with empty avatar IDs and then receive a
-different assigned avatar in a later row update; that transition is a
-user-visible identity change even when the final database state is
-correct. The frontend must not repair that class of backend fault by
-hashing or defaulting to a local avatar identity; an incomplete row is
-rendered as incomplete and captured by diagnostics.
+session's agent avatar ID before writing `visible=true` and preserve it
+on every visible create/update write; the system avatar ID is reserved
+from the same durable deck when an active system avatar exists. A client
+must never observe a new visible row with an empty agent avatar ID and
+then receive a different assigned avatar in a later row update; that
+transition is a user-visible identity change even when the final
+database state is correct. The frontend must not repair that class of
+backend fault by hashing or defaulting to a local avatar identity; an
+incomplete row is rendered as incomplete and captured by diagnostics.
 
 ### Wire shape: per-row UPDATE, not typed events
 
@@ -211,7 +212,10 @@ which is why every server-side wonk has produced a user-visible bug.
    runs in a page-level singleton so it survives leaving Settings to
    create or open a session. Recording samples share a `detail.run_id`
    and include both 10s interval samples and debounced event samples.
-   The server stores each client snapshot together with the current registry rows in
+   Captures include automatic identity diagnostics for missing assigned
+   avatars, rendered/assigned avatar mismatches, generated display
+   names, and store/render identity mismatches. The server stores each
+   client snapshot together with the current registry rows in
    `session_list_debug_captures`, capped at the latest 200 captures per
    owner/scope. Operators read the captured evidence from
    `GET /api/debug/session-list-captures` without asking the user to open

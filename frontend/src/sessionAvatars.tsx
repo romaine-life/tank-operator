@@ -133,19 +133,19 @@ function findAvatarByID(pool: AgentAvatar[], avatarId?: string | null): AgentAva
   return pool.find((avatar) => avatar.id === avatarId) ?? null;
 }
 
-export function getSessionAvatar(_sessionId: string, assignedAvatarId?: string | null): AgentAvatar | null {
+export function getSessionAvatarByID(assignedAvatarId?: string | null): AgentAvatar | null {
   return findAvatarByID(getAgentAvatarPool(), assignedAvatarId);
 }
 
-export function requireSessionAvatar(sessionId: string, assignedAvatarId: string): AgentAvatar {
-  const avatar = getSessionAvatar(sessionId, assignedAvatarId);
+export function requireSessionAvatar(assignedAvatarId: string): AgentAvatar {
+  const avatar = getSessionAvatarByID(assignedAvatarId);
   if (!avatar) {
     throw new Error(`assigned session avatar is unavailable: ${assignedAvatarId}`);
   }
   return avatar;
 }
 
-export function getSystemAvatar(_seed: string, assignedAvatarId?: string | null): AgentAvatar | null {
+export function getSystemAvatarByID(assignedAvatarId?: string | null): AgentAvatar | null {
   return findAvatarByID(runtimeSystemAvatars, assignedAvatarId);
 }
 

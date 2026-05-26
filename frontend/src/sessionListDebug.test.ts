@@ -2,11 +2,13 @@ import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  analyzeSessionListDebugSnapshot,
   captureSessionListDebugSnapshot,
   getSessionListDebugSnapshot,
   recordSessionListDebugEvent,
   resetSessionListDebugForTest,
   setSessionListDebugCaptureReporterForTest,
+  updateSessionListDebugStore,
   updateSessionListDebugRender,
   type SessionListDebugCapturePayload,
   type SessionListDebugRow,
@@ -23,6 +25,7 @@ function debugRow(overrides: Partial<SessionListDebugRow> = {}): SessionListDebu
     id: "223",
     name: null,
     display_name: "223",
+    display_name_source: "generated",
     pod_name: "session-223",
     status: "Pending",
     visible: true,
@@ -93,6 +96,43 @@ test("manual capture posts the current debug snapshot", async () => {
   assert.equal(reports[0]?.session_id, "223");
   assert.equal(reports[0]?.source, "SessionListDebugPage");
   assert.equal(reports[0]?.snapshot.events.at(-1)?.kind, "manual-capture-requested");
+  const diagnostics = (reports[0]?.detail as {
+    session_list_debug_diagnostics?: { issue_count?: number; generated_display_names?: string[] };
+  }).session_list_debug_diagnostics;
+  assert.equal(diagnostics?.issue_count, 0);
+  assert.deepEqual(diagnostics?.generated_display_names, ["223"]);
+});
+
+test("session-list diagnostics flag missing and mismatched identity", () => {
+  updateSessionListDebugStore({
+    cursor: "10",
+    rows: [debugRow({ agent_avatar_id: null, rendered_avatar_id: null })],
+    tombstones: [],
+  });
+  updateSessionListDebugRender({
+    active_id: "223",
+    sessions: [
+      debugRow({
+        agent_avatar_id: null,
+        rendered_avatar_id: "jp1-sattler",
+        name: "wrong name",
+        display_name: "wrong name",
+        display_name_source: "durable",
+      }),
+    ],
+  });
+
+  const diagnostics = analyzeSessionListDebugSnapshot(getSessionListDebugSnapshot());
+  assert.equal(
+    diagnostics.issues.some((issue) => issue.code === "rendered_avatar_without_assignment"),
+    true,
+  );
+  assert.equal(
+    diagnostics.issues.some(
+      (issue) => issue.code === "store_render_identity_mismatch" && issue.field === "name",
+    ),
+    true,
+  );
 });
 
 test("manual recording samples can share a run id", async () => {
