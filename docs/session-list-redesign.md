@@ -198,8 +198,10 @@ which is why every server-side wonk has produced a user-visible bug.
    client/server row state. The affected browser posts bounded
    debug-ring snapshots to
    `POST /api/client-metrics/session-list-debug-capture`; recording
-   samples share a `detail.run_id`. The server stores each client
-   snapshot together with the current registry rows in
+   runs in a page-level singleton so it survives leaving Settings to
+   create or open a session. Recording samples share a `detail.run_id`
+   and include both 10s interval samples and debounced event samples.
+   The server stores each client snapshot together with the current registry rows in
    `session_list_debug_captures`, capped at the latest 200 captures per
    owner/scope. Operators read the captured evidence from
    `GET /api/debug/session-list-captures` without asking the user to open

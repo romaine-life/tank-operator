@@ -293,6 +293,11 @@ avatar":
    click `Record 2m` before reproducing, or click `Capture Now` while
    the bad render is visible. The standalone `/_debug/session-list`
    page exposes the same controls plus raw client/server row state.
+   Recording runs in a page-level singleton, so it continues while the
+   user leaves Settings to create or open a session. Besides the 10s
+   interval samples, session-list debug events also trigger a debounced
+   `manual-record-sample` with `detail.phase=event-sample`; this keeps
+   short-lived bad renders in the durable capture stream.
 2. Read `GET /api/debug/session-list-captures?owner=<email>&limit=10`
    and inspect the latest captures. Recording samples share
    `detail.run_id`.

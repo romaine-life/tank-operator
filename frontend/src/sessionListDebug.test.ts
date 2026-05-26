@@ -11,6 +11,12 @@ import {
   type SessionListDebugCapturePayload,
   type SessionListDebugRow,
 } from "./sessionListDebug";
+import {
+  resetSessionListDebugRecorderForTest,
+  setSessionListDebugRecorderOptionsForTest,
+  startSessionListDebugRecording,
+  stopSessionListDebugRecording,
+} from "./sessionListDebugRecorder";
 
 function debugRow(overrides: Partial<SessionListDebugRow> = {}): SessionListDebugRow {
   return {
@@ -28,6 +34,7 @@ function debugRow(overrides: Partial<SessionListDebugRow> = {}): SessionListDebu
 }
 
 beforeEach(() => {
+  resetSessionListDebugRecorderForTest();
   resetSessionListDebugForTest();
 });
 
@@ -127,6 +134,57 @@ test("manual recording samples can share a run id", async () => {
   assert.deepEqual((reports[1]?.detail as { run_id?: string }).run_id, "sldr_test");
 });
 
+test("manual recording keeps sampling after controls unmount", async () => {
+  const reports: SessionListDebugCapturePayload[] = [];
+  setSessionListDebugCaptureReporterForTest((payload) => {
+    reports.push(payload);
+  });
+  setSessionListDebugRecorderOptionsForTest({
+    duration_ms: 500,
+    sample_interval_ms: 200,
+    event_sample_debounce_ms: 10,
+  });
+
+  startSessionListDebugRecording("SettingsAdmin");
+  await waitFor(() => reports.some((report) => report.reason === "manual-record-start"));
+
+  recordSessionListDebugEvent({
+    kind: "create-response",
+    source: "createSession",
+    session_id: "223",
+    row: debugRow(),
+  });
+  updateSessionListDebugRender({
+    active_id: "223",
+    sessions: [debugRow({ name: "wrong name", display_name: "wrong name" })],
+  });
+
+  await waitFor(() =>
+    reports.some(
+      (report) =>
+        report.reason === "manual-record-sample" &&
+        (report.detail as { phase?: string }).phase === "event-sample",
+    ),
+  );
+  stopSessionListDebugRecording("manual");
+
+  const sample = reports.find(
+    (report) =>
+      report.reason === "manual-record-sample" &&
+      (report.detail as { phase?: string }).phase === "event-sample",
+  );
+  assert.equal(sample?.source, "SettingsAdmin");
+  assert.equal(sample?.session_id, "223");
+  assert.equal(
+    sample?.snapshot.events.some(
+      (event) =>
+        event.kind === "render-state" &&
+        event.rows?.some((row) => row.id === "223" && row.display_name === "wrong name"),
+    ),
+    true,
+  );
+});
+
 test("manual capture failures are retained in the local debug ring", async () => {
   setSessionListDebugCaptureReporterForTest(() => {
     throw new Error("store unavailable");
@@ -148,3 +206,12 @@ test("manual capture failures are retained in the local debug ring", async () =>
     true,
   );
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(predicate(), true);
+}

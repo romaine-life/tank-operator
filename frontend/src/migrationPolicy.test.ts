@@ -13,6 +13,7 @@ const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
+const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
 const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
@@ -250,6 +251,9 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
   assert.equal(sessionListDebugCaptureControlsSource.includes("Record 2m"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("startSessionListDebugRecording"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("event-sample"), true);
   assert.equal(appSource.includes("Session-list diagnostics"), true);
   assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
 });
