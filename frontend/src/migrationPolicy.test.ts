@@ -185,6 +185,8 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("RunTurnActivityScreen"), true);
   assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
   assert.equal(appSource.includes("turnThinkingGroup"), true);
+  assert.equal(appSource.includes("showAssistantAvatar = !ownedByTurnActivity"), true);
+  assert.match(appSource, /ownedByTurnActivity\s+showAssistantAvatar/);
   assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
   assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
@@ -192,9 +194,11 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.match(appSource, /disabled=\{!turnsAvailable\}/);
   assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
+  assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
   assert.equal(indexCssSource.includes(".run-msg-turn"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
 });
 

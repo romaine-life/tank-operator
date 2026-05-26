@@ -4320,6 +4320,7 @@ function RunMessageBubble({
   onOpenTurn,
   canonicalMessage = true,
   ownedByTurnActivity = false,
+  showAssistantAvatar = !ownedByTurnActivity,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
@@ -4333,6 +4334,7 @@ function RunMessageBubble({
   onOpenTurn?: (turnId: string) => void;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
+  showAssistantAvatar?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -4388,7 +4390,7 @@ function RunMessageBubble({
       data-owner={ownedByTurnActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
     >
-      {variant === "assistant" && !ownedByTurnActivity && (
+      {variant === "assistant" && showAssistantAvatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -6121,6 +6123,7 @@ function RunTurnActivityScreen({
         showDuration={showDuration}
         canonicalMessage={false}
         ownedByTurnActivity
+        showAssistantAvatar
       />
     );
   };

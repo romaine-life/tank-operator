@@ -51,11 +51,13 @@ function TranscriptMessage({
   variant,
   highlighted,
   ownedByActivity,
+  showAssistantAvatar = !ownedByActivity,
   children,
 }: {
   variant: "assistant" | "user" | "system";
   highlighted?: boolean;
   ownedByActivity?: boolean;
+  showAssistantAvatar?: boolean;
   children: ReactNode;
 }) {
   const avatar = getSessionAvatar("portfolio-transcript-state");
@@ -71,7 +73,7 @@ function TranscriptMessage({
       data-design-state={highlighted ? "highlighted" : variant}
       data-inspectable
     >
-      {variant === "assistant" && !ownedByActivity && (
+      {variant === "assistant" && showAssistantAvatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -206,7 +208,7 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
       </div>
       <div className="run-turn-view-body run-transcript run-transcript-claude">
         <RunningTool highlighted={highlighted} />
-        <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity>
+        <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
           <p style={{ margin: 0 }}>
             I found the highlight hook and the active turn data attribute.
           </p>
