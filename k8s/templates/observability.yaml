@@ -440,6 +440,24 @@ spec:
               identity bug. Start with the terminal producer's event_id /
               turn_id construction and the App.tsx terminal matching path.
 
+        - alert: TankTranscriptMaterializationInvariantViolation
+          expr: |
+            sum by (invariant, terminal_status) (
+              increase(tank_transcript_materialization_invariant_violation_total[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "transcript materialization violated {{`{{ $labels.invariant }}`}} for terminal_status={{`{{ $labels.terminal_status }}`}}"
+            runbook: |
+              The backend projected a durable transcript row state that
+              contradicts the canonical session_events ledger. For the
+              current known invariant, a turn_activity shell was still
+              active even though the same turn had a terminal event in
+              the locked projection input. This is a backend
+              materializer regression, not a browser queueing bug.
+
         # Candidate C — reducer drop. Server emits a Tank event the
         # browser never confirms receiving. Threshold: 5% sustained
         # divergence on the same event_type for 10m. Sum across

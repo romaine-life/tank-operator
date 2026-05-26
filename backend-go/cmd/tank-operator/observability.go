@@ -136,6 +136,10 @@ var (
 		Name: "tank_transcript_turn_failure_total",
 		Help: "Durable turn.failed / turn.command_failed events persisted to session_events, partitioned by producer source and payload reason.",
 	}, []string{"source", "reason"})
+	transcriptMaterializationInvariantViolationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_transcript_materialization_invariant_violation_total",
+		Help: "Transcript row materialization produced a projection that violates a durable transcript invariant.",
+	}, []string{"invariant", "terminal_status"})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -1317,6 +1321,31 @@ func recordTurnTerminalMissingClientNonce(source string, eventType string) {
 		sessionEventSourceLabel(source),
 		sessionEventTypeLabel(eventType),
 	).Inc()
+}
+
+func recordTranscriptMaterializationInvariantViolation(invariant string, terminalStatus string) {
+	transcriptMaterializationInvariantViolationTotal.WithLabelValues(
+		transcriptMaterializationInvariantLabel(invariant),
+		transcriptMaterializationTerminalStatusLabel(terminalStatus),
+	).Inc()
+}
+
+func transcriptMaterializationInvariantLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "active_shell_after_terminal":
+		return "active_shell_after_terminal"
+	default:
+		return "unknown"
+	}
+}
+
+func transcriptMaterializationTerminalStatusLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "completed", "failed", "interrupted":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
 }
 
 // promProviderHealthMetrics satisfies providerhealth.Metrics so the

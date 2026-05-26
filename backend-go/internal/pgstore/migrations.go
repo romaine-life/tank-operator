@@ -412,6 +412,14 @@ var schemaMigrations = []string{
 		projection_version integer NOT NULL,
 		completed_at       timestamptz NOT NULL DEFAULT now()
 	)`,
+	// Exact per-session row locks for transcript materialization. A refresh
+	// must serialize the event-ledger read, transcript projection, and row
+	// replacement as one critical section; otherwise a stale projection can
+	// survive after a terminal turn event.
+	`CREATE TABLE IF NOT EXISTS session_transcript_materialization_locks (
+		tank_session_id text PRIMARY KEY,
+		created_at      timestamptz NOT NULL DEFAULT now()
+	)`,
 	`CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
 		p_email text,
 		p_scope text,
