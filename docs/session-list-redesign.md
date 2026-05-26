@@ -118,6 +118,14 @@ Terminating/Failed/Removed transitions update the row's
 `terminating_at` only if the row is still visible; for invisible rows
 they are dropped at the controller.
 
+The first visible row must be render-complete. Create paths reserve the
+session's agent and system avatar IDs before writing `visible=true`, and
+every visible create/update write preserves those IDs. A client must
+never observe a new visible row with empty avatar IDs and then receive a
+different assigned avatar in a later row update; that transition is a
+user-visible identity change even when the final database state is
+correct.
+
 ### Wire shape: per-row UPDATE, not typed events
 
 NATS and Postgres have non-overlapping roles, mirroring the chat-window

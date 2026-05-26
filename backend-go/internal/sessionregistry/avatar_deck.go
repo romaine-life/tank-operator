@@ -100,6 +100,40 @@ func (s *Store) AssignSessionAvatars(ctx context.Context, owner, sessionID strin
 	return assignment, nil
 }
 
+// ReserveSessionAvatars draws the avatar IDs for a session before the session
+// row is first made visible. Create paths use this to avoid exposing a
+// visible row with empty avatar IDs between the registry insert and the later
+// idempotent AssignSessionAvatars update.
+func (s *Store) ReserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error) {
+	normalized := strings.ToLower(strings.TrimSpace(owner))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" {
+		return sessionmodel.SessionAvatarAssignment{}, nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return sessionmodel.SessionAvatarAssignment{}, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	agentID, err := s.drawAvatarFromDeck(ctx, tx, normalized, avatarassets.KindAgent, sessionID)
+	if err != nil {
+		return sessionmodel.SessionAvatarAssignment{}, err
+	}
+	systemID, err := s.drawAvatarFromDeck(ctx, tx, normalized, avatarassets.KindSystem, sessionID)
+	if err != nil {
+		return sessionmodel.SessionAvatarAssignment{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return sessionmodel.SessionAvatarAssignment{}, err
+	}
+	return sessionmodel.SessionAvatarAssignment{
+		AgentAvatarID:  agentID,
+		SystemAvatarID: systemID,
+	}, nil
+}
+
 func (s *Store) drawAvatarFromDeck(ctx context.Context, tx pgx.Tx, owner, kind, sessionID string) (string, error) {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, avatarDeckLockKey(owner, s.scope, kind)); err != nil {
 		return "", err
