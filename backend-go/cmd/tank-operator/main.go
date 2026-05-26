@@ -267,7 +267,14 @@ func main() {
 
 	sessionScope := envDefault("SESSION_REGISTRY_SCOPE", "default")
 
-	// 5. Init session registry.
+	// 5. Init session registry. We also retain the concrete
+	// *sessionregistry.Store (when Postgres is wired) because the
+	// orphan-consumer sweep needs a scope-wide session_id query that
+	// isn't on the sessions.SessionRegistry interface.
+	var sessionRegStore *sessionregistry.Store
+	if pgPool != nil {
+		sessionRegStore = sessionregistry.NewPostgresStore(pgPool, sessionScope)
+	}
 	sessionReg := buildSessionRegistry(pgPool, sessionScope)
 
 	// 6. Init session events store for the SDK runners' canonical stream.
@@ -487,6 +494,15 @@ func main() {
 			}()
 		}
 	}
+
+	// Orphan-consumer sweep. Periodically deletes stranded JetStream
+	// consumers (per-session data/control consumers that nothing
+	// cleans up when a session goes away). Without this loop, deleted
+	// sessions leak consumers until the JetStream RAM budget is
+	// saturated — observed at 725 consumers / 6 live sessions on
+	// 2026-05-25. Skipped in stub mode where there's no real
+	// Postgres or NATS to operate against.
+	startOrphanConsumerSweeps(ctx, sessionBus, sessionRegStore, sessionScope)
 
 	// 12. Register all routes. Internal session handlers authenticate via
 	// the auth.romaine.life service-principal JWT path (#486 Stage 4); the

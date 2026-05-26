@@ -217,6 +217,37 @@ var (
 		Help:    "Duration from session_events row Upsert returning to the NATS wake publish completing.",
 		Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
 	})
+	// NATS orphan-consumer sweep observability. Every (session,
+	// provider) pair owns 2 durable JetStream consumers; nothing
+	// deletes them when a session goes away (the runner-side
+	// ensureConsumer only creates). Without the sweep, deleted
+	// sessions accumulate stranded consumers that eat the JetStream
+	// RAM budget — observed at 725 consumers for 6 live sessions on
+	// 2026-05-25. internal/sessionbus.SweepOrphanConsumers does the
+	// cleanup; these metrics surface its behavior so an operator can
+	// tell whether the sweep is running, finding orphans, and
+	// successfully deleting them.
+	sessionBusOrphanConsumersGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_orphan_consumers",
+		Help: "Stranded JetStream consumers observed in the most recent sweep pass (consumers whose session_id has no matching row in this scope, older than the safety threshold).",
+	})
+	sessionBusConsumersScannedGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_consumers_scanned",
+		Help: "Total JetStream consumers observed on the session bus in the most recent sweep pass (across all scopes).",
+	})
+	sessionBusOrphanConsumerDeletedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_bus_orphan_consumers_deleted_total",
+		Help: "JetStream consumers the orphan sweep successfully deleted (cumulative).",
+	})
+	sessionBusOrphanConsumerDeleteErrorsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_bus_orphan_consumer_delete_errors_total",
+		Help: "Orphan-consumer delete attempts that failed (cumulative). Non-zero rate means the sweep is identifying orphans but NATS is refusing to remove them.",
+	})
+	sessionBusOrphanSweepPassesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_bus_orphan_sweep_passes_total",
+		Help: "Orphan-sweep passes, partitioned by outcome (ok / error). Steady-state expectation: ok dominates; error > 0 means the sweep itself is failing (NATS unreachable, list consumers timing out, etc).",
+	}, []string{"result"})
+
 	// Per-event-type emit counter — the candidate-C stethoscope. When
 	// the server's emit-by-type vs the client's receive-by-type
 	// (tank_session_event_client_received_total, ingested through
@@ -1366,6 +1397,29 @@ func (promWakeMetrics) RecordCommandPublishFailed(kind string, reason string) {
 		sessionBusCommandKindLabel(kind),
 		sessionBusCommandReasonLabel(reason),
 	).Inc()
+}
+
+// promSweepMetrics adapts sessionbus.SweepResult into the Prometheus
+// gauges + counters defined above. The gauges are last-observed
+// snapshots (overwritten each pass); the counters are cumulative
+// (added each pass). Pair with recordSessionBusOrphanSweepResult,
+// which records the per-pass outcome label for the alert that fires
+// when the sweep itself is broken.
+type promSweepMetrics struct{}
+
+func (promSweepMetrics) RecordSweepPass(result sessionbus.SweepResult) {
+	sessionBusOrphanConsumersGauge.Set(float64(result.Orphans))
+	sessionBusConsumersScannedGauge.Set(float64(result.Scanned))
+	if result.Deleted > 0 {
+		sessionBusOrphanConsumerDeletedTotal.Add(float64(result.Deleted))
+	}
+	if result.Errors > 0 {
+		sessionBusOrphanConsumerDeleteErrorsTotal.Add(float64(result.Errors))
+	}
+}
+
+func recordSessionBusOrphanSweepResult(result string) {
+	sessionBusOrphanSweepPassesTotal.WithLabelValues(result).Inc()
 }
 
 // sessionBusCommandKindLabel is the prom-side validator for the kind

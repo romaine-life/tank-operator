@@ -106,6 +106,25 @@ All metric names are prefixed `tank_`. The full namespace:
   candidate-B zombie-SSE detector: the browser's silence watchdog
   observes the idle interval whenever a connected stream has gone
   >30 s without emitting events while a turn is in flight.
+- `tank_session_bus_orphan_consumers` /
+  `tank_session_bus_consumers_scanned` /
+  `tank_session_bus_orphan_consumers_deleted_total` /
+  `tank_session_bus_orphan_consumer_delete_errors_total` /
+  `tank_session_bus_orphan_sweep_passes_total{result}` — the durable
+  remediation surface for stranded JetStream consumers. Every (session,
+  provider) pair owns two durable consumers (data + control); the
+  runner-side `ensureConsumer` / `ensureControlConsumer` only creates,
+  so deleted sessions leak consumers indefinitely (observed at 725
+  consumers / 6 live sessions on 2026-05-25, ~50 % of the JetStream
+  RAM budget). The orchestrator runs `SweepOrphanConsumers` on a
+  5-minute initial delay then hourly; each pass lists consumers,
+  decodes session_id, deletes any orphan older than 15 minutes
+  (`MinAge` floor). The gauges are last-pass snapshots; the
+  `_deleted_total` / `_delete_errors_total` counters are cumulative.
+  Alerts: `TankSessionBusOrphanSweepFailing` (sweep itself broken),
+  `TankSessionBusOrphanConsumersHigh` (sweep running but backlog
+  growing). See `backend-go/internal/sessionbus/sweep.go` for the
+  decoder + per-pass logic.
 - `tank_client_long_task_*` — browser-reported main-thread long-task
   diagnostics ingested through `POST /api/client-metrics/long-tasks`.
   The SPA installs a `PerformanceObserver({type: "longtask"})` probe
