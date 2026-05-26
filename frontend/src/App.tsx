@@ -6021,7 +6021,11 @@ function RunTurnThinkingBubble({
         aria-label="Open turn"
         onClick={() => onOpenTurn?.(turnId)}
       >
-        <span className="run-turn-thinking-dots" aria-hidden="true">...</span>
+        <span className="run-turn-thinking-dots" aria-hidden="true">
+          <span>.</span>
+          <span>.</span>
+          <span>.</span>
+        </span>
       </button>
     </div>
   );
@@ -6382,7 +6386,11 @@ function RunTurnActivityScreen({
               </div>
             ) : selected.active && detailGroups.length === 0 ? (
               <div className="run-turn-view-thinking" aria-label="Turn is running">
-                <span aria-hidden="true">...</span>
+                <span className="run-turn-thinking-dots" aria-hidden="true">
+                  <span>.</span>
+                  <span>.</span>
+                  <span>.</span>
+                </span>
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
