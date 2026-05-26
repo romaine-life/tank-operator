@@ -195,8 +195,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
   assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
+  assert.equal(appSource.includes("function TurnsTab"), true);
   assert.equal(appSource.includes("openTurnPage"), true);
-  assert.match(appSource, /disabled=\{!turnsAvailable\}/);
+  assert.match(appSource, /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
+  assert.match(
+    appSource,
+    /<TurnsTab\n\s+active=\{false\}\n\s+disabled\n\s+onOpen=\{\(\) => undefined\}/,
+  );
   assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);

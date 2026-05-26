@@ -29,9 +29,10 @@ export interface WorkspaceShellProps {
    */
   title?: ReactNode;
   /**
-   * Tab nav slot — Files / Settings / Help (plus the Back-to-chat row when
-   * inside the run pane). Callers may pass disabled tabs when the workspace
-   * chrome should be visible before session-bound targets exist.
+   * Tab nav slot — Turns / Background / Files / Settings / Help (plus the
+   * Back-to-chat row when inside the run pane). Callers may pass disabled tabs
+   * when the workspace chrome should be visible before session-bound targets
+   * exist.
    */
   tabs?: ReactNode;
   /**

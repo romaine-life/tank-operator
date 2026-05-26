@@ -46,6 +46,41 @@ function BackgroundTab({
   );
 }
 
+function TurnsTab({
+  active = false,
+  count = 0,
+  disabled = false,
+}: {
+  active?: boolean;
+  count?: number;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      className={`run-tab run-turns-trigger${active ? " run-tab-active" : ""}`}
+      type="button"
+      aria-pressed={active}
+      disabled={disabled}
+      title={disabled ? "Turns are available once the agent has turn activity" : "Turns"}
+      data-design-component="RunHeaderTab"
+      data-design-state={active ? "turns-active" : disabled ? "turns-disabled" : "turns-rest"}
+      data-design-source="frontend/src/App.tsx"
+    >
+      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Turns</span>
+      {count > 0 && (
+        <span
+          className="run-shell-tasks-count"
+          data-active={active ? "true" : undefined}
+          aria-label={`${count} turns`}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
 export function StyleguideRunHeaderTabs() {
   return (
     <div style={styleguideShellStyle}>
@@ -68,6 +103,7 @@ export function StyleguideRunHeaderTabs() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
+                    <TurnsTab disabled />
                     <BackgroundTab count={0} />
                     <button
                       className="run-tab"
@@ -121,6 +157,7 @@ export function StyleguideRunHeaderTabs() {
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
+                    <TurnsTab count={4} />
                     <BackgroundTab count={3} />
                     <button
                       className="run-tab run-tab-active"
@@ -166,6 +203,7 @@ export function StyleguideRunHeaderTabs() {
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
+                    <TurnsTab count={2} />
                     <BackgroundTab count={1} />
                     <button
                       className="run-tab run-tab-active"

@@ -4860,6 +4860,44 @@ function BackgroundLedger({
   );
 }
 
+function TurnsTab({
+  active,
+  count = 0,
+  hasActiveTurn = false,
+  disabled = false,
+  title = disabled ? "Turns are available once the agent has turn activity" : "Turns",
+  onOpen,
+}: {
+  active: boolean;
+  count?: number;
+  hasActiveTurn?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`run-tab run-turns-trigger${active ? " run-tab-active" : ""}`}
+      onClick={disabled ? undefined : onOpen}
+      aria-pressed={active}
+      disabled={disabled}
+      title={title}
+    >
+      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Turns</span>
+      {count > 0 && (
+        <span
+          className="run-shell-tasks-count"
+          data-active={hasActiveTurn ? "true" : undefined}
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function BackgroundMeta({
   label,
   value,
@@ -10220,28 +10258,17 @@ function ChatPane({
               <span>Back</span>
             </button>
           )}
-          <button
-            type="button"
-            className={`run-tab run-turns-trigger${activeTab === "turns" ? " run-tab-active" : ""}`}
-            onClick={() => {
+          <TurnsTab
+            active={activeTab === "turns"}
+            count={turnViewItems.length}
+            hasActiveTurn={turnViewItems.some((turn) => turn.active)}
+            disabled={!turnsAvailable}
+            title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
+            onOpen={() => {
               if (activeTab === "turns") setActiveTab("chat");
               else openTurnPage();
             }}
-            aria-pressed={activeTab === "turns"}
-            disabled={!turnsAvailable}
-            title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
-          >
-            <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-            <span>Turns</span>
-            {turnViewItems.length > 0 && (
-              <span
-                className="run-shell-tasks-count"
-                data-active={turnViewItems.some((turn) => turn.active) ? "true" : undefined}
-              >
-                {turnViewItems.length}
-              </span>
-            )}
-          </button>
+          />
           <BackgroundLedger
             entries={backgroundLedgerEntries}
             active={activeTab === "background"}
@@ -13346,6 +13373,11 @@ export function App() {
                   <span>Back</span>
                 </button>
               )}
+              <TurnsTab
+                active={false}
+                disabled
+                onOpen={() => undefined}
+              />
               <BackgroundLedger
                 entries={[]}
                 active={false}
