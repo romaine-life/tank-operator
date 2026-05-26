@@ -143,6 +143,10 @@ import {
   setActiveSessionMode,
 } from "./longTaskTelemetry";
 import {
+  useRelativeMinutes,
+  useRelativeSeconds,
+} from "./timeService";
+import {
   clusterHealthHeadline,
   clusterHealthIssueText,
   clusterHealthNatsReachabilityLabel,
@@ -1246,19 +1250,6 @@ function formatBootTime(ms: number): string {
   return formatRuntime(ms);
 }
 
-function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
-  if (!session.created_at) return null;
-  const startedMs = Date.parse(session.created_at);
-  if (!Number.isFinite(startedMs)) return null;
-  return formatRuntime(nowMs - startedMs);
-}
-
-function sessionRuntimeTitle(session: Session, nowMs: number): string {
-  const startedMs = session.created_at ? Date.parse(session.created_at) : NaN;
-  const runtime = Number.isFinite(startedMs) ? formatRuntime(nowMs - startedMs) : "unknown";
-  return `running ${runtime}`;
-}
-
 function currentSessionSkillState(
   testState?: TestState | null,
   rolloutState?: RolloutState | null,
@@ -1340,24 +1331,68 @@ function sessionBootStartMs(session: Session): number {
   return Number.isFinite(createdMs) ? createdMs : NaN;
 }
 
-function sessionBootLabel(session: Session, nowMs: number): string | null {
-  const startMs = sessionBootStartMs(session);
-  if (!Number.isFinite(startMs)) return null;
+// SessionStats renders the sidebar's ↓ boot-time and ↑ runtime
+// labels for one session row. The hooks (useRelativeSeconds /
+// useRelativeMinutes) subscribe to the singleton timeService at the
+// granularity the label actually displays, so re-renders only happen
+// when *this row's* bucket boundary is crossed — not on every clock
+// tick at the App root. Replaces the prior App-root `nowMs` ticker
+// that cascaded a full-tree re-render every 30s (and every 1s while
+// any session was Pending), which was the dominant
+// `correlation=idle` long-task source observed in
+// `tank_client_long_task_duration_seconds`.
+function SessionStats({ session }: { session: Session }) {
+  const bootStartMs = sessionBootStartMs(session);
   const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
-  if (Number.isFinite(readyMs)) return formatBootTime(readyMs - startMs);
-  if (session.status === "Pending") return formatBootTime(nowMs - startMs);
-  return null;
-}
-
-function sessionBootTitle(session: Session, nowMs: number): string {
-  const startMs = sessionBootStartMs(session);
-  if (!Number.isFinite(startMs)) return "startup time unknown";
-  const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
-  if (Number.isFinite(readyMs)) {
-    return `ready ${formatBootTime(readyMs - startMs)} after request`;
+  const bootFinalMs =
+    Number.isFinite(readyMs) && Number.isFinite(bootStartMs)
+      ? readyMs - bootStartMs
+      : null;
+  // Live boot ticker only runs while Pending and we don't yet have a
+  // final ready_at. Passing null here keeps the hook subscribed but
+  // makes its getSnapshot return null — useSyncExternalStore then
+  // dedupes and no re-render fires.
+  const liveBootStart =
+    bootFinalMs === null && session.status === "Pending" && Number.isFinite(bootStartMs)
+      ? bootStartMs
+      : null;
+  const liveBootSeconds = useRelativeSeconds(liveBootStart);
+  let bootLabel: string | null = null;
+  let bootTitle = "startup time unknown";
+  if (bootFinalMs !== null) {
+    bootLabel = formatBootTime(bootFinalMs);
+    bootTitle = `ready ${bootLabel} after request`;
+  } else if (liveBootStart !== null && liveBootSeconds !== null) {
+    bootLabel = formatBootTime(liveBootSeconds * 1000);
+    bootTitle = `starting for ${bootLabel} since request`;
   }
-  if (session.status === "Pending") return `starting for ${formatBootTime(nowMs - startMs)} since request`;
-  return "startup time unknown";
+
+  const createdMs = session.created_at ? Date.parse(session.created_at) : NaN;
+  const runtimeStartedAt = Number.isFinite(createdMs) ? createdMs : null;
+  const runtimeMinutes = useRelativeMinutes(runtimeStartedAt);
+  const runtimeLabel =
+    runtimeStartedAt !== null && runtimeMinutes !== null
+      ? formatRuntime(runtimeMinutes * 60_000)
+      : null;
+  const runtimeTitle = runtimeLabel ? `running ${runtimeLabel}` : "runtime unknown";
+
+  if (!bootLabel && !runtimeLabel) return null;
+  return (
+    <span className="session-stats">
+      {bootLabel && (
+        <span className="session-stat" title={bootTitle} aria-label={bootTitle}>
+          <span aria-hidden="true">↓</span>
+          <span>{bootLabel}</span>
+        </span>
+      )}
+      {runtimeLabel && (
+        <span className="session-stat" title={runtimeTitle} aria-label={runtimeTitle}>
+          <span aria-hidden="true">↑</span>
+          <span>{runtimeLabel}</span>
+        </span>
+      )}
+    </span>
+  );
 }
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
@@ -1420,17 +1455,13 @@ function clearGlimmungLaunchContext(): void {
 // ledger; the polling loop (only active while any session was
 // non-Active) is no longer needed.
 //
-// Two cadences for the shared `nowMs` clock:
-//   - BOOT: 1s while any session is Pending, so the sidebar ↓ boot label
-//     (second-resolution via formatBootTime) visibly counts up second by
-//     second during pod launch. A coarser interval here makes the counter
-//     look frozen and only "post an update when it's done loading."
-//   - IDLE: 30s once nothing is booting, since the ↑ runtime label is
-//     minute-resolution (formatRuntime returns "<1m" / "Nm" / "Nh" / "Nd")
-//     and doesn't need second-grain ticks — pod uptime lasts minutes-to-
-//     hours, so a slow tick is enough to catch minute boundaries.
-const SESSION_BOOT_TICK_MS = 1_000;
-const SESSION_RUNTIME_TICK_MS = 30_000;
+// Sidebar boot/runtime labels subscribe to the singleton timeService
+// (see SessionStats above). The previous design held `nowMs` as App-
+// root useState and ticked it from a setInterval, which cascaded a
+// full-tree re-render every 30s (or every 1s while any session was
+// Pending) — observed as 5+ second `correlation=idle` blocks in
+// `tank_client_long_task_duration_seconds`. Per-row hooks now subscribe
+// at the granularity each label actually renders at.
 const HOME_DEFAULT_SESSION_TITLE = "New session";
 
 function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
@@ -1777,17 +1808,52 @@ function SessionAvatarIcon({
   return <AgentAvatarIcon avatar={avatar} className={className} />;
 }
 
-function ClusterHealthWidget({
-  health,
-  error,
-  loading,
-  onRefresh,
-}: {
-  health: ClusterHealthResponse | null;
-  error: string | null;
-  loading: boolean;
-  onRefresh: () => void;
-}) {
+// ClusterHealthWidget owns its own polling. The 30s setInterval +
+// state setters previously lived at App-root, which cascaded a
+// full-tree re-render every 30s — observed as `correlation=idle`
+// blocks in `tank_client_long_task_duration_seconds`. Co-locating the
+// polling here keeps the re-render scoped to this widget. `enabled`
+// gates the poll (only run when the user is signed in); flipping it
+// false tears down the state so a signed-out / styleguide render
+// stays at zero work.
+function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
+  const [health, setHealth] = useState<ClusterHealthResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    setLoading(true);
+    try {
+      const res = await authedFetch("/api/cluster-health");
+      if (!res.ok) throw new Error(`cluster health failed: ${res.status}`);
+      setHealth((await res.json()) as ClusterHealthResponse);
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setHealth(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    void load();
+    const interval = window.setInterval(() => {
+      void load();
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [enabled, load]);
+
+  const onRefresh = useCallback(() => {
+    void load();
+  }, [load]);
+
   const status: ClusterHealthStatus = error ? "unknown" : health?.status ?? "unknown";
   const headline = error ? "Cluster unknown" : clusterHealthHeadline(health);
   const issue = error || clusterHealthIssueText(health);
@@ -2071,8 +2137,6 @@ function DemoLanding() {
             {demoSessions.map((s) => {
               const isActive = s.id === selected?.id;
               const statusDotClass = sessionStatusDotClass(s);
-              const bootLabel = sessionBootLabel(s, Date.now());
-              const runtimeLabel = sessionRuntimeLabel(s, Date.now());
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               return (
                 <li
@@ -2104,22 +2168,7 @@ function DemoLanding() {
                       aria-label={`status: ${s.status}`}
                     />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    {(bootLabel || runtimeLabel) && (
-                      <span className="session-stats">
-                        {bootLabel && (
-                          <span className="session-stat" title={sessionBootTitle(s, Date.now())}>
-                            <span aria-hidden="true">↓</span>
-                            <span>{bootLabel}</span>
-                          </span>
-                        )}
-                        {runtimeLabel && (
-                          <span className="session-stat" title={sessionRuntimeTitle(s, Date.now())}>
-                            <span aria-hidden="true">↑</span>
-                            <span>{runtimeLabel}</span>
-                          </span>
-                        )}
-                      </span>
-                    )}
+                    <SessionStats session={s} />
                     {s.mode === "claude_cli" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
@@ -10761,7 +10810,6 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -10862,37 +10910,10 @@ export function App() {
     await loadRuntimeAvatarCatalog();
     setAvatarCatalogVersion((version) => version + 1);
   }, []);
-  const [clusterHealth, setClusterHealth] = useState<ClusterHealthResponse | null>(null);
-  const [clusterHealthError, setClusterHealthError] = useState<string | null>(null);
-  const [clusterHealthLoading, setClusterHealthLoading] = useState(false);
-  const loadClusterHealth = useCallback(async () => {
-    if (!user) return;
-    setClusterHealthLoading(true);
-    try {
-      const res = await authedFetch("/api/cluster-health");
-      if (!res.ok) throw new Error(`cluster health failed: ${res.status}`);
-      setClusterHealth((await res.json()) as ClusterHealthResponse);
-      setClusterHealthError(null);
-    } catch (err) {
-      setClusterHealthError(errorMessage(err));
-    } finally {
-      setClusterHealthLoading(false);
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) {
-      setClusterHealth(null);
-      setClusterHealthError(null);
-      setClusterHealthLoading(false);
-      return;
-    }
-    void loadClusterHealth();
-    const interval = window.setInterval(() => {
-      void loadClusterHealth();
-    }, 30_000);
-    return () => window.clearInterval(interval);
-  }, [loadClusterHealth, user]);
+  // Cluster-health polling lives inside ClusterHealthWidget so the
+  // 30s setInterval + its setState calls don't cascade re-renders
+  // through the App-root tree. See SessionStats above for the same
+  // pattern applied to the per-row time labels.
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -11511,15 +11532,6 @@ export function App() {
     void refresh();
   }, [user, effectiveSessionScope]);
 
-  // While a pod is booting we need a 1s tick so the ↓ boot label counts up
-  // second by second. Once nothing's booting, fall back to the slow tick —
-  // the ↑ runtime label is minute-resolution and re-rendering the sidebar
-  // every second for hours of idle uptime would be wasted work.
-  const hasPendingSession = useMemo(
-    () => sessions.some((s) => s.status === "Pending"),
-    [sessions],
-  );
-
   // Keep the refs that the SSE reducer reads in sync with the latest
   // committed state. This lets the SSE useEffect close over a stable
   // user identity instead of every render's state, avoiding constant
@@ -11541,13 +11553,6 @@ export function App() {
       sessions: sessionListDebugRows(sessions),
     });
   }, [sessions, active, avatarCatalogVersion]);
-
-  useEffect(() => {
-    if (!user) return;
-    const tickMs = hasPendingSession ? SESSION_BOOT_TICK_MS : SESSION_RUNTIME_TICK_MS;
-    const t = setInterval(() => setNowMs(Date.now()), tickMs);
-    return () => clearInterval(t);
-  }, [user, hasPendingSession]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
@@ -12657,8 +12662,6 @@ export function App() {
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
-              const bootLabel = sessionBootLabel(s, nowMs);
-              const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               const skillStateClass = sessionSkillStateClass(s);
               return (
                 <li
@@ -12704,30 +12707,8 @@ export function App() {
                       aria-label={`status: ${statusLabel}`}
                     />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    {(bootLabel || runtimeLabel) && (
-                      <span className="session-stats">
-                        {bootLabel && (
-                          <span
-                            className="session-stat"
-                            title={sessionBootTitle(s, nowMs)}
-                            aria-label={sessionBootTitle(s, nowMs)}
-                          >
-                            <span aria-hidden="true">↓</span>
-                            <span>{bootLabel}</span>
-                          </span>
-                        )}
-                        {runtimeLabel && (
-                          <span
-                            className="session-stat"
-                            title={sessionRuntimeTitle(s, nowMs)}
-                            aria-label={sessionRuntimeTitle(s, nowMs)}
-                          >
-                            <span aria-hidden="true">↑</span>
-                            <span>{runtimeLabel}</span>
-                          </span>
-                        )}
-                      </span>
-                    )}
+                    <SessionStats session={s} />
+                    {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"
@@ -12749,14 +12730,7 @@ export function App() {
           </ul>
         </div>
 
-        <ClusterHealthWidget
-          health={clusterHealth}
-          error={clusterHealthError}
-          loading={clusterHealthLoading}
-          onRefresh={() => {
-            void loadClusterHealth();
-          }}
-        />
+        <ClusterHealthWidget enabled={Boolean(user)} />
 
         <div className="sidebar-footer" data-menu="profile">
           <button

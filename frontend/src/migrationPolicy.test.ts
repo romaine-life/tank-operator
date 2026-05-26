@@ -50,6 +50,58 @@ test("session activity is not refreshed by a steady interval", () => {
   assert.equal(/setInterval\(\s*refreshSessionActivity/.test(appSource), false);
 });
 
+test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {
+  // Two App-root tickers used to live here and were the dominant source
+  // of `correlation=idle` long-task blocks (5+ s p95) observed via
+  // `tank_client_long_task_duration_seconds`. Both are retired:
+  //
+  //   1. `nowMs` / `setNowMs` ticker (1s while any session was Pending,
+  //      else 30s) → SessionStats now subscribes to the singleton
+  //      timeService at minute/second granularity, re-rendering only
+  //      the row whose bucket changed.
+  //   2. `clusterHealth*` + `loadClusterHealth` + 30s setInterval →
+  //      ClusterHealthWidget now owns its own state and polling.
+  //
+  // Re-introducing either pattern restores the cascading-rerender
+  // failure mode; this guard catches it at PR time. If a future
+  // surface legitimately needs a periodic refresh, scope it to its
+  // own component (or use the timeService for time-relative labels).
+  for (const forbidden of [
+    "setNowMs",
+    "hasPendingSession",
+    "SESSION_BOOT_TICK_MS",
+    "SESSION_RUNTIME_TICK_MS",
+    "setClusterHealth",
+    "loadClusterHealth",
+    "sessionBootLabel",
+    "sessionRuntimeLabel",
+    "sessionBootTitle",
+    "sessionRuntimeTitle",
+  ]) {
+    assert.equal(
+      new RegExp(`\\b${forbidden}\\b`).test(
+        appSource.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""),
+      ),
+      false,
+      `${forbidden} must not appear in App.tsx code (only in comments). The cascading-rerender pattern is retired; use timeService or co-locate the state with its consumer.`,
+    );
+  }
+  // Sidebar boot/runtime labels must use the timeService hooks, not
+  // wall-clock reads at render time. A bare Date.now() at render would
+  // give a stale label until the parent re-rendered for some other
+  // reason — the failure mode that the old nowMs ticker covered up.
+  assert.match(
+    appSource,
+    /from\s+"\.\/timeService"/,
+    "App.tsx must import from ./timeService for relative-time labels",
+  );
+  assert.match(
+    appSource,
+    /\buseRelative(Seconds|Minutes)\b/,
+    "App.tsx must call a timeService hook (useRelativeSeconds / useRelativeMinutes) so per-row labels stay live without an App-root ticker",
+  );
+});
+
 test("session activity status states have explicit sidebar styles", () => {
   for (const state of [
     "active",
