@@ -86,6 +86,7 @@ import {
   reduceConversationEvents,
   type ConversationBackgroundTaskStatus,
   type ConversationReducerState,
+  type ConversationTurnTerminal,
 } from "./conversationReducer";
 import {
   projectConversationState,
@@ -120,6 +121,7 @@ import {
   normalizeSessionRowUpdate,
   type SessionRow,
 } from "./sessionStore";
+import { conversationRunIsActive, decideFollowupSubmit } from "./submitLatch";
 import {
   logSessionListEvent,
   logSessionListSnapshot,
@@ -2538,6 +2540,15 @@ function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
     };
   }
   return null;
+}
+
+function sdkTerminalResultFromConversationTerminal(
+  terminal: ConversationTurnTerminal | undefined,
+): SdkTerminalResult | null {
+  if (!terminal) return null;
+  if (terminal.status === "completed") return { status: "done" };
+  if (terminal.status === "interrupted") return { status: "stopped" };
+  return { status: "error", detail: terminal.detail };
 }
 
 function turnIdForBrowserClientNonce(clientNonce: string): string {
@@ -6983,11 +6994,7 @@ function ChatPane({
     const total = totalContextTokens(projection.lastUsage as ClaudeUsage | undefined);
     if (total > 0) setTokensUsed(total);
 
-    const sdkActive =
-      projection.runStatus === "submitted" ||
-      projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input" ||
-      projection.runStatus === "stopping";
+    const sdkActive = conversationRunIsActive(projection.runStatus);
     setRenderedActiveTurnId(sdkActive ? projection.activeTurnId : null);
     activeInterruptTargetRef.current = sdkActive
       ? projection.activeClientNonce ?? projection.activeTurnId
@@ -7394,11 +7401,7 @@ function ChatPane({
     if (!run || !running || queuedMessages.length === 0) return;
     if (queuedFollowupBlockedReportedRef.current === run.id) return;
     const projection = projectConversationState(sdkConversationStateRef.current);
-    const durableActive =
-      projection.runStatus === "submitted" ||
-      projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input" ||
-      projection.runStatus === "stopping";
+    const durableActive = conversationRunIsActive(projection.runStatus);
     if (durableActive) return;
     queuedFollowupBlockedReportedRef.current = run.id;
     logSessionEventStreamEvent("queued_followup_blocked_after_terminal", {
@@ -8868,7 +8871,18 @@ function ChatPane({
     // out, surface it but still let the run go ahead with what's ready.
     const composed = composePromptWithAttachments(trimmed);
     if (composed == null) return;
-    if (running) {
+    const projection = projectConversationState(sdkConversationStateRef.current);
+    const run = currentRunRef.current;
+    const terminal = sdkTerminalResultFromConversationTerminal(
+      run ? sdkConversationStateRef.current.turnTerminals[run.turnId] : undefined,
+    );
+    const submitDecision = decideFollowupSubmit({
+      running,
+      durableRunStatus: projection.runStatus,
+      hasLocalRun: run !== null,
+      localRunHasDurableTerminal: terminal !== null,
+    });
+    if (submitDecision.action === "queue") {
       // Queue message to send once the current run finishes. PromptInput
       // clears the textarea before this callback returns, so the visible
       // queued-message list is the user's confirmation that the submit stuck.
@@ -8877,6 +8891,19 @@ function ChatPane({
         { id: nextQueuedMessageId(), text: composed },
       ]);
       return;
+    }
+    if (submitDecision.staleReason) {
+      logSessionEventStreamEvent("stale_running_blocked_submit", {
+        sessionMode: session.mode,
+      });
+      if (run && terminal) {
+        finalizeSdkRun(run, terminal, { refreshHistory: false });
+      } else {
+        currentRunRef.current = null;
+        setRunning(false);
+        setRunStatus((prev) => (prev === "running" || prev === "stopping" ? "done" : prev));
+        setSdkConnectionState("idle");
+      }
     }
     startRun(composed);
   }

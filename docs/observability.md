@@ -88,7 +88,7 @@ All metric names are prefixed `tank_`. The full namespace:
   `event` (opened, ready, tank_event_received,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
-  resync_required, stream_error, closed_unmount, closed_error,
+  stale_running_blocked_submit, resync_required, stream_error, closed_unmount, closed_error,
   reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
@@ -129,6 +129,12 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_runner_turn_duration_seconds_count{outcome="interrupted"}`
   series to drive the `TankStopNotDelivered` / `TankStopNotTerminated`
   self-telling alerts (see Alerts § below).
+- `tank_session_activity_late_interrupt_ignored_total{status}` — the
+  chat→sidebar activity fold saw `turn.interrupt_requested` after the
+  durable fold had already reached a non-active status, so it preserved
+  `ready` / `error` / `stopped` instead of downgrading the session row
+  back to `stopping`. This is the server-side detector for stale
+  stop-clicks racing behind terminal turn events.
 - `tank_runner_*` — pod-side runner counters/histograms. The default
   `mode` label is "claude" or "codex", bound at module import.
   `tank_runner_item_outcome_total{outcome,reason}` counts bounded item
@@ -350,7 +356,8 @@ declares one rule group per subsystem:
 - **Session bus / live transport**: schema-rejected events (steady-state
   must be zero), wake-publish failures, stream auth ticket store failures,
   terminal events missing `client_nonce`, browser terminal/local-run
-  mismatches, browser queued-followup-after-terminal reports, and
+  mismatches, browser queued-followup-after-terminal reports, stale
+  browser `running` latches blocking submit, and
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).

@@ -27,6 +27,13 @@ type ActivitySummary struct {
 	UpdatedAt    *string `json:"updated_at"`
 }
 
+// ActivityFoldStats reports diagnostic facts observed while deriving the
+// summary. The fold result remains the source of truth; stats are for
+// bounded observability at the caller.
+type ActivityFoldStats struct {
+	LateInterruptIgnoredStatuses []string
+}
+
 // DeriveActivitySummary applies the chat-event lifecycle fold the sidebar
 // used to compute on every poll of the retired activity-polling
 // endpoint. Called by the session-bus persister after upserting a chat
@@ -58,7 +65,15 @@ type ActivitySummary struct {
 // summaries skip the row write (avoids storms of no-op rows on every
 // keystroke-level chat event).
 func DeriveActivitySummary(prior *ActivitySummary, events []map[string]any, unreadCount int, failedFromPod bool) ActivitySummary {
+	out, _ := DeriveActivitySummaryWithStats(prior, events, unreadCount, failedFromPod)
+	return out
+}
+
+// DeriveActivitySummaryWithStats is DeriveActivitySummary plus the bounded
+// diagnostic facts needed by the production emitter.
+func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]any, unreadCount int, failedFromPod bool) (ActivitySummary, ActivityFoldStats) {
 	out := ActivitySummary{Status: "ready"}
+	stats := ActivityFoldStats{}
 	if prior != nil {
 		out = *prior
 	}
@@ -97,11 +112,16 @@ func DeriveActivitySummary(prior *ActivitySummary, events []map[string]any, unre
 			out.Failed = true
 		case "turn.interrupt_requested":
 			// Stop has been requested but the turn is still mid-flight;
-			// keep ActiveTurnID. The terminal event (turn.interrupted /
-			// completed / failed / command_failed) resolves this later.
-			out.Status = "stopping"
-			out.NeedsInput = false
-			out.Failed = false
+			// keep ActiveTurnID. A late interrupt after a terminal event is
+			// only an audit chip and must not downgrade ready/error/stopped
+			// back to stopping.
+			if canTransitionToStopping(out.Status) {
+				out.Status = "stopping"
+				out.NeedsInput = false
+				out.Failed = false
+			} else {
+				stats.LateInterruptIgnoredStatuses = append(stats.LateInterruptIgnoredStatuses, out.Status)
+			}
 		case "turn.interrupted":
 			out.Status = "stopped"
 			out.ActiveTurnID = nil
@@ -129,7 +149,7 @@ func DeriveActivitySummary(prior *ActivitySummary, events []map[string]any, unre
 			out.Status = "error"
 		}
 	}
-	return out
+	return out, stats
 }
 
 // ActivitySummariesEqual is the persister's emit-or-skip predicate. Two
@@ -194,6 +214,15 @@ func IsLifecycleChatEventType(eventType string) bool {
 		}
 	}
 	return false
+}
+
+func canTransitionToStopping(status string) bool {
+	switch status {
+	case "submitted", "streaming", "needs_input", "stopping":
+		return true
+	default:
+		return false
+	}
 }
 
 func stringField(m map[string]any, key string) string {

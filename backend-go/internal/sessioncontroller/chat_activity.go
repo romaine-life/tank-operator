@@ -65,13 +65,15 @@ type LifecycleEmitterMetrics interface {
 	RecordActivityDelta(emitted bool)
 	RecordActivityFailure()
 	RecordActivityErrorTransition(reason string)
+	RecordActivityLateInterruptIgnored(status string)
 }
 
 type noopLifecycleEmitterMetrics struct{}
 
-func (noopLifecycleEmitterMetrics) RecordActivityDelta(_ bool)             {}
-func (noopLifecycleEmitterMetrics) RecordActivityFailure()                 {}
-func (noopLifecycleEmitterMetrics) RecordActivityErrorTransition(_ string) {}
+func (noopLifecycleEmitterMetrics) RecordActivityDelta(_ bool)                  {}
+func (noopLifecycleEmitterMetrics) RecordActivityFailure()                      {}
+func (noopLifecycleEmitterMetrics) RecordActivityErrorTransition(_ string)      {}
+func (noopLifecycleEmitterMetrics) RecordActivityLateInterruptIgnored(_ string) {}
 
 // activityErrorReason picks the label for
 // LifecycleEmitterMetrics.RecordActivityErrorTransition. Pod-state
@@ -205,7 +207,10 @@ func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner,
 		return fmt.Errorf("chat-activity emitter: unread count for %q: %w", publicID, err)
 	}
 
-	next := sessionactivity.DeriveActivitySummary(prior, folded, unread, failedFromPod)
+	next, foldStats := sessionactivity.DeriveActivitySummaryWithStats(prior, folded, unread, failedFromPod)
+	for _, status := range foldStats.LateInterruptIgnoredStatuses {
+		metrics.RecordActivityLateInterruptIgnored(status)
+	}
 	if prior != nil && sessionactivity.ActivitySummariesEqual(*prior, next) {
 		metrics.RecordActivityDelta(false)
 		return nil

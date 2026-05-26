@@ -489,10 +489,12 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.equal(sessionEventStreamTelemetrySource.includes("stream_silent_while_running"), true);
   assert.equal(sessionEventStreamTelemetrySource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(sessionEventStreamTelemetrySource.includes("queued_followup_blocked_after_terminal"), true);
+  assert.equal(sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("tank_event_received"'), true);
   assert.equal(appSource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("queued_followup_blocked_after_terminal"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("stale_running_blocked_submit"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("resync_required"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("stream_error"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("closed_error"'), true);

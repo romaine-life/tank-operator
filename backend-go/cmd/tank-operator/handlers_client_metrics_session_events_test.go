@@ -18,6 +18,7 @@ func TestSessionEventStreamMetricsAcceptsValidBatch(t *testing.T) {
 			{"event":"stream_silent_while_running","sessionMode":"claude_gui","idleSeconds":42.5,"whileRunning":true},
 			{"event":"terminal_matched_by_turn_id","eventType":"turn.completed","sessionMode":"hermes_gui"},
 			{"event":"queued_followup_blocked_after_terminal","sessionMode":"hermes_gui"},
+			{"event":"stale_running_blocked_submit","sessionMode":"codex_gui"},
 			{"event":"closed_unmount","sessionMode":"claude_gui"}
 		]}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/session-events-stream", body)
@@ -75,6 +76,9 @@ func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	}
 	if got := sessionEventStreamClientEventLabel("terminal_local_run_mismatch"); got != "terminal_local_run_mismatch" {
 		t.Fatalf("terminal mismatch label = %q", got)
+	}
+	if got := sessionEventStreamClientEventLabel("stale_running_blocked_submit"); got != "stale_running_blocked_submit" {
+		t.Fatalf("stale submit label = %q", got)
 	}
 	if got := sessionEventStreamClientEventLabel("malicious-event-name"); got != "other" {
 		t.Fatalf("unknown event should clamp to other, got %q", got)
