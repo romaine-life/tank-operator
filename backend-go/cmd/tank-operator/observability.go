@@ -961,6 +961,10 @@ var (
 		Name: "tank_session_activity_error_transitions_total",
 		Help: "Session activity pill transitions into the \"error\" state, labeled by cause (pod_failed, turn_failed, turn_command_failed, unknown).",
 	}, []string{"reason"})
+	sessionActivityLateInterruptIgnoredTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_activity_late_interrupt_ignored_total",
+		Help: "Late turn.interrupt_requested lifecycle events ignored because the activity fold had already reached a non-active state.",
+	}, []string{"status"})
 	// sessionRowUpdatesTotal counts sessioncontroller.RowWriter's
 	// per-event outcomes on the sessions row. Outcome=ok dominates in
 	// steady state; outcome=failed > 0 means the sidebar's column
@@ -1044,6 +1048,19 @@ func (promLifecycleEmitterMetrics) RecordActivityFailure() {
 
 func (promLifecycleEmitterMetrics) RecordActivityErrorTransition(reason string) {
 	sessionActivityErrorTransitionsTotal.WithLabelValues(reason).Inc()
+}
+
+func (promLifecycleEmitterMetrics) RecordActivityLateInterruptIgnored(status string) {
+	sessionActivityLateInterruptIgnoredTotal.WithLabelValues(sessionActivityStatusLabel(status)).Inc()
+}
+
+func sessionActivityStatusLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ready", "submitted", "streaming", "needs_input", "stopping", "stopped", "error":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
+	}
 }
 
 // --- Postgres query tracer metrics ---

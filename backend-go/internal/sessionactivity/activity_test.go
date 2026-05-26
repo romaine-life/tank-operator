@@ -135,6 +135,62 @@ func TestDeriveActivitySummaryFoldsInterruptRequestedToStopping(t *testing.T) {
 	}
 }
 
+func TestDeriveActivitySummaryIgnoresLateInterruptRequestedAfterTerminal(t *testing.T) {
+	tests := []struct {
+		name       string
+		terminal   map[string]any
+		wantStatus string
+		wantFailed bool
+	}{
+		{
+			name:       "completed stays ready",
+			terminal:   map[string]any{"type": "turn.completed", "turn_id": "turn-1", "order_key": "2"},
+			wantStatus: "ready",
+		},
+		{
+			name:       "failed stays error",
+			terminal:   map[string]any{"type": "turn.failed", "turn_id": "turn-1", "order_key": "2"},
+			wantStatus: "error",
+			wantFailed: true,
+		},
+		{
+			name:       "command failed stays error",
+			terminal:   map[string]any{"type": "turn.command_failed", "turn_id": "turn-1", "order_key": "2"},
+			wantStatus: "error",
+			wantFailed: true,
+		},
+		{
+			name:       "interrupted stays stopped",
+			terminal:   map[string]any{"type": "turn.interrupted", "turn_id": "turn-1", "order_key": "2"},
+			wantStatus: "stopped",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, stats := DeriveActivitySummaryWithStats(nil, []map[string]any{
+				{"type": "turn.started", "turn_id": "turn-1", "order_key": "1"},
+				tt.terminal,
+				{"type": "turn.interrupt_requested", "turn_id": "turn-1", "order_key": "3"},
+			}, 0, false)
+			if got.Status != tt.wantStatus {
+				t.Fatalf("status after terminal + late interrupt = %q, want %q", got.Status, tt.wantStatus)
+			}
+			if got.Failed != tt.wantFailed {
+				t.Fatalf("failed after terminal + late interrupt = %v, want %v", got.Failed, tt.wantFailed)
+			}
+			if got.ActiveTurnID != nil {
+				t.Fatalf("ActiveTurnID after terminal + late interrupt = %#v, want nil", got.ActiveTurnID)
+			}
+			if got.LastOrderKey == nil || *got.LastOrderKey != "3" {
+				t.Fatalf("LastOrderKey after late interrupt = %#v, want 3", got.LastOrderKey)
+			}
+			if len(stats.LateInterruptIgnoredStatuses) != 1 || stats.LateInterruptIgnoredStatuses[0] != tt.wantStatus {
+				t.Fatalf("LateInterruptIgnoredStatuses = %#v, want [%q]", stats.LateInterruptIgnoredStatuses, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestIsLifecycleChatEventTypeAllowlist(t *testing.T) {
 	for _, allowed := range LifecycleChatEventTypes {
 		if !IsLifecycleChatEventType(allowed) {

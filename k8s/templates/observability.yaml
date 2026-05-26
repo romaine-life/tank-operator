@@ -404,6 +404,25 @@ spec:
               `terminal_local_run_mismatch`) and inspect the relevant
               frontend/src/App.tsx currentRunRef/finalizeSdkRun path.
 
+        - alert: TankBrowserStaleRunningBlockedSubmit
+          expr: |
+            sum by (session_mode) (
+              increase(tank_session_event_client_events_total{event="stale_running_blocked_submit"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "browser recovered a stale running latch before submit on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The SPA was about to queue a follow-up because local
+              running=true, but durable conversation state was no
+              longer active. The submit guard cleared the stale latch
+              and sent the message immediately. Inspect recent session
+              activity_summary rows and terminal correlation telemetry
+              to decide whether the cause was a stale server activity
+              projection or a missed local-run finalization.
+
         - alert: TankBrowserTerminalLocalRunMismatch
           expr: |
             sum by (session_mode) (
@@ -628,6 +647,24 @@ spec:
               unread-count indicators will lag actual chat state.
               Inspect orchestrator logs for `chat-activity emitter:`
               lines.
+
+        - alert: TankSessionActivityLateInterruptIgnored
+          expr: |
+            sum by (status) (
+              increase(tank_session_activity_late_interrupt_ignored_total[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "activity fold ignored a late interrupt after status={{`{{ $labels.status }}`}}"
+            runbook: |
+              The chat→sidebar activity fold saw
+              turn.interrupt_requested after the durable state was no
+              longer active, so it preserved the terminal/ready/error
+              projection instead of downgrading the session row to
+              stopping. Check the originating stop request path and
+              correlate with browser stale-running submit telemetry.
 
         # Row-update producer outcome. RowWriter is the single seam
         # the K8s watch and activity emitter write through; a non-zero
