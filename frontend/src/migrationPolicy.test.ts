@@ -257,10 +257,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
+  assert.equal(indexCssSource.includes(".run-turn-thinking-dots"), true);
+  assert.equal(indexCssSource.includes("@keyframes run-thinking-dot-bounce"), true);
   assert.equal(indexCssSource.includes(".run-msg-turn"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-dots"), true);
 });
 
 test("chat live stream waits for timeline bootstrap", () => {

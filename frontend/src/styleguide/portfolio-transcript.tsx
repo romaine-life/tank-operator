@@ -183,7 +183,11 @@ function TurnThinkingMessage({
         </span>
       )}
       <button type="button" className="run-transcript-message-content run-turn-thinking-content">
-        <span aria-hidden="true">...</span>
+        <span className="run-turn-thinking-dots" aria-hidden="true">
+          <span>.</span>
+          <span>.</span>
+          <span>.</span>
+        </span>
       </button>
     </div>
   );
