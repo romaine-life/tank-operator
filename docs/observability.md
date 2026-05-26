@@ -95,6 +95,22 @@ All metric names are prefixed `tank_`. The full namespace:
   candidate-B zombie-SSE detector: the browser's silence watchdog
   observes the idle interval whenever a connected stream has gone
   >30 s without emitting events while a turn is in flight.
+- `tank_client_long_task_*` — browser-reported main-thread long-task
+  diagnostics ingested through `POST /api/client-metrics/long-tasks`.
+  The SPA installs a `PerformanceObserver({type: "longtask"})` probe
+  at boot (`frontend/src/longTaskTelemetry.ts`) and reports every
+  ≥50 ms main-thread block along with three correlation deltas: time
+  since the last tank-event SSE delivery, since the last session
+  switch, and since the last user scroll. Server-bucketed labels:
+  `session_mode` (the chat-scroll mode allowlist), `attribution`
+  (`self` / `other` / `unknown`, bucketed from
+  `PerformanceLongTaskTiming.name`), and `correlation` (`event_burst`
+  / `session_switch` / `scroll` / `idle`, picked from the most-recent
+  in-window signal). The duration histogram buckets target the
+  input-responsiveness band (50 ms - 5 s); anything past 2 s is the
+  "page feels frozen" zone. This is the operational replacement for
+  devtools' Performance panel — the SPA user can't open devtools, so
+  the click-unresponsiveness failure mode otherwise has no surface.
 - `tank_turn_terminal_missing_client_nonce_total{source,event_type}` —
   durable turn terminal rows (`turn.completed`, `turn.failed`,
   `turn.command_failed`, `turn.interrupted`) persisted without
