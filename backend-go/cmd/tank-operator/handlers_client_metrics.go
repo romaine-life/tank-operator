@@ -19,59 +19,64 @@ type chatScrollMetricsRequest struct {
 }
 
 type chatScrollMetricEvent struct {
-	Event                 string   `json:"event"`
-	Surface               string   `json:"surface"`
-	SessionMode           string   `json:"sessionMode"`
-	SessionID             string   `json:"sessionId,omitempty"`
-	PagePath              string   `json:"pagePath,omitempty"`
-	PageSearch            string   `json:"pageSearch,omitempty"`
-	Source                string   `json:"source,omitempty"`
-	Anchor                string   `json:"anchor,omitempty"`
-	RequestID             string   `json:"requestId,omitempty"`
-	BeforeCursor          string   `json:"beforeCursor,omitempty"`
-	AfterCursor           string   `json:"afterCursor,omitempty"`
-	Reason                string   `json:"reason,omitempty"`
-	Key                   string   `json:"key,omitempty"`
-	FirstGroupKey         string   `json:"firstGroupKey,omitempty"`
-	LastGroupKey          string   `json:"lastGroupKey,omitempty"`
-	PreviousFirstGroupKey string   `json:"previousFirstGroupKey,omitempty"`
-	PreviousLastGroupKey  string   `json:"previousLastGroupKey,omitempty"`
-	TargetEdge            string   `json:"targetEdge,omitempty"`
-	NavInFlight           string   `json:"navInFlight,omitempty"`
-	Signal                *float64 `json:"signal,omitempty"`
-	Status                *float64 `json:"status,omitempty"`
-	DurationMs            *float64 `json:"durationMs,omitempty"`
-	EventCount            *float64 `json:"eventCount,omitempty"`
-	CanonicalEvents       *float64 `json:"canonicalEventCount,omitempty"`
-	FoundOldest           *bool    `json:"foundOldest,omitempty"`
-	FoundNewest           *bool    `json:"foundNewest,omitempty"`
-	HasPrevCursor         *bool    `json:"hasPrevCursor,omitempty"`
-	HasNextCursor         *bool    `json:"hasNextCursor,omitempty"`
-	ClearRealtime         *bool    `json:"clearRealtime,omitempty"`
-	AtBottom              *bool    `json:"atBottom,omitempty"`
-	HasScrollParent       *bool    `json:"hasScrollParent,omitempty"`
-	ScrollTop             *float64 `json:"scrollTop,omitempty"`
-	ScrollHeight          *float64 `json:"scrollHeight,omitempty"`
-	ClientHeight          *float64 `json:"clientHeight,omitempty"`
-	BottomDistance        *float64 `json:"bottomDistance,omitempty"`
-	Entries               *float64 `json:"entries,omitempty"`
-	PreviousEntries       *float64 `json:"previousEntries,omitempty"`
-	EntriesDelta          *float64 `json:"entriesDelta,omitempty"`
-	Groups                *float64 `json:"groups,omitempty"`
-	PreviousGroups        *float64 `json:"previousGroups,omitempty"`
-	GroupsDelta           *float64 `json:"groupsDelta,omitempty"`
-	VisibleRowsAdded      *float64 `json:"visibleRowsAdded,omitempty"`
-	VisibleRowsRemoved    *float64 `json:"visibleRowsRemoved,omitempty"`
-	Messages              *float64 `json:"messages,omitempty"`
-	PreviousMessages      *float64 `json:"previousMessages,omitempty"`
-	MessagesDelta         *float64 `json:"messagesDelta,omitempty"`
-	Reasoning             *float64 `json:"reasoning,omitempty"`
-	Meta                  *float64 `json:"meta,omitempty"`
-	BackgroundTasks       *float64 `json:"backgroundTasks,omitempty"`
-	ToolGroups            *float64 `json:"toolGroups,omitempty"`
-	ToolEntries           *float64 `json:"toolEntries,omitempty"`
-	ActivityGroups        *float64 `json:"activityGroups,omitempty"`
-	ActivityEntries       *float64 `json:"activityEntries,omitempty"`
+	Event                       string   `json:"event"`
+	Surface                     string   `json:"surface"`
+	SessionMode                 string   `json:"sessionMode"`
+	SessionID                   string   `json:"sessionId,omitempty"`
+	PagePath                    string   `json:"pagePath,omitempty"`
+	PageSearch                  string   `json:"pageSearch,omitempty"`
+	Source                      string   `json:"source,omitempty"`
+	Anchor                      string   `json:"anchor,omitempty"`
+	RequestID                   string   `json:"requestId,omitempty"`
+	BeforeCursor                string   `json:"beforeCursor,omitempty"`
+	AfterCursor                 string   `json:"afterCursor,omitempty"`
+	Reason                      string   `json:"reason,omitempty"`
+	Key                         string   `json:"key,omitempty"`
+	FirstGroupKey               string   `json:"firstGroupKey,omitempty"`
+	LastGroupKey                string   `json:"lastGroupKey,omitempty"`
+	PreviousFirstGroupKey       string   `json:"previousFirstGroupKey,omitempty"`
+	PreviousLastGroupKey        string   `json:"previousLastGroupKey,omitempty"`
+	TargetEdge                  string   `json:"targetEdge,omitempty"`
+	NavInFlight                 string   `json:"navInFlight,omitempty"`
+	Signal                      *float64 `json:"signal,omitempty"`
+	Status                      *float64 `json:"status,omitempty"`
+	DurationMs                  *float64 `json:"durationMs,omitempty"`
+	EventCount                  *float64 `json:"eventCount,omitempty"`
+	CanonicalEvents             *float64 `json:"canonicalEventCount,omitempty"`
+	FoundOldest                 *bool    `json:"foundOldest,omitempty"`
+	FoundNewest                 *bool    `json:"foundNewest,omitempty"`
+	HasPrevCursor               *bool    `json:"hasPrevCursor,omitempty"`
+	HasNextCursor               *bool    `json:"hasNextCursor,omitempty"`
+	ClearRealtime               *bool    `json:"clearRealtime,omitempty"`
+	AtBottom                    *bool    `json:"atBottom,omitempty"`
+	HasScrollParent             *bool    `json:"hasScrollParent,omitempty"`
+	ScrollTop                   *float64 `json:"scrollTop,omitempty"`
+	ScrollHeight                *float64 `json:"scrollHeight,omitempty"`
+	ClientHeight                *float64 `json:"clientHeight,omitempty"`
+	BottomDistance              *float64 `json:"bottomDistance,omitempty"`
+	Entries                     *float64 `json:"entries,omitempty"`
+	PreviousEntries             *float64 `json:"previousEntries,omitempty"`
+	EntriesDelta                *float64 `json:"entriesDelta,omitempty"`
+	Groups                      *float64 `json:"groups,omitempty"`
+	PreviousGroups              *float64 `json:"previousGroups,omitempty"`
+	GroupsDelta                 *float64 `json:"groupsDelta,omitempty"`
+	VisibleRowsAdded            *float64 `json:"visibleRowsAdded,omitempty"`
+	VisibleRowsRemoved          *float64 `json:"visibleRowsRemoved,omitempty"`
+	Messages                    *float64 `json:"messages,omitempty"`
+	PreviousMessages            *float64 `json:"previousMessages,omitempty"`
+	MessagesDelta               *float64 `json:"messagesDelta,omitempty"`
+	Reasoning                   *float64 `json:"reasoning,omitempty"`
+	Meta                        *float64 `json:"meta,omitempty"`
+	BackgroundTasks             *float64 `json:"backgroundTasks,omitempty"`
+	ThinkingGroups              *float64 `json:"thinkingGroups,omitempty"`
+	ToolGroups                  *float64 `json:"toolGroups,omitempty"`
+	ToolEntries                 *float64 `json:"toolEntries,omitempty"`
+	ActivityGroups              *float64 `json:"activityGroups,omitempty"`
+	ActiveActivityGroups        *float64 `json:"activeActivityGroups,omitempty"`
+	DurableActiveActivityGroups *float64 `json:"durableActiveActivityGroups,omitempty"`
+	ActivityEntries             *float64 `json:"activityEntries,omitempty"`
+	TurnActivityShells          *float64 `json:"turnActivityShells,omitempty"`
+	DurableActiveTurnShells     *float64 `json:"durableActiveTurnActivityShells,omitempty"`
 }
 
 func (s *appServer) handleChatScrollMetrics(w http.ResponseWriter, r *http.Request) {
@@ -143,10 +148,15 @@ func validChatScrollMetricNumbers(event chatScrollMetricEvent) bool {
 		event.Reasoning,
 		event.Meta,
 		event.BackgroundTasks,
+		event.ThinkingGroups,
 		event.ToolGroups,
 		event.ToolEntries,
 		event.ActivityGroups,
+		event.ActiveActivityGroups,
+		event.DurableActiveActivityGroups,
 		event.ActivityEntries,
+		event.TurnActivityShells,
+		event.DurableActiveTurnShells,
 	} {
 		if value == nil {
 			continue
@@ -174,6 +184,7 @@ var chatScrollStructuredLogEvents = map[string]struct{}{
 	"scroll-to-oldest":         {},
 	"start-reached":            {},
 	"at-bottom-change":         {},
+	"thinking-row-missing":     {},
 }
 
 func logChatScrollClientEvent(email string, event chatScrollMetricEvent) {
@@ -233,10 +244,15 @@ func logChatScrollClientEvent(email string, event chatScrollMetricEvent) {
 		"reasoning", metricLogFloat(event.Reasoning),
 		"meta", metricLogFloat(event.Meta),
 		"background_tasks", metricLogFloat(event.BackgroundTasks),
+		"thinking_groups", metricLogFloat(event.ThinkingGroups),
 		"tool_groups", metricLogFloat(event.ToolGroups),
 		"tool_entries", metricLogFloat(event.ToolEntries),
 		"activity_groups", metricLogFloat(event.ActivityGroups),
+		"active_activity_groups", metricLogFloat(event.ActiveActivityGroups),
+		"durable_active_activity_groups", metricLogFloat(event.DurableActiveActivityGroups),
 		"activity_entries", metricLogFloat(event.ActivityEntries),
+		"turn_activity_shells", metricLogFloat(event.TurnActivityShells),
+		"durable_active_turn_activity_shells", metricLogFloat(event.DurableActiveTurnShells),
 	)
 }
 
@@ -280,6 +296,7 @@ var chatScrollMetricEventLabels = map[string]struct{}{
 	"scroll-to-oldest":              {},
 	"start-reached":                 {},
 	"at-bottom-change":              {},
+	"thinking-row-missing":          {},
 	"scroll-parent-mounted":         {},
 	"scroll-parent-unmounted":       {},
 	"debug-scroll-parent-mounted":   {},

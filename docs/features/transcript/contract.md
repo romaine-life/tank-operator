@@ -69,6 +69,10 @@ other.
   or an explicit durable final-answer marker exists. Without such a marker, the
   final answer is inferred from the trailing assistant message/run after
   `turn.completed`.
+- A server-projected active `turn_activity` shell owns the visible running
+  placeholder for that turn. The browser must not hide the `...` row while
+  waiting for a separately-delivered activity summary to set the same active
+  turn id.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
@@ -96,6 +100,11 @@ other.
   then live stream telemetry.
 - A durable terminal event that exists but is not visible in an open transcript
   must leave enough telemetry to localize the miss.
+- A server-projected active Turn activity shell that does not produce a visible
+  `...` row must emit bounded client telemetry so the missing placeholder can be
+  diagnosed without guessing from screenshots. The telemetry must count active
+  shells from transcript entries, not only from rendered rows, because the shell
+  may be projection-only.
 - A report that a message bounced between Turn activity and the main transcript
   should be diagnosable from the durable event order plus the frontend
   projection chosen before first paint.

@@ -66,10 +66,15 @@ interface ChatScrollMetricPayload {
   reasoning?: number;
   meta?: number;
   backgroundTasks?: number;
+  thinkingGroups?: number;
   toolGroups?: number;
   toolEntries?: number;
   activityGroups?: number;
+  activeActivityGroups?: number;
+  durableActiveActivityGroups?: number;
   activityEntries?: number;
+  turnActivityShells?: number;
+  durableActiveTurnActivityShells?: number;
 }
 
 let pendingMetrics: ChatScrollMetricPayload[] = [];
@@ -184,10 +189,15 @@ function enqueueChatScrollMetric(
     reasoning: metricNumber(detail.reasoning),
     meta: metricNumber(detail.meta),
     backgroundTasks: metricNumber(detail.backgroundTasks),
+    thinkingGroups: metricNumber(detail.thinkingGroups),
     toolGroups: metricNumber(detail.toolGroups),
     toolEntries: metricNumber(detail.toolEntries),
     activityGroups: metricNumber(detail.activityGroups),
+    activeActivityGroups: metricNumber(detail.activeActivityGroups),
+    durableActiveActivityGroups: metricNumber(detail.durableActiveActivityGroups),
     activityEntries: metricNumber(detail.activityEntries),
+    turnActivityShells: metricNumber(detail.turnActivityShells),
+    durableActiveTurnActivityShells: metricNumber(detail.durableActiveTurnActivityShells),
   });
   if (pendingMetrics.length >= MAX_BATCH_EVENTS) {
     flushChatScrollMetrics();

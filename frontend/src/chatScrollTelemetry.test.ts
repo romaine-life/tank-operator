@@ -91,6 +91,10 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
     targetEdge: "oldest",
     atBottom: false,
     bottomDistance: 240,
+    thinkingGroups: 0,
+    turnActivityShells: 1,
+    durableActiveActivityGroups: 1,
+    durableActiveTurnActivityShells: 1,
   });
   flushChatScrollMetricsForTest();
 
@@ -111,4 +115,8 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   assert.equal(event.anchor, "oldest");
   assert.equal(event.key, "Home");
   assert.equal(event.targetEdge, "oldest");
+  assert.equal(event.thinkingGroups, 0);
+  assert.equal(event.turnActivityShells, 1);
+  assert.equal(event.durableActiveActivityGroups, 1);
+  assert.equal(event.durableActiveTurnActivityShells, 1);
 });

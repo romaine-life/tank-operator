@@ -108,6 +108,58 @@ func TestHandleChatScrollMetricsLogsBoundedTraceContext(t *testing.T) {
 	}
 }
 
+func TestHandleChatScrollMetricsLogsThinkingRowInvariantContext(t *testing.T) {
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [{
+			"event": "thinking-row-missing",
+			"surface": "session",
+			"sessionMode": "codex_gui",
+			"sessionId": "251",
+			"thinkingGroups": 0,
+			"activityGroups": 1,
+			"activeActivityGroups": 0,
+			"durableActiveActivityGroups": 1,
+			"turnActivityShells": 1,
+			"durableActiveTurnActivityShells": 1,
+			"entries": 8
+		}]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"event":"thinking-row-missing"`,
+		`"session_id":"251"`,
+		`"thinking_groups":0`,
+		`"activity_groups":1`,
+		`"active_activity_groups":0`,
+		`"durable_active_activity_groups":1`,
+		`"turn_activity_shells":1`,
+		`"durable_active_turn_activity_shells":1`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	if !strings.Contains(metrics, `tank_chat_scroll_client_events_total{at_bottom="unknown",event="thinking-row-missing",has_scroll_parent="unknown",session_mode="codex_gui",surface="session"}`) {
+		t.Fatalf("scrape missing thinking-row-missing event:\n%s", metrics)
+	}
+}
+
 func TestHandleChatScrollMetricsRejectsUnboundedBatch(t *testing.T) {
 	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
 	var body bytes.Buffer
