@@ -122,6 +122,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		Mode        string                           `json:"mode"`
 		Model       string                           `json:"model,omitempty"`
 		Effort      string                           `json:"effort,omitempty"`
+		Name        *string                          `json:"name,omitempty"`
 		Repos       []string                         `json:"repos"`
 		InitialTurn *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
@@ -129,6 +130,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.Mode = ""
 		body.Model = ""
 		body.Effort = ""
+		body.Name = nil
 		body.Repos = nil
 		body.InitialTurn = nil
 	}
@@ -170,6 +172,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:       owner,
 		Mode:        mode,
+		Name:        body.Name,
 		Repos:       repos,
 		Model:       runConfig.Model,
 		Effort:      runConfig.Effort,
@@ -824,6 +827,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		Mode                  string   `json:"mode"`
 		Model                 string   `json:"model,omitempty"`
 		Effort                string   `json:"effort,omitempty"`
+		Name                  *string  `json:"name,omitempty"`
 		Repos                 []string `json:"repos"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -870,6 +874,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		Owner:           email,
 		Mode:            mode,
 		GlimmungContext: glimmungContext,
+		Name:            body.Name,
 		Repos:           repos,
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,

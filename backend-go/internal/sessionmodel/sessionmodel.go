@@ -251,6 +251,10 @@ type ManifestOptions struct {
 	// create time. PodManifest passes it to the repo-cloner init
 	// container as JSON; empty means no init container.
 	Repos []string
+	// Name is the optional user-facing session title selected before
+	// creation. It is stamped on the pod annotation so degraded pod-only
+	// reads match the registry row.
+	Name *string
 	// HotSwapAgentRunner gates the test-slot hot-swap surface on SDK
 	// runner containers. When true, PodManifest attaches a writable
 	// emptyDir at /var/run/<runner>-hot, mounts it on the active runner
@@ -870,6 +874,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"tank-operator/owner-email":      owner,
 		"tank-operator/session-id":       sessionID,
 		"argocd.argoproj.io/tracking-id": argoTrackingID,
+	}
+	if name := NormalizeName(opts.Name); name != nil {
+		annotations["tank-operator/display-name"] = *name
 	}
 	if opts.GlimmungContextJSON != "" {
 		annotations["tank-operator/glimmung-context"] = opts.GlimmungContextJSON
