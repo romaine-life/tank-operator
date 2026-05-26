@@ -143,7 +143,7 @@ import {
 import {
   clusterHealthHeadline,
   clusterHealthIssueText,
-  clusterHealthNatsLoadLabel,
+  clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
   type ClusterHealthResponse,
   type ClusterHealthStatus,
@@ -1742,45 +1742,60 @@ function ClusterHealthWidget({
       className={`cluster-health ${clusterHealthStatusClass(status)}`}
       aria-label="Cluster health"
     >
-      <button
-        type="button"
-        className="cluster-health-main"
-        onClick={onRefresh}
-        title={issue}
-        aria-label={`${headline}: ${issue}`}
-      >
-        <span className="cluster-health-status" aria-hidden="true">
-          {loading ? (
-            <Loader2Icon className="cluster-health-spin" />
-          ) : status === "healthy" ? (
-            <CheckIcon />
-          ) : status === "critical" ? (
-            <AlertCircleIcon />
-          ) : (
-            <ActivityIcon />
-          )}
-        </span>
-        <span className="cluster-health-body">
-          <span className="cluster-health-title">{headline}</span>
-          <span className="cluster-health-sub">{issue}</span>
-        </span>
-        <span className="cluster-health-refresh" aria-hidden="true">
-          <RotateCcwIcon />
-        </span>
-      </button>
-      <div className="cluster-health-metrics" aria-hidden={health ? undefined : "true"}>
-        <span title="Ready Kubernetes nodes">
-          <MonitorIcon />
-          <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
-        </span>
-        <span title="Ready Tank session pods">
-          <SquareTerminalIcon />
-          <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
-        </span>
-        <span title="NATS JetStream memory utilization">
-          <ActivityIcon />
-          <span>{clusterHealthNatsLoadLabel(nats)}</span>
-        </span>
+      <div className="cluster-health-panel">
+        <button
+          type="button"
+          className="cluster-health-main"
+          onClick={onRefresh}
+          title={issue}
+          aria-label={`${headline}: ${issue}`}
+        >
+          <span className="cluster-health-status" aria-hidden="true">
+            {loading ? (
+              <Loader2Icon className="cluster-health-spin" />
+            ) : status === "healthy" ? (
+              <CheckIcon />
+            ) : status === "critical" ? (
+              <AlertCircleIcon />
+            ) : (
+              <ActivityIcon />
+            )}
+          </span>
+          <span className="cluster-health-body">
+            <span className="cluster-health-title">{headline}</span>
+            <span className="cluster-health-sub">{issue}</span>
+          </span>
+          <span className="cluster-health-refresh" aria-hidden="true">
+            <RotateCcwIcon />
+          </span>
+        </button>
+        <dl
+          className="cluster-health-metrics"
+          aria-label="Cluster health metrics"
+          aria-hidden={health ? undefined : "true"}
+        >
+          <div className="cluster-health-metric" title="Ready Kubernetes nodes">
+            <dt>Nodes</dt>
+            <dd>
+              <MonitorIcon aria-hidden="true" />
+              <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Ready Tank session pods">
+            <dt>Sessions</dt>
+            <dd>
+              <SquareTerminalIcon aria-hidden="true" />
+              <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Reachable NATS monitors">
+            <dt>NATS</dt>
+            <dd>
+              <ActivityIcon aria-hidden="true" />
+              <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
+            </dd>
+          </div>
+        </dl>
       </div>
     </section>
   );
