@@ -723,6 +723,58 @@ func boolMetricLabel(value *bool) string {
 	return "false"
 }
 
+// --- Browser long-task metrics ---
+//
+// Surfaces main-thread blocks ≥50 ms reported by the SPA via
+// PerformanceObserver({type: "longtask"}). The SPA passes raw
+// durations and correlation deltas; the server picks a single bounded
+// `correlation` label so cardinality stays predictable. The SPA user
+// can't open devtools' Performance panel, so this counter and its
+// duration histogram are the operational replacement.
+var (
+	longTaskClientReportsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_client_long_task_reports_total",
+			Help: "Browser long-task metric report requests, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
+	longTaskClientTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_client_long_task_total",
+			Help: "Browser main-thread long tasks (≥50 ms) reported by the SPA, labeled by session mode, attribution, and correlation.",
+		},
+		[]string{"session_mode", "attribution", "correlation"},
+	)
+	longTaskClientDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name: "tank_client_long_task_duration_seconds",
+			Help: "Duration of browser main-thread long tasks (≥50 ms) reported by the SPA.",
+			// Buckets target the input-responsiveness range. 0.05 is the
+			// spec floor for a longtask; >2 s is the "page feels frozen"
+			// threshold past which finer resolution doesn't change the
+			// diagnosis ("it's stuck").
+			Buckets: []float64{0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2, 5},
+		},
+		[]string{"session_mode", "correlation"},
+	)
+)
+
+func recordLongTaskClientReport(result string) {
+	longTaskClientReportsTotal.WithLabelValues(result).Inc()
+}
+
+func recordLongTaskClientEvent(event longTaskMetricEvent) {
+	if event.DurationMs == nil || *event.DurationMs < longTaskMinDurationMs {
+		return
+	}
+	mode := longTaskSessionModeLabel(event.SessionMode)
+	attribution := longTaskAttributionLabel(event.Attribution)
+	correlation := longTaskCorrelationLabel(event)
+	longTaskClientTotal.WithLabelValues(mode, attribution, correlation).Inc()
+	longTaskClientDurationSeconds.WithLabelValues(mode, correlation).Observe(*event.DurationMs / 1000.0)
+}
+
 // GET /api/github/repos counters. The endpoint proxies through to
 // mcp-github via an on-behalf-of token mint; both legs can fail
 // independently, so we surface a simple ok|error outcome label plus

@@ -127,6 +127,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// (zombie SSE) and candidate-C (reducer drop) stethoscope on the
 	// client side. Pairs with server-side counters in observability.go.
 	mux.HandleFunc("POST /api/client-metrics/session-events-stream", s.handleSessionEventStreamMetrics)
+	// Browser-side main-thread long-task probe. Surfaces input-
+	// blocking ≥50 ms blocks (the failure mode behind "clicks aren't
+	// responding") with a correlation label tying each block to the
+	// most-recent tank-event / session-switch / scroll the SPA saw.
+	mux.HandleFunc("POST /api/client-metrics/long-tasks", s.handleLongTaskMetrics)
 
 	// Avatar assets. Reads are authenticated so uploaded backing photos
 	// are not exposed as static public files; writes are admin-only.

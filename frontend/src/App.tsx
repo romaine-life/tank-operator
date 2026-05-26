@@ -136,6 +136,11 @@ import {
   logChatScrollEvent,
 } from "./chatScrollTelemetry";
 import {
+  noteSessionSwitch,
+  noteTankEvent,
+  setActiveSessionMode,
+} from "./longTaskTelemetry";
+import {
   clusterHealthHeadline,
   clusterHealthIssueText,
   clusterHealthNatsLoadLabel,
@@ -9174,6 +9179,11 @@ function ChatPane({
         sessionMode: session.mode,
         eventType,
       });
+      // Long-task correlation: a tank-event triggers JSON.parse +
+      // reducer fold + projection rebuild + render. If those produce
+      // a >50 ms main-thread block, the longtask probe will attribute
+      // it via the sinceTankEventMs delta.
+      noteTankEvent();
       silenceWatchdogRef.current?.reset();
       applySdkDurableEvent(parsed);
     });
@@ -9209,6 +9219,12 @@ function ChatPane({
 
   useEffect(() => {
     if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
+    // Long-task correlation: switching active sessions triggers a
+    // reducer reset + transcript bootstrap + scroll rewire. Attribute
+    // any block in that window to the switch via sinceSessionSwitchMs,
+    // and label any block that fires now by the session's mode.
+    setActiveSessionMode(session.mode);
+    noteSessionSwitch();
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
     void openSdkEventStream();
