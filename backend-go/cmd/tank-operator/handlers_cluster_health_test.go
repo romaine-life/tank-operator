@@ -43,11 +43,13 @@ func TestHandleClusterHealthSummarizesNodesSessionsAndNATS(t *testing.T) {
 							{
 								"name": "TANK_SESSION_BUS",
 								"cluster": map[string]any{
+									"leader": "tank-nats-0",
 									"replicas": []map[string]any{
-										{"name": "tank-nats-0", "current": true},
 										{"name": "tank-nats-1", "current": true},
+										{"name": "tank-nats-2", "current": true},
 									},
 								},
+								"config": map[string]any{"num_replicas": 3},
 								"state": map[string]any{
 									"messages":       20,
 									"bytes":          500,
@@ -97,11 +99,11 @@ func TestHandleClusterHealthSummarizesNodesSessionsAndNATS(t *testing.T) {
 	if body.NATS.ReachableServers != 1 || body.NATS.JetStream.MemoryUtilization != 0.5 {
 		t.Fatalf("nats = %#v", body.NATS)
 	}
-	if body.NATS.JetStream.StreamReplicas != 2 || body.NATS.JetStream.ExpectedStreamReplicas != 3 {
-		t.Fatalf("nats stream replicas = %#v", body.NATS.JetStream)
+	if body.NATS.Status != "healthy" || len(body.NATS.Warnings) != 0 {
+		t.Fatalf("nats should be healthy, got %#v", body.NATS)
 	}
-	if !strings.Contains(strings.Join(body.NATS.Warnings, "\n"), "NATS stream replicas 2/3") {
-		t.Fatalf("nats warnings = %#v", body.NATS.Warnings)
+	if body.NATS.JetStream.StreamReplicas != 3 || body.NATS.JetStream.ExpectedStreamReplicas != 3 || body.NATS.JetStream.StreamCurrentReplicas != 3 {
+		t.Fatalf("nats stream replicas = %#v", body.NATS.JetStream)
 	}
 }
 
@@ -118,6 +120,155 @@ func TestCollectNATSHealthCriticalWhenMonitorUnreachable(t *testing.T) {
 	}
 	if got.ReachableServers != 0 || got.Error == "" {
 		t.Fatalf("nats = %#v", got)
+	}
+}
+
+func TestCollectNATSHealthWarnsWhenStreamReplicasAreLagging(t *testing.T) {
+	nats := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/varz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"server_name":    "tank-nats-0",
+				"slow_consumers": 0,
+				"jetstream": map[string]any{
+					"config": map[string]any{"max_memory": 1000},
+					"stats":  map[string]any{"memory": 500, "reserved_memory": 500},
+					"meta":   map[string]any{"pending": 0},
+				},
+			})
+		case "/jsz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"memory":  500,
+				"streams": 1,
+				"config":  map[string]any{"max_memory": 1000},
+				"account_details": []map[string]any{
+					{
+						"stream_detail": []map[string]any{
+							{
+								"name": "TANK_SESSION_BUS",
+								"cluster": map[string]any{
+									"leader": "tank-nats-0",
+									"replicas": []map[string]any{
+										{"name": "tank-nats-1", "current": true},
+										{"name": "tank-nats-2", "current": false},
+									},
+								},
+								"config": map[string]any{"num_replicas": 3},
+							},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nats.Close()
+
+	got := collectNATSHealth(context.Background(), []string{nats.URL}, "TANK_SESSION_BUS", 3)
+	if got.Status != "warning" {
+		t.Fatalf("status = %q, want warning: %#v", got.Status, got)
+	}
+	if got.JetStream.StreamReplicas != 3 || got.JetStream.StreamCurrentReplicas != 2 || got.JetStream.StreamLaggingReplicas != 1 {
+		t.Fatalf("jetstream = %#v", got.JetStream)
+	}
+	if !strings.Contains(strings.Join(got.Warnings, "\n"), "Live delivery replicas 2/3 current") {
+		t.Fatalf("warnings = %#v", got.Warnings)
+	}
+}
+
+func TestCollectNATSHealthPrefersStreamLeaderReplicaView(t *testing.T) {
+	follower := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/varz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"server_name":    "tank-nats-0",
+				"slow_consumers": 0,
+				"jetstream": map[string]any{
+					"config": map[string]any{"max_memory": 1000},
+					"stats":  map[string]any{"memory": 500, "reserved_memory": 500},
+					"meta":   map[string]any{"pending": 0},
+				},
+			})
+		case "/jsz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"memory":  500,
+				"streams": 1,
+				"config":  map[string]any{"max_memory": 1000},
+				"account_details": []map[string]any{
+					{
+						"stream_detail": []map[string]any{
+							{
+								"name": "TANK_SESSION_BUS",
+								"cluster": map[string]any{
+									"leader": "tank-nats-1",
+									"replicas": []map[string]any{
+										{"name": "tank-nats-1", "current": true},
+										{"name": "tank-nats-2", "current": false},
+									},
+								},
+								"config": map[string]any{"num_replicas": 3},
+							},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer follower.Close()
+
+	leader := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/varz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"server_name":    "tank-nats-1",
+				"slow_consumers": 0,
+				"jetstream": map[string]any{
+					"config": map[string]any{"max_memory": 1000},
+					"stats":  map[string]any{"memory": 500, "reserved_memory": 500},
+					"meta":   map[string]any{"pending": 0},
+				},
+			})
+		case "/jsz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"memory":  500,
+				"streams": 1,
+				"config":  map[string]any{"max_memory": 1000},
+				"account_details": []map[string]any{
+					{
+						"stream_detail": []map[string]any{
+							{
+								"name": "TANK_SESSION_BUS",
+								"cluster": map[string]any{
+									"leader": "tank-nats-1",
+									"replicas": []map[string]any{
+										{"name": "tank-nats-0", "current": true},
+										{"name": "tank-nats-2", "current": true},
+									},
+								},
+								"config": map[string]any{"num_replicas": 3},
+							},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer leader.Close()
+
+	got := collectNATSHealth(context.Background(), []string{follower.URL, leader.URL}, "TANK_SESSION_BUS", 3)
+	if got.Status != "healthy" {
+		t.Fatalf("status = %q, want healthy: %#v", got.Status, got)
+	}
+	if got.JetStream.StreamReplicas != 3 || got.JetStream.StreamCurrentReplicas != 3 || got.JetStream.StreamLaggingReplicas != 0 {
+		t.Fatalf("jetstream = %#v", got.JetStream)
+	}
+	if strings.Contains(strings.Join(got.Warnings, "\n"), "Live delivery replicas") {
+		t.Fatalf("warnings = %#v", got.Warnings)
 	}
 }
 

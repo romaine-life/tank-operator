@@ -4,6 +4,7 @@ import { App } from "./App";
 import { LongChatDebugPage } from "./LongChatDebugPage";
 import { SessionListDebugPage } from "./SessionListDebugPage";
 import { AvatarPreviewHost } from "./avatarPreview";
+import { noteUserScroll, startLongTaskObserver } from "./longTaskTelemetry";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
 import { StyleguideButtons } from "./styleguide/buttons";
@@ -113,6 +114,19 @@ function Root() {
     if (render) return render();
   }
   return <App />;
+}
+
+// Install the main-thread long-task observer before React mounts so the
+// initial-paint chunk is also counted. The probe degrades silently on
+// browsers without PerformanceObserver longtask support (Firefox).
+startLongTaskObserver();
+// Passive document-level scroll listener feeds the long-task probe's
+// scroll-correlation signal. Capture=true catches scroll events on
+// any scrollable container (chat transcript, sidebar) without each one
+// needing its own listener. Passive so the listener can never block
+// the input being measured.
+if (typeof document !== "undefined") {
+  document.addEventListener("scroll", noteUserScroll, { capture: true, passive: true });
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

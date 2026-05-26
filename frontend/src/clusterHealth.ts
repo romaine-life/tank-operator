@@ -60,6 +60,8 @@ export interface ClusterJetStreamHealth {
   stream_name?: string;
   stream_replicas: number;
   expected_stream_replicas: number;
+  stream_current_replicas: number;
+  stream_lagging_replicas: number;
   stream_messages: number;
   stream_bytes: number;
   stream_consumers: number;
@@ -99,13 +101,14 @@ export function clusterHealthIssueText(health: ClusterHealthResponse | null): st
     if (health.sessions.not_ready > 0) return `${health.sessions.not_ready} session pod${health.sessions.not_ready === 1 ? "" : "s"} not ready`;
   }
   if (health.status === "unknown") return "health partially unavailable";
-  return "nodes, sessions, NATS";
+  return "all checks passing";
 }
 
-export function clusterHealthNatsLoadLabel(nats: ClusterNATSHealth | undefined): string {
-  const util = nats?.jetstream?.memory_utilization;
-  if (typeof util !== "number" || !Number.isFinite(util) || util <= 0) return "n/a";
-  return `${Math.round(util * 100)}%`;
+export function clusterHealthNatsReachabilityLabel(nats: ClusterNATSHealth | undefined): string {
+  if (!nats) return "-/-";
+  const expected = nats.expected_servers || nats.configured_monitor_urls;
+  if (expected <= 0) return `${nats.reachable_servers}/?`;
+  return `${nats.reachable_servers}/${expected}`;
 }
 
 export function clusterHealthStatusClass(status: ClusterHealthStatus | undefined): string {

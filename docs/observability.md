@@ -106,6 +106,22 @@ All metric names are prefixed `tank_`. The full namespace:
   candidate-B zombie-SSE detector: the browser's silence watchdog
   observes the idle interval whenever a connected stream has gone
   >30 s without emitting events while a turn is in flight.
+- `tank_client_long_task_*` — browser-reported main-thread long-task
+  diagnostics ingested through `POST /api/client-metrics/long-tasks`.
+  The SPA installs a `PerformanceObserver({type: "longtask"})` probe
+  at boot (`frontend/src/longTaskTelemetry.ts`) and reports every
+  ≥50 ms main-thread block along with three correlation deltas: time
+  since the last tank-event SSE delivery, since the last session
+  switch, and since the last user scroll. Server-bucketed labels:
+  `session_mode` (the chat-scroll mode allowlist), `attribution`
+  (`self` / `other` / `unknown`, bucketed from
+  `PerformanceLongTaskTiming.name`), and `correlation` (`event_burst`
+  / `session_switch` / `scroll` / `idle`, picked from the most-recent
+  in-window signal). The duration histogram buckets target the
+  input-responsiveness band (50 ms - 5 s); anything past 2 s is the
+  "page feels frozen" zone. This is the operational replacement for
+  devtools' Performance panel — the SPA user can't open devtools, so
+  the click-unresponsiveness failure mode otherwise has no surface.
 - `tank_turn_terminal_missing_client_nonce_total{source,event_type}` —
   durable turn terminal rows (`turn.completed`, `turn.failed`,
   `turn.command_failed`, `turn.interrupted`) persisted without
@@ -203,8 +219,17 @@ The endpoint is intentionally a compact user-visible health surface, not a
 replacement for Prometheus or Grafana. It exists so the home page can show the
 cluster-level failure modes that otherwise look like "Tank just died":
 not-ready or pressured nodes, pending/not-ready session pods, unreachable NATS
-replicas, JetStream memory saturation, slow consumers, meta backlog, and
-`TANK_SESSION_BUS` replica-count drift from `NATS_STREAM_REPLICAS`.
+replicas, JetStream memory saturation, slow consumers, metadata backlog, and
+`TANK_SESSION_BUS` live-delivery replica health.
+
+For JetStream streams, the sidebar treats `config.num_replicas` as the
+configured replica count and separately reports current replicas, preferring
+the stream leader's replica view when it is reachable. It does not use the raw
+length of NATS `/jsz`'s `cluster.replicas` array as the configured count
+because that array is reported from a server-local raft view and omits the
+local participant. A healthy three-replica stream should therefore show healthy
+delivery, not a misleading `2/3` warning just because the leader or local
+replica is represented outside the array.
 
 ## Avatar Upload Debug Surface
 

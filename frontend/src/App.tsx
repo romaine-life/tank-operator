@@ -110,7 +110,6 @@ import {
   SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
-  sessionActivityChips,
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
@@ -137,9 +136,14 @@ import {
   logChatScrollEvent,
 } from "./chatScrollTelemetry";
 import {
+  noteSessionSwitch,
+  noteTankEvent,
+  setActiveSessionMode,
+} from "./longTaskTelemetry";
+import {
   clusterHealthHeadline,
   clusterHealthIssueText,
-  clusterHealthNatsLoadLabel,
+  clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
   type ClusterHealthResponse,
   type ClusterHealthStatus,
@@ -1793,45 +1797,60 @@ function ClusterHealthWidget({
       className={`cluster-health ${clusterHealthStatusClass(status)}`}
       aria-label="Cluster health"
     >
-      <button
-        type="button"
-        className="cluster-health-main"
-        onClick={onRefresh}
-        title={issue}
-        aria-label={`${headline}: ${issue}`}
-      >
-        <span className="cluster-health-status" aria-hidden="true">
-          {loading ? (
-            <Loader2Icon className="cluster-health-spin" />
-          ) : status === "healthy" ? (
-            <CheckIcon />
-          ) : status === "critical" ? (
-            <AlertCircleIcon />
-          ) : (
-            <ActivityIcon />
-          )}
-        </span>
-        <span className="cluster-health-body">
-          <span className="cluster-health-title">{headline}</span>
-          <span className="cluster-health-sub">{issue}</span>
-        </span>
-        <span className="cluster-health-refresh" aria-hidden="true">
-          <RotateCcwIcon />
-        </span>
-      </button>
-      <div className="cluster-health-metrics" aria-hidden={health ? undefined : "true"}>
-        <span title="Ready Kubernetes nodes">
-          <MonitorIcon />
-          <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
-        </span>
-        <span title="Ready Tank session pods">
-          <SquareTerminalIcon />
-          <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
-        </span>
-        <span title="NATS JetStream memory utilization">
-          <ActivityIcon />
-          <span>{clusterHealthNatsLoadLabel(nats)}</span>
-        </span>
+      <div className="cluster-health-panel">
+        <button
+          type="button"
+          className="cluster-health-main"
+          onClick={onRefresh}
+          title={issue}
+          aria-label={`${headline}: ${issue}`}
+        >
+          <span className="cluster-health-status" aria-hidden="true">
+            {loading ? (
+              <Loader2Icon className="cluster-health-spin" />
+            ) : status === "healthy" ? (
+              <CheckIcon />
+            ) : status === "critical" ? (
+              <AlertCircleIcon />
+            ) : (
+              <ActivityIcon />
+            )}
+          </span>
+          <span className="cluster-health-body">
+            <span className="cluster-health-title">{headline}</span>
+            <span className="cluster-health-sub">{issue}</span>
+          </span>
+          <span className="cluster-health-refresh" aria-hidden="true">
+            <RotateCcwIcon />
+          </span>
+        </button>
+        <dl
+          className="cluster-health-metrics"
+          aria-label="Cluster health metrics"
+          aria-hidden={health ? undefined : "true"}
+        >
+          <div className="cluster-health-metric" title="Ready Kubernetes nodes">
+            <dt>Nodes</dt>
+            <dd>
+              <MonitorIcon aria-hidden="true" />
+              <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Ready Tank session pods">
+            <dt>Sessions</dt>
+            <dd>
+              <SquareTerminalIcon aria-hidden="true" />
+              <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Reachable NATS monitors">
+            <dt>NATS</dt>
+            <dd>
+              <ActivityIcon aria-hidden="true" />
+              <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
+            </dd>
+          </div>
+        </dl>
       </div>
     </section>
   );
@@ -6609,11 +6628,6 @@ function RunHelpScreen() {
                 ) : (
                   <span className="run-help-status-spacer" />
                 )}
-                {item.chip ? (
-                  <span className={`session-activity-chip is-${item.chip.tone}`}>
-                    {item.chip.label}
-                  </span>
-                ) : null}
               </div>
               <div className="run-help-status-copy">
                 <span className="run-help-status-label">{item.label}</span>
@@ -9251,6 +9265,7 @@ function ChatPane({
         sessionMode: session.mode,
         eventType,
       });
+      noteTankEvent();
       silenceWatchdogRef.current?.reset();
       applySdkDurableEvent(parsed);
     });
@@ -9286,6 +9301,12 @@ function ChatPane({
 
   useEffect(() => {
     if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
+    // Long-task correlation: switching active sessions triggers a
+    // reducer reset + transcript bootstrap + scroll rewire. Attribute
+    // any block in that window to the switch via sinceSessionSwitchMs,
+    // and label any block that fires now by the session's mode.
+    setActiveSessionMode(session.mode);
+    noteSessionSwitch();
     sdkEventSourceRef.current?.close();
     sdkEventSourceRef.current = null;
     void openSdkEventStream();
@@ -12609,7 +12630,6 @@ export function App() {
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
-              const activityChips = sessionActivityChips(sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               const skillStateClass = sessionSkillStateClass(s);
@@ -12681,17 +12701,6 @@ export function App() {
                         )}
                       </span>
                     )}
-                    {activityChips.map((chip) => (
-                      <span
-                        key={chip.key}
-                        className={`session-activity-chip is-${chip.tone}`}
-                        title={chip.title}
-                        aria-label={chip.title}
-                      >
-                        {chip.label}
-                      </span>
-                    ))}
-                    {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"

@@ -74,6 +74,7 @@ export const STATUSES = [
   ["agent-waiting", "Agent waiting"],
   ["agent-needs-input", "Needs input"],
   ["agent-stopping", "Stopping"],
+  ["agent-stopped", "Stopped"],
   ["agent-error", "Agent error"],
 ] as const;
 export const SURFACE_SWATCHES = [
@@ -87,6 +88,10 @@ export const SEMANTIC_SWATCHES = [
   ["accent", "--accent-fg", "#b9d2fb"],
   ["remote", "--cyan", "#67e8f9"],
   ["online", "--status-online", "#34d399"],
+  ["ready", "--status-agent-ready", "#a1a1aa"],
+  ["running", "--status-agent-running", "#60a5fa"],
+  ["stopping", "--status-agent-stopping", "#fbbf24"],
+  ["stopped", "--status-agent-stopped", "#71717a"],
   ["failed", "--status-error-fg", "#ef6f6f"],
   ["needs input", "--status-agent-needs-input", "#fb923c"],
 ] as const;
