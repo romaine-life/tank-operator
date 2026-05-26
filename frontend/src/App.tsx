@@ -88,6 +88,7 @@ import {
   logSessionEventStreamEvent,
   type SilenceWatchdog,
 } from "./sessionEventStreamTelemetry";
+import { transcriptVisuallyAtBottom } from "./transcriptScroll";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   initialConversationState,
@@ -3821,6 +3822,7 @@ function isTurnActivityEntry(entry: TranscriptEntry): boolean {
 function createTurnActivityEntryGroup(
   entry: TranscriptEntry,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+  activeTurnId: string | null,
 ): Extract<EntryGroup, { kind: "activity" }> | null {
   const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
   if (!turnId) return null;
@@ -3831,7 +3833,7 @@ function createTurnActivityEntryGroup(
     turnId,
     entries,
     compactedEntryIds: entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
-    active: entry.activity?.active === true || entry.activity?.status === "active",
+    active: turnId === (activeTurnId?.trim() ?? ""),
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
   };
@@ -3872,7 +3874,7 @@ function groupTranscriptEntries(
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
+        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId);
         if (group) {
           for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
           if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
@@ -6005,7 +6007,7 @@ function buildTurnViewItems(
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
-        active: turnId === active || shellSummary?.active === true || shellSummary?.status === "active",
+        active: turnId === active,
         loaded: Boolean(loadedEntries),
         startedAt,
         completedAt,
@@ -7683,6 +7685,15 @@ function ChatPane({
       setRunStatus((prev) => (prev === "running" ? "done" : prev));
     }
   }
+  function syncSdkVisualTailState(fallback = sdkAtBottomRef.current): boolean {
+    const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, fallback);
+    if (sdkAtBottomRef.current !== visuallyAtBottom) {
+      sdkAtBottomRef.current = visuallyAtBottom;
+      setUserScrolledUp(!visuallyAtBottom);
+      if (visuallyAtBottom) setSdkPendingTailCount(0);
+    }
+    return visuallyAtBottom;
+  }
   function replaceSdkServerRows(
     projectedEntries: TranscriptEntry[],
     clearRealtime = false,
@@ -7851,6 +7862,7 @@ function ChatPane({
   function applySdkDurableEvent(event: JsonObject): void {
     if (!isTankConversationEvent(event)) return;
     advanceSdkTimelineCursor(event);
+    const atLiveTail = syncSdkVisualTailState();
     const alreadySeen = sdkServerEventsRef.current.some(
       (candidate) => candidate.event_id === event.event_id,
     );
@@ -7865,7 +7877,7 @@ function ChatPane({
       // produce new bubbles, just status transitions. Match the same
       // policy the server-side UnreadOutputItemTypes uses for badging.
       if (
-        !sdkAtBottomRef.current &&
+        !atLiveTail &&
         eventCountsAsTailOutput(event as unknown as JsonObject)
       ) {
         setSdkPendingTailCount((count) => count + 1);
@@ -7897,7 +7909,7 @@ function ChatPane({
   }
 
   function scheduleProjectedTimelineRefresh(): void {
-    if (!sdkAtBottomRef.current) return;
+    if (!syncSdkVisualTailState()) return;
     if (sdkProjectedRefreshTimerRef.current !== null) {
       window.clearTimeout(sdkProjectedRefreshTimerRef.current);
     }
@@ -7907,17 +7919,19 @@ function ChatPane({
     }, 500);
   }
 
-  // handleSdkAtBottomChange is the durable boolean source from Virtuoso
-  // for "is the user viewing the live tail." Replaces the prior 24px
-  // scrollTop hysteresis listener. Two side effects:
+  // handleSdkAtBottomChange starts from Virtuoso's live-tail signal but
+  // verifies it against the actual scroll container. The DOM check covers
+  // cases where virtualization keeps the callback stale while the user is
+  // visibly above the bottom. Two side effects:
   //   - Mirror to userScrolledUp so the existing scroll-to-bottom button
   //     visibility CSS still works.
   //   - When transitioning to atBottom=true, clear the pending-tail
   //     pill counter — the user has now seen those events.
   function handleSdkAtBottomChange(atBottom: boolean): void {
-    sdkAtBottomRef.current = atBottom;
-    setUserScrolledUp(!atBottom);
-    if (atBottom) setSdkPendingTailCount(0);
+    const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, atBottom);
+    sdkAtBottomRef.current = visuallyAtBottom;
+    setUserScrolledUp(!visuallyAtBottom);
+    if (visuallyAtBottom) setSdkPendingTailCount(0);
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -8114,6 +8128,8 @@ function ChatPane({
       }
       const scrollToLatestOnReady =
         timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      const stickToLatestAfterLoad =
+        source === "projected-refresh" && syncSdkVisualTailState();
       if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
         timelineBootstrapScrollToLatestRef.current = false;
       }
@@ -8226,6 +8242,8 @@ function ChatPane({
       applySdkActivitySummaryToUi(body.activity);
       if (scrollToLatestOnReady) {
         timelineBootstrapScrollToLatestRef.current = false;
+        requestScrollToLatest("auto", source);
+      } else if (stickToLatestAfterLoad) {
         requestScrollToLatest("auto", source);
       }
       return { replayed: projectedEntries.length > 0 };

@@ -14,7 +14,7 @@ import (
 )
 
 const transcriptRowCursorSeparator = "\x1f"
-const transcriptRowBackfillVersion = 1
+const transcriptRowBackfillVersion = 2
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
@@ -56,14 +56,7 @@ func (s *transcriptRowStore) ReplaceForTurn(ctx context.Context, tankSessionID, 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM session_transcript_rows WHERE tank_session_id = $1 AND turn_id = $2`,
-		storageKey,
-		strings.TrimSpace(turnID),
-	); err != nil {
-		return err
-	}
-	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
+	if err := s.replaceForTurnTx(ctx, tx, storageKey, turnID, entries); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -76,23 +69,7 @@ func (s *transcriptRowStore) ReplaceForSession(ctx context.Context, tankSessionI
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx,
-		`DELETE FROM session_transcript_rows WHERE tank_session_id = $1`,
-		storageKey,
-	); err != nil {
-		return err
-	}
-	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO session_transcript_row_backfills (
-			tank_session_id, projection_version, completed_at
-		) VALUES ($1, $2, now())
-		ON CONFLICT (tank_session_id) DO UPDATE
-		SET projection_version = EXCLUDED.projection_version,
-			completed_at = now()
-	`, storageKey, transcriptRowBackfillVersion); err != nil {
+	if err := s.replaceForSessionTx(ctx, tx, storageKey, entries); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -105,10 +82,94 @@ func (s *transcriptRowStore) UpsertRows(ctx context.Context, tankSessionID strin
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
+	if err := s.upsertRowsTx(ctx, tx, storageKey, entries); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *transcriptRowStore) WithTranscriptMaterializationTx(ctx context.Context, tankSessionID string, fn func(context.Context, pgx.Tx) error) error {
+	if fn == nil {
+		return nil
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := s.lockTranscriptMaterializationTx(ctx, tx, storageKey); err != nil {
+		return err
+	}
+	if err := fn(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *transcriptRowStore) ReplaceForTurnTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string, entries []map[string]any) error {
+	return s.replaceForTurnTx(ctx, tx, sessionmodel.SessionStorageKey(s.scope, tankSessionID), turnID, entries)
+}
+
+func (s *transcriptRowStore) ReplaceForSessionTx(ctx context.Context, tx pgx.Tx, tankSessionID string, entries []map[string]any) error {
+	return s.replaceForSessionTx(ctx, tx, sessionmodel.SessionStorageKey(s.scope, tankSessionID), entries)
+}
+
+func (s *transcriptRowStore) UpsertRowsTx(ctx context.Context, tx pgx.Tx, tankSessionID string, entries []map[string]any) error {
+	return s.upsertRowsTx(ctx, tx, sessionmodel.SessionStorageKey(s.scope, tankSessionID), entries)
+}
+
+func (s *transcriptRowStore) lockTranscriptMaterializationTx(ctx context.Context, tx pgx.Tx, storageKey string) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO session_transcript_materialization_locks (tank_session_id)
+		VALUES ($1)
+		ON CONFLICT (tank_session_id) DO NOTHING
+	`, storageKey); err != nil {
+		return err
+	}
+	var locked string
+	return tx.QueryRow(ctx, `
+		SELECT tank_session_id
+		FROM session_transcript_materialization_locks
+		WHERE tank_session_id = $1
+		FOR UPDATE
+	`, storageKey).Scan(&locked)
+}
+
+func (s *transcriptRowStore) replaceForTurnTx(ctx context.Context, tx pgx.Tx, storageKey, turnID string, entries []map[string]any) error {
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM session_transcript_rows WHERE tank_session_id = $1 AND turn_id = $2`,
+		storageKey,
+		strings.TrimSpace(turnID),
+	); err != nil {
+		return err
+	}
+	return insertTranscriptRows(ctx, tx, storageKey, entries)
+}
+
+func (s *transcriptRowStore) replaceForSessionTx(ctx context.Context, tx pgx.Tx, storageKey string, entries []map[string]any) error {
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM session_transcript_rows WHERE tank_session_id = $1`,
+		storageKey,
+	); err != nil {
+		return err
+	}
+	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO session_transcript_row_backfills (
+			tank_session_id, projection_version, completed_at
+		) VALUES ($1, $2, now())
+		ON CONFLICT (tank_session_id) DO UPDATE
+		SET projection_version = EXCLUDED.projection_version,
+			completed_at = now()
+	`, storageKey, transcriptRowBackfillVersion)
+	return err
+}
+
+func (s *transcriptRowStore) upsertRowsTx(ctx context.Context, tx pgx.Tx, storageKey string, entries []map[string]any) error {
+	return insertTranscriptRows(ctx, tx, storageKey, entries)
 }
 
 func (s *transcriptRowStore) ListLatest(ctx context.Context, tankSessionID string, rows int) (TranscriptRowPage, error) {

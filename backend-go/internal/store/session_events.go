@@ -131,6 +131,10 @@ type postgresSessionEventStore struct {
 	scope string
 }
 
+type sessionEventQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 func NewPostgresSessionEventStore(pool *pgxpool.Pool, scope string) SessionEventStore {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
@@ -207,6 +211,14 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 // The (tank_session_id, order_key) index makes both directions indexed
 // seeks; no full-session scan on any read path.
 func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
+	return s.listBySession(ctx, s.pool, tankSessionID, cursor, limit)
+}
+
+func (s *postgresSessionEventStore) ListBySessionTx(ctx context.Context, tx pgx.Tx, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
+	return s.listBySession(ctx, tx, tankSessionID, cursor, limit)
+}
+
+func (s *postgresSessionEventStore) listBySession(ctx context.Context, qx sessionEventQueryer, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
@@ -234,7 +246,7 @@ func (s *postgresSessionEventStore) ListBySession(ctx context.Context, tankSessi
 		args = append(args, queryLimit)
 	}
 
-	rows, err := s.pool.Query(ctx, q, args...)
+	rows, err := qx.Query(ctx, q, args...)
 	if err != nil {
 		return SessionEventPage{}, err
 	}
@@ -282,6 +294,14 @@ func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessio
 }
 
 func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
+	return s.eventsForTurn(ctx, s.pool, tankSessionID, turnID, limit)
+}
+
+func (s *postgresSessionEventStore) EventsForTurnTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
+	return s.eventsForTurn(ctx, tx, tankSessionID, turnID, limit)
+}
+
+func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessionEventQueryer, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
@@ -294,7 +314,7 @@ func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessi
 		ORDER BY order_key ASC
 		LIMIT $3
 	`
-	rows, err := s.pool.Query(ctx, q, storageKey, strings.TrimSpace(turnID), queryLimit)
+	rows, err := qx.Query(ctx, q, storageKey, strings.TrimSpace(turnID), queryLimit)
 	if err != nil {
 		return SessionEventPage{}, err
 	}

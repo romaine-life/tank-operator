@@ -229,6 +229,19 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
+test("replayed turn activity shells do not own active state", () => {
+  assert.equal(
+    appSource.includes('entry.activity?.active === true || entry.activity?.status === "active"'),
+    false,
+  );
+  assert.equal(
+    appSource.includes('shellSummary?.active === true || shellSummary?.status === "active"'),
+    false,
+  );
+  assert.equal(appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'), true);
+  assert.equal(appSource.includes("active: turnId === active,"), true);
+});
+
 test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
   assert.equal(appSource.includes("buildTurnViewItems"), true);
@@ -243,7 +256,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("turnThinkingGroup"), true);
   assert.equal(appSource.includes("showAssistantAvatar = !ownedByTurnActivity"), true);
   assert.match(appSource, /ownedByTurnActivity\s+showAssistantAvatar/);
-  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
+  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId)"), true);
   assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
   assert.equal(appSource.includes("function TurnsTab"), true);
@@ -555,6 +568,13 @@ test("chat submit explicitly lands at the latest message", () => {
   const startRunMatch = appSource.match(/function startRun\([\s\S]*?\n  \}/);
   assert.ok(startRunMatch, "startRun should be present");
   assert.equal(startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'), true);
+});
+
+test("live transcript tail state checks the actual scroll container", () => {
+  assert.equal(appSource.includes("syncSdkVisualTailState"), true);
+  assert.equal(appSource.includes("transcriptVisuallyAtBottom"), true);
+  assert.match(appSource, /const atLiveTail = syncSdkVisualTailState\(\)/);
+  assert.match(appSource, /if \(!syncSdkVisualTailState\(\)\) return;/);
 });
 
 test("chat back-pagination keeps an explicit access path", () => {

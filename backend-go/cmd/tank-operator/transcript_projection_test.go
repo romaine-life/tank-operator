@@ -38,6 +38,9 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	if activity["toolCount"] != 1 || activity["childCount"] != 2 {
 		t.Fatalf("activity summary = %#v, want one tool and two child log entries", activity)
 	}
+	if activity["active"] == true || activity["status"] == "active" {
+		t.Fatalf("completed turn activity rendered active: %#v", activity)
+	}
 	if _, hasChildren := shell["entries"]; hasChildren {
 		t.Fatalf("collapsed shell must not inline child entries: %#v", shell)
 	}
