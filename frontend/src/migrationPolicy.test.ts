@@ -178,20 +178,21 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
-test("turn activity rows render with agent avatar ownership", () => {
-  assert.match(
-    appSource,
-    /className="run-turn-activity-avatar"[\s\S]{0,240}<AgentAvatarIcon avatar=\{avatar\}/,
-  );
-  assert.equal(appSource.includes("turnActivityOwnedAssistantEntries"), true);
-  assert.equal(appSource.includes('data-owner={ownedByTurnActivity ? "activity" : undefined}'), true);
-  assert.equal(appSource.includes("ownedByTurnActivity"), true);
-  assert.equal(indexCssSource.includes(".run-turn-activity-stack"), true);
-  assert.equal(indexCssSource.includes(".run-turn-activity-content"), true);
-  assert.equal(indexCssSource.includes(".run-turn-activity-avatar"), true);
-  assert.equal(indexCssSource.includes('[data-slot="message"][data-owner="activity"]'), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-activity-avatar"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes('data-inline-response="true"'), true);
+test("turn internals move out of the transcript into a turn view", () => {
+  assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
+  assert.equal(appSource.includes("buildTurnViewItems"), true);
+  assert.equal(appSource.includes("RunTurnActivityScreen"), true);
+  assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
+  assert.equal(appSource.includes("turnThinkingGroup"), true);
+  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
+  assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
+  assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
+  assert.equal(appSource.includes("openTurnPage"), true);
+  assert.equal(indexCssSource.includes(".run-turn-view"), true);
+  assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
+  assert.equal(indexCssSource.includes(".run-msg-turn"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
 });
 
 test("chat live stream waits for timeline bootstrap", () => {

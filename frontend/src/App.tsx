@@ -2680,7 +2680,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
 
 /** A file the user picked / dropped / pasted on the home composer before
@@ -3547,6 +3547,7 @@ function conversationEntriesToTranscript(
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry }
   | {
       kind: "activity";
       id: string;
@@ -3563,8 +3564,22 @@ function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
     return toolGroupStateKey(g.entries);
   }
+  if (g.kind === "thinking") return g.id;
   if (g.kind === "activity") return g.id;
   return g.entry.id;
+}
+
+function isUserMessageEntry(entry: TranscriptEntry): boolean {
+  return entry.kind === "message" && entry.role === "user";
+}
+
+function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<EntryGroup, { kind: "thinking" }> {
+  return {
+    kind: "thinking",
+    id: `turn-thinking-${turnId}`,
+    turnId,
+    shell,
+  };
 }
 
 function turnActivityOwnedAssistantEntries(
@@ -3626,16 +3641,6 @@ function createTurnActivityEntryGroup(
   };
 }
 
-function pushTurnActivityEntryGroup(
-  groups: EntryGroup[],
-  entry: TranscriptEntry,
-  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
-): Extract<EntryGroup, { kind: "activity" }> | null {
-  const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
-  if (group) groups.push(group);
-  return group;
-}
-
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -3661,22 +3666,27 @@ function groupTranscriptEntries(
   activeTurnId: string | null = null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined> = {},
 ): EntryGroup[] {
+  void condenseCompletedTurns;
   const hasProjectedTurnActivity = entries.some(isTurnActivityEntry);
-  if (!condenseCompletedTurns && !hasProjectedTurnActivity) return groupFlatTranscriptEntries(entries);
   const groups: EntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
-  const activityOwnedEntryIds = new Set<string>();
+  const activityHiddenEntryIds = new Set<string>();
   if (hasProjectedTurnActivity) {
+    const insertedThinkingTurnIds = new Set<string>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        const group = pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn);
-        for (const ownedEntry of group ? turnActivityOwnedAssistantEntries(group) : []) {
-          activityOwnedEntryIds.add(ownedEntry.id);
+        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
+        if (group) {
+          for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
+          if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
+            groups.push(turnThinkingGroup(group.turnId, entry));
+            insertedThinkingTurnIds.add(group.turnId);
+          }
         }
         continue;
       }
-      if (activityOwnedEntryIds.has(entry.id)) continue;
+      if (activityHiddenEntryIds.has(entry.id)) continue;
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
@@ -3685,13 +3695,11 @@ function groupTranscriptEntries(
   for (const group of compactCompletedTurnEntries(entries, true, activeTurnId)) {
     if (group.kind === "activity") {
       flushTranscriptToolBucket(groups, bucket);
-      groups.push(group);
-      for (const ownedEntry of turnActivityOwnedAssistantEntries(group)) {
-        activityOwnedEntryIds.add(ownedEntry.id);
+      if (group.active) {
+        groups.push(turnThinkingGroup(group.turnId));
       }
       continue;
     }
-    if (activityOwnedEntryIds.has(group.entry.id)) continue;
     pushTranscriptEntryGroup(groups, group.entry, bucket);
   }
   flushTranscriptToolBucket(groups, bucket);
@@ -4081,6 +4089,29 @@ function LinkButton({
   );
 }
 
+function TurnViewButton({
+  turnId,
+  onOpenTurn,
+}: {
+  turnId: string;
+  onOpenTurn: (turnId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-turn"
+      title="Open turn"
+      aria-label="Open turn"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenTurn(turnId);
+      }}
+    >
+      <ActivityIcon size={12} aria-hidden="true" />
+    </button>
+  );
+}
+
 function ForkButton({
   entry,
   onFork,
@@ -4286,6 +4317,7 @@ function RunMessageBubble({
   showDuration,
   onQuote,
   onFork,
+  onOpenTurn,
   canonicalMessage = true,
   ownedByTurnActivity = false,
 }: {
@@ -4298,6 +4330,7 @@ function RunMessageBubble({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string) => void;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
 }) {
@@ -4404,6 +4437,9 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
+          {variant === "assistant" && entry.turnId && onOpenTurn && (
+            <TurnViewButton turnId={entry.turnId} onOpenTurn={onOpenTurn} />
+          )}
           {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
           )}
@@ -5672,6 +5708,110 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
 }
 
+type TurnViewItem = {
+  turnId: string;
+  label: string;
+  summary: string;
+  entries: TranscriptEntry[];
+  shell?: TranscriptEntry;
+  active: boolean;
+  loaded: boolean;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
+  return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
+}
+
+function buildTurnViewItems(
+  entries: TranscriptEntry[],
+  activeTurnId: string | null,
+  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+): TurnViewItem[] {
+  const order = new Map<string, number>();
+  const shells = new Map<string, TranscriptEntry>();
+  const rawEntries = new Map<string, TranscriptEntry[]>();
+  entries.forEach((entry, index) => {
+    const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+    if (!turnId) return;
+    if (!order.has(turnId)) order.set(turnId, index);
+    if (isTurnActivityEntry(entry)) {
+      shells.set(turnId, entry);
+      return;
+    }
+    if (isUserMessageEntry(entry)) return;
+    const bucket = rawEntries.get(turnId) ?? [];
+    bucket.push(entry);
+    rawEntries.set(turnId, bucket);
+  });
+
+  const active = activeTurnId?.trim() ?? "";
+  if (active && !order.has(active)) order.set(active, entries.length);
+
+  return Array.from(order.entries())
+    .sort((a, b) => a[1] - b[1])
+    .map(([turnId], index) => {
+      const shell = shells.get(turnId);
+      const loadedEntries = activityEntriesByTurn[turnId];
+      const turnEntries = loadedEntries ?? rawEntries.get(turnId) ?? [];
+      const shellSummary = shell?.activity;
+      const startedAt =
+        shellSummary?.startedAt ??
+        turnEntries.find((entry) => turnEntryTimestamp(entry))?.startedAt ??
+        turnEntries.find((entry) => turnEntryTimestamp(entry))?.time;
+      const completedAt =
+        shellSummary?.completedAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.completedAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
+      return {
+        turnId,
+        label: `Turn ${index + 1}`,
+        summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
+        entries: turnEntries,
+        shell,
+        active: turnId === active || shellSummary?.active === true || shellSummary?.status === "active",
+        loaded: Boolean(loadedEntries),
+        startedAt,
+        completedAt,
+      };
+    });
+}
+
+function RunTurnThinkingBubble({
+  turnId,
+  avatar,
+  onOpenTurn,
+}: {
+  turnId: string;
+  avatar: AgentAvatar;
+  onOpenTurn?: (turnId: string) => void;
+}) {
+  return (
+    <div
+      className="run-transcript-message run-turn-thinking"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="turn-thinking"
+    >
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <button
+        type="button"
+        className="run-transcript-message-content run-turn-thinking-content"
+        title="Open turn"
+        aria-label="Open turn"
+        onClick={() => onOpenTurn?.(turnId)}
+      >
+        <span className="run-turn-thinking-dots" aria-hidden="true">...</span>
+      </button>
+    </div>
+  );
+}
+
 function RunTurnActivityGroup({
   group,
   open,
@@ -5839,6 +5979,7 @@ function RunTurnActivityGroup({
                     />
                   );
                 }
+                if (child.kind === "thinking") return null;
                 return (
                   <RunMessageBubble
                     key={child.entry.id}
@@ -5880,6 +6021,167 @@ function RunTurnActivityGroup({
   );
 }
 
+function RunTurnActivityScreen({
+  turns,
+  selectedTurnId,
+  onSelectTurn,
+  avatar,
+  systemAvatar,
+  sessionId,
+  showThinking,
+  autoExpandTools,
+  showTimestamps,
+  showDuration,
+  loadingActivityTurns,
+  onOpenBackgroundTask,
+}: {
+  turns: TurnViewItem[];
+  selectedTurnId: string | null;
+  onSelectTurn: (turnId: string) => void;
+  avatar: AgentAvatar;
+  systemAvatar: AgentAvatar | null;
+  sessionId: string;
+  showThinking: boolean;
+  autoExpandTools: boolean;
+  showTimestamps: boolean;
+  showDuration: boolean;
+  loadingActivityTurns: Record<string, boolean | undefined>;
+  onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+}) {
+  const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
+  const detailEntries = useMemo(
+    () =>
+      (selected?.entries ?? []).filter(
+        (entry) => !isTurnActivityEntry(entry) && !isUserMessageEntry(entry),
+      ),
+    [selected?.entries],
+  );
+  const detailGroups = useMemo(
+    () => groupFlatTranscriptEntries(detailEntries),
+    [detailEntries],
+  );
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
+  const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
+  const renderGroup = (group: FlatEntryGroup) => {
+    if (group.kind === "tools") {
+      const groupKey = toolGroupStateKey(group.entries);
+      return (
+        <RunToolGroup
+          key={groupKey}
+          entries={group.entries}
+          autoExpand={autoExpandTools}
+          showTimestamps={showTimestamps}
+          open={
+            toolGroupOpenOverrides[groupKey] ??
+            toolGroupDefaultOpen(group.entries, autoExpandTools, toolExpansionOverrides)
+          }
+          onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
+          toolExpansionOverrides={toolExpansionOverrides}
+          onToolExpandedChange={setToolExpanded}
+        />
+      );
+    }
+    if (group.kind === "reasoning") {
+      return <RunReasoningBlock key={group.entry.id} entry={group.entry} showThinking={showThinking} />;
+    }
+    if (group.kind === "meta") {
+      return <RunMetaBlock key={group.entry.id} entry={group.entry} />;
+    }
+    if (group.kind === "background_task") {
+      return (
+        <RunBackgroundTaskBlock
+          key={group.entry.id}
+          entry={group.entry}
+          showTimestamps={showTimestamps}
+          onOpenTask={onOpenBackgroundTask}
+        />
+      );
+    }
+    if (group.kind === "thinking") return null;
+    return (
+      <RunMessageBubble
+        key={group.entry.id}
+        entry={group.entry}
+        avatar={avatar}
+        systemAvatar={systemAvatar}
+        sessionId={sessionId}
+        highlighted={false}
+        showTimestamps={showTimestamps}
+        showDuration={showDuration}
+        canonicalMessage={false}
+        ownedByTurnActivity
+      />
+    );
+  };
+
+  return (
+    <div className="run-turn-view" aria-label="Turn view">
+      <div className="run-turn-view-head">
+        <div className="run-turn-view-title">
+          <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
+          <h2>Turns</h2>
+        </div>
+        <select
+          className="run-turn-view-select"
+          value={selected?.turnId ?? ""}
+          onChange={(event) => onSelectTurn(event.target.value)}
+          disabled={turns.length === 0}
+          aria-label="Select turn"
+        >
+          {turns.length === 0 ? (
+            <option value="">No turns</option>
+          ) : turns.map((turn) => (
+            <option key={turn.turnId} value={turn.turnId}>
+              {turn.label}{turn.active ? " (running)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      {selected ? (
+        <>
+          <div className="run-turn-view-summary">
+            <span data-active={selected.active ? "true" : undefined}>
+              {selected.active ? "running" : "complete"}
+            </span>
+            <span>{selected.summary}</span>
+            {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
+            {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+          </div>
+          <div className="run-turn-view-body run-transcript run-transcript-claude">
+            {loading && detailGroups.length === 0 ? (
+              <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>Loading activity...</span>
+              </div>
+            ) : selected.active && detailGroups.length === 0 ? (
+              <div className="run-turn-view-thinking" aria-label="Turn is running">
+                <span aria-hidden="true">...</span>
+              </div>
+            ) : detailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
+            ) : (
+              detailGroups.map(renderGroup)
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="run-shell-tasks-empty">No turns.</div>
+      )}
+    </div>
+  );
+}
+
 // RunMessages renders the durable transcript through react-virtuoso so the
 // DOM stays bounded regardless of session length — Mattermost / Element /
 // Slack / Discord all converge on this architecture (see
@@ -5910,6 +6212,7 @@ export function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  onOpenTurn,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -5946,6 +6249,7 @@ export function RunMessages({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -6028,6 +6332,7 @@ export function RunMessages({
         }
         return compactedContains || visibleAssistantContains;
       }
+      if (g.kind === "thinking") return false;
       return g.entry.id === target;
     });
     if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
@@ -6181,6 +6486,15 @@ export function RunMessages({
           />
         );
       }
+      if (g.kind === "thinking") {
+        return (
+          <RunTurnThinkingBubble
+            turnId={g.turnId}
+            avatar={avatar}
+            onOpenTurn={onOpenTurn}
+          />
+        );
+      }
       if (g.kind === "activity") {
         const groupKey = entryGroupKey(g);
         return (
@@ -6221,6 +6535,7 @@ export function RunMessages({
           showDuration={showDuration}
           onQuote={onQuote}
           onFork={onFork}
+          onOpenTurn={onOpenTurn}
         />
       );
     },
@@ -6232,6 +6547,7 @@ export function RunMessages({
       highlightedEntryId,
       loadingActivityTurns,
       onFork,
+      onOpenTurn,
       onActivityOpen,
       onOpenBackgroundTask,
       onQuote,
@@ -6737,6 +7053,7 @@ function ChatPane({
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
   const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
@@ -9406,6 +9723,15 @@ function ChatPane({
     ],
     [activeBackgroundEntries, detachedShellEntries],
   );
+  const turnViewItems = useMemo(
+    () => buildTurnViewItems(renderedEntries, renderedActiveTurnId, activityEntriesByTurn),
+    [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
+  );
+  const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
+  const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  const selectedTurnExists =
+    selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
+  const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
   const ensureTurnActivityLoaded = useCallback((turnId: string) => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
@@ -9432,6 +9758,26 @@ function ChatPane({
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
   }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
+  useEffect(() => {
+    if (turnViewItems.length === 0) {
+      if (selectedTurnId !== null) setSelectedTurnId(null);
+      return;
+    }
+    if (!selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
+  }, [latestTurnId, selectedTurnExists, selectedTurnId, turnViewItems.length]);
+  useEffect(() => {
+    if (activeTab !== "turns") return;
+    if (!effectiveSelectedTurnId) return;
+    ensureTurnActivityLoaded(effectiveSelectedTurnId);
+  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  const openTurnPage = useCallback((turnId?: string) => {
+    const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
+    if (target) {
+      setSelectedTurnId(target);
+      ensureTurnActivityLoaded(target);
+    }
+    setActiveTab("turns");
+  }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
@@ -9761,6 +10107,27 @@ function ChatPane({
               <span>Back</span>
             </button>
           )}
+          <button
+            type="button"
+            className={`run-tab run-turns-trigger${activeTab === "turns" ? " run-tab-active" : ""}`}
+            onClick={() => {
+              if (activeTab === "turns") setActiveTab("chat");
+              else openTurnPage();
+            }}
+            aria-pressed={activeTab === "turns"}
+            title="Turns"
+          >
+            <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+            <span>Turns</span>
+            {turnViewItems.length > 0 && (
+              <span
+                className="run-shell-tasks-count"
+                data-active={turnViewItems.some((turn) => turn.active) ? "true" : undefined}
+              >
+                {turnViewItems.length}
+              </span>
+            )}
+          </button>
           <BackgroundLedger
             entries={backgroundLedgerEntries}
             active={activeTab === "background"}
@@ -10080,6 +10447,24 @@ function ChatPane({
               </div>
             </div>
           </div>
+        ) : activeTab === "turns" ? (
+          <RunTurnActivityScreen
+            turns={turnViewItems}
+            selectedTurnId={effectiveSelectedTurnId}
+            onSelectTurn={(turnId) => {
+              setSelectedTurnId(turnId);
+              ensureTurnActivityLoaded(turnId);
+            }}
+            avatar={sessionAvatar}
+            systemAvatar={systemAvatar}
+            sessionId={session.id}
+            showThinking={runPrefs.showThinking}
+            autoExpandTools={runPrefs.autoExpandTools}
+            showTimestamps={runPrefs.showTimestamps}
+            showDuration={runPrefs.showDuration}
+            loadingActivityTurns={loadingActivityTurns}
+            onOpenBackgroundTask={openBackgroundPage}
+          />
         ) : activeTab === "background" ? (
           <BackgroundScreen
             shellEntries={activeBackgroundEntries}
@@ -10200,6 +10585,7 @@ function ChatPane({
                       })
               }
               onOpenBackgroundTask={openBackgroundPage}
+              onOpenTurn={openTurnPage}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();

@@ -154,7 +154,7 @@ function RunningTool({ highlighted }: { highlighted?: boolean }) {
   );
 }
 
-function ActiveTurnActivity({
+function TurnThinkingMessage({
   active,
   highlighted,
 }: {
@@ -164,46 +164,51 @@ function ActiveTurnActivity({
   const avatar = getSessionAvatar("portfolio-transcript-state");
   return (
     <div
-      className="run-turn-activity"
-      data-state="open"
+      className="run-transcript-message run-turn-thinking"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="turn-thinking"
       data-active={active ? "true" : undefined}
-      data-inline-response="true"
-      data-design-component="TranscriptTurnActivity"
+      data-highlight={highlighted ? "true" : undefined}
+      data-design-component="TranscriptTurnThinking"
       data-design-state={active ? "active" : "rest"}
       data-inspectable
     >
-      <span className="run-turn-activity-avatar" aria-hidden="true">
+      <span className="run-msg-ai-avatar" aria-hidden="true">
         <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
-      <div className="run-turn-activity-stack">
-        <div className="run-turn-activity-content">
-          <button type="button" className="run-turn-activity-header" aria-expanded={true}>
-            <span className="run-turn-activity-icon" aria-hidden="true">
-              <ActivityIcon size={14} strokeWidth={2} />
-            </span>
-            <span className="run-turn-activity-label">Turn activity</span>
-            <span className="run-turn-activity-summary">
-              1 running shell / 1 edit candidate / 2 progress notes
-            </span>
-            <span className="run-tool-timing">
-              <span>19:04:14</span>
-              <span className="run-tool-timing-arrow">to</span>
-              <span className="run-tool-timing-running">
-                <TimerIcon className="run-tool-timing-spinner run-spin" size={12} aria-hidden="true" />
-              </span>
-            </span>
-            <span className="run-turn-activity-chevron">
-              <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
-            </span>
-          </button>
-          <div className="run-turn-activity-body">
-            <RunningTool highlighted={highlighted} />
-          </div>
+      <button type="button" className="run-transcript-message-content run-turn-thinking-content">
+        <span aria-hidden="true">...</span>
+      </button>
+    </div>
+  );
+}
+
+function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
+  return (
+    <div className="run-turn-view" data-design-component="TurnView" data-inspectable>
+      <div className="run-turn-view-head">
+        <div className="run-turn-view-title">
+          <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
+          <h2>Turns</h2>
         </div>
+        <select className="run-turn-view-select" value="turn-3" aria-label="Select turn" onChange={() => {}}>
+          <option value="turn-1">Turn 1</option>
+          <option value="turn-2">Turn 2</option>
+          <option value="turn-3">Turn 3 (running)</option>
+        </select>
+      </div>
+      <div className="run-turn-view-summary">
+        <span data-active="true">running</span>
+        <span>1 running shell / 1 edit candidate / 2 progress notes</span>
+        <span>19:04:14</span>
+      </div>
+      <div className="run-turn-view-body run-transcript run-transcript-claude">
+        <RunningTool highlighted={highlighted} />
         <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity>
           <p style={{ margin: 0 }}>
-            I found the highlight hook and the active turn data attribute. The portfolio keeps both states
-            visible without needing a live session ledger.
+            I found the highlight hook and the active turn data attribute.
           </p>
         </TranscriptMessage>
       </div>
@@ -231,7 +236,7 @@ function TranscriptSpecimen({
           Show me the active transcript turn and the text box without waiting for real session data.
         </p>
       </TranscriptMessage>
-      <ActiveTurnActivity
+      <TurnThinkingMessage
         active={highlightTarget === "activity"}
         highlighted={highlightTarget === "activity"}
       />
@@ -324,11 +329,16 @@ function ComposerSpecimen({
   );
 }
 
-function PortfolioTabs() {
+function PortfolioTabs({ active }: { active: "transcript" | "turns" }) {
   return (
     <>
-      <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
+      <button className={`run-tab${active === "transcript" ? " run-tab-active" : ""}`} type="button" aria-pressed={active === "transcript"}>
         Transcript
+      </button>
+      <button className={`run-tab run-turns-trigger${active === "turns" ? " run-tab-active" : ""}`} type="button" aria-pressed={active === "turns"}>
+        <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+        <span>Turns</span>
+        <span className="run-shell-tasks-count" data-active="true">3</span>
       </button>
       <button className="run-tab" type="button">
         Files
@@ -372,6 +382,7 @@ export function StyleguidePortfolioTranscript() {
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>("both");
   const transcriptActive = activeSurface === "transcript" || activeSurface === "both";
   const composerActive = activeSurface === "composer" || activeSurface === "both";
+  const turnViewActive = highlightTarget === "activity";
 
   return (
     <div style={styleguideShellStyle}>
@@ -422,10 +433,14 @@ export function StyleguidePortfolioTranscript() {
                     <p className="run-header-sub">mocked codex gui session</p>
                   </>
                 }
-                tabs={<PortfolioTabs />}
-                body={<TranscriptSpecimen highlightTarget={highlightTarget} />}
+                tabs={<PortfolioTabs active={turnViewActive ? "turns" : "transcript"} />}
+                body={
+                  turnViewActive
+                    ? <TurnViewSpecimen highlighted={highlightTarget === "activity"} />
+                    : <TranscriptSpecimen highlightTarget={highlightTarget} />
+                }
                 bodyClassName={transcriptActive ? "styleguide-surface-active styleguide-transcript-surface-active" : undefined}
-                bodyAriaLabel="Transcript"
+                bodyAriaLabel={turnViewActive ? "Turn view" : "Transcript"}
                 floatingBetweenBodyAndComposer={
                   <button
                     className="run-scroll-to-bottom run-scroll-to-bottom-pending"
