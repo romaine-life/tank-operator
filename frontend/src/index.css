@@ -5779,8 +5779,16 @@ textarea.run-files-viewer-editor:focus {
   flex-shrink: 0;
 }
 
-.run-turn-activity-content {
+.run-turn-activity-stack {
   grid-column: 2;
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.run-turn-activity-content {
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -7176,6 +7184,16 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
   padding: 0.75rem 1rem;
+}
+
+.run-transcript [data-slot="message"][data-owner="activity"] {
+  grid-template-columns: minmax(0, 1fr);
+  padding-left: 0;
+}
+
+.run-transcript [data-slot="message"][data-owner="activity"] .run-transcript-message-content {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .run-transcript-message-text {

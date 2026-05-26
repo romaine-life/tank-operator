@@ -3567,6 +3567,18 @@ function entryGroupKey(g: EntryGroup): string {
   return g.entry.id;
 }
 
+function turnActivityOwnedAssistantEntries(
+  group: Extract<EntryGroup, { kind: "activity" }>,
+): TranscriptEntry[] {
+  const compactedEntryIds = new Set(group.compactedEntryIds);
+  return group.entries.filter(
+    (entry) =>
+      entry.kind === "message" &&
+      entry.role === "assistant" &&
+      !compactedEntryIds.has(entry.id),
+  );
+}
+
 function toolGroupStateKey(entries: TranscriptEntry[]): string {
   const head = entries[0]?.id ?? "tools";
   return `tools-${head}`;
@@ -3595,15 +3607,14 @@ function isTurnActivityEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "turn_activity" && Boolean(entry.turnId);
 }
 
-function pushTurnActivityEntryGroup(
-  groups: EntryGroup[],
+function createTurnActivityEntryGroup(
   entry: TranscriptEntry,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
-): void {
+): Extract<EntryGroup, { kind: "activity" }> | null {
   const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
-  if (!turnId) return;
+  if (!turnId) return null;
   const entries = activityEntriesByTurn[turnId] ?? [];
-  groups.push({
+  return {
     kind: "activity",
     id: entry.id,
     turnId,
@@ -3612,7 +3623,17 @@ function pushTurnActivityEntryGroup(
     active: entry.activity?.active === true || entry.activity?.status === "active",
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
-  });
+  };
+}
+
+function pushTurnActivityEntryGroup(
+  groups: EntryGroup[],
+  entry: TranscriptEntry,
+  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+): Extract<EntryGroup, { kind: "activity" }> | null {
+  const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
+  if (group) groups.push(group);
+  return group;
 }
 
 function flushTranscriptToolBucket(
@@ -3644,13 +3665,18 @@ function groupTranscriptEntries(
   if (!condenseCompletedTurns && !hasProjectedTurnActivity) return groupFlatTranscriptEntries(entries);
   const groups: EntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
+  const activityOwnedEntryIds = new Set<string>();
   if (hasProjectedTurnActivity) {
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn);
+        const group = pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn);
+        for (const ownedEntry of group ? turnActivityOwnedAssistantEntries(group) : []) {
+          activityOwnedEntryIds.add(ownedEntry.id);
+        }
         continue;
       }
+      if (activityOwnedEntryIds.has(entry.id)) continue;
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
@@ -3660,8 +3686,12 @@ function groupTranscriptEntries(
     if (group.kind === "activity") {
       flushTranscriptToolBucket(groups, bucket);
       groups.push(group);
+      for (const ownedEntry of turnActivityOwnedAssistantEntries(group)) {
+        activityOwnedEntryIds.add(ownedEntry.id);
+      }
       continue;
     }
+    if (activityOwnedEntryIds.has(group.entry.id)) continue;
     pushTranscriptEntryGroup(groups, group.entry, bucket);
   }
   flushTranscriptToolBucket(groups, bucket);
@@ -4257,6 +4287,7 @@ function RunMessageBubble({
   onQuote,
   onFork,
   canonicalMessage = true,
+  ownedByTurnActivity = false,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar;
@@ -4268,6 +4299,7 @@ function RunMessageBubble({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   canonicalMessage?: boolean;
+  ownedByTurnActivity?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -4320,9 +4352,10 @@ function RunMessageBubble({
       data-severity={variant === "system" ? messageSeverity : undefined}
       data-message-id={canonicalMessage ? entry.id : undefined}
       data-activity-entry-id={canonicalMessage ? undefined : entry.id}
+      data-owner={ownedByTurnActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
     >
-      {variant === "assistant" && (
+      {variant === "assistant" && !ownedByTurnActivity && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -5656,6 +5689,7 @@ function RunTurnActivityGroup({
   onToolExpandedChange,
   highlightedEntryId,
   onQuote,
+  onFork,
   onOpenBackgroundTask,
   loading,
 }: {
@@ -5675,16 +5709,27 @@ function RunTurnActivityGroup({
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
+  onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
 }) {
-  const childGroups = useMemo(
-    () => groupFlatTranscriptEntries(group.entries),
-    [group.entries],
+  const ownedAssistantEntries = useMemo(
+    () => turnActivityOwnedAssistantEntries(group),
+    [group],
+  );
+  const ownedAssistantEntryIds = useMemo(
+    () => new Set(ownedAssistantEntries.map((entry) => entry.id)),
+    [ownedAssistantEntries],
   );
   const compactedEntryIds = useMemo(
     () => new Set(group.compactedEntryIds),
     [group.compactedEntryIds],
+  );
+  const childGroups = useMemo(
+    () => groupFlatTranscriptEntries(
+      group.entries.filter((entry) => !ownedAssistantEntryIds.has(entry.id)),
+    ),
+    [group.entries, ownedAssistantEntryIds],
   );
   const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
   const completedAt = [...group.entries]
@@ -5696,122 +5741,140 @@ function RunTurnActivityGroup({
       className="run-turn-activity"
       data-state={open ? "open" : "closed"}
       data-active={group.active === true ? "true" : undefined}
+      data-inline-response={ownedAssistantEntries.length > 0 ? "true" : undefined}
     >
       <span className="run-turn-activity-avatar" aria-hidden="true">
         <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
-      <div className="run-turn-activity-content">
-        <button
-          type="button"
-          className="run-turn-activity-header"
-          onClick={() => onOpenChange(!open)}
-          aria-expanded={open}
-        >
-          <span
-            className="run-turn-activity-icon"
-            title="Condensed turn activity"
-            aria-label="Condensed turn activity"
+      <div className="run-turn-activity-stack">
+        <div className="run-turn-activity-content">
+          <button
+            type="button"
+            className="run-turn-activity-header"
+            onClick={() => onOpenChange(!open)}
+            aria-expanded={open}
           >
-            <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
-          </span>
-          <span className="run-turn-activity-label">Turn activity</span>
-          <span className="run-turn-activity-summary">
-            {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
-          </span>
-          {showTimestamps && (
-            <ToolTiming
-              startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
-              completedAt={
-                shellSummary?.completedAt ??
-                completedAt?.completedAt ??
-                completedAt?.turnTerminalAt ??
-                completedAt?.time
-              }
-              running={group.active === true}
-            />
-          )}
-          <span className="run-turn-activity-chevron">
-            {open ? (
-              <ChevronUpIcon size={14} className="run-chevron-icon" />
-            ) : (
-              <ChevronDownIcon size={14} className="run-chevron-icon" />
+            <span
+              className="run-turn-activity-icon"
+              title="Condensed turn activity"
+              aria-label="Condensed turn activity"
+            >
+              <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+            </span>
+            <span className="run-turn-activity-label">Turn activity</span>
+            <span className="run-turn-activity-summary">
+              {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
+                completedAt={
+                  shellSummary?.completedAt ??
+                  completedAt?.completedAt ??
+                  completedAt?.turnTerminalAt ??
+                  completedAt?.time
+                }
+                running={group.active === true}
+              />
             )}
-          </span>
-        </button>
-        {open && (
-          <div className="run-turn-activity-body">
-            {group.shell && !group.loaded ? (
-              <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
-                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
-              </div>
-            ) : childGroups.map((child) => {
-              if (child.kind === "tools") {
-                const childGroupKey = toolGroupStateKey(child.entries);
+            <span className="run-turn-activity-chevron">
+              {open ? (
+                <ChevronUpIcon size={14} className="run-chevron-icon" />
+              ) : (
+                <ChevronDownIcon size={14} className="run-chevron-icon" />
+              )}
+            </span>
+          </button>
+          {open && (
+            <div className="run-turn-activity-body">
+              {group.shell && !group.loaded ? (
+                <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
+                  <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                  <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
+                </div>
+              ) : childGroups.map((child) => {
+                if (child.kind === "tools") {
+                  const childGroupKey = toolGroupStateKey(child.entries);
+                  return (
+                    <RunToolGroup
+                      key={childGroupKey}
+                      entries={child.entries}
+                      autoExpand={autoExpandTools}
+                      showTimestamps={showTimestamps}
+                      open={
+                        toolGroupOpenOverrides[childGroupKey] ??
+                        toolGroupDefaultOpen(
+                          child.entries,
+                          autoExpandTools,
+                          toolExpansionOverrides,
+                        )
+                      }
+                      onOpenChange={(nextOpen) =>
+                        onToolGroupOpenChange(childGroupKey, nextOpen)
+                      }
+                      toolExpansionOverrides={toolExpansionOverrides}
+                      onToolExpandedChange={onToolExpandedChange}
+                    />
+                  );
+                }
+                if (child.kind === "reasoning") {
+                  return (
+                    <RunReasoningBlock
+                      key={child.entry.id}
+                      entry={child.entry}
+                      showThinking={showThinking}
+                    />
+                  );
+                }
+                if (child.kind === "meta") {
+                  return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
+                }
+                if (child.kind === "background_task") {
+                  return (
+                    <RunBackgroundTaskBlock
+                      key={child.entry.id}
+                      entry={child.entry}
+                      showTimestamps={showTimestamps}
+                      onOpenTask={onOpenBackgroundTask}
+                    />
+                  );
+                }
                 return (
-                  <RunToolGroup
-                    key={childGroupKey}
-                    entries={child.entries}
-                    autoExpand={autoExpandTools}
-                    showTimestamps={showTimestamps}
-                    open={
-                      toolGroupOpenOverrides[childGroupKey] ??
-                      toolGroupDefaultOpen(
-                        child.entries,
-                        autoExpandTools,
-                        toolExpansionOverrides,
-                      )
-                    }
-                    onOpenChange={(nextOpen) =>
-                      onToolGroupOpenChange(childGroupKey, nextOpen)
-                    }
-                    toolExpansionOverrides={toolExpansionOverrides}
-                    onToolExpandedChange={onToolExpandedChange}
-                  />
-                );
-              }
-              if (child.kind === "reasoning") {
-                return (
-                  <RunReasoningBlock
+                  <RunMessageBubble
                     key={child.entry.id}
                     entry={child.entry}
-                    showThinking={showThinking}
-                  />
-                );
-              }
-              if (child.kind === "meta") {
-                return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
-              }
-              if (child.kind === "background_task") {
-                return (
-                  <RunBackgroundTaskBlock
-                    key={child.entry.id}
-                    entry={child.entry}
+                    avatar={avatar}
+                    systemAvatar={systemAvatar}
+                    sessionId={sessionId}
+                    highlighted={
+                      compactedEntryIds.has(child.entry.id) &&
+                      highlightedEntryId === child.entry.id
+                    }
                     showTimestamps={showTimestamps}
-                    onOpenTask={onOpenBackgroundTask}
+                    showDuration={showDuration}
+                    onQuote={onQuote}
+                    canonicalMessage={false}
                   />
                 );
-              }
-              return (
-                <RunMessageBubble
-                  key={child.entry.id}
-                  entry={child.entry}
-                  avatar={avatar}
-                  systemAvatar={systemAvatar}
-                  sessionId={sessionId}
-                  highlighted={
-                    compactedEntryIds.has(child.entry.id) &&
-                    highlightedEntryId === child.entry.id
-                  }
-                  showTimestamps={showTimestamps}
-                  showDuration={showDuration}
-                  onQuote={onQuote}
-                  canonicalMessage={false}
-                />
-              );
-            })}
-          </div>
-        )}
+              })}
+            </div>
+          )}
+        </div>
+        {ownedAssistantEntries.map((entry) => (
+          <RunMessageBubble
+            key={entry.id}
+            entry={entry}
+            avatar={avatar}
+            systemAvatar={systemAvatar}
+            sessionId={sessionId}
+            highlighted={highlightedEntryId === entry.id}
+            showTimestamps={showTimestamps}
+            showDuration={showDuration}
+            onQuote={onQuote}
+            onFork={onFork}
+            ownedByTurnActivity
+          />
+        ))}
       </div>
     </div>
   );
@@ -5944,8 +6007,11 @@ export function RunMessages({
         return contains;
       }
       if (g.kind === "activity") {
-        const contains = g.compactedEntryIds.includes(target);
-        if (contains) {
+        const compactedContains = g.compactedEntryIds.includes(target);
+        const visibleAssistantContains = turnActivityOwnedAssistantEntries(g).some(
+          (entry) => entry.id === target,
+        );
+        if (compactedContains) {
           activityGroupKey = entryGroupKey(g);
           if (g.shell) onActivityOpen?.(g.turnId);
           const targetEntry = g.entries.find((entry) => entry.id === target);
@@ -5960,7 +6026,7 @@ export function RunMessages({
             }
           }
         }
-        return contains;
+        return compactedContains || visibleAssistantContains;
       }
       return g.entry.id === target;
     });
@@ -6138,6 +6204,7 @@ export function RunMessages({
             onToolExpandedChange={setToolExpanded}
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
+            onFork={onFork}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
           />

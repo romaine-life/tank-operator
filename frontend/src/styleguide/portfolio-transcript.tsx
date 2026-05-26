@@ -50,10 +50,12 @@ const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
 function TranscriptMessage({
   variant,
   highlighted,
+  ownedByActivity,
   children,
 }: {
   variant: "assistant" | "user" | "system";
   highlighted?: boolean;
+  ownedByActivity?: boolean;
   children: ReactNode;
 }) {
   const avatar = getSessionAvatar("portfolio-transcript-state");
@@ -63,12 +65,13 @@ function TranscriptMessage({
       data-slot="message"
       data-variant={variant}
       data-role={variant}
+      data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
       data-design-component="TranscriptMessage"
       data-design-state={highlighted ? "highlighted" : variant}
       data-inspectable
     >
-      {variant === "assistant" && (
+      {variant === "assistant" && !ownedByActivity && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -164,6 +167,7 @@ function ActiveTurnActivity({
       className="run-turn-activity"
       data-state="open"
       data-active={active ? "true" : undefined}
+      data-inline-response="true"
       data-design-component="TranscriptTurnActivity"
       data-design-state={active ? "active" : "rest"}
       data-inspectable
@@ -171,35 +175,37 @@ function ActiveTurnActivity({
       <span className="run-turn-activity-avatar" aria-hidden="true">
         <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
-      <div className="run-turn-activity-content">
-        <button type="button" className="run-turn-activity-header" aria-expanded={true}>
-          <span className="run-turn-activity-icon" aria-hidden="true">
-            <ActivityIcon size={14} strokeWidth={2} />
-          </span>
-          <span className="run-turn-activity-label">Turn activity</span>
-          <span className="run-turn-activity-summary">
-            1 running shell / 1 edit candidate / 2 progress notes
-          </span>
-          <span className="run-tool-timing">
-            <span>19:04:14</span>
-            <span className="run-tool-timing-arrow">to</span>
-            <span className="run-tool-timing-running">
-              <TimerIcon className="run-tool-timing-spinner run-spin" size={12} aria-hidden="true" />
+      <div className="run-turn-activity-stack">
+        <div className="run-turn-activity-content">
+          <button type="button" className="run-turn-activity-header" aria-expanded={true}>
+            <span className="run-turn-activity-icon" aria-hidden="true">
+              <ActivityIcon size={14} strokeWidth={2} />
             </span>
-          </span>
-          <span className="run-turn-activity-chevron">
-            <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
-          </span>
-        </button>
-        <div className="run-turn-activity-body">
-          <RunningTool highlighted={highlighted} />
-          <TranscriptMessage variant="assistant" highlighted={highlighted}>
-            <p style={{ margin: 0 }}>
-              I found the highlight hook and the active turn data attribute. The portfolio keeps both states
-              visible without needing a live session ledger.
-            </p>
-          </TranscriptMessage>
+            <span className="run-turn-activity-label">Turn activity</span>
+            <span className="run-turn-activity-summary">
+              1 running shell / 1 edit candidate / 2 progress notes
+            </span>
+            <span className="run-tool-timing">
+              <span>19:04:14</span>
+              <span className="run-tool-timing-arrow">to</span>
+              <span className="run-tool-timing-running">
+                <TimerIcon className="run-tool-timing-spinner run-spin" size={12} aria-hidden="true" />
+              </span>
+            </span>
+            <span className="run-turn-activity-chevron">
+              <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
+            </span>
+          </button>
+          <div className="run-turn-activity-body">
+            <RunningTool highlighted={highlighted} />
+          </div>
         </div>
+        <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity>
+          <p style={{ margin: 0 }}>
+            I found the highlight hook and the active turn data attribute. The portfolio keeps both states
+            visible without needing a live session ledger.
+          </p>
+        </TranscriptMessage>
       </div>
     </div>
   );

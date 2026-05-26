@@ -183,9 +183,15 @@ test("turn activity rows render with agent avatar ownership", () => {
     appSource,
     /className="run-turn-activity-avatar"[\s\S]{0,240}<AgentAvatarIcon avatar=\{avatar\}/,
   );
+  assert.equal(appSource.includes("turnActivityOwnedAssistantEntries"), true);
+  assert.equal(appSource.includes('data-owner={ownedByTurnActivity ? "activity" : undefined}'), true);
+  assert.equal(appSource.includes("ownedByTurnActivity"), true);
+  assert.equal(indexCssSource.includes(".run-turn-activity-stack"), true);
   assert.equal(indexCssSource.includes(".run-turn-activity-content"), true);
   assert.equal(indexCssSource.includes(".run-turn-activity-avatar"), true);
+  assert.equal(indexCssSource.includes('[data-slot="message"][data-owner="activity"]'), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-activity-avatar"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes('data-inline-response="true"'), true);
 });
 
 test("chat live stream waits for timeline bootstrap", () => {
