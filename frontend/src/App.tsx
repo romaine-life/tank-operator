@@ -4766,8 +4766,6 @@ function RunSystemMessageGroupBubble({
   highlightedEntryId: string | null;
   showTimestamps: boolean;
 }) {
-  const latest = entries[entries.length - 1];
-  const time = latest ? formatMessageTime(latest.time) : "";
   const highlighted = entries.some((entry) => highlightedEntryId === entry.id);
   return (
     <div
@@ -4787,26 +4785,29 @@ function RunSystemMessageGroupBubble({
       </span>
       <div className="run-transcript-message-content" data-slot="message-content">
         <div className="run-transcript-system-group">
-          {entries.map((entry) => (
-            <div
-              key={entry.id}
-              className="run-transcript-system-group-item"
-              data-message-id={entry.id}
-              data-highlight={highlightedEntryId === entry.id ? "true" : undefined}
-            >
-              <div className="run-transcript-message-text" data-slot="message-text">
-                <RunMarkdown>{entry.text ?? ""}</RunMarkdown>
+          {entries.map((entry) => {
+            const time = formatMessageTime(entry.time);
+            return (
+              <div
+                key={entry.id}
+                className="run-transcript-system-group-item"
+                data-message-id={entry.id}
+                data-highlight={highlightedEntryId === entry.id ? "true" : undefined}
+              >
+                <div className="run-transcript-message-text" data-slot="message-text">
+                  <RunMarkdown>{entry.text ?? ""}</RunMarkdown>
+                </div>
+                {showTimestamps && time && (
+                  <div className="run-msg-footer" data-always-visible="">
+                    <div className="run-msg-timings">
+                      <span className="run-msg-timing-row">{time}</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
-        {showTimestamps && time && (
-          <div className="run-msg-footer" data-always-visible="">
-            <div className="run-msg-timings">
-              <span className="run-msg-timing-row">{time}</span>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
