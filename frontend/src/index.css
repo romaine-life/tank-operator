@@ -3352,6 +3352,112 @@ button:disabled {
   height: 100%;
 }
 
+.run-turn-view {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-height: 0;
+  height: 100%;
+  padding: var(--space-3) 0 var(--space-3);
+}
+
+.run-turn-view-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: 0 var(--space-3);
+}
+
+.run-turn-view-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-primary);
+}
+
+.run-turn-view-title h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.run-turn-view-select {
+  min-width: 9rem;
+  max-width: 16rem;
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 0.35rem 0.55rem;
+}
+
+.run-turn-view-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.run-turn-view-summary span {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-secondary);
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+}
+
+.run-turn-view-summary span[data-active="true"] {
+  background: rgba(96, 165, 250, 0.18);
+  color: #bfdbfe;
+}
+
+.run-turn-view-body {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.run-turn-view-body.run-transcript {
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+.run-turn-view-body .run-transcript-message {
+  width: 100%;
+}
+
+.run-turn-view-loading {
+  min-height: 12rem;
+}
+
+.run-turn-view-thinking {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-width: 3.25rem;
+  min-height: 2.35rem;
+  border-radius: 0.875rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  letter-spacing: 0;
+}
+
 .run-shell-tasks-list {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -5738,6 +5844,10 @@ textarea.run-files-viewer-editor:focus {
   color: var(--cyan);
 }
 
+.run-msg-turn {
+  color: #93c5fd;
+}
+
 /* Match the cyan accent on fork so the two "navigation" affordances
    read as a set. Hovering still ramps to text-primary via the base
    .run-msg-action:hover rule. */
@@ -5817,11 +5927,41 @@ textarea.run-files-viewer-editor:focus {
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* Meta entries — info pill or red error box. */
+/* Turn activity disclosure rows. */
 .run-turn-activity {
-  grid-column: 1 / -1;
-  justify-self: stretch;
+  display: grid;
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+  column-gap: 0.55rem;
+  row-gap: 0.2rem;
+  align-items: start;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding-left: var(--run-transcript-message-inset-left);
+}
+
+.run-turn-activity-avatar {
+  grid-column: 1;
+  grid-row: 1;
+  width: 2.625rem;
+  height: 2.625rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.run-turn-activity-stack {
+  grid-column: 2;
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.run-turn-activity-content {
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -5829,7 +5969,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(255, 255, 255, 0.022);
 }
 
-.run-turn-activity[data-state="open"] {
+.run-turn-activity[data-state="open"] .run-turn-activity-content {
   overflow: visible;
 }
 
@@ -7220,6 +7360,23 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.run-transcript [data-slot="message"][data-kind="turn-thinking"] .run-turn-thinking-content {
+  min-width: 3.25rem;
+  min-height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.run-transcript [data-slot="message"][data-kind="turn-thinking"] .run-turn-thinking-content:hover {
+  background: rgba(255, 255, 255, 0.075);
+}
+
 .run-transcript [data-slot="message"][data-variant="system"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
@@ -7241,6 +7398,24 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid rgba(255, 255, 255, 0.06);
   color: var(--text-primary);
   padding: 0.75rem 1rem;
+}
+
+.run-transcript [data-slot="message"][data-owner="activity"] {
+  grid-template-columns: minmax(0, 1fr);
+  padding-left: 0;
+}
+
+.run-transcript [data-slot="message"][data-owner="activity"] .run-transcript-message-content {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"] {
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+}
+
+.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"] .run-transcript-message-content {
+  grid-column: 2;
 }
 
 .run-transcript-message-text {

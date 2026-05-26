@@ -1130,7 +1130,58 @@ async function completeGitHubInstall(state: string): Promise<SessionUser> {
   return body.user;
 }
 
+type SessionRoute = {
+  sessionId: string;
+  tab: "chat" | "turns";
+  turnId: string | null;
+};
+
+function decodeRouteSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return "";
+  }
+}
+
+function readSessionRouteFromPath(pathname = window.location.pathname): SessionRoute | null {
+  const parts = pathname.split("/").filter(Boolean).map(decodeRouteSegment);
+  if (parts[0] !== "sessions" || !parts[1]) return null;
+  if (parts.length === 2) return { sessionId: parts[1], tab: "chat", turnId: null };
+  if (parts[2] !== "turns") return { sessionId: parts[1], tab: "chat", turnId: null };
+  return {
+    sessionId: parts[1],
+    tab: "turns",
+    turnId: parts[3]?.trim() || null,
+  };
+}
+
+function sessionRouteUrl(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): string {
+  const url = new URL(window.location.href);
+  url.pathname = `/sessions/${encodeURIComponent(id)}${
+    tab === "turns"
+      ? `/turns${turnId ? `/${encodeURIComponent(turnId)}` : ""}`
+      : ""
+  }`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function routeHasMessageTarget(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("message") || params.has("timeline_id");
+}
+
+function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
+  if (routeHasMessageTarget()) return;
+  const next = sessionRouteUrl(id, tab, turnId);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
 function readInitialSessionId(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.sessionId) return route.sessionId;
   const params = new URLSearchParams(window.location.search);
   return params.get("session");
 }
@@ -1142,11 +1193,7 @@ function clearInitialSessionId(): void {
 }
 
 function sessionUrl(id: string): string {
-  const url = new URL(window.location.href);
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("session", id);
-  return url.toString();
+  return sessionRouteUrl(id);
 }
 
 // Deep link to a specific message inside a session. Read by
@@ -2810,7 +2857,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
 
 /** A file the user picked / dropped / pasted on the home composer before
@@ -3677,6 +3724,7 @@ function conversationEntriesToTranscript(
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "tools"; entries: TranscriptEntry[] }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry }
   | {
       kind: "activity";
       id: string;
@@ -3693,8 +3741,34 @@ function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
     return toolGroupStateKey(g.entries);
   }
+  if (g.kind === "thinking") return g.id;
   if (g.kind === "activity") return g.id;
   return g.entry.id;
+}
+
+function isUserMessageEntry(entry: TranscriptEntry): boolean {
+  return entry.kind === "message" && entry.role === "user";
+}
+
+function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<EntryGroup, { kind: "thinking" }> {
+  return {
+    kind: "thinking",
+    id: `turn-thinking-${turnId}`,
+    turnId,
+    shell,
+  };
+}
+
+function turnActivityOwnedAssistantEntries(
+  group: Extract<EntryGroup, { kind: "activity" }>,
+): TranscriptEntry[] {
+  const compactedEntryIds = new Set(group.compactedEntryIds);
+  return group.entries.filter(
+    (entry) =>
+      entry.kind === "message" &&
+      entry.role === "assistant" &&
+      !compactedEntryIds.has(entry.id),
+  );
 }
 
 function toolGroupStateKey(entries: TranscriptEntry[]): string {
@@ -3725,15 +3799,14 @@ function isTurnActivityEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "turn_activity" && Boolean(entry.turnId);
 }
 
-function pushTurnActivityEntryGroup(
-  groups: EntryGroup[],
+function createTurnActivityEntryGroup(
   entry: TranscriptEntry,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
-): void {
+): Extract<EntryGroup, { kind: "activity" }> | null {
   const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
-  if (!turnId) return;
+  if (!turnId) return null;
   const entries = activityEntriesByTurn[turnId] ?? [];
-  groups.push({
+  return {
     kind: "activity",
     id: entry.id,
     turnId,
@@ -3742,7 +3815,7 @@ function pushTurnActivityEntryGroup(
     active: entry.activity?.active === true || entry.activity?.status === "active",
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
-  });
+  };
 }
 
 function flushTranscriptToolBucket(
@@ -3770,17 +3843,27 @@ function groupTranscriptEntries(
   activeTurnId: string | null = null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined> = {},
 ): EntryGroup[] {
+  void condenseCompletedTurns;
   const hasProjectedTurnActivity = entries.some(isTurnActivityEntry);
-  if (!condenseCompletedTurns && !hasProjectedTurnActivity) return groupFlatTranscriptEntries(entries);
   const groups: EntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
+  const activityHiddenEntryIds = new Set<string>();
   if (hasProjectedTurnActivity) {
+    const insertedThinkingTurnIds = new Set<string>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn);
+        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
+        if (group) {
+          for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
+          if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
+            groups.push(turnThinkingGroup(group.turnId, entry));
+            insertedThinkingTurnIds.add(group.turnId);
+          }
+        }
         continue;
       }
+      if (activityHiddenEntryIds.has(entry.id)) continue;
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
@@ -3789,7 +3872,9 @@ function groupTranscriptEntries(
   for (const group of compactCompletedTurnEntries(entries, true, activeTurnId)) {
     if (group.kind === "activity") {
       flushTranscriptToolBucket(groups, bucket);
-      groups.push(group);
+      if (group.active) {
+        groups.push(turnThinkingGroup(group.turnId));
+      }
       continue;
     }
     pushTranscriptEntryGroup(groups, group.entry, bucket);
@@ -4181,6 +4266,29 @@ function LinkButton({
   );
 }
 
+function TurnViewButton({
+  turnId,
+  onOpenTurn,
+}: {
+  turnId: string;
+  onOpenTurn: (turnId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-turn"
+      title="Open turn"
+      aria-label="Open turn"
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenTurn(turnId);
+      }}
+    >
+      <ActivityIcon size={12} aria-hidden="true" />
+    </button>
+  );
+}
+
 function ForkButton({
   entry,
   onFork,
@@ -4386,7 +4494,10 @@ function RunMessageBubble({
   showDuration,
   onQuote,
   onFork,
+  onOpenTurn,
   canonicalMessage = true,
+  ownedByTurnActivity = false,
+  showAssistantAvatar = !ownedByTurnActivity,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar | null;
@@ -4397,7 +4508,10 @@ function RunMessageBubble({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string) => void;
   canonicalMessage?: boolean;
+  ownedByTurnActivity?: boolean;
+  showAssistantAvatar?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -4450,9 +4564,10 @@ function RunMessageBubble({
       data-severity={variant === "system" ? messageSeverity : undefined}
       data-message-id={canonicalMessage ? entry.id : undefined}
       data-activity-entry-id={canonicalMessage ? undefined : entry.id}
+      data-owner={ownedByTurnActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
     >
-      {variant === "assistant" && (
+      {variant === "assistant" && showAssistantAvatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -4501,6 +4616,9 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
+          {variant === "assistant" && entry.turnId && onOpenTurn && (
+            <TurnViewButton turnId={entry.turnId} onOpenTurn={onOpenTurn} />
+          )}
           {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
           )}
@@ -4866,6 +4984,44 @@ function BackgroundLedger({
       >
         {activeCount}
       </span>
+    </button>
+  );
+}
+
+function TurnsTab({
+  active,
+  count = 0,
+  hasActiveTurn = false,
+  disabled = false,
+  title = disabled ? "Turns are available once the agent has turn activity" : "Turns",
+  onOpen,
+}: {
+  active: boolean;
+  count?: number;
+  hasActiveTurn?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`run-tab run-turns-trigger${active ? " run-tab-active" : ""}`}
+      onClick={disabled ? undefined : onOpen}
+      aria-pressed={active}
+      disabled={disabled}
+      title={title}
+    >
+      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+      <span>Turns</span>
+      {count > 0 && (
+        <span
+          className="run-shell-tasks-count"
+          data-active={hasActiveTurn ? "true" : undefined}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -5767,6 +5923,110 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
 }
 
+type TurnViewItem = {
+  turnId: string;
+  label: string;
+  summary: string;
+  entries: TranscriptEntry[];
+  shell?: TranscriptEntry;
+  active: boolean;
+  loaded: boolean;
+  startedAt?: string;
+  completedAt?: string;
+};
+
+function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
+  return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
+}
+
+function buildTurnViewItems(
+  entries: TranscriptEntry[],
+  activeTurnId: string | null,
+  activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+): TurnViewItem[] {
+  const order = new Map<string, number>();
+  const shells = new Map<string, TranscriptEntry>();
+  const rawEntries = new Map<string, TranscriptEntry[]>();
+  entries.forEach((entry, index) => {
+    const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+    if (!turnId) return;
+    if (!order.has(turnId)) order.set(turnId, index);
+    if (isTurnActivityEntry(entry)) {
+      shells.set(turnId, entry);
+      return;
+    }
+    if (isUserMessageEntry(entry)) return;
+    const bucket = rawEntries.get(turnId) ?? [];
+    bucket.push(entry);
+    rawEntries.set(turnId, bucket);
+  });
+
+  const active = activeTurnId?.trim() ?? "";
+  if (active && !order.has(active)) order.set(active, entries.length);
+
+  return Array.from(order.entries())
+    .sort((a, b) => a[1] - b[1])
+    .map(([turnId], index) => {
+      const shell = shells.get(turnId);
+      const loadedEntries = activityEntriesByTurn[turnId];
+      const turnEntries = loadedEntries ?? rawEntries.get(turnId) ?? [];
+      const shellSummary = shell?.activity;
+      const startedAt =
+        shellSummary?.startedAt ??
+        turnEntries.find((entry) => turnEntryTimestamp(entry))?.startedAt ??
+        turnEntries.find((entry) => turnEntryTimestamp(entry))?.time;
+      const completedAt =
+        shellSummary?.completedAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.completedAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
+        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
+      return {
+        turnId,
+        label: `Turn ${index + 1}`,
+        summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
+        entries: turnEntries,
+        shell,
+        active: turnId === active || shellSummary?.active === true || shellSummary?.status === "active",
+        loaded: Boolean(loadedEntries),
+        startedAt,
+        completedAt,
+      };
+    });
+}
+
+function RunTurnThinkingBubble({
+  turnId,
+  avatar,
+  onOpenTurn,
+}: {
+  turnId: string;
+  avatar: AgentAvatar | null;
+  onOpenTurn?: (turnId: string) => void;
+}) {
+  return (
+    <div
+      className="run-transcript-message run-turn-thinking"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="turn-thinking"
+    >
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <button
+        type="button"
+        className="run-transcript-message-content run-turn-thinking-content"
+        title="Open turn"
+        aria-label="Open turn"
+        onClick={() => onOpenTurn?.(turnId)}
+      >
+        <span className="run-turn-thinking-dots" aria-hidden="true">...</span>
+      </button>
+    </div>
+  );
+}
+
 function RunTurnActivityGroup({
   group,
   open,
@@ -5784,6 +6044,7 @@ function RunTurnActivityGroup({
   onToolExpandedChange,
   highlightedEntryId,
   onQuote,
+  onFork,
   onOpenBackgroundTask,
   loading,
 }: {
@@ -5803,16 +6064,27 @@ function RunTurnActivityGroup({
   onToolExpandedChange: (entryId: string, expanded: boolean) => void;
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
+  onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
 }) {
-  const childGroups = useMemo(
-    () => groupFlatTranscriptEntries(group.entries),
-    [group.entries],
+  const ownedAssistantEntries = useMemo(
+    () => turnActivityOwnedAssistantEntries(group),
+    [group],
+  );
+  const ownedAssistantEntryIds = useMemo(
+    () => new Set(ownedAssistantEntries.map((entry) => entry.id)),
+    [ownedAssistantEntries],
   );
   const compactedEntryIds = useMemo(
     () => new Set(group.compactedEntryIds),
     [group.compactedEntryIds],
+  );
+  const childGroups = useMemo(
+    () => groupFlatTranscriptEntries(
+      group.entries.filter((entry) => !ownedAssistantEntryIds.has(entry.id)),
+    ),
+    [group.entries, ownedAssistantEntryIds],
   );
   const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
   const completedAt = [...group.entries]
@@ -5824,117 +6096,303 @@ function RunTurnActivityGroup({
       className="run-turn-activity"
       data-state={open ? "open" : "closed"}
       data-active={group.active === true ? "true" : undefined}
+      data-inline-response={ownedAssistantEntries.length > 0 ? "true" : undefined}
     >
-      <button
-        type="button"
-        className="run-turn-activity-header"
-        onClick={() => onOpenChange(!open)}
-        aria-expanded={open}
-      >
-        <span
-          className="run-turn-activity-icon"
-          title="Condensed turn activity"
-          aria-label="Condensed turn activity"
-        >
-          <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
-        </span>
-        <span className="run-turn-activity-label">Turn activity</span>
-        <span className="run-turn-activity-summary">
-          {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
-        </span>
-        {showTimestamps && (
-          <ToolTiming
-            startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
-            completedAt={
-              shellSummary?.completedAt ??
-              completedAt?.completedAt ??
-              completedAt?.turnTerminalAt ??
-              completedAt?.time
-            }
-            running={group.active === true}
-          />
-        )}
-        <span className="run-turn-activity-chevron">
-          {open ? (
-            <ChevronUpIcon size={14} className="run-chevron-icon" />
-          ) : (
-            <ChevronDownIcon size={14} className="run-chevron-icon" />
-          )}
-        </span>
-      </button>
-      {open && (
-        <div className="run-turn-activity-body">
-          {group.shell && !group.loaded ? (
-            <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
-              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-              <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
-            </div>
-          ) : childGroups.map((child) => {
-            if (child.kind === "tools") {
-              const childGroupKey = toolGroupStateKey(child.entries);
-              return (
-                <RunToolGroup
-                  key={childGroupKey}
-                  entries={child.entries}
-                  autoExpand={autoExpandTools}
-                  showTimestamps={showTimestamps}
-                  open={
-                    toolGroupOpenOverrides[childGroupKey] ??
-                    toolGroupDefaultOpen(
-                      child.entries,
-                      autoExpandTools,
-                      toolExpansionOverrides,
-                    )
-                  }
-                  onOpenChange={(nextOpen) =>
-                    onToolGroupOpenChange(childGroupKey, nextOpen)
-                  }
-                  toolExpansionOverrides={toolExpansionOverrides}
-                  onToolExpandedChange={onToolExpandedChange}
-                />
-              );
-            }
-            if (child.kind === "reasoning") {
-              return (
-                <RunReasoningBlock
-                  key={child.entry.id}
-                  entry={child.entry}
-                  showThinking={showThinking}
-                />
-              );
-            }
-            if (child.kind === "meta") {
-              return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
-            }
-            if (child.kind === "background_task") {
-              return (
-                <RunBackgroundTaskBlock
-                  key={child.entry.id}
-                  entry={child.entry}
-                  showTimestamps={showTimestamps}
-                  onOpenTask={onOpenBackgroundTask}
-                />
-              );
-            }
-            return (
-              <RunMessageBubble
-                key={child.entry.id}
-                entry={child.entry}
-                avatar={avatar}
-                systemAvatar={systemAvatar}
-                sessionId={sessionId}
-                highlighted={
-                  compactedEntryIds.has(child.entry.id) &&
-                  highlightedEntryId === child.entry.id
+      <span className="run-turn-activity-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div className="run-turn-activity-stack">
+        <div className="run-turn-activity-content">
+          <button
+            type="button"
+            className="run-turn-activity-header"
+            onClick={() => onOpenChange(!open)}
+            aria-expanded={open}
+          >
+            <span
+              className="run-turn-activity-icon"
+              title="Condensed turn activity"
+              aria-label="Condensed turn activity"
+            >
+              <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+            </span>
+            <span className="run-turn-activity-label">Turn activity</span>
+            <span className="run-turn-activity-summary">
+              {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+            </span>
+            {showTimestamps && (
+              <ToolTiming
+                startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
+                completedAt={
+                  shellSummary?.completedAt ??
+                  completedAt?.completedAt ??
+                  completedAt?.turnTerminalAt ??
+                  completedAt?.time
                 }
-                showTimestamps={showTimestamps}
-                showDuration={showDuration}
-                onQuote={onQuote}
-                canonicalMessage={false}
+                running={group.active === true}
               />
-            );
-          })}
+            )}
+            <span className="run-turn-activity-chevron">
+              {open ? (
+                <ChevronUpIcon size={14} className="run-chevron-icon" />
+              ) : (
+                <ChevronDownIcon size={14} className="run-chevron-icon" />
+              )}
+            </span>
+          </button>
+          {open && (
+            <div className="run-turn-activity-body">
+              {group.shell && !group.loaded ? (
+                <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
+                  <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                  <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
+                </div>
+              ) : childGroups.map((child) => {
+                if (child.kind === "tools") {
+                  const childGroupKey = toolGroupStateKey(child.entries);
+                  return (
+                    <RunToolGroup
+                      key={childGroupKey}
+                      entries={child.entries}
+                      autoExpand={autoExpandTools}
+                      showTimestamps={showTimestamps}
+                      open={
+                        toolGroupOpenOverrides[childGroupKey] ??
+                        toolGroupDefaultOpen(
+                          child.entries,
+                          autoExpandTools,
+                          toolExpansionOverrides,
+                        )
+                      }
+                      onOpenChange={(nextOpen) =>
+                        onToolGroupOpenChange(childGroupKey, nextOpen)
+                      }
+                      toolExpansionOverrides={toolExpansionOverrides}
+                      onToolExpandedChange={onToolExpandedChange}
+                    />
+                  );
+                }
+                if (child.kind === "reasoning") {
+                  return (
+                    <RunReasoningBlock
+                      key={child.entry.id}
+                      entry={child.entry}
+                      showThinking={showThinking}
+                    />
+                  );
+                }
+                if (child.kind === "meta") {
+                  return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
+                }
+                if (child.kind === "background_task") {
+                  return (
+                    <RunBackgroundTaskBlock
+                      key={child.entry.id}
+                      entry={child.entry}
+                      showTimestamps={showTimestamps}
+                      onOpenTask={onOpenBackgroundTask}
+                    />
+                  );
+                }
+                if (child.kind === "thinking") return null;
+                return (
+                  <RunMessageBubble
+                    key={child.entry.id}
+                    entry={child.entry}
+                    avatar={avatar}
+                    systemAvatar={systemAvatar}
+                    sessionId={sessionId}
+                    highlighted={
+                      compactedEntryIds.has(child.entry.id) &&
+                      highlightedEntryId === child.entry.id
+                    }
+                    showTimestamps={showTimestamps}
+                    showDuration={showDuration}
+                    onQuote={onQuote}
+                    canonicalMessage={false}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
+        {ownedAssistantEntries.map((entry) => (
+          <RunMessageBubble
+            key={entry.id}
+            entry={entry}
+            avatar={avatar}
+            systemAvatar={systemAvatar}
+            sessionId={sessionId}
+            highlighted={highlightedEntryId === entry.id}
+            showTimestamps={showTimestamps}
+            showDuration={showDuration}
+            onQuote={onQuote}
+            onFork={onFork}
+            ownedByTurnActivity
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RunTurnActivityScreen({
+  turns,
+  selectedTurnId,
+  onSelectTurn,
+  avatar,
+  systemAvatar,
+  sessionId,
+  showThinking,
+  autoExpandTools,
+  showTimestamps,
+  showDuration,
+  loadingActivityTurns,
+  onOpenBackgroundTask,
+}: {
+  turns: TurnViewItem[];
+  selectedTurnId: string | null;
+  onSelectTurn: (turnId: string) => void;
+  avatar: AgentAvatar | null;
+  systemAvatar: AgentAvatar | null;
+  sessionId: string;
+  showThinking: boolean;
+  autoExpandTools: boolean;
+  showTimestamps: boolean;
+  showDuration: boolean;
+  loadingActivityTurns: Record<string, boolean | undefined>;
+  onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+}) {
+  const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
+  const detailEntries = useMemo(
+    () =>
+      (selected?.entries ?? []).filter(
+        (entry) => !isTurnActivityEntry(entry) && !isUserMessageEntry(entry),
+      ),
+    [selected?.entries],
+  );
+  const detailGroups = useMemo(
+    () => groupFlatTranscriptEntries(detailEntries),
+    [detailEntries],
+  );
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
+  const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
+    setToolGroupOpenOverrides((prev) => (
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
+    ));
+  }, []);
+  const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
+    setToolExpansionOverrides((prev) => (
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
+    ));
+  }, []);
+  const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
+  const renderGroup = (group: FlatEntryGroup) => {
+    if (group.kind === "tools") {
+      const groupKey = toolGroupStateKey(group.entries);
+      return (
+        <RunToolGroup
+          key={groupKey}
+          entries={group.entries}
+          autoExpand={autoExpandTools}
+          showTimestamps={showTimestamps}
+          open={
+            toolGroupOpenOverrides[groupKey] ??
+            toolGroupDefaultOpen(group.entries, autoExpandTools, toolExpansionOverrides)
+          }
+          onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
+          toolExpansionOverrides={toolExpansionOverrides}
+          onToolExpandedChange={setToolExpanded}
+        />
+      );
+    }
+    if (group.kind === "reasoning") {
+      return <RunReasoningBlock key={group.entry.id} entry={group.entry} showThinking={showThinking} />;
+    }
+    if (group.kind === "meta") {
+      return <RunMetaBlock key={group.entry.id} entry={group.entry} />;
+    }
+    if (group.kind === "background_task") {
+      return (
+        <RunBackgroundTaskBlock
+          key={group.entry.id}
+          entry={group.entry}
+          showTimestamps={showTimestamps}
+          onOpenTask={onOpenBackgroundTask}
+        />
+      );
+    }
+    if (group.kind === "thinking") return null;
+    return (
+      <RunMessageBubble
+        key={group.entry.id}
+        entry={group.entry}
+        avatar={avatar}
+        systemAvatar={systemAvatar}
+        sessionId={sessionId}
+        highlighted={false}
+        showTimestamps={showTimestamps}
+        showDuration={showDuration}
+        canonicalMessage={false}
+        ownedByTurnActivity
+        showAssistantAvatar
+      />
+    );
+  };
+
+  return (
+    <div className="run-turn-view" aria-label="Turn view">
+      <div className="run-turn-view-head">
+        <div className="run-turn-view-title">
+          <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
+          <h2>Turns</h2>
+        </div>
+        <select
+          className="run-turn-view-select"
+          value={selected?.turnId ?? ""}
+          onChange={(event) => onSelectTurn(event.target.value)}
+          disabled={turns.length === 0}
+          aria-label="Select turn"
+        >
+          {turns.length === 0 ? (
+            <option value="">No turns</option>
+          ) : turns.map((turn) => (
+            <option key={turn.turnId} value={turn.turnId}>
+              {turn.label}{turn.active ? " (running)" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+      {selected ? (
+        <>
+          <div className="run-turn-view-summary">
+            <span data-active={selected.active ? "true" : undefined}>
+              {selected.active ? "running" : "complete"}
+            </span>
+            <span>{selected.summary}</span>
+            {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
+            {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+          </div>
+          <div className="run-turn-view-body run-transcript run-transcript-claude">
+            {loading && detailGroups.length === 0 ? (
+              <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>Loading activity...</span>
+              </div>
+            ) : selected.active && detailGroups.length === 0 ? (
+              <div className="run-turn-view-thinking" aria-label="Turn is running">
+                <span aria-hidden="true">...</span>
+              </div>
+            ) : detailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
+            ) : (
+              detailGroups.map(renderGroup)
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="run-shell-tasks-empty">No turns.</div>
       )}
     </div>
   );
@@ -5970,6 +6428,7 @@ export function RunMessages({
   showDuration,
   onQuote,
   onFork,
+  onOpenTurn,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -6006,6 +6465,7 @@ export function RunMessages({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -6067,8 +6527,11 @@ export function RunMessages({
         return contains;
       }
       if (g.kind === "activity") {
-        const contains = g.compactedEntryIds.includes(target);
-        if (contains) {
+        const compactedContains = g.compactedEntryIds.includes(target);
+        const visibleAssistantContains = turnActivityOwnedAssistantEntries(g).some(
+          (entry) => entry.id === target,
+        );
+        if (compactedContains) {
           activityGroupKey = entryGroupKey(g);
           if (g.shell) onActivityOpen?.(g.turnId);
           const targetEntry = g.entries.find((entry) => entry.id === target);
@@ -6083,8 +6546,9 @@ export function RunMessages({
             }
           }
         }
-        return contains;
+        return compactedContains || visibleAssistantContains;
       }
+      if (g.kind === "thinking") return false;
       return g.entry.id === target;
     });
     if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
@@ -6238,6 +6702,15 @@ export function RunMessages({
           />
         );
       }
+      if (g.kind === "thinking") {
+        return (
+          <RunTurnThinkingBubble
+            turnId={g.turnId}
+            avatar={avatar}
+            onOpenTurn={onOpenTurn}
+          />
+        );
+      }
       if (g.kind === "activity") {
         const groupKey = entryGroupKey(g);
         return (
@@ -6261,6 +6734,7 @@ export function RunMessages({
             onToolExpandedChange={setToolExpanded}
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
+            onFork={onFork}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
           />
@@ -6277,6 +6751,7 @@ export function RunMessages({
           showDuration={showDuration}
           onQuote={onQuote}
           onFork={onFork}
+          onOpenTurn={onOpenTurn}
         />
       );
     },
@@ -6288,6 +6763,7 @@ export function RunMessages({
       highlightedEntryId,
       loadingActivityTurns,
       onFork,
+      onOpenTurn,
       onActivityOpen,
       onOpenBackgroundTask,
       onQuote,
@@ -6796,7 +7272,16 @@ function ChatPane({
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<RunTab>("chat");
+  const initialSessionRoute = useMemo(() => readSessionRouteFromPath(), []);
+  const initialRunRoute =
+    initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
+  const [activeTab, setActiveTab] = useState<RunTab>(initialRunRoute?.tab ?? "chat");
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
+    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  );
+  const [pendingRouteTurnId, setPendingRouteTurnId] = useState<string | null>(
+    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  );
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
@@ -7545,6 +8030,27 @@ function ChatPane({
       initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
+  const applyCurrentSessionRoute = useCallback(() => {
+    if (!visible) return;
+    const route = readSessionRouteFromPath();
+    if (route?.sessionId !== session.id) return;
+    if (route.tab === "turns") {
+      setActiveTab("turns");
+      setPendingRouteTurnId(route.turnId);
+      if (route.turnId) setSelectedTurnId(route.turnId);
+      return;
+    }
+    setActiveTab("chat");
+    setPendingRouteTurnId(null);
+  }, [session.id, visible]);
+  useEffect(() => {
+    applyCurrentSessionRoute();
+  }, [applyCurrentSessionRoute]);
+  useEffect(() => {
+    if (!visible) return;
+    window.addEventListener("popstate", applyCurrentSessionRoute);
+    return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
+  }, [applyCurrentSessionRoute, visible]);
 
   // History replay hits the server-owned transcript-row read model. Live SSE
   // still carries raw Tank events, but historical navigation no longer pages
@@ -9482,6 +9988,18 @@ function ChatPane({
     ],
     [activeBackgroundEntries, detachedShellEntries],
   );
+  const turnViewItems = useMemo(
+    () => buildTurnViewItems(renderedEntries, renderedActiveTurnId, activityEntriesByTurn),
+    [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
+  );
+  const turnsAvailable = turnViewItems.length > 0;
+  const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
+  const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  const selectedTurnExists =
+    selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
+  const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
+  const routedSelectedTurnId =
+    activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
   const ensureTurnActivityLoaded = useCallback((turnId: string) => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
@@ -9508,6 +10026,57 @@ function ChatPane({
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
   }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
+  useEffect(() => {
+    if (turnViewItems.length === 0) {
+      if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
+      return;
+    }
+    if (pendingRouteTurnId) {
+      const routeTurnExists = turnViewItems.some((turn) => turn.turnId === pendingRouteTurnId);
+      if (routeTurnExists) {
+        if (selectedTurnId !== pendingRouteTurnId) setSelectedTurnId(pendingRouteTurnId);
+        setPendingRouteTurnId(null);
+        return;
+      }
+      if (!historyBootstrapped) return;
+      setPendingRouteTurnId(null);
+    }
+    if (!selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
+  }, [
+    historyBootstrapped,
+    latestTurnId,
+    pendingRouteTurnId,
+    selectedTurnExists,
+    selectedTurnId,
+    turnViewItems,
+  ]);
+  useEffect(() => {
+    if (activeTab !== "turns" || turnsAvailable) return;
+    if (!historyBootstrapped || pendingRouteTurnId) return;
+    setActiveTab("chat");
+  }, [activeTab, historyBootstrapped, pendingRouteTurnId, turnsAvailable]);
+  useEffect(() => {
+    if (!visible || pendingScrollMessageId) return;
+    if (activeTab === "turns") {
+      replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
+    } else {
+      replaceSessionRoute(session.id, "chat");
+    }
+  }, [activeTab, pendingScrollMessageId, routedSelectedTurnId, session.id, visible]);
+  useEffect(() => {
+    if (activeTab !== "turns") return;
+    if (!effectiveSelectedTurnId) return;
+    ensureTurnActivityLoaded(effectiveSelectedTurnId);
+  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  const openTurnPage = useCallback((turnId?: string) => {
+    const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
+    if (target) {
+      setPendingRouteTurnId(null);
+      setSelectedTurnId(target);
+      ensureTurnActivityLoaded(target);
+    }
+    setActiveTab("turns");
+  }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
@@ -9837,6 +10406,17 @@ function ChatPane({
               <span>Back</span>
             </button>
           )}
+          <TurnsTab
+            active={activeTab === "turns"}
+            count={turnViewItems.length}
+            hasActiveTurn={turnViewItems.some((turn) => turn.active)}
+            disabled={!turnsAvailable}
+            title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
+            onOpen={() => {
+              if (activeTab === "turns") setActiveTab("chat");
+              else openTurnPage();
+            }}
+          />
           <BackgroundLedger
             entries={backgroundLedgerEntries}
             active={activeTab === "background"}
@@ -10156,6 +10736,25 @@ function ChatPane({
               </div>
             </div>
           </div>
+        ) : activeTab === "turns" ? (
+          <RunTurnActivityScreen
+            turns={turnViewItems}
+            selectedTurnId={effectiveSelectedTurnId}
+            onSelectTurn={(turnId) => {
+              setPendingRouteTurnId(null);
+              setSelectedTurnId(turnId);
+              ensureTurnActivityLoaded(turnId);
+            }}
+            avatar={sessionAvatar}
+            systemAvatar={systemAvatar}
+            sessionId={session.id}
+            showThinking={runPrefs.showThinking}
+            autoExpandTools={runPrefs.autoExpandTools}
+            showTimestamps={runPrefs.showTimestamps}
+            showDuration={runPrefs.showDuration}
+            loadingActivityTurns={loadingActivityTurns}
+            onOpenBackgroundTask={openBackgroundPage}
+          />
         ) : activeTab === "background" ? (
           <BackgroundScreen
             shellEntries={activeBackgroundEntries}
@@ -10276,6 +10875,7 @@ function ChatPane({
                       })
               }
               onOpenBackgroundTask={openBackgroundPage}
+              onOpenTurn={openTurnPage}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();
@@ -10921,7 +11521,15 @@ export function App() {
   useEffect(() => {
     const url = new URL(window.location.href);
     if (active) {
-      url.searchParams.set("session", active);
+      const route = readSessionRouteFromPath();
+      if (route?.sessionId === active && !routeHasMessageTarget()) {
+        url.searchParams.delete("session");
+      } else if (!routeHasMessageTarget()) {
+        window.history.replaceState({}, "", sessionRouteUrl(active));
+        return;
+      } else {
+        url.searchParams.set("session", active);
+      }
     } else {
       url.searchParams.delete("session");
     }
@@ -11993,6 +12601,11 @@ export function App() {
   }
 
   function goHome() {
+    const url = new URL(window.location.href);
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    window.history.replaceState({}, "", url.toString());
     setActive(null);
     setHomeActiveTab("chat");
   }
@@ -12821,6 +13434,11 @@ export function App() {
                   <span>Back</span>
                 </button>
               )}
+              <TurnsTab
+                active={false}
+                disabled
+                onOpen={() => undefined}
+              />
               <BackgroundLedger
                 entries={[]}
                 active={false}

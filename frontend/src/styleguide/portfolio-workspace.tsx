@@ -158,6 +158,10 @@ function PortfolioWorkspaceScene() {
             <button className="run-header-name-btn" type="button">design-showcase</button>
           </div>
           <nav className="run-tabs" aria-label="Session actions">
+            <button className="run-tab run-turns-trigger" type="button" aria-pressed={false} disabled title="Turns are available once the agent has turn activity">
+              <ActivityIcon className="run-tab-icon" aria-hidden="true" />
+              <span>Turns</span>
+            </button>
             <button className="run-tab run-shell-tasks-trigger" type="button" aria-pressed={false} title="Background">
               <ActivityIcon className="run-tab-icon" aria-hidden="true" />
               <span>Background</span>

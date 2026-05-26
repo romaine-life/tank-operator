@@ -229,6 +229,40 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
+test("turn internals move out of the transcript into a turn view", () => {
+  assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
+  assert.equal(appSource.includes("buildTurnViewItems"), true);
+  assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
+  assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
+  assert.equal(appSource.includes('url.pathname = `/sessions/${encodeURIComponent(id)}${'), true);
+  assert.equal(appSource.includes('setActiveTab("turns")'), true);
+  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
+  assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
+  assert.equal(appSource.includes("RunTurnActivityScreen"), true);
+  assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
+  assert.equal(appSource.includes("turnThinkingGroup"), true);
+  assert.equal(appSource.includes("showAssistantAvatar = !ownedByTurnActivity"), true);
+  assert.match(appSource, /ownedByTurnActivity\s+showAssistantAvatar/);
+  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
+  assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
+  assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
+  assert.equal(appSource.includes("function TurnsTab"), true);
+  assert.equal(appSource.includes("openTurnPage"), true);
+  assert.match(appSource, /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
+  assert.match(
+    appSource,
+    /<TurnsTab\n\s+active=\{false\}\n\s+disabled\n\s+onOpen=\{\(\) => undefined\}/,
+  );
+  assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
+  assert.equal(indexCssSource.includes(".run-turn-view"), true);
+  assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
+  assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
+  assert.equal(indexCssSource.includes(".run-msg-turn"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
+});
+
 test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
