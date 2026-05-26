@@ -243,7 +243,10 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("turnThinkingGroup"), true);
   assert.equal(appSource.includes("showAssistantAvatar = !ownedByTurnActivity"), true);
   assert.match(appSource, /ownedByTurnActivity\s+showAssistantAvatar/);
-  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn)"), true);
+  assert.match(
+    appSource,
+    /createTurnActivityEntryGroup\(\s*entry,\s*activityEntriesByTurn,\s*activeTurnId,\s*\)/,
+  );
   assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
   assert.equal(appSource.includes("function TurnsTab"), true);

@@ -181,6 +181,7 @@ import {
   sessionFilesTabTitle,
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
+import { isTurnActivityActive } from "./turnActivityState";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 
@@ -3802,6 +3803,7 @@ function isTurnActivityEntry(entry: TranscriptEntry): boolean {
 function createTurnActivityEntryGroup(
   entry: TranscriptEntry,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+  activeTurnId: string | null,
 ): Extract<EntryGroup, { kind: "activity" }> | null {
   const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
   if (!turnId) return null;
@@ -3812,7 +3814,7 @@ function createTurnActivityEntryGroup(
     turnId,
     entries,
     compactedEntryIds: entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
-    active: entry.activity?.active === true || entry.activity?.status === "active",
+    active: isTurnActivityActive(turnId, activeTurnId),
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
   };
@@ -3853,7 +3855,11 @@ function groupTranscriptEntries(
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn);
+        const group = createTurnActivityEntryGroup(
+          entry,
+          activityEntriesByTurn,
+          activeTurnId,
+        );
         if (group) {
           for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
           if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
@@ -5986,7 +5992,7 @@ function buildTurnViewItems(
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
-        active: turnId === active || shellSummary?.active === true || shellSummary?.status === "active",
+        active: isTurnActivityActive(turnId, active),
         loaded: Boolean(loadedEntries),
         startedAt,
         completedAt,
@@ -6488,7 +6494,12 @@ export function RunMessages({
   onActivityOpen?: (turnId: string) => void;
 }) {
   const groups = useMemo(
-    () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
+    () => groupTranscriptEntries(
+      entries,
+      condenseCompletedTurns,
+      activeTurnId,
+      activityEntriesByTurn,
+    ),
     [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
