@@ -70,22 +70,25 @@ type clusterNATSServer struct {
 }
 
 type clusterJetStream struct {
-	MemoryBytes            int64   `json:"memory_bytes"`
-	MaxMemoryBytes         int64   `json:"max_memory_bytes"`
-	MemoryUtilization      float64 `json:"memory_utilization"`
-	ReservedMemoryBytes    int64   `json:"reserved_memory_bytes"`
-	MetaPending            int64   `json:"meta_pending"`
-	SlowConsumers          int64   `json:"slow_consumers"`
-	Streams                int64   `json:"streams"`
-	Consumers              int64   `json:"consumers"`
-	Messages               int64   `json:"messages"`
-	Bytes                  int64   `json:"bytes"`
-	StreamName             string  `json:"stream_name,omitempty"`
-	StreamReplicas         int     `json:"stream_replicas"`
-	ExpectedStreamReplicas int     `json:"expected_stream_replicas"`
-	StreamMessages         int64   `json:"stream_messages"`
-	StreamBytes            int64   `json:"stream_bytes"`
-	StreamConsumers        int64   `json:"stream_consumers"`
+	MemoryBytes             int64   `json:"memory_bytes"`
+	MaxMemoryBytes          int64   `json:"max_memory_bytes"`
+	MemoryUtilization       float64 `json:"memory_utilization"`
+	ReservedMemoryBytes     int64   `json:"reserved_memory_bytes"`
+	MetaPending             int64   `json:"meta_pending"`
+	SlowConsumers           int64   `json:"slow_consumers"`
+	Streams                 int64   `json:"streams"`
+	Consumers               int64   `json:"consumers"`
+	Messages                int64   `json:"messages"`
+	Bytes                   int64   `json:"bytes"`
+	StreamName              string  `json:"stream_name,omitempty"`
+	StreamReplicas          int     `json:"stream_replicas"`
+	ExpectedStreamReplicas  int     `json:"expected_stream_replicas"`
+	StreamCurrentReplicas   int     `json:"stream_current_replicas"`
+	StreamLaggingReplicas   int     `json:"stream_lagging_replicas"`
+	streamReplicaLeaderView bool
+	StreamMessages          int64 `json:"stream_messages"`
+	StreamBytes             int64 `json:"stream_bytes"`
+	StreamConsumers         int64 `json:"stream_consumers"`
 }
 
 func (s *appServer) handleClusterHealth(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +220,11 @@ func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName str
 	}
 
 	client := &http.Client{Timeout: 900 * time.Millisecond}
-	firstReachableURL := ""
+	type reachableMonitor struct {
+		url        string
+		serverName string
+	}
+	var reachable []reachableMonitor
 	for _, monitorURL := range monitorURLs {
 		var varz natsVarzResponse
 		requestCtx, cancel := context.WithTimeout(ctx, 900*time.Millisecond)
@@ -231,10 +238,8 @@ func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName str
 			continue
 		}
 
-		if firstReachableURL == "" {
-			firstReachableURL = monitorURL
-		}
 		out.ReachableServers++
+		reachable = append(reachable, reachableMonitor{url: monitorURL, serverName: varz.ServerName})
 		out.Servers = append(out.Servers, clusterNATSServer{
 			Name:      varz.ServerName,
 			Reachable: true,
@@ -242,15 +247,27 @@ func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName str
 		mergeNATSVarz(&out.JetStream, varz)
 	}
 
-	if firstReachableURL != "" {
-		var jsz natsJSZResponse
-		requestCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
-		err := fetchNATSJSON(requestCtx, client, firstReachableURL, "/jsz?streams=true&consumers=false", &jsz)
-		cancel()
-		if err != nil {
-			out.Warnings = append(out.Warnings, "NATS JetStream detail unavailable")
-		} else {
-			mergeNATSJSZ(&out.JetStream, jsz, streamName)
+	if len(reachable) != 0 {
+		detailAvailable := false
+		for _, monitor := range reachable {
+			var jsz natsJSZResponse
+			requestCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+			err := fetchNATSJSON(requestCtx, client, monitor.url, "/jsz?streams=true&consumers=false&config=true", &jsz)
+			cancel()
+			if err != nil {
+				continue
+			}
+			detailAvailable = true
+			mergeNATSJSZ(&out.JetStream, jsz, streamName, monitor.serverName)
+			if out.JetStream.ExpectedStreamReplicas > 0 &&
+				out.JetStream.streamReplicaLeaderView &&
+				out.JetStream.StreamReplicas >= out.JetStream.ExpectedStreamReplicas &&
+				out.JetStream.StreamCurrentReplicas >= out.JetStream.ExpectedStreamReplicas {
+				break
+			}
+		}
+		if !detailAvailable {
+			out.Warnings = append(out.Warnings, "Live delivery detail unavailable")
 		}
 	}
 
@@ -278,6 +295,11 @@ type natsVarzResponse struct {
 	} `json:"jetstream"`
 }
 
+type natsJSZStreamReplica struct {
+	Name    string `json:"name"`
+	Current bool   `json:"current"`
+}
+
 type natsJSZResponse struct {
 	Memory         int64 `json:"memory"`
 	ReservedMemory int64 `json:"reserved_memory"`
@@ -295,11 +317,12 @@ type natsJSZResponse struct {
 		StreamDetail []struct {
 			Name    string `json:"name"`
 			Cluster struct {
-				Replicas []struct {
-					Name    string `json:"name"`
-					Current bool   `json:"current"`
-				} `json:"replicas"`
+				Leader   string                 `json:"leader"`
+				Replicas []natsJSZStreamReplica `json:"replicas"`
 			} `json:"cluster"`
+			Config struct {
+				NumReplicas int `json:"num_replicas"`
+			} `json:"config"`
 			State struct {
 				Messages      int64 `json:"messages"`
 				Bytes         int64 `json:"bytes"`
@@ -318,22 +341,33 @@ func mergeNATSVarz(out *clusterJetStream, varz natsVarzResponse) {
 	updateNATSMemoryUtilization(out)
 }
 
-func mergeNATSJSZ(out *clusterJetStream, jsz natsJSZResponse, streamName string) {
+func mergeNATSJSZ(out *clusterJetStream, jsz natsJSZResponse, streamName, localServerName string) {
 	out.MemoryBytes = maxInt64(out.MemoryBytes, jsz.Memory)
 	out.MaxMemoryBytes = maxInt64(out.MaxMemoryBytes, jsz.Config.MaxMemory)
 	out.ReservedMemoryBytes = maxInt64(out.ReservedMemoryBytes, jsz.ReservedMemory)
 	out.MetaPending = maxInt64(out.MetaPending, jsz.MetaCluster.Pending)
-	out.Streams = jsz.Streams
-	out.Consumers = jsz.Consumers
-	out.Messages = jsz.Messages
-	out.Bytes = jsz.Bytes
+	out.Streams = maxInt64(out.Streams, jsz.Streams)
+	out.Consumers = maxInt64(out.Consumers, jsz.Consumers)
+	out.Messages = maxInt64(out.Messages, jsz.Messages)
+	out.Bytes = maxInt64(out.Bytes, jsz.Bytes)
 	for _, account := range jsz.AccountDetails {
 		for _, stream := range account.StreamDetail {
 			if streamName != "" && stream.Name != streamName {
 				continue
 			}
 			out.StreamName = stream.Name
-			out.StreamReplicas = len(stream.Cluster.Replicas)
+			currentReplicas := streamCurrentReplicaCount(stream.Cluster.Replicas, localServerName)
+			configuredReplicas := stream.Config.NumReplicas
+			if configuredReplicas <= 0 {
+				configuredReplicas = maxInt(currentReplicas, len(stream.Cluster.Replicas))
+			}
+			isLeaderView := strings.TrimSpace(stream.Cluster.Leader) != "" && strings.TrimSpace(stream.Cluster.Leader) == strings.TrimSpace(localServerName)
+			if shouldUseNATSReplicaView(out, configuredReplicas, currentReplicas, isLeaderView) {
+				out.StreamReplicas = configuredReplicas
+				out.StreamCurrentReplicas = currentReplicas
+				out.streamReplicaLeaderView = isLeaderView
+				updateNATSReplicaLag(out)
+			}
 			out.StreamMessages = stream.State.Messages
 			out.StreamBytes = stream.State.Bytes
 			out.StreamConsumers = stream.State.ConsumerCount
@@ -366,25 +400,27 @@ func classifyNATSHealth(out *clusterNATSHealth) string {
 	}
 
 	if out.ReachableServers < out.ExpectedServers {
-		addWarning(fmt.Sprintf("NATS monitor reachability %d/%d", out.ReachableServers, out.ExpectedServers))
+		addWarning(fmt.Sprintf("Live delivery monitors %d/%d reachable", out.ReachableServers, out.ExpectedServers))
 	}
 	if out.JetStream.MemoryUtilization >= 0.90 {
-		addCritical("NATS JetStream memory over 90%")
+		addCritical("Live delivery memory over 90%")
 	} else if out.JetStream.MemoryUtilization >= 0.75 {
-		addWarning("NATS JetStream memory over 75%")
+		addWarning("Live delivery memory over 75%")
 	}
 	if out.JetStream.MetaPending > 50 {
-		addWarning("NATS JetStream meta pending over 50")
+		addWarning("Live delivery metadata backlog over 50")
 	}
 	if out.JetStream.SlowConsumers > 0 {
-		addWarning("NATS reports slow consumers")
+		addWarning("Live delivery has slow consumers")
 	}
 	if out.JetStream.ExpectedStreamReplicas > 0 {
 		switch {
 		case out.JetStream.StreamReplicas == 0:
-			addWarning("NATS stream replica detail unavailable")
+			addWarning("Live delivery replica detail unavailable")
 		case out.JetStream.StreamReplicas < out.JetStream.ExpectedStreamReplicas:
-			addWarning(fmt.Sprintf("NATS stream replicas %d/%d", out.JetStream.StreamReplicas, out.JetStream.ExpectedStreamReplicas))
+			addWarning(fmt.Sprintf("Live delivery configured replicas %d/%d", out.JetStream.StreamReplicas, out.JetStream.ExpectedStreamReplicas))
+		case out.JetStream.StreamCurrentReplicas > 0 && out.JetStream.StreamCurrentReplicas < out.JetStream.ExpectedStreamReplicas:
+			addWarning(fmt.Sprintf("Live delivery replicas %d/%d current", out.JetStream.StreamCurrentReplicas, out.JetStream.ExpectedStreamReplicas))
 		}
 	}
 	return status
@@ -493,6 +529,50 @@ func maxInt64(left, right int64) int64 {
 		return right
 	}
 	return left
+}
+
+func maxInt(left, right int) int {
+	if right > left {
+		return right
+	}
+	return left
+}
+
+func streamCurrentReplicaCount(replicas []natsJSZStreamReplica, localServerName string) int {
+	current := map[string]struct{}{}
+	if localServerName = strings.TrimSpace(localServerName); localServerName != "" {
+		current[localServerName] = struct{}{}
+	}
+	for _, replica := range replicas {
+		if replica.Current && strings.TrimSpace(replica.Name) != "" {
+			current[replica.Name] = struct{}{}
+		}
+	}
+	return len(current)
+}
+
+func shouldUseNATSReplicaView(out *clusterJetStream, configuredReplicas, currentReplicas int, isLeaderView bool) bool {
+	if isLeaderView {
+		return true
+	}
+	if out.streamReplicaLeaderView {
+		return false
+	}
+	if configuredReplicas > out.StreamReplicas {
+		return true
+	}
+	if configuredReplicas == out.StreamReplicas && currentReplicas > out.StreamCurrentReplicas {
+		return true
+	}
+	return false
+}
+
+func updateNATSReplicaLag(out *clusterJetStream) {
+	if out.StreamReplicas > out.StreamCurrentReplicas {
+		out.StreamLaggingReplicas = out.StreamReplicas - out.StreamCurrentReplicas
+		return
+	}
+	out.StreamLaggingReplicas = 0
 }
 
 func updateNATSMemoryUtilization(out *clusterJetStream) {

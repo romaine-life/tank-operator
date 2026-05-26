@@ -55,6 +55,8 @@ function baseHealth(): ClusterHealthResponse {
         stream_name: "TANK_SESSION_BUS",
         stream_replicas: 3,
         expected_stream_replicas: 3,
+        stream_current_replicas: 3,
+        stream_lagging_replicas: 0,
         stream_messages: 20,
         stream_bytes: 128,
         stream_consumers: 4,
@@ -84,8 +86,8 @@ test("cluster health issue text surfaces NATS warnings", () => {
   const health = baseHealth();
   health.status = "warning";
   health.nats.status = "warning";
-  health.nats.warnings = ["NATS stream replicas 2/3"];
-  assert.equal(clusterHealthIssueText(health), "NATS stream replicas 2/3");
+  health.nats.warnings = ["Live delivery replicas 2/3 current"];
+  assert.equal(clusterHealthIssueText(health), "Live delivery replicas 2/3 current");
 });
 
 test("cluster health NATS load formats utilization", () => {
