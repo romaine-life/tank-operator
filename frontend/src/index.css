@@ -6883,11 +6883,12 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript {
   --run-transcript-active-rail-left: 0.2rem;
   --run-transcript-message-inset-left: 0.7rem;
+  --run-transcript-row-gap: var(--space-3);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
   align-content: start;
-  gap: var(--space-3);
+  gap: var(--run-transcript-row-gap);
   font-family: var(--font-primary);
   font-size: var(--run-chat-font-sm);
   line-height: 1.55;
@@ -6900,6 +6901,14 @@ textarea.run-files-viewer-editor:focus {
   position: relative;
   isolation: isolate;
   transition: background var(--motion-fast, 120ms) ease;
+}
+
+/* Virtuoso wraps top-level transcript entries in measured data-index rows.
+   Padding those wrappers preserves the same visual air that non-virtualized
+   transcript fixtures get from the grid gap above. */
+.run-transcript [data-index] {
+  box-sizing: border-box;
+  padding-block: calc(var(--run-transcript-row-gap) / 2);
 }
 
 .run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript,
