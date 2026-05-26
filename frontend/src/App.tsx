@@ -109,7 +109,6 @@ import {
   SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
-  sessionActivityChips,
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
@@ -6546,11 +6545,6 @@ function RunHelpScreen() {
                 ) : (
                   <span className="run-help-status-spacer" />
                 )}
-                {item.chip ? (
-                  <span className={`session-activity-chip is-${item.chip.tone}`}>
-                    {item.chip.label}
-                  </span>
-                ) : null}
               </div>
               <div className="run-help-status-copy">
                 <span className="run-help-status-label">{item.label}</span>
@@ -12546,7 +12540,6 @@ export function App() {
               const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
-              const activityChips = sessionActivityChips(sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
               const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               const skillStateClass = sessionSkillStateClass(s);
@@ -12618,17 +12611,6 @@ export function App() {
                         )}
                       </span>
                     )}
-                    {activityChips.map((chip) => (
-                      <span
-                        key={chip.key}
-                        className={`session-activity-chip is-${chip.tone}`}
-                        title={chip.title}
-                        aria-label={chip.title}
-                      >
-                        {chip.label}
-                      </span>
-                    ))}
-                    {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
                         className="session-action"

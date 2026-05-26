@@ -5,7 +5,6 @@ import {
   SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
-  sessionActivityChips,
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
@@ -59,13 +58,9 @@ test("session activity drives sidebar labels and dots", () => {
 
   assert.equal(sessionActivityDotStatus("Active", true, needsInput ?? undefined), "agent-needs-input");
   assert.equal(sessionActivityStatusLabel("Active", true, needsInput ?? undefined), "Needs input");
-  assert.deepEqual(
-    sessionActivityChips(needsInput ?? undefined).map((chip) => chip.label),
-    ["input"],
-  );
 });
 
-test("running and unread activity stay on the status dot, not sidebar chips", () => {
+test("running and unread activity stay on the status dot", () => {
   const streaming = normalizeSessionActivity({
     session_id: "63",
     status: "streaming",
@@ -77,10 +72,9 @@ test("running and unread activity stay on the status dot, not sidebar chips", ()
 
   assert.equal(sessionActivityDotStatus("Active", true, streaming ?? undefined), "agent-working");
   assert.equal(sessionActivityStatusLabel("Active", true, streaming ?? undefined), "Running");
-  assert.deepEqual(sessionActivityChips(streaming ?? undefined), []);
 });
 
-test("stopping status drives Stopping label, agent-stopping dot, and stopping chip", () => {
+test("stopping status drives Stopping label and agent-stopping dot", () => {
   const stopping = normalizeSessionActivity({
     session_id: "63",
     status: "stopping",
@@ -93,26 +87,21 @@ test("stopping status drives Stopping label, agent-stopping dot, and stopping ch
   assert.equal(stopping?.status, "stopping");
   assert.equal(sessionActivityDotStatus("Active", true, stopping ?? undefined), "agent-stopping");
   assert.equal(sessionActivityStatusLabel("Active", true, stopping ?? undefined), "Stopping");
-  assert.deepEqual(
-    sessionActivityChips(stopping ?? undefined).map((chip) => ({ label: chip.label, tone: chip.tone })),
-    [{ label: "stopping", tone: "stopping" }],
-  );
 });
 
-test("session activity legend mirrors sidebar dot and chip mappings", () => {
+test("session activity legend mirrors sidebar dot mappings", () => {
   const byKey = new Map(SESSION_ACTIVITY_STATUS_LEGEND.map((item) => [item.key, item]));
   const cases: Array<{
     key: string;
     activity: SessionActivitySummary;
     dot: string | null;
-    chip: { label: string; tone: string } | null;
   }> = [
-    { key: "ready", activity: summary("ready"), dot: "agent-waiting", chip: null },
-    { key: "running", activity: summary("streaming"), dot: "agent-working", chip: null },
-    { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input", chip: { label: "input", tone: "input" } },
-    { key: "stopping", activity: summary("stopping"), dot: "agent-stopping", chip: { label: "stopping", tone: "stopping" } },
-    { key: "stopped", activity: summary("stopped"), dot: "agent-waiting", chip: { label: "stopped", tone: "stopped" } },
-    { key: "failed", activity: summary("error"), dot: "agent-error", chip: { label: "failed", tone: "failed" } },
+    { key: "ready", activity: summary("ready"), dot: "agent-waiting" },
+    { key: "running", activity: summary("streaming"), dot: "agent-working" },
+    { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input" },
+    { key: "stopping", activity: summary("stopping"), dot: "agent-stopping" },
+    { key: "stopped", activity: summary("stopped"), dot: "agent-waiting" },
+    { key: "failed", activity: summary("error"), dot: "agent-error" },
   ];
 
   assert.equal(byKey.size, cases.length);
@@ -127,13 +116,7 @@ test("session activity legend mirrors sidebar dot and chip mappings", () => {
     } else {
       assert.equal(legend.dotStatus, null);
     }
-    assert.deepEqual(legend.chip, item.chip);
   }
-
-  assert.deepEqual(
-    sessionActivityChips(summary("ready", { unread_count: 3 })).map((chip) => chip.label),
-    [],
-  );
 });
 
 // shouldRingForActivityTransition is the centralized "play turn-complete

@@ -64,13 +64,8 @@ test("session activity status states have explicit sidebar styles", () => {
       `missing status-dot style for ${state}`,
     );
   }
-  for (const state of ["input", "failed", "stopping", "stopped"]) {
-    assert.equal(
-      indexCssSource.includes(`.session-activity-chip.is-${state}`),
-      true,
-      `missing session-activity-chip style for ${state}`,
-    );
-  }
+  assert.equal(indexCssSource.includes(".session-activity-chip"), false);
+  assert.equal(appSource.includes("sessionActivityChips"), false);
 });
 
 test("chat transcript UI does not use the retired agent-ws route", () => {
@@ -310,7 +305,7 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before'), true);
   assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:focus::before'), false);
   assert.equal(indexCssSource.includes(".run-composer.run-composer-runpane:focus-within"), true);
-  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), true);
+  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), false);
   assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
   assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
   assert.equal(styleguideSharedSource.includes("agent-needs-input"), true);

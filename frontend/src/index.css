@@ -1965,48 +1965,6 @@ button:disabled {
   opacity: 1;
 }
 
-.session-closing-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-}
-
-.session-activity-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-}
-
-.session-activity-chip.is-input {
-  background: rgba(251, 146, 60, 0.14);
-  color: var(--status-agent-needs-input);
-}
-
-.session-activity-chip.is-failed {
-  background: var(--status-error-bg);
-  color: var(--status-error-fg);
-}
-
-.session-activity-chip.is-stopping,
-.session-activity-chip.is-stopped {
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
-}
-
 .mode-claude_cli        { background: var(--mode-claude-cli-bg); color: var(--mode-claude-cli-fg); }
 .mode-claude_gui { background: var(--mode-claude-gui-bg); color: var(--mode-claude-gui-fg); }
 .mode-api_key             { background: var(--mode-api-key-bg); color: var(--mode-api-key-fg); }

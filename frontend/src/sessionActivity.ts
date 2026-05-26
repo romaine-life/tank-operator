@@ -18,19 +18,11 @@ export interface SessionActivitySummary {
   updated_at: string | null;
 }
 
-export interface SessionActivityChip {
-  key: "state";
-  label: string;
-  title: string;
-  tone: "failed" | "input" | "stopping" | "stopped";
-}
-
 export interface SessionActivityLegendItem {
   key: string;
   label: string;
   detail: string;
   dotStatus: string | null;
-  chip: Pick<SessionActivityChip, "label" | "tone"> | null;
 }
 
 export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
@@ -39,42 +31,36 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     label: "Ready / waiting",
     detail: "No active turn is running.",
     dotStatus: "agent-waiting",
-    chip: null,
   },
   {
     key: "running",
     label: "Submitted / running",
     detail: "The agent has queued or active work.",
     dotStatus: "agent-working",
-    chip: null,
   },
   {
     key: "needs-input",
     label: "Needs input",
     detail: "The session is waiting for your response.",
     dotStatus: "agent-needs-input",
-    chip: { label: "input", tone: "input" },
   },
   {
     key: "stopping",
     label: "Stopping",
     detail: "A stop request is being applied.",
     dotStatus: "agent-stopping",
-    chip: { label: "stopping", tone: "stopping" },
   },
   {
     key: "stopped",
     label: "Stopped",
     detail: "The latest turn was stopped.",
     dotStatus: "agent-waiting",
-    chip: { label: "stopped", tone: "stopped" },
   },
   {
     key: "failed",
     label: "Failed",
     detail: "The latest turn ended with an error.",
     dotStatus: "agent-error",
-    chip: { label: "failed", tone: "failed" },
   },
 ];
 
@@ -193,23 +179,6 @@ export function shouldRingForActivityTransition(
     return false;
   }
   return true;
-}
-
-export function sessionActivityChips(
-  activity?: SessionActivitySummary,
-): SessionActivityChip[] {
-  if (!activity) return [];
-  const chips: SessionActivityChip[] = [];
-  if (activity.failed || activity.status === "error") {
-    chips.push({ key: "state", label: "failed", title: "Failed", tone: "failed" });
-  } else if (activity.needs_input || activity.status === "needs_input") {
-    chips.push({ key: "state", label: "input", title: "Needs input", tone: "input" });
-  } else if (activity.status === "stopping") {
-    chips.push({ key: "state", label: "stopping", title: "Stopping", tone: "stopping" });
-  } else if (activity.status === "stopped") {
-    chips.push({ key: "state", label: "stopped", title: "Stopped", tone: "stopped" });
-  }
-  return chips;
 }
 
 function activityStatus(value: string | null): ConversationActivityStatus | null {
