@@ -9179,10 +9179,6 @@ function ChatPane({
         sessionMode: session.mode,
         eventType,
       });
-      // Long-task correlation: a tank-event triggers JSON.parse +
-      // reducer fold + projection rebuild + render. If those produce
-      // a >50 ms main-thread block, the longtask probe will attribute
-      // it via the sinceTankEventMs delta.
       noteTankEvent();
       silenceWatchdogRef.current?.reset();
       applySdkDurableEvent(parsed);
