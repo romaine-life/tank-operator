@@ -9727,6 +9727,7 @@ function ChatPane({
     () => buildTurnViewItems(renderedEntries, renderedActiveTurnId, activityEntriesByTurn),
     [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
   );
+  const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
   const selectedTurnExists =
@@ -9765,6 +9766,10 @@ function ChatPane({
     }
     if (!selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
   }, [latestTurnId, selectedTurnExists, selectedTurnId, turnViewItems.length]);
+  useEffect(() => {
+    if (activeTab !== "turns" || turnsAvailable) return;
+    setActiveTab("chat");
+  }, [activeTab, turnsAvailable]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -10115,7 +10120,8 @@ function ChatPane({
               else openTurnPage();
             }}
             aria-pressed={activeTab === "turns"}
-            title="Turns"
+            disabled={!turnsAvailable}
+            title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
           >
             <ActivityIcon className="run-tab-icon" aria-hidden="true" />
             <span>Turns</span>
