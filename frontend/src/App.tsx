@@ -1106,7 +1106,58 @@ async function completeGitHubInstall(state: string): Promise<SessionUser> {
   return body.user;
 }
 
+type SessionRoute = {
+  sessionId: string;
+  tab: "chat" | "turns";
+  turnId: string | null;
+};
+
+function decodeRouteSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return "";
+  }
+}
+
+function readSessionRouteFromPath(pathname = window.location.pathname): SessionRoute | null {
+  const parts = pathname.split("/").filter(Boolean).map(decodeRouteSegment);
+  if (parts[0] !== "sessions" || !parts[1]) return null;
+  if (parts.length === 2) return { sessionId: parts[1], tab: "chat", turnId: null };
+  if (parts[2] !== "turns") return { sessionId: parts[1], tab: "chat", turnId: null };
+  return {
+    sessionId: parts[1],
+    tab: "turns",
+    turnId: parts[3]?.trim() || null,
+  };
+}
+
+function sessionRouteUrl(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): string {
+  const url = new URL(window.location.href);
+  url.pathname = `/sessions/${encodeURIComponent(id)}${
+    tab === "turns"
+      ? `/turns${turnId ? `/${encodeURIComponent(turnId)}` : ""}`
+      : ""
+  }`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function routeHasMessageTarget(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("message") || params.has("timeline_id");
+}
+
+function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
+  if (routeHasMessageTarget()) return;
+  const next = sessionRouteUrl(id, tab, turnId);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
 function readInitialSessionId(): string | null {
+  const route = readSessionRouteFromPath();
+  if (route?.sessionId) return route.sessionId;
   const params = new URLSearchParams(window.location.search);
   return params.get("session");
 }
@@ -1118,11 +1169,7 @@ function clearInitialSessionId(): void {
 }
 
 function sessionUrl(id: string): string {
-  const url = new URL(window.location.href);
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("session", id);
-  return url.toString();
+  return sessionRouteUrl(id);
 }
 
 // Deep link to a specific message inside a session. Read by
@@ -7055,8 +7102,16 @@ function ChatPane({
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<RunTab>("chat");
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const initialSessionRoute = useMemo(() => readSessionRouteFromPath(), []);
+  const initialRunRoute =
+    initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
+  const [activeTab, setActiveTab] = useState<RunTab>(initialRunRoute?.tab ?? "chat");
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
+    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  );
+  const [pendingRouteTurnId, setPendingRouteTurnId] = useState<string | null>(
+    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  );
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
@@ -7813,6 +7868,27 @@ function ChatPane({
       initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
+  const applyCurrentSessionRoute = useCallback(() => {
+    if (!visible) return;
+    const route = readSessionRouteFromPath();
+    if (route?.sessionId !== session.id) return;
+    if (route.tab === "turns") {
+      setActiveTab("turns");
+      setPendingRouteTurnId(route.turnId);
+      if (route.turnId) setSelectedTurnId(route.turnId);
+      return;
+    }
+    setActiveTab("chat");
+    setPendingRouteTurnId(null);
+  }, [session.id, visible]);
+  useEffect(() => {
+    applyCurrentSessionRoute();
+  }, [applyCurrentSessionRoute]);
+  useEffect(() => {
+    if (!visible) return;
+    window.addEventListener("popstate", applyCurrentSessionRoute);
+    return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
+  }, [applyCurrentSessionRoute, visible]);
 
   // History replay hits the server-owned transcript-row read model. Live SSE
   // still carries raw Tank events, but historical navigation no longer pages
@@ -9736,6 +9812,8 @@ function ChatPane({
   const selectedTurnExists =
     selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
+  const routedSelectedTurnId =
+    activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
   const ensureTurnActivityLoaded = useCallback((turnId: string) => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
@@ -9764,15 +9842,41 @@ function ChatPane({
   }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
-      if (selectedTurnId !== null) setSelectedTurnId(null);
+      if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
       return;
     }
+    if (pendingRouteTurnId) {
+      const routeTurnExists = turnViewItems.some((turn) => turn.turnId === pendingRouteTurnId);
+      if (routeTurnExists) {
+        if (selectedTurnId !== pendingRouteTurnId) setSelectedTurnId(pendingRouteTurnId);
+        setPendingRouteTurnId(null);
+        return;
+      }
+      if (!historyBootstrapped) return;
+      setPendingRouteTurnId(null);
+    }
     if (!selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
-  }, [latestTurnId, selectedTurnExists, selectedTurnId, turnViewItems.length]);
+  }, [
+    historyBootstrapped,
+    latestTurnId,
+    pendingRouteTurnId,
+    selectedTurnExists,
+    selectedTurnId,
+    turnViewItems,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns" || turnsAvailable) return;
+    if (!historyBootstrapped || pendingRouteTurnId) return;
     setActiveTab("chat");
-  }, [activeTab, turnsAvailable]);
+  }, [activeTab, historyBootstrapped, pendingRouteTurnId, turnsAvailable]);
+  useEffect(() => {
+    if (!visible || pendingScrollMessageId) return;
+    if (activeTab === "turns") {
+      replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
+    } else {
+      replaceSessionRoute(session.id, "chat");
+    }
+  }, [activeTab, pendingScrollMessageId, routedSelectedTurnId, session.id, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -9781,6 +9885,7 @@ function ChatPane({
   const openTurnPage = useCallback((turnId?: string) => {
     const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
     if (target) {
+      setPendingRouteTurnId(null);
       setSelectedTurnId(target);
       ensureTurnActivityLoaded(target);
     }
@@ -10461,6 +10566,7 @@ function ChatPane({
             turns={turnViewItems}
             selectedTurnId={effectiveSelectedTurnId}
             onSelectTurn={(turnId) => {
+              setPendingRouteTurnId(null);
               setSelectedTurnId(turnId);
               ensureTurnActivityLoaded(turnId);
             }}
@@ -11268,7 +11374,15 @@ export function App() {
   useEffect(() => {
     const url = new URL(window.location.href);
     if (active) {
-      url.searchParams.set("session", active);
+      const route = readSessionRouteFromPath();
+      if (route?.sessionId === active && !routeHasMessageTarget()) {
+        url.searchParams.delete("session");
+      } else if (!routeHasMessageTarget()) {
+        window.history.replaceState({}, "", sessionRouteUrl(active));
+        return;
+      } else {
+        url.searchParams.set("session", active);
+      }
     } else {
       url.searchParams.delete("session");
     }
@@ -12356,6 +12470,11 @@ export function App() {
   }
 
   function goHome() {
+    const url = new URL(window.location.href);
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    window.history.replaceState({}, "", url.toString());
     setActive(null);
     setHomeActiveTab("chat");
   }

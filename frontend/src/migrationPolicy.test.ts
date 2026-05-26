@@ -182,6 +182,11 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
   assert.equal(appSource.includes("buildTurnViewItems"), true);
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
+  assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
+  assert.equal(appSource.includes('url.pathname = `/sessions/${encodeURIComponent(id)}${'), true);
+  assert.equal(appSource.includes('setActiveTab("turns")'), true);
+  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
+  assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
   assert.equal(appSource.includes("RunTurnActivityScreen"), true);
   assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
   assert.equal(appSource.includes("turnThinkingGroup"), true);
