@@ -4,24 +4,78 @@
 // here so the visual catalog (the styleguide index + feature pages) stays
 // consistent without duplicating swatch lists or styling tokens.
 
-export const MODES = ["claude_cli", "api_key", "config", "codex_cli"] as const;
+export const MODES = [
+  "claude_cli",
+  "claude_gui",
+  "api_key",
+  "config",
+  "codex_cli",
+  "codex_gui",
+  "codex_exec_gui",
+  "codex_app_server",
+  "codex_config",
+  "hermes_gui",
+  "pi_cli",
+  "pi_config",
+] as const;
 export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "claude-cli",
+  claude_gui: "claude-gui",
   api_key: "api",
   config: "config",
   codex_cli: "codex-cli",
+  codex_gui: "codex-gui",
+  codex_exec_gui: "codex-exec",
+  codex_app_server: "codex-app",
+  codex_config: "codex-cfg",
+  hermes_gui: "hermes",
+  pi_cli: "pi-cli",
+  pi_config: "pi-cfg",
 };
 export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "Claude CLI",
+  claude_gui: "Claude GUI",
   api_key: "Claude API key",
   config: "Claude config",
   codex_cli: "Codex CLI",
+  codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
+  codex_app_server: "Codex App Server",
+  codex_config: "Codex config",
+  hermes_gui: "Hermes",
+  pi_cli: "Pi CLI",
+  pi_config: "Pi config",
 };
-export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">> = {
+export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex" | "hermes" | "pi">> = {
   claude_cli: "anthropic",
+  claude_gui: "anthropic",
   codex_cli: "codex",
+  codex_gui: "codex",
+  codex_exec_gui: "codex",
+  codex_app_server: "codex",
+  hermes_gui: "hermes",
+  pi_cli: "pi",
 };
-export const STATUSES = ["active", "pending", "error"] as const;
+export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "cli">> = {
+  claude_cli: "cli",
+  claude_gui: "gui",
+  codex_cli: "cli",
+  codex_gui: "gui",
+  codex_exec_gui: "gui",
+  codex_app_server: "gui",
+  hermes_gui: "gui",
+  pi_cli: "cli",
+};
+export const STATUSES = [
+  ["active", "Active"],
+  ["pending", "Pending"],
+  ["failed", "Failed"],
+  ["agent-working", "Agent working"],
+  ["agent-waiting", "Agent waiting"],
+  ["agent-needs-input", "Needs input"],
+  ["agent-stopping", "Stopping"],
+  ["agent-error", "Agent error"],
+] as const;
 export const SURFACE_SWATCHES = [
   ["app", "--bg-app", "#171717"],
   ["sidebar", "--bg-sidebar", "rgba(13,13,13,0.88)"],

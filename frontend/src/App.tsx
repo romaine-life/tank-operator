@@ -6330,6 +6330,20 @@ function RunSettingsPanel({
                 Manage
               </span>
             </button>
+            <a
+              className="run-settings-link"
+              href="/_styleguide"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <span className="run-settings-link-label">
+                <ExternalLinkIcon className="run-settings-link-icon" aria-hidden="true" />
+                <span>Design portfolio</span>
+              </span>
+              <span className="run-settings-scope-value">
+                Open
+              </span>
+            </a>
             {adminControls.canViewProdSessions && (
               <button
                 type="button"

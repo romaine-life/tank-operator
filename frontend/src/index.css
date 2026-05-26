@@ -3144,6 +3144,17 @@ button:disabled {
   background: var(--bg-base, #0a0a0a);
   font-family: var(--font-primary);
   position: relative;
+  --run-surface-accent: rgba(96, 165, 250, 0.72);
+  --run-surface-accent-soft: rgba(96, 165, 250, 0.16);
+  --run-surface-accent-fill: rgba(96, 165, 250, 0.045);
+  --run-surface-active-wash: linear-gradient(
+    90deg,
+    var(--run-surface-accent-fill),
+    rgba(10, 10, 10, 0) 8.5rem
+  );
+  --run-surface-active-shadow:
+    inset 0 0 0 1px var(--run-surface-accent-soft),
+    inset 0 1px 0 rgba(147, 197, 253, 0.12);
 }
 
 /* Header bar — session title left, tab nav right. */
@@ -4069,16 +4080,107 @@ button:disabled {
 .run-main[aria-label="Transcript"],
 .run-main[aria-label="New session setup"],
 .demo-workspace[aria-label="New session setup"] {
-  transition: box-shadow 120ms ease;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    box-shadow var(--motion-fast, 120ms) ease;
 }
 
-.run-main[aria-label="Transcript"]:focus,
 .run-main[aria-label="New session setup"]:focus,
 .demo-workspace[aria-label="New session setup"]:focus {
   outline: none;
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.09),
     inset 3px 0 0 rgba(180, 180, 180, 0.34);
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within) {
+  outline: none;
+}
+
+.styleguide-transcript-focus-shell {
+  --styleguide-surface-accent: var(--run-surface-accent);
+  --styleguide-surface-accent-soft: var(--run-surface-accent-soft);
+  --styleguide-surface-accent-fill: var(--run-surface-accent-fill);
+  --styleguide-surface-active-wash: var(--run-surface-active-wash);
+  --styleguide-surface-active-shadow: var(--run-surface-active-shadow);
+}
+
+.styleguide-transcript-focus-shell .styleguide-surface-active {
+  position: relative;
+}
+
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active:focus {
+  outline: none;
+}
+
+.styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active {
+  border-color: var(--styleguide-surface-accent-soft);
+  background:
+    var(--styleguide-surface-active-wash),
+    rgba(255, 255, 255, 0.025);
+  box-shadow:
+    var(--styleguide-surface-active-shadow),
+    0 16px 36px rgba(0, 0, 0, 0.24);
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within {
+  position: relative;
+  border-color: rgba(147, 197, 253, 0.9);
+  background:
+    linear-gradient(90deg, rgba(96, 165, 250, 0.09), rgba(255, 255, 255, 0.035) 10rem),
+    rgba(255, 255, 255, 0.035);
+  box-shadow:
+    0 0 0 2px rgba(96, 165, 250, 0.3),
+    0 0 0 6px rgba(96, 165, 250, 0.1),
+    0 18px 42px rgba(0, 0, 0, 0.3),
+    0 0 34px -14px rgba(96, 165, 250, 0.95);
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within::before {
+  content: "";
+  position: absolute;
+  left: 0.55rem;
+  top: 0.62rem;
+  bottom: 0.62rem;
+  z-index: 6;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(191, 219, 254, 0.98),
+    rgba(96, 165, 250, 0.86) 58%,
+    rgba(96, 165, 250, 0.28)
+  );
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.24),
+    0 0 22px rgba(96, 165, 250, 0.48);
+  pointer-events: none;
+}
+
+.styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active::before {
+  top: 0.62rem;
+  bottom: 0.62rem;
+  height: auto;
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within .run-composer-textarea {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.045) !important;
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within .run-composer-footer {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.05);
+}
+
+.styleguide-transcript-focus-shell .run-composer.styleguide-composer-surface-active > * {
+  position: relative;
+  z-index: 1;
+}
+
+.styleguide-transcript-focus-shell .run-composer.run-composer-interactive:focus-within > * {
+  position: relative;
+  z-index: 1;
 }
 
 .run-shell {
@@ -4489,6 +4591,77 @@ button:disabled {
     border-color var(--motion-fast, 120ms) ease,
     box-shadow var(--motion-fast, 120ms) ease,
     background var(--motion-fast, 120ms) ease;
+}
+
+.run-composer.run-composer-runpane {
+  position: relative;
+  border-color: var(--run-surface-accent-soft);
+  background:
+    var(--run-surface-active-wash),
+    rgba(255, 255, 255, 0.025);
+  box-shadow:
+    var(--run-surface-active-shadow),
+    0 16px 36px rgba(0, 0, 0, 0.24);
+}
+
+.run-composer.run-composer-runpane::before {
+  content: "";
+  position: absolute;
+  left: 0.55rem;
+  top: 0.62rem;
+  bottom: 0.62rem;
+  z-index: 6;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(147, 197, 253, 0.92),
+    var(--run-surface-accent) 58%,
+    rgba(96, 165, 250, 0.18)
+  );
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.16),
+    0 0 18px rgba(96, 165, 250, 0.3);
+  pointer-events: none;
+}
+
+.run-composer.run-composer-runpane > * {
+  position: relative;
+  z-index: 1;
+}
+
+.run-composer.run-composer-runpane:focus-within {
+  border-color: rgba(147, 197, 253, 0.9);
+  background:
+    linear-gradient(90deg, rgba(96, 165, 250, 0.09), rgba(255, 255, 255, 0.035) 10rem),
+    rgba(255, 255, 255, 0.035);
+  box-shadow:
+    0 0 0 2px rgba(96, 165, 250, 0.3),
+    0 0 0 6px rgba(96, 165, 250, 0.1),
+    0 18px 42px rgba(0, 0, 0, 0.3),
+    0 0 34px -14px rgba(96, 165, 250, 0.95);
+}
+
+.run-composer.run-composer-runpane:focus-within::before {
+  background: linear-gradient(
+    180deg,
+    rgba(191, 219, 254, 0.98),
+    rgba(96, 165, 250, 0.86) 58%,
+    rgba(96, 165, 250, 0.28)
+  );
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.24),
+    0 0 22px rgba(96, 165, 250, 0.48);
+}
+
+.run-composer.run-composer-runpane:focus-within .run-composer-textarea {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.045) !important;
+}
+
+.run-composer.run-composer-runpane:focus-within .run-composer-footer {
+  border-radius: 0.6rem;
+  background: rgba(96, 165, 250, 0.05);
 }
 
 .run-composer.run-composer-interactive > [data-slot="input-group"],
@@ -5673,6 +5846,7 @@ textarea.run-files-viewer-editor:focus {
 .run-turn-activity-body .run-transcript-message {
   grid-template-columns: 2rem minmax(0, 1fr);
   width: 100%;
+  padding-left: 0;
 }
 
 .run-turn-activity-body .run-reasoning {
@@ -6644,6 +6818,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-transcript {
+  --run-transcript-active-rail-left: 0.2rem;
+  --run-transcript-message-inset-left: 0.7rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
@@ -6658,6 +6834,47 @@ textarea.run-files-viewer-editor:focus {
   min-height: 0;
   min-width: 0;
   max-width: 100%;
+  position: relative;
+  isolation: isolate;
+  transition: background var(--motion-fast, 120ms) ease;
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript,
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript {
+  background: linear-gradient(
+    90deg,
+    rgba(96, 165, 250, 0.075),
+    rgba(96, 165, 250, 0.035) 4rem,
+    rgba(10, 10, 10, 0) 11rem
+  );
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before,
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript::before {
+  content: "";
+  position: absolute;
+  left: var(--run-transcript-active-rail-left);
+  top: var(--space-5);
+  z-index: 0;
+  width: 2px;
+  height: min(5.75rem, calc(100% - (var(--space-5) * 2)));
+  border-radius: 999px;
+  background: linear-gradient(
+    180deg,
+    rgba(147, 197, 253, 0.92),
+    var(--run-surface-accent) 58%,
+    rgba(96, 165, 250, 0.18)
+  );
+  box-shadow:
+    0 0 0 1px rgba(96, 165, 250, 0.16),
+    0 0 18px rgba(96, 165, 250, 0.3);
+  pointer-events: none;
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript > *,
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript > * {
+  position: relative;
+  z-index: 1;
 }
 
 .run-transcript-divider {
@@ -6683,6 +6900,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: start;
   min-width: 0;
   max-width: 100%;
+  padding-left: var(--run-transcript-message-inset-left);
 }
 
 /* Avatars — assistant and user avatars are real elements in the outer columns.

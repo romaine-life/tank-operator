@@ -24,19 +24,19 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
     name: "elements",
     entries: [
       { slug: "buttons", label: "buttons", sub: "primary, secondary, link" },
-      { slug: "status-dot", label: "status dot", sub: "active / pending / error" },
-      { slug: "mode-chip", label: "mode chip", sub: "claude / api / config / codex" },
-      { slug: "tool-icons", label: "tool icons", sub: "transcript glyphs" },
+      { slug: "status-dot", label: "status dot", sub: "lifecycle + agent states" },
+      { slug: "mode-chip", label: "mode chip", sub: "provider + GUI/CLI chips" },
+      { slug: "tool-icons", label: "tool icons", sub: "current tool families" },
       { slug: "mcp-icon", label: "mcp icon", sub: "MCP servers + tool calls" },
     ],
   },
   {
     name: "components",
     entries: [
-      { slug: "new-session-row", label: "new session row", sub: "launcher" },
+      { slug: "new-session-row", label: "session launcher", sub: "home setup + composer" },
       { slug: "run-header-tabs", label: "run header tabs", sub: "side-pane nav" },
       { slug: "session-row", label: "session row", sub: "sidebar list entry" },
-      { slug: "mode-dropdown", label: "mode dropdown", sub: "provider selector" },
+      { slug: "mode-dropdown", label: "runtime controls", sub: "provider + interaction" },
       { slug: "welcome-card", label: "welcome card", sub: "boot/onboarding shell" },
       { slug: "error-pill", label: "error pill", sub: "inline transient errors" },
       { slug: "boot-state", label: "boot state", sub: "full-screen lifecycle" },
@@ -47,6 +47,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
     entries: [
       { slug: "portfolio-workspace", label: "portfolio: session workspace", sub: "full shell density" },
       { slug: "portfolio-onboarding", label: "portfolio: onboarding", sub: "first-run wall" },
+      { slug: "portfolio-transcript", label: "portfolio: transcript states", sub: "highlight / active / composer" },
     ],
   },
   {
