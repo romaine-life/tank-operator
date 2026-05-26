@@ -60,6 +60,8 @@ export interface ClusterJetStreamHealth {
   stream_name?: string;
   stream_replicas: number;
   expected_stream_replicas: number;
+  stream_current_replicas: number;
+  stream_lagging_replicas: number;
   stream_messages: number;
   stream_bytes: number;
   stream_consumers: number;

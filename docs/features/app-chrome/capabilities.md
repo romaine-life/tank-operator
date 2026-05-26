@@ -109,6 +109,11 @@ Contract impact:
 - NATS health includes both transport reachability and JetStream pressure
   signals so the 2026-05-25 "publish dies when NATS stalls" shape is visible
   before a user has to infer it from failed turns.
+- JetStream stream health distinguishes configured replicas from current
+  replicas. The sidebar must not treat the server-local `/jsz`
+  `cluster.replicas` array length as the configured stream count, because that
+  array omits the local raft participant and can make a healthy stream look
+  like `2/3`.
 
 Evidence:
 - PRs changing this surface should verify `GET /api/cluster-health`, the

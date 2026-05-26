@@ -192,8 +192,17 @@ The endpoint is intentionally a compact user-visible health surface, not a
 replacement for Prometheus or Grafana. It exists so the home page can show the
 cluster-level failure modes that otherwise look like "Tank just died":
 not-ready or pressured nodes, pending/not-ready session pods, unreachable NATS
-replicas, JetStream memory saturation, slow consumers, meta backlog, and
-`TANK_SESSION_BUS` replica-count drift from `NATS_STREAM_REPLICAS`.
+replicas, JetStream memory saturation, slow consumers, metadata backlog, and
+`TANK_SESSION_BUS` live-delivery replica health.
+
+For JetStream streams, the sidebar treats `config.num_replicas` as the
+configured replica count and separately reports current replicas, preferring
+the stream leader's replica view when it is reachable. It does not use the raw
+length of NATS `/jsz`'s `cluster.replicas` array as the configured count
+because that array is reported from a server-local raft view and omits the
+local participant. A healthy three-replica stream should therefore show healthy
+delivery, not a misleading `2/3` warning just because the leader or local
+replica is represented outside the array.
 
 ## Avatar Upload Debug Surface
 
