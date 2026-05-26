@@ -100,7 +100,7 @@ test("session activity legend mirrors sidebar dot mappings", () => {
     { key: "running", activity: summary("streaming"), dot: "agent-working" },
     { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input" },
     { key: "stopping", activity: summary("stopping"), dot: "agent-stopping" },
-    { key: "stopped", activity: summary("stopped"), dot: "agent-waiting" },
+    { key: "stopped", activity: summary("stopped"), dot: "agent-stopped" },
     { key: "failed", activity: summary("error"), dot: "agent-error" },
   ];
 

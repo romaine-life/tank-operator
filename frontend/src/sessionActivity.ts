@@ -54,7 +54,7 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     key: "stopped",
     label: "Stopped",
     detail: "The latest turn was stopped.",
-    dotStatus: "agent-waiting",
+    dotStatus: "agent-stopped",
   },
   {
     key: "failed",
@@ -90,6 +90,7 @@ export function sessionActivityDotStatus(
   if (activity?.failed || activity?.status === "error") return "agent-error";
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
   if (activity?.status === "stopping") return "agent-stopping";
+  if (activity?.status === "stopped") return "agent-stopped";
   if (activity?.status === "submitted" || activity?.status === "streaming") {
     return "agent-working";
   }

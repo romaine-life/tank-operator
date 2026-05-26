@@ -56,6 +56,7 @@ test("session activity status states have explicit sidebar styles", () => {
     "agent-waiting",
     "agent-needs-input",
     "agent-stopping",
+    "agent-stopped",
     "agent-error",
   ]) {
     assert.equal(
