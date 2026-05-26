@@ -530,10 +530,15 @@ test("quality gap policy docs are bundled into session config", () => {
   assert.equal(bundledMigrationPolicySource.includes("# Migration Policy"), true);
 });
 
-test("fresh chat sessions focus the composer instead of the rename field", () => {
-  assert.equal(appSource.includes("setAutoRenameSessionId(created.id)"), false);
+test("workspace title editor survives session creation", () => {
+  assert.equal(appSource.includes("autoRenameSessionId"), false);
+  assert.equal(appSource.includes("pendingCreateTitleSessionId"), true);
+  assert.equal(appSource.includes("WorkspaceTitleSpacer"), true);
+  assert.equal(indexCssSource.includes("workspace-title-overlay"), true);
+  assert.equal(appSource.includes("requested_name_applied"), false);
+  assert.match(appSource, /\.\.\.\(requestedName \? \{ name: requestedName \} : \{\}\)/);
+  assert.equal(appSource.includes("beginSessionTitleEdit(session)"), true);
   assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
-  assert.equal(appSource.includes("setAutoRenameSessionId(session.id)"), true);
 });
 
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {

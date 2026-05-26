@@ -160,6 +160,34 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
+func TestPodManifestDisplayNameAnnotation(t *testing.T) {
+	name := "  Launch draft  "
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+		PiSessionImage:    "pi-image",
+		Name:              &name,
+	})
+	metadata := manifest["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if got, want := annotations["tank-operator/display-name"], "Launch draft"; got != want {
+		t.Fatalf("display-name annotation = %v, want %q", got, want)
+	}
+
+	blank := "   "
+	manifest = PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:      "claude-image",
+		CodexSessionImage: "codex-image",
+		PiSessionImage:    "pi-image",
+		Name:              &blank,
+	})
+	metadata = manifest["metadata"].(map[string]any)
+	annotations = metadata["annotations"].(map[string]any)
+	if _, ok := annotations["tank-operator/display-name"]; ok {
+		t.Fatal("blank display name should not create a pod annotation")
+	}
+}
+
 func TestPodManifestMaterializesTankDocsBeforeSandboxAgent(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",

@@ -236,6 +236,48 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCreatePersistsInitialDisplayName(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		nextID: "57",
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-57",
+			SystemAvatarID: "system-57",
+		},
+	}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	rawName := "  Launch draft  "
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+		Name:  &rawName,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Name == nil || *info.Name != "Launch draft" {
+		t.Fatalf("info name = %#v, want normalized initial title", info.Name)
+	}
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pod.Annotations["tank-operator/display-name"], "Launch draft"; got != want {
+		t.Fatalf("pod display-name annotation = %q, want %q", got, want)
+	}
+	if len(registry.records) != 1 {
+		t.Fatalf("registry records = %d, want 1", len(registry.records))
+	}
+	if got := registry.records[0].Name; got == nil || *got != "Launch draft" {
+		t.Fatalf("registry name = %#v, want normalized initial title", got)
+	}
+}
+
 func TestManagerCreateWritesReservedAvatarsBeforeVisibleRow(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	registry := &managerTestRegistry{

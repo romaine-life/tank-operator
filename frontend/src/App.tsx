@@ -1518,6 +1518,18 @@ function clearGlimmungLaunchContext(): void {
 // at the granularity each label actually renders at.
 const HOME_DEFAULT_SESSION_TITLE = "New session";
 
+function normalizedHomeTitleNameFrom(value: string, fromDefault: boolean): string | null {
+  const trimmed = value.trim();
+  if (fromDefault && (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)) {
+    return null;
+  }
+  return trimmed === "" ? null : trimmed;
+}
+
+function WorkspaceTitleSpacer() {
+  return <span className="workspace-title-spacer" aria-hidden="true" />;
+}
+
 function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
   if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return null;
   if (event.key === "ArrowUp") return -1;
@@ -7208,7 +7220,6 @@ function RunHelpScreen() {
 function ChatPane({
   session,
   visible,
-  onRename,
   onSessionPatch,
   onForkMessage,
   pendingScrollMessageId,
@@ -7216,8 +7227,6 @@ function ChatPane({
   runPrefs,
   setRunPref,
   user,
-  autoRename,
-  onAutoRenameConsumed,
   autoFocusComposer,
   onAutoFocusComposerConsumed,
   primeTurnCompleteSound,
@@ -7229,7 +7238,6 @@ function ChatPane({
 }: {
   session: Session;
   visible: boolean;
-  onRename: (id: string, name: string | null) => void;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   // Deep-link target the parent extracted from ?message=<id>. Only set
@@ -7240,8 +7248,6 @@ function ChatPane({
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   user: SessionUser;
-  autoRename: boolean;
-  onAutoRenameConsumed: () => void;
   autoFocusComposer: boolean;
   onAutoFocusComposerConsumed: () => void;
   // App-owned audio: the SSE consumer in App.tsx rings on the
@@ -7280,23 +7286,6 @@ function ChatPane({
   const sdkConversationStateRef = useRef<ConversationReducerState>(initialConversationState);
   const sdkAssistantDurationsRef = useRef<Map<string, number>>(new Map());
   const [running, setRunning] = useState(false);
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [editingTitleValue, setEditingTitleValue] = useState("");
-  const editingTitleFromFallbackRef = useRef(false);
-  const editingTitleClosingRef = useRef(false);
-
-  // Parent-driven auto-rename. When App sets autoRenameSessionId to this
-  // session's id after F2, the chat-pane title input opens with the
-  // current name pre-loaded. We ack via onAutoRenameConsumed so the signal
-  // is single-shot and re-runs cleanly on a subsequent F2.
-  useEffect(() => {
-    if (!autoRename || readOnly) return;
-    editingTitleFromFallbackRef.current = session.name == null;
-    editingTitleClosingRef.current = false;
-    setEditingTitleValue(sessionDisplayName(session));
-    setEditingTitle(true);
-    onAutoRenameConsumed();
-  }, [autoRename, readOnly, session.id, session.name, session.pod_name, onAutoRenameConsumed]);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
@@ -10285,31 +10274,6 @@ function ChatPane({
     if (tab === "files" && !filesAvailable) return;
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
-  const beginEditingTitle = () => {
-    editingTitleFromFallbackRef.current = session.name == null;
-    editingTitleClosingRef.current = false;
-    setEditingTitleValue(sessionDisplayName(session));
-    setEditingTitle(true);
-  };
-  const cancelEditingTitle = () => {
-    editingTitleClosingRef.current = true;
-    editingTitleFromFallbackRef.current = false;
-    setEditingTitle(false);
-  };
-  const commitEditingTitle = () => {
-    if (editingTitleClosingRef.current) return;
-    editingTitleClosingRef.current = true;
-    const trimmed = editingTitleValue.trim();
-    const fallbackName = defaultSessionName(session);
-    const nextName =
-      trimmed === "" ||
-      (editingTitleFromFallbackRef.current && trimmed === fallbackName)
-        ? null
-        : trimmed;
-    onRename(session.id, nextName);
-    editingTitleFromFallbackRef.current = false;
-    setEditingTitle(false);
-  };
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
@@ -10374,49 +10338,7 @@ function ChatPane({
           for (const f of fs) void uploadAttachment(f);
         }
       }}
-      title={(<>
-          {editingTitle ? (
-            <input
-              className="run-header-name-input"
-              aria-label="Session name"
-              value={editingTitleValue}
-              autoFocus
-              onFocus={selectTitleInputText}
-              onChange={(e) => setEditingTitleValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  commitEditingTitle();
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  cancelEditingTitle();
-                }
-              }}
-              onBlur={commitEditingTitle}
-              maxLength={80}
-            />
-          ) : (
-            <button
-              className="run-header-name-btn"
-              title={
-                readOnly
-                  ? sessionDisplayName(session)
-                  : session.name
-                    ? `${defaultSessionName(session)} — click to rename`
-                    : "click to rename"
-              }
-              disabled={readOnly}
-              onClick={() => {
-                if (readOnly) return;
-                beginEditingTitle();
-              }}
-            >
-              {sessionDisplayName(session)}
-            </button>
-          )}
-      </>)}
+      title={<WorkspaceTitleSpacer />}
       tabs={(<>
           {activeTab !== "chat" && (
             <button
@@ -11639,7 +11561,17 @@ export function App() {
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
+  const homeSessionNameRef = useRef("");
+  const homeEditingTitleRef = useRef(false);
   const homeEditingDefaultTitleRef = useRef(false);
+  const homeTitleClosingRef = useRef(false);
+  const [pendingCreateTitleSessionId, setPendingCreateTitleSessionId] = useState<string | null>(null);
+  const pendingCreateTitleSessionIdRef = useRef<string | null>(null);
+  const [editingSessionTitleId, setEditingSessionTitleId] = useState<string | null>(null);
+  const [editingSessionTitleValue, setEditingSessionTitleValue] = useState("");
+  const editingSessionTitleValueRef = useRef("");
+  const editingSessionTitleFromFallbackRef = useRef(false);
+  const editingSessionTitleClosingRef = useRef(false);
   const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
   const pendingHomeComposerFocusRef = useRef(false);
@@ -11737,11 +11669,6 @@ export function App() {
     repos: string[];
     error?: string | null;
   }>({ status: "idle", repos: [] });
-  // When non-null, the chat pane for this session id auto-opens its title
-  // rename input on its next render. Used by the F2 keyboard shortcut and
-  // cleared by ChatPane via onAutoRenameConsumed once it has applied the
-  // signal.
-  const [autoRenameSessionId, setAutoRenameSessionId] = useState<string | null>(null);
   // Freshly-created chat sessions should land in the composer once the
   // session is ready. The title can still be renamed explicitly via F2.
   const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
@@ -12181,6 +12108,18 @@ export function App() {
   useEffect(() => {
     activeRef.current = active;
   }, [active]);
+  useEffect(() => {
+    homeSessionNameRef.current = homeSessionName;
+  }, [homeSessionName]);
+  useEffect(() => {
+    homeEditingTitleRef.current = homeEditingTitle;
+  }, [homeEditingTitle]);
+  useEffect(() => {
+    pendingCreateTitleSessionIdRef.current = pendingCreateTitleSessionId;
+  }, [pendingCreateTitleSessionId]);
+  useEffect(() => {
+    editingSessionTitleValueRef.current = editingSessionTitleValue;
+  }, [editingSessionTitleValue]);
 
   useEffect(() => {
     updateSessionListDebugRender({
@@ -12606,15 +12545,13 @@ export function App() {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      // Rename now lives in the chat-pane header. Make sure the pane is
-      // active (so the header is mounted) and ask it to enter edit mode.
       activate(session.id);
       setAutoFocusComposerSessionId(null);
-      setAutoRenameSessionId(session.id);
+      beginSessionTitleEdit(session);
     };
     window.addEventListener("keydown", renameHighlightedSession, { capture: true });
     return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
-  }, [sessions, active, closingIds, homeSessionName]);
+  }, [sessions, active, closingIds, readOnlySessionView]);
 
   function activate(id: string) {
     // Treat the sidebar click as the user gesture that unlocks audio
@@ -12752,7 +12689,10 @@ export function App() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
-    const requestedName = homeSessionName.trim();
+    const requestedName = normalizedHomeTitleNameFrom(
+      homeSessionNameRef.current,
+      homeEditingDefaultTitleRef.current,
+    );
     const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
     const seedPrompt = composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
     const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode) ? [...homeAttachments] : [];
@@ -12795,23 +12735,23 @@ export function App() {
         body: JSON.stringify({
           mode,
           repos,
+          ...(requestedName ? { name: requestedName } : {}),
           ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
       if (!res.ok) throw new Error(`create failed: ${res.status}`);
       let created: Session = normalizeSession(await res.json());
-      let requestedNameApplied = false;
-      if (requestedName) {
+      const titleEditorOpen = homeEditingTitleRef.current;
+      const latestHomeName = normalizedHomeTitleNameFrom(
+        homeSessionNameRef.current,
+        homeEditingDefaultTitleRef.current,
+      );
+      let responseTitleUpdate = false;
+      if (!titleEditorOpen && latestHomeName !== requestedName) {
         try {
-          const renameRes = await authedFetch(`/api/sessions/${created.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: requestedName }),
-          });
-          if (!renameRes.ok) throw new Error(`rename failed: ${renameRes.status}`);
-          created = normalizeSession(await renameRes.json());
-          requestedNameApplied = true;
+          created = await patchSessionName(created.id, latestHomeName);
+          responseTitleUpdate = true;
         } catch (e) {
           setError(String(e));
         }
@@ -12827,7 +12767,8 @@ export function App() {
         rows: sessionListDebugRows(sessionsRef.current),
         detail: {
           requested_name: requestedName || null,
-          requested_name_applied: requestedNameApplied,
+          latest_home_name: latestHomeName,
+          response_title_update: responseTitleUpdate,
           initial_skill_name: requestedInitialSkillName ?? null,
         },
       });
@@ -12853,12 +12794,19 @@ export function App() {
         detail: { operation: "prepend_created_session" },
       });
       activate(created.id);
-      if (CHAT_MODES.has(created.mode)) {
-        setAutoFocusComposerSessionId(created.id);
-      }
-      if (requestedNameApplied) {
+      if (titleEditorOpen) {
+        pendingCreateTitleSessionIdRef.current = created.id;
+        setPendingCreateTitleSessionId(created.id);
+      } else {
+        pendingCreateTitleSessionIdRef.current = null;
+        setPendingCreateTitleSessionId(null);
+        homeSessionNameRef.current = "";
         setHomeSessionName("");
+        homeEditingTitleRef.current = false;
         setHomeEditingTitle(false);
+      }
+      if (CHAT_MODES.has(created.mode) && !titleEditorOpen) {
+        setAutoFocusComposerSessionId(created.id);
       }
       if (seedInitialTurnAtCreate && requestedInitialSkillName === "test") {
         void markCreatedSessionTestState(created.id).catch((e) => {
@@ -13083,35 +13031,93 @@ export function App() {
   }
 
   function beginHomeTitleEdit() {
-    const usingDefaultTitle = homeSessionName.trim() === "";
+    const usingDefaultTitle = homeSessionNameRef.current.trim() === "";
     homeEditingDefaultTitleRef.current = usingDefaultTitle;
+    homeTitleClosingRef.current = false;
     if (usingDefaultTitle) {
+      homeSessionNameRef.current = HOME_DEFAULT_SESSION_TITLE;
       setHomeSessionName(HOME_DEFAULT_SESSION_TITLE);
     }
+    homeEditingTitleRef.current = true;
     setHomeEditingTitle(true);
   }
 
-  function finishHomeTitleEdit() {
-    const trimmed = homeSessionName.trim();
-    if (
-      homeEditingDefaultTitleRef.current &&
-      (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)
-    ) {
+  async function finishHomeTitleEdit() {
+    if (homeTitleClosingRef.current) return;
+    homeTitleClosingRef.current = true;
+    const fromDefault = homeEditingDefaultTitleRef.current;
+    const nextName = normalizedHomeTitleNameFrom(homeSessionNameRef.current, fromDefault);
+    const pendingSessionId = pendingCreateTitleSessionIdRef.current;
+    homeEditingDefaultTitleRef.current = false;
+    homeEditingTitleRef.current = false;
+    setHomeEditingTitle(false);
+
+    if (pendingSessionId) {
+      pendingCreateTitleSessionIdRef.current = null;
+      setPendingCreateTitleSessionId(null);
+      await renameSession(pendingSessionId, nextName);
+      homeSessionNameRef.current = "";
+      setHomeSessionName("");
+      return;
+    }
+
+    if (nextName == null && fromDefault) {
+      homeSessionNameRef.current = "";
       setHomeSessionName("");
     }
-    homeEditingDefaultTitleRef.current = false;
-    setHomeEditingTitle(false);
+  }
+
+  function beginSessionTitleEdit(session: Session) {
+    if (readOnlySessionView) return;
+    editingSessionTitleFromFallbackRef.current = session.name == null;
+    editingSessionTitleClosingRef.current = false;
+    const value = sessionDisplayName(session);
+    editingSessionTitleValueRef.current = value;
+    setEditingSessionTitleValue(value);
+    setEditingSessionTitleId(session.id);
+  }
+
+  function cancelSessionTitleEdit() {
+    editingSessionTitleClosingRef.current = true;
+    editingSessionTitleFromFallbackRef.current = false;
+    editingSessionTitleValueRef.current = "";
+    setEditingSessionTitleId(null);
+    setEditingSessionTitleValue("");
+  }
+
+  function commitSessionTitleEdit() {
+    if (editingSessionTitleClosingRef.current) return;
+    const sessionID = editingSessionTitleId;
+    if (!sessionID) return;
+    editingSessionTitleClosingRef.current = true;
+    const session = sessionsRef.current.find((s) => s.id === sessionID);
+    const trimmed = editingSessionTitleValueRef.current.trim();
+    const fallbackName = session ? defaultSessionName(session) : "";
+    const nextName =
+      trimmed === "" ||
+      (editingSessionTitleFromFallbackRef.current && trimmed === fallbackName)
+        ? null
+        : trimmed;
+    editingSessionTitleFromFallbackRef.current = false;
+    editingSessionTitleValueRef.current = "";
+    setEditingSessionTitleId(null);
+    setEditingSessionTitleValue("");
+    void renameSession(sessionID, nextName);
+  }
+
+  async function patchSessionName(id: string, nextName: string | null): Promise<Session> {
+    const res = await authedFetch(`/api/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName }),
+    });
+    if (!res.ok) throw new Error(`rename failed: ${res.status}`);
+    return normalizeSession(await res.json());
   }
 
   async function renameSession(id: string, nextName: string | null) {
     try {
-      const res = await authedFetch(`/api/sessions/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nextName }),
-      });
-      if (!res.ok) throw new Error(`rename failed: ${res.status}`);
-      const updated: Session = normalizeSession(await res.json());
+      const updated = await patchSessionName(id, nextName);
       recordSessionListDebugEvent({
         kind: "rename-response",
         source: "renameSession",
@@ -13158,7 +13164,7 @@ export function App() {
       next.delete(id);
       return next;
     });
-    setAutoRenameSessionId((prev) => (prev === id ? null : prev));
+    setEditingSessionTitleId((prev) => (prev === id ? null : prev));
     setActive((prev) => {
       if (prev !== id) return prev;
       const idx = sessions.findIndex((s) => s.id === id);
@@ -13250,6 +13256,100 @@ export function App() {
     INITIAL_MESSAGE_MODE_OPTIONS.find((option) => option.id === runPrefs.initialMessageMode) ??
     INITIAL_MESSAGE_MODE_OPTIONS[0];
   const homeSessionTitle = homeSessionName.trim() || HOME_DEFAULT_SESSION_TITLE;
+  const activeWorkspaceSession = active == null
+    ? null
+    : sessions.find((session) => session.id === active) ?? null;
+  const useHomeTitleChrome =
+    active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
+  const showWorkspaceTitleChrome =
+    useHomeTitleChrome ||
+    (activeWorkspaceSession != null && CHAT_MODES.has(activeWorkspaceSession.mode));
+  const workspaceTitleChrome = showWorkspaceTitleChrome ? (
+    <div className="workspace-title-overlay">
+      {useHomeTitleChrome ? (
+        homeEditingTitle ? (
+          <input
+            className="run-header-name-input"
+            aria-label="Session name"
+            value={homeSessionName}
+            autoFocus
+            onFocus={selectTitleInputText}
+            onChange={(e) => {
+              homeSessionNameRef.current = e.target.value;
+              setHomeSessionName(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                void finishHomeTitleEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                void finishHomeTitleEdit();
+              }
+            }}
+            onBlur={() => {
+              void finishHomeTitleEdit();
+            }}
+            maxLength={80}
+          />
+        ) : (
+          <button
+            type="button"
+            className="run-header-name-btn"
+            title="Name this session before creating it"
+            onClick={beginHomeTitleEdit}
+          >
+            {homeSessionTitle}
+          </button>
+        )
+      ) : activeWorkspaceSession != null ? (
+        editingSessionTitleId === activeWorkspaceSession.id ? (
+          <input
+            className="run-header-name-input"
+            aria-label="Session name"
+            value={editingSessionTitleValue}
+            autoFocus
+            onFocus={selectTitleInputText}
+            onChange={(e) => {
+              editingSessionTitleValueRef.current = e.target.value;
+              setEditingSessionTitleValue(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                commitSessionTitleEdit();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                cancelSessionTitleEdit();
+              }
+            }}
+            onBlur={commitSessionTitleEdit}
+            maxLength={80}
+          />
+        ) : (
+          <button
+            type="button"
+            className="run-header-name-btn"
+            title={
+              readOnlySessionView
+                ? sessionDisplayName(activeWorkspaceSession)
+                : activeWorkspaceSession.name
+                  ? `${defaultSessionName(activeWorkspaceSession)} - click to rename`
+                  : "click to rename"
+            }
+            disabled={readOnlySessionView}
+            onClick={() => beginSessionTitleEdit(activeWorkspaceSession)}
+          >
+            {sessionDisplayName(activeWorkspaceSession)}
+          </button>
+        )
+      ) : null}
+    </div>
+  ) : null;
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
   const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
@@ -13401,6 +13501,7 @@ export function App() {
       </aside>
 
       <main className="workspace">
+        {workspaceTitleChrome}
         {active == null ? (
           // Pre-session "home" state. Same workspace scaffold as an active
           // session — same body/composer column and same composer footer at
@@ -13411,40 +13512,7 @@ export function App() {
             bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
             bodyRef={homeBodyRef}
             bodyAriaLabel={homeActiveTab === "chat" ? "New session setup" : "Workspace panel"}
-            title={(<>
-              {homeEditingTitle ? (
-                <input
-                  className="run-header-name-input"
-                  aria-label="Session name"
-                  value={homeSessionName}
-                  autoFocus
-                  onFocus={selectTitleInputText}
-                  onChange={(e) => setHomeSessionName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      finishHomeTitleEdit();
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      finishHomeTitleEdit();
-                    }
-                  }}
-                  onBlur={finishHomeTitleEdit}
-                  maxLength={80}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="run-header-name-btn"
-                  title="Name this session before creating it"
-                  onClick={beginHomeTitleEdit}
-                >
-                  {homeSessionTitle}
-                </button>
-              )}
-            </>)}
+            title={<WorkspaceTitleSpacer />}
             tabs={(<>
               {homeActiveTab !== "chat" && (
                 <button
@@ -13942,7 +14010,6 @@ export function App() {
                     <ChatPane
                       session={s}
                       visible={active === s.id}
-                      onRename={renameSession}
                       onSessionPatch={patchSession}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
@@ -13954,8 +14021,6 @@ export function App() {
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
                       user={user!}
-                      autoRename={autoRenameSessionId === s.id}
-                      onAutoRenameConsumed={() => setAutoRenameSessionId(null)}
                       autoFocusComposer={autoFocusComposerSessionId === s.id}
                       onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
                       primeTurnCompleteSound={primeTurnCompleteSound}

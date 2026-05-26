@@ -266,6 +266,10 @@ type CreateOptions struct {
 	// the registry row and threads them into the pod manifest for the
 	// repo-cloner init container.
 	Repos []string
+	// Name is the optional display title supplied by the workspace title
+	// bar before the create request is sent. It is normalized once here
+	// and becomes part of the initial durable sessions row.
+	Name *string
 	// Model/Effort are the session-owned SDK run configuration. The
 	// HTTP handler validates provider-specific effort values before
 	// calling Create; Manager persists them unchanged.
@@ -291,6 +295,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	model := opts.Model
 	effort := opts.Effort
+	name := sessionmodel.NormalizeName(opts.Name)
 
 	// hermes_gui (and any future no-pod mode) short-circuits the K8s
 	// pod-create path. The session exists as a Postgres registry row +
@@ -307,7 +312,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		// no-pod. The repos arg is threaded for forward-compat with
 		// any future no-pod mode that wants repo metadata visible in
 		// the SPA without pod-side cloning.
-		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos, model, effort)
+		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos, name, model, effort)
 	}
 
 	// Lazy re-resolution for first-install ordering.
@@ -338,6 +343,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
+	manifestOpts.Name = name
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -379,6 +385,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
 			Visible:        true,
+			Name:           name,
 			RequestedAt:    requestedAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
@@ -422,6 +429,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Mode:           mode,
 		RequestedAt:    &requestedAt,
 		CreatedAt:      createdAt,
+		Name:           name,
 		Repos:          repos,
 		Model:          model,
 		Effort:         effort,
@@ -439,6 +447,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
 			Visible:        true,
+			Name:           name,
 			RequestedAt:    requestedAt,
 			CreatedAt:      *createdAt,
 			UpdatedAt:      requestedAt,
@@ -501,7 +510,7 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 // makes sense for the external backend — here, "Active" once the row is
 // written. Reaper does not touch no-pod sessions because reaper lists
 // pods, not registry rows.
-func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string, model, effort string) (Info, error) {
+func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string, name *string, model, effort string) (Info, error) {
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
 		return Info{}, err
@@ -526,6 +535,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		Scope:          m.manifestOpts.SessionScope,
 		PodName:        "",
 		Visible:        true,
+		Name:           name,
 		RequestedAt:    requestedAt,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -560,6 +570,7 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 		RequestedAt:    &requestedAt,
 		CreatedAt:      &now,
 		ReadyAt:        &now,
+		Name:           name,
 		Repos:          repos,
 		Model:          model,
 		Effort:         effort,

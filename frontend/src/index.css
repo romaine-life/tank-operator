@@ -2322,10 +2322,40 @@ button:disabled {
 .workspace {
   display: flex;
   flex-direction: column;
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--bg-app);
+}
+
+.workspace-title-overlay {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-5);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: min(16rem, calc(100% - (2 * var(--space-5))));
+}
+
+.workspace-title-spacer {
+  display: block;
+  width: 16rem;
+  max-width: min(16rem, calc(100vw - (2 * var(--space-5))));
+  min-height: calc(var(--text-lg) * 1.45);
+}
+
+.workspace-title-overlay .run-header-name-btn,
+.workspace-title-overlay .run-header-name-input {
+  max-width: 100%;
+}
+
+.workspace-title-overlay .run-header-name-btn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .demo-workspace {
