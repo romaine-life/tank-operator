@@ -111,6 +111,8 @@ export interface ChatComposerProps {
    * menu, and MCP menu here. Home + demo leave this empty.
    */
   toolButtons?: ReactNode;
+  /** Seeds the uncontrolled textarea for static portfolio/demo specimens. */
+  initialText?: string;
   /** Fires whenever the textarea's content changes — including programmatic clears. */
   onTextChange?: (text: string) => void;
 }
@@ -137,14 +139,32 @@ export function ChatComposer({
   onStop,
   isStopping,
   toolButtons,
+  initialText,
   onTextChange,
 }: ChatComposerProps) {
   // Internal mirror of the textarea's value so the hint can fade and the
   // clear-X can show/hide without making the textarea itself controlled
   // (PromptInput owns submission lifecycle, and turning the textarea into a
   // controlled input would fight its uncontrolled clear-on-submit reset).
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initialText ?? "");
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const seededInitialTextRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialText || seededInitialTextRef.current) return;
+    const ta = composerRef.current?.querySelector("textarea") as
+      | HTMLTextAreaElement
+      | null;
+    if (!ta) return;
+    seededInitialTextRef.current = true;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(ta, initialText);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    setText(initialText);
+  }, [initialText]);
 
   // Apply the requested Enter-vs-Ctrl+Enter behavior. The textarea's own
   // keydown logic in PromptInput.tsx submits on Enter (no shift) by default,

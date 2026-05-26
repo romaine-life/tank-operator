@@ -15,6 +15,7 @@ import { StyleguideModeChip } from "./styleguide/mode-chip";
 import { StyleguideModeDropdown } from "./styleguide/mode-dropdown";
 import { StyleguideNewSessionRow } from "./styleguide/new-session-row";
 import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding";
+import { StyleguidePortfolioTranscript } from "./styleguide/portfolio-transcript";
 import { StyleguidePortfolioWorkspace } from "./styleguide/portfolio-workspace";
 import { StyleguideRunHeaderTabs } from "./styleguide/run-header-tabs";
 import { StyleguideSessionRow } from "./styleguide/session-row";
@@ -94,6 +95,7 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/error-pill": () => <StyleguideErrorPill />,
   "/_styleguide/portfolio-workspace": () => <StyleguidePortfolioWorkspace />,
   "/_styleguide/portfolio-onboarding": () => <StyleguidePortfolioOnboarding />,
+  "/_styleguide/portfolio-transcript": () => <StyleguidePortfolioTranscript />,
   "/_styleguide/boot-state": () => <StyleguideBootState />,
   "/_styleguide/avatars": () => <StyleguideAvatars />,
 };
