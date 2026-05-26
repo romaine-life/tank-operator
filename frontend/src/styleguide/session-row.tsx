@@ -83,9 +83,6 @@ export function StyleguideSessionRow() {
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-needs-input" title="Needs input" aria-label="status: Needs input" />
                 <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
-                <span className="session-activity-chip is-input" title="Agent needs input" aria-label="Agent needs input">
-                  input
-                </span>
               </div>
             </li>
             <li>
@@ -121,7 +118,6 @@ export function StyleguideSessionRow() {
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-stopping" title="Stopping" aria-label="status: Stopping" />
                 <ModePair provider="pi" interaction="cli" label="Pi CLI" />
-                <span className="session-closing-chip">closing</span>
               </div>
             </li>
           </ul>

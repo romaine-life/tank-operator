@@ -99,9 +99,13 @@
   --status-error-fg: #ef6f6f;
   --status-pending-bg: var(--gray-850);
   --status-pending-fg: var(--gray-400);
-  --status-agent-working: #fbbf24;
-  --status-agent-waiting: #67e8f9;
+  --status-agent-ready: #a1a1aa;
+  --status-agent-running: #60a5fa;
   --status-agent-needs-input: #fb923c;
+  --status-agent-stopping: #fbbf24;
+  --status-agent-stopped: #71717a;
+  --status-agent-working: var(--status-agent-running);
+  --status-agent-waiting: var(--status-agent-ready);
   --skill-test-fg: #bef264;
   --skill-test-bg: rgba(132, 204, 22, 0.16);
   --skill-test-border: rgba(190, 242, 100, 0.24);
@@ -1895,7 +1899,8 @@ button:disabled {
 .status-dot.status-agent-waiting,
 .status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 .status-dot.status-agent-needs-input { background: var(--status-agent-needs-input); }
-.status-dot.status-agent-stopping { background: var(--status-agent-working); }
+.status-dot.status-agent-stopping { background: var(--status-agent-stopping); }
+.status-dot.status-agent-stopped { background: var(--status-agent-stopped); }
 .status-dot.status-agent-error { background: var(--status-error-fg); }
 
 .mode {
@@ -1963,48 +1968,6 @@ button:disabled {
 
 .sidebar.is-collapsed .sessions li.is-open:not(.is-closing) .session-avatar {
   opacity: 1;
-}
-
-.session-closing-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-}
-
-.session-activity-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-}
-
-.session-activity-chip.is-input {
-  background: rgba(251, 146, 60, 0.14);
-  color: var(--status-agent-needs-input);
-}
-
-.session-activity-chip.is-failed {
-  background: var(--status-error-bg);
-  color: var(--status-error-fg);
-}
-
-.session-activity-chip.is-stopping,
-.session-activity-chip.is-stopped {
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
 }
 
 .mode-claude_cli        { background: var(--mode-claude-cli-bg); color: var(--mode-claude-cli-fg); }

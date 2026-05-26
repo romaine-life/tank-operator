@@ -118,7 +118,6 @@ function PortfolioWorkspaceScene() {
                 <span className="mode mode-icon-only mode-interaction-chip" title="gui" aria-label="gui">
                   <MonitorIcon className="mode-interaction-icon" aria-hidden="true" />
                 </span>
-                <span className="session-activity-chip is-input">input</span>
               </div>
             </li>
             <li>
