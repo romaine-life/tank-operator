@@ -2124,17 +2124,45 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  padding: 5px 2px 0;
+  padding: 6px 2px 0;
+  margin: 0;
 }
 
-.cluster-health-metrics span {
+.cluster-health-metric {
   min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-items: center;
+  gap: 2px;
+}
+
+.cluster-health-metric dt,
+.cluster-health-metric dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.cluster-health-metric dt {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.cluster-health-metric dd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   color: var(--text-muted);
   font-size: 10px;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 

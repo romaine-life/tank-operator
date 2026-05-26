@@ -1763,20 +1763,33 @@ function ClusterHealthWidget({
           <RotateCcwIcon />
         </span>
       </button>
-      <div className="cluster-health-metrics" aria-hidden={health ? undefined : "true"}>
-        <span title="Ready Kubernetes nodes">
-          <MonitorIcon />
-          <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
-        </span>
-        <span title="Ready Tank session pods">
-          <SquareTerminalIcon />
-          <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
-        </span>
-        <span title="NATS JetStream memory utilization">
-          <ActivityIcon />
-          <span>{clusterHealthNatsLoadLabel(nats)}</span>
-        </span>
-      </div>
+      <dl
+        className="cluster-health-metrics"
+        aria-label="Cluster health metrics"
+        aria-hidden={health ? undefined : "true"}
+      >
+        <div className="cluster-health-metric" title="Ready Kubernetes nodes">
+          <dt>Nodes</dt>
+          <dd>
+            <MonitorIcon aria-hidden="true" />
+            <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
+          </dd>
+        </div>
+        <div className="cluster-health-metric" title="Ready Tank session pods">
+          <dt>Sessions</dt>
+          <dd>
+            <SquareTerminalIcon aria-hidden="true" />
+            <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+          </dd>
+        </div>
+        <div className="cluster-health-metric" title="NATS JetStream memory utilization">
+          <dt>NATS</dt>
+          <dd>
+            <ActivityIcon aria-hidden="true" />
+            <span>{clusterHealthNatsLoadLabel(nats)}</span>
+          </dd>
+        </div>
+      </dl>
     </section>
   );
 }

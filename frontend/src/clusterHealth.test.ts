@@ -90,6 +90,10 @@ test("cluster health issue text surfaces NATS warnings", () => {
   assert.equal(clusterHealthIssueText(health), "Live delivery replicas 2/3 current");
 });
 
+test("cluster health issue text uses a non-label healthy summary", () => {
+  assert.equal(clusterHealthIssueText(baseHealth()), "all checks passing");
+});
+
 test("cluster health NATS load formats utilization", () => {
   assert.equal(clusterHealthNatsLoadLabel(baseHealth().nats), "50%");
   const health = baseHealth();

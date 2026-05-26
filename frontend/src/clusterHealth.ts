@@ -101,7 +101,7 @@ export function clusterHealthIssueText(health: ClusterHealthResponse | null): st
     if (health.sessions.not_ready > 0) return `${health.sessions.not_ready} session pod${health.sessions.not_ready === 1 ? "" : "s"} not ready`;
   }
   if (health.status === "unknown") return "health partially unavailable";
-  return "nodes, sessions, NATS";
+  return "all checks passing";
 }
 
 export function clusterHealthNatsLoadLabel(nats: ClusterNATSHealth | undefined): string {
