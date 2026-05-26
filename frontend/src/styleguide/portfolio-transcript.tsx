@@ -158,6 +158,7 @@ function ActiveTurnActivity({
   active: boolean;
   highlighted?: boolean;
 }) {
+  const avatar = getSessionAvatar("portfolio-transcript-state");
   return (
     <div
       className="run-turn-activity"
@@ -167,33 +168,38 @@ function ActiveTurnActivity({
       data-design-state={active ? "active" : "rest"}
       data-inspectable
     >
-      <button type="button" className="run-turn-activity-header" aria-expanded={true}>
-        <span className="run-turn-activity-icon" aria-hidden="true">
-          <ActivityIcon size={14} strokeWidth={2} />
-        </span>
-        <span className="run-turn-activity-label">Turn activity</span>
-        <span className="run-turn-activity-summary">
-          1 running shell / 1 edit candidate / 2 progress notes
-        </span>
-        <span className="run-tool-timing">
-          <span>19:04:14</span>
-          <span className="run-tool-timing-arrow">to</span>
-          <span className="run-tool-timing-running">
-            <TimerIcon className="run-tool-timing-spinner run-spin" size={12} aria-hidden="true" />
+      <span className="run-turn-activity-avatar" aria-hidden="true">
+        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div className="run-turn-activity-content">
+        <button type="button" className="run-turn-activity-header" aria-expanded={true}>
+          <span className="run-turn-activity-icon" aria-hidden="true">
+            <ActivityIcon size={14} strokeWidth={2} />
           </span>
-        </span>
-        <span className="run-turn-activity-chevron">
-          <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
-        </span>
-      </button>
-      <div className="run-turn-activity-body">
-        <RunningTool highlighted={highlighted} />
-        <TranscriptMessage variant="assistant" highlighted={highlighted}>
-          <p style={{ margin: 0 }}>
-            I found the highlight hook and the active turn data attribute. The portfolio keeps both states
-            visible without needing a live session ledger.
-          </p>
-        </TranscriptMessage>
+          <span className="run-turn-activity-label">Turn activity</span>
+          <span className="run-turn-activity-summary">
+            1 running shell / 1 edit candidate / 2 progress notes
+          </span>
+          <span className="run-tool-timing">
+            <span>19:04:14</span>
+            <span className="run-tool-timing-arrow">to</span>
+            <span className="run-tool-timing-running">
+              <TimerIcon className="run-tool-timing-spinner run-spin" size={12} aria-hidden="true" />
+            </span>
+          </span>
+          <span className="run-turn-activity-chevron">
+            <ChevronDownIcon size={14} className="run-chevron-icon" aria-hidden="true" />
+          </span>
+        </button>
+        <div className="run-turn-activity-body">
+          <RunningTool highlighted={highlighted} />
+          <TranscriptMessage variant="assistant" highlighted={highlighted}>
+            <p style={{ margin: 0 }}>
+              I found the highlight hook and the active turn data attribute. The portfolio keeps both states
+              visible without needing a live session ledger.
+            </p>
+          </TranscriptMessage>
+        </div>
       </div>
     </div>
   );

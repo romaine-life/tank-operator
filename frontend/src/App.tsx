@@ -5697,117 +5697,122 @@ function RunTurnActivityGroup({
       data-state={open ? "open" : "closed"}
       data-active={group.active === true ? "true" : undefined}
     >
-      <button
-        type="button"
-        className="run-turn-activity-header"
-        onClick={() => onOpenChange(!open)}
-        aria-expanded={open}
-      >
-        <span
-          className="run-turn-activity-icon"
-          title="Condensed turn activity"
-          aria-label="Condensed turn activity"
+      <span className="run-turn-activity-avatar" aria-hidden="true">
+        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div className="run-turn-activity-content">
+        <button
+          type="button"
+          className="run-turn-activity-header"
+          onClick={() => onOpenChange(!open)}
+          aria-expanded={open}
         >
-          <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
-        </span>
-        <span className="run-turn-activity-label">Turn activity</span>
-        <span className="run-turn-activity-summary">
-          {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
-        </span>
-        {showTimestamps && (
-          <ToolTiming
-            startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
-            completedAt={
-              shellSummary?.completedAt ??
-              completedAt?.completedAt ??
-              completedAt?.turnTerminalAt ??
-              completedAt?.time
-            }
-            running={group.active === true}
-          />
-        )}
-        <span className="run-turn-activity-chevron">
-          {open ? (
-            <ChevronUpIcon size={14} className="run-chevron-icon" />
-          ) : (
-            <ChevronDownIcon size={14} className="run-chevron-icon" />
+          <span
+            className="run-turn-activity-icon"
+            title="Condensed turn activity"
+            aria-label="Condensed turn activity"
+          >
+            <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+          </span>
+          <span className="run-turn-activity-label">Turn activity</span>
+          <span className="run-turn-activity-summary">
+            {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+          </span>
+          {showTimestamps && (
+            <ToolTiming
+              startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
+              completedAt={
+                shellSummary?.completedAt ??
+                completedAt?.completedAt ??
+                completedAt?.turnTerminalAt ??
+                completedAt?.time
+              }
+              running={group.active === true}
+            />
           )}
-        </span>
-      </button>
-      {open && (
-        <div className="run-turn-activity-body">
-          {group.shell && !group.loaded ? (
-            <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
-              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-              <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
-            </div>
-          ) : childGroups.map((child) => {
-            if (child.kind === "tools") {
-              const childGroupKey = toolGroupStateKey(child.entries);
+          <span className="run-turn-activity-chevron">
+            {open ? (
+              <ChevronUpIcon size={14} className="run-chevron-icon" />
+            ) : (
+              <ChevronDownIcon size={14} className="run-chevron-icon" />
+            )}
+          </span>
+        </button>
+        {open && (
+          <div className="run-turn-activity-body">
+            {group.shell && !group.loaded ? (
+              <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
+              </div>
+            ) : childGroups.map((child) => {
+              if (child.kind === "tools") {
+                const childGroupKey = toolGroupStateKey(child.entries);
+                return (
+                  <RunToolGroup
+                    key={childGroupKey}
+                    entries={child.entries}
+                    autoExpand={autoExpandTools}
+                    showTimestamps={showTimestamps}
+                    open={
+                      toolGroupOpenOverrides[childGroupKey] ??
+                      toolGroupDefaultOpen(
+                        child.entries,
+                        autoExpandTools,
+                        toolExpansionOverrides,
+                      )
+                    }
+                    onOpenChange={(nextOpen) =>
+                      onToolGroupOpenChange(childGroupKey, nextOpen)
+                    }
+                    toolExpansionOverrides={toolExpansionOverrides}
+                    onToolExpandedChange={onToolExpandedChange}
+                  />
+                );
+              }
+              if (child.kind === "reasoning") {
+                return (
+                  <RunReasoningBlock
+                    key={child.entry.id}
+                    entry={child.entry}
+                    showThinking={showThinking}
+                  />
+                );
+              }
+              if (child.kind === "meta") {
+                return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
+              }
+              if (child.kind === "background_task") {
+                return (
+                  <RunBackgroundTaskBlock
+                    key={child.entry.id}
+                    entry={child.entry}
+                    showTimestamps={showTimestamps}
+                    onOpenTask={onOpenBackgroundTask}
+                  />
+                );
+              }
               return (
-                <RunToolGroup
-                  key={childGroupKey}
-                  entries={child.entries}
-                  autoExpand={autoExpandTools}
-                  showTimestamps={showTimestamps}
-                  open={
-                    toolGroupOpenOverrides[childGroupKey] ??
-                    toolGroupDefaultOpen(
-                      child.entries,
-                      autoExpandTools,
-                      toolExpansionOverrides,
-                    )
-                  }
-                  onOpenChange={(nextOpen) =>
-                    onToolGroupOpenChange(childGroupKey, nextOpen)
-                  }
-                  toolExpansionOverrides={toolExpansionOverrides}
-                  onToolExpandedChange={onToolExpandedChange}
-                />
-              );
-            }
-            if (child.kind === "reasoning") {
-              return (
-                <RunReasoningBlock
+                <RunMessageBubble
                   key={child.entry.id}
                   entry={child.entry}
-                  showThinking={showThinking}
-                />
-              );
-            }
-            if (child.kind === "meta") {
-              return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
-            }
-            if (child.kind === "background_task") {
-              return (
-                <RunBackgroundTaskBlock
-                  key={child.entry.id}
-                  entry={child.entry}
+                  avatar={avatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={sessionId}
+                  highlighted={
+                    compactedEntryIds.has(child.entry.id) &&
+                    highlightedEntryId === child.entry.id
+                  }
                   showTimestamps={showTimestamps}
-                  onOpenTask={onOpenBackgroundTask}
+                  showDuration={showDuration}
+                  onQuote={onQuote}
+                  canonicalMessage={false}
                 />
               );
-            }
-            return (
-              <RunMessageBubble
-                key={child.entry.id}
-                entry={child.entry}
-                avatar={avatar}
-                systemAvatar={systemAvatar}
-                sessionId={sessionId}
-                highlighted={
-                  compactedEntryIds.has(child.entry.id) &&
-                  highlightedEntryId === child.entry.id
-                }
-                showTimestamps={showTimestamps}
-                showDuration={showDuration}
-                onQuote={onQuote}
-                canonicalMessage={false}
-              />
-            );
-          })}
-        </div>
-      )}
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

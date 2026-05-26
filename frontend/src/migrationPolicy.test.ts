@@ -178,6 +178,16 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
 });
 
+test("turn activity rows render with agent avatar ownership", () => {
+  assert.match(
+    appSource,
+    /className="run-turn-activity-avatar"[\s\S]{0,240}<AgentAvatarIcon avatar=\{avatar\}/,
+  );
+  assert.equal(indexCssSource.includes(".run-turn-activity-content"), true);
+  assert.equal(indexCssSource.includes(".run-turn-activity-avatar"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-activity-avatar"), true);
+});
+
 test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
