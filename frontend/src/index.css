@@ -2026,6 +2026,17 @@ button:disabled {
   padding: var(--space-2) var(--space-3) 0;
 }
 
+.cluster-health-panel {
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-sidebar-control);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+.cluster-health-panel:hover {
+  background: var(--bg-sidebar-hover);
+}
+
 .cluster-health-main {
   width: 100%;
   min-height: 44px;
@@ -2034,15 +2045,13 @@ button:disabled {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2);
-  border-radius: var(--radius-lg);
-  background: var(--bg-sidebar-control);
+  background: transparent;
   color: var(--text-body);
   text-align: left;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
 }
 
 .cluster-health-main:hover:not(:disabled) {
-  background: var(--bg-sidebar-hover);
+  background: transparent;
   color: var(--text-primary);
 }
 
@@ -2124,8 +2133,9 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  padding: 6px 2px 0;
-  margin: 0;
+  padding: 6px 0 7px;
+  margin: 0 var(--space-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
 
 .cluster-health-metric {
@@ -2173,6 +2183,10 @@ button:disabled {
 
 .sidebar.is-collapsed .cluster-health {
   padding: var(--space-2) 0.5rem 0;
+}
+
+.sidebar.is-collapsed .cluster-health-panel {
+  width: 2.25rem;
 }
 
 .sidebar.is-collapsed .cluster-health-main {
