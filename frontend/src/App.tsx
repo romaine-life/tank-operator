@@ -189,6 +189,7 @@ import {
   sessionFilesTabTitle,
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
+import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 
@@ -3743,6 +3744,7 @@ function conversationEntriesToTranscript(
 
 type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
+  | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
   | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry }
   | {
@@ -3761,9 +3763,42 @@ function entryGroupKey(g: EntryGroup): string {
   if (g.kind === "tools") {
     return toolGroupStateKey(g.entries);
   }
+  if (g.kind === "message_group") {
+    return `messages-${g.entries[0]?.id ?? "group"}`;
+  }
   if (g.kind === "thinking") return g.id;
   if (g.kind === "activity") return g.id;
   return g.entry.id;
+}
+
+function messageEntryForAvatarGrouping(
+  group: EntryGroup | FlatEntryGroup | null | undefined,
+): TranscriptEntry | null {
+  if (!group) return null;
+  return group.kind === "message" ? group.entry : null;
+}
+
+function isMessageAvatarContinuation(
+  groups: readonly (EntryGroup | FlatEntryGroup)[],
+  index: number,
+): boolean {
+  const current = messageEntryForAvatarGrouping(groups[index]!);
+  const previous = messageEntryForAvatarGrouping(groups[index - 1]!);
+  return shouldGroupTranscriptMessageWithPrevious(previous, current);
+}
+
+function isAbsorbableSystemMessage(entry: TranscriptEntry): boolean {
+  if (entry.kind !== "message" || entry.role !== "system") return false;
+  const messageKind = (entry as Record<string, unknown>).messageKind;
+  const action = (entry as Record<string, unknown>).action;
+  return (!messageKind || messageKind === "message") && !action;
+}
+
+function lastSystemMessageGroupEntry(group: EntryGroup | undefined): TranscriptEntry | null {
+  if (!group) return null;
+  if (group.kind === "message" && isAbsorbableSystemMessage(group.entry)) return group.entry;
+  if (group.kind === "message_group") return group.entries[group.entries.length - 1] ?? null;
+  return null;
 }
 
 function isUserMessageEntry(entry: TranscriptEntry): boolean {
@@ -3808,6 +3843,19 @@ function pushTranscriptEntryGroup(
   if (bucket.entries.length) {
     groups.push({ kind: "tools", entries: bucket.entries });
     bucket.entries = [];
+  }
+  if (isAbsorbableSystemMessage(entry)) {
+    const lastIndex = groups.length - 1;
+    const previous = lastSystemMessageGroupEntry(groups[lastIndex]);
+    if (previous && shouldGroupTranscriptMessageWithPrevious(previous, entry)) {
+      const last = groups[lastIndex]!;
+      if (last.kind === "message_group") {
+        last.entries = [...last.entries, entry];
+      } else if (last.kind === "message") {
+        groups[lastIndex] = { kind: "message_group", entries: [last.entry, entry] };
+      }
+      return;
+    }
   }
   if (entry.kind === "message") groups.push({ kind: "message", entry });
   else if (entry.kind === "reasoning") groups.push({ kind: "reasoning", entry });
@@ -3922,6 +3970,8 @@ function chatScrollGroupSnapshot(
       toolEntries += group.entries.length;
     } else if (group.kind === "message") {
       messages += 1;
+    } else if (group.kind === "message_group") {
+      messages += group.entries.length;
     } else if (group.kind === "reasoning") {
       reasoning += 1;
     } else if (group.kind === "background_task") {
@@ -4519,6 +4569,7 @@ function RunMessageBubble({
   canonicalMessage = true,
   ownedByTurnActivity = false,
   showAssistantAvatar = !ownedByTurnActivity,
+  isAvatarContinuation = false,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar | null;
@@ -4533,6 +4584,7 @@ function RunMessageBubble({
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
+  isAvatarContinuation?: boolean;
 }) {
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
@@ -4586,14 +4638,15 @@ function RunMessageBubble({
       data-message-id={canonicalMessage ? entry.id : undefined}
       data-activity-entry-id={canonicalMessage ? undefined : entry.id}
       data-owner={ownedByTurnActivity ? "activity" : undefined}
+      data-continuation={isAvatarContinuation ? "true" : undefined}
       data-highlight={highlighted ? "true" : undefined}
     >
-      {variant === "assistant" && showAssistantAvatar && (
+      {variant === "assistant" && showAssistantAvatar && !isAvatarContinuation && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
       )}
-      {variant === "system" && (
+      {variant === "system" && !isAvatarContinuation && (
         <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
           {systemAvatar ? (
             <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
@@ -4672,7 +4725,7 @@ function RunMessageBubble({
           </div>
         </div>
       </div>
-      {variant === "user" && (() => {
+      {variant === "user" && !isAvatarContinuation && (() => {
         // Cross-session handoff: a sibling tank-operator session posted
         // this turn via mcp-tank-operator. Only render a session avatar
         // when the durable message/session data names one; otherwise use
@@ -4698,6 +4751,64 @@ function RunMessageBubble({
           </span>
         ) : null;
       })()}
+    </div>
+  );
+}
+
+function RunSystemMessageGroupBubble({
+  entries,
+  systemAvatar,
+  highlightedEntryId,
+  showTimestamps,
+}: {
+  entries: TranscriptEntry[];
+  systemAvatar: AgentAvatar | null;
+  highlightedEntryId: string | null;
+  showTimestamps: boolean;
+}) {
+  const highlighted = entries.some((entry) => highlightedEntryId === entry.id);
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="system-group"
+      data-highlight={highlighted ? "true" : undefined}
+    >
+      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
+      </span>
+      <div className="run-transcript-message-content" data-slot="message-content">
+        <div className="run-transcript-system-group">
+          {entries.map((entry) => {
+            const time = formatMessageTime(entry.time);
+            return (
+              <div
+                key={entry.id}
+                className="run-transcript-system-group-item"
+                data-message-id={entry.id}
+                data-highlight={highlightedEntryId === entry.id ? "true" : undefined}
+              >
+                <div className="run-transcript-message-text" data-slot="message-text">
+                  <RunMarkdown>{entry.text ?? ""}</RunMarkdown>
+                </div>
+                {showTimestamps && time && (
+                  <div className="run-msg-footer" data-always-visible="">
+                    <div className="run-msg-timings">
+                      <span className="run-msg-timing-row">{time}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -6172,7 +6283,7 @@ function RunTurnActivityGroup({
                   <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
                   <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
                 </div>
-              ) : childGroups.map((child) => {
+              ) : childGroups.map((child, childIndex) => {
                 if (child.kind === "tools") {
                   const childGroupKey = toolGroupStateKey(child.entries);
                   return (
@@ -6219,6 +6330,17 @@ function RunTurnActivityGroup({
                     />
                   );
                 }
+                if (child.kind === "message_group") {
+                  return (
+                    <RunSystemMessageGroupBubble
+                      key={entryGroupKey(child)}
+                      entries={child.entries}
+                      systemAvatar={systemAvatar}
+                      highlightedEntryId={highlightedEntryId}
+                      showTimestamps={showTimestamps}
+                    />
+                  );
+                }
                 if (child.kind === "thinking") return null;
                 return (
                   <RunMessageBubble
@@ -6235,6 +6357,7 @@ function RunTurnActivityGroup({
                     showDuration={showDuration}
                     onQuote={onQuote}
                     canonicalMessage={false}
+                    isAvatarContinuation={isMessageAvatarContinuation(childGroups, childIndex)}
                   />
                 );
               })}
@@ -6313,7 +6436,7 @@ function RunTurnActivityScreen({
     ));
   }, []);
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
-  const renderGroup = (group: FlatEntryGroup) => {
+  const renderGroup = (group: FlatEntryGroup, groupIndex: number) => {
     if (group.kind === "tools") {
       const groupKey = toolGroupStateKey(group.entries);
       return (
@@ -6348,6 +6471,17 @@ function RunTurnActivityScreen({
         />
       );
     }
+    if (group.kind === "message_group") {
+      return (
+        <RunSystemMessageGroupBubble
+          key={entryGroupKey(group)}
+          entries={group.entries}
+          systemAvatar={systemAvatar}
+          highlightedEntryId={null}
+          showTimestamps={showTimestamps}
+        />
+      );
+    }
     if (group.kind === "thinking") return null;
     return (
       <RunMessageBubble
@@ -6362,6 +6496,7 @@ function RunTurnActivityScreen({
         canonicalMessage={false}
         ownedByTurnActivity
         showAssistantAvatar
+        isAvatarContinuation={isMessageAvatarContinuation(detailGroups, groupIndex)}
       />
     );
   };
@@ -6591,6 +6726,7 @@ export function RunMessages({
         return compactedContains || visibleAssistantContains;
       }
       if (g.kind === "thinking") return false;
+      if (g.kind === "message_group") return g.entries.some((entry) => entry.id === target);
       return g.entry.id === target;
     });
     if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
@@ -6711,7 +6847,7 @@ export function RunMessages({
     [],
   );
   const renderItem = useCallback(
-    (_index: number, g: EntryGroup) => {
+    (index: number, g: EntryGroup) => {
       if (g.kind === "tools") {
         const groupKey = toolGroupStateKey(g.entries);
         return (
@@ -6741,6 +6877,16 @@ export function RunMessages({
             entry={g.entry}
             showTimestamps={showTimestamps}
             onOpenTask={onOpenBackgroundTask}
+          />
+        );
+      }
+      if (g.kind === "message_group") {
+        return (
+          <RunSystemMessageGroupBubble
+            entries={g.entries}
+            systemAvatar={systemAvatar}
+            highlightedEntryId={highlightedEntryId}
+            showTimestamps={showTimestamps}
           />
         );
       }
@@ -6794,6 +6940,7 @@ export function RunMessages({
           onQuote={onQuote}
           onFork={onFork}
           onOpenTurn={onOpenTurn}
+          isAvatarContinuation={isMessageAvatarContinuation(groups, index)}
         />
       );
     },
@@ -6801,6 +6948,7 @@ export function RunMessages({
       activityOpenOverrides,
       autoExpandTools,
       avatar,
+      groups,
       systemAvatar,
       highlightedEntryId,
       loadingActivityTurns,
