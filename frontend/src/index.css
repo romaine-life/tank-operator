@@ -7202,6 +7202,10 @@ textarea.run-files-viewer-editor:focus {
   padding-left: var(--run-transcript-message-inset-left);
 }
 
+.run-transcript-message[data-continuation="true"] {
+  margin-top: calc(var(--run-transcript-row-gap) * -0.45);
+}
+
 /* Avatars — assistant and user avatars are real elements in the outer columns.
    Sized to match the 42px sidebar .session-avatar so the JP1 avatar reads
    at the same scale in both surfaces. */
@@ -7521,6 +7525,20 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-muted);
   border: 1px solid rgba(255, 255, 255, 0.065);
   font-size: var(--run-chat-font-sm);
+}
+
+.run-transcript [data-slot="message"][data-kind="system-group"] .run-transcript-message-content {
+  padding-block: 0.64rem;
+}
+
+.run-transcript-system-group {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.run-transcript-system-group-item + .run-transcript-system-group-item {
+  padding-top: 0.42rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Claude assistant variant — same shell as the generic assistant bubble.
