@@ -64,6 +64,17 @@ All metric names are prefixed `tank_`. The full namespace:
   `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
   `session_id`, email, raw route paths, or user-supplied event names as
   labels; unknown values collapse to `other` / `unknown`.
+- `tank_session_list_debug_capture_reports_total{result,reason}` —
+  browser-reported session-list debug captures ingested through
+  `POST /api/client-metrics/session-list-debug-capture`. The SPA sends
+  bounded `/_debug/session-list` snapshots only from explicit
+  Settings -> Admin or debug-page capture/record controls. `reason` is
+  a closed enum and unknown values collapse to `other`; the metric never
+  labels by owner, session id, path, or raw user input.
+- `tank_admin_debug_session_list_capture_reads_total{result}` — admin
+  reads of `GET /api/debug/session-list-captures`, the durable capture
+  store for client-side session-list diagnostics. Captures are retained
+  at the latest 200 records per owner/scope.
 - `tank_session_event_wake_published_total` /
   `tank_session_event_wake_received_total` /
   `tank_session_event_persist_to_wake_seconds` — the per-session SSE
@@ -297,6 +308,35 @@ line per call (`caller_email`, `session_id`, `session_scope`,
 `tank_admin_debug_session_event_ledger_reads_total{result}` at
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
+
+## Session List Capture Debug Surface
+
+`GET /api/debug/session-list-captures` (admin-only) returns durable
+browser-side session-list captures posted by
+`POST /api/client-metrics/session-list-debug-capture`. Each record
+contains the captured client snapshot, the capture detail, and the
+server registry rows at ingest time.
+
+Standard workflow for "new session showed another session's name or
+avatar":
+
+1. Ask the user to open Settings -> Admin in the affected browser and
+   click `Record 2m` before reproducing, or click `Capture Now` while
+   the bad render is visible. The standalone `/_debug/session-list`
+   page exposes the same controls plus raw client/server row state.
+   Recording runs in a page-level singleton, so it continues while the
+   user leaves Settings to create or open a session. Besides the 10s
+   interval samples, session-list debug events also trigger a debounced
+   `manual-record-sample` with `detail.phase=event-sample`; this keeps
+   short-lived bad renders in the durable capture stream.
+2. Read `GET /api/debug/session-list-captures?owner=<email>&limit=10`
+   and inspect the latest captures. Recording samples share
+   `detail.run_id`.
+3. Compare the captured browser `snapshot` rows with `server_rows`
+   recorded at ingest time. If `server_rows` is stable while the browser
+   snapshot shows the wrong `name` or avatar id, the bug is in the client
+   store/render/avatar resolution layer. If both disagree with the
+   create response, the bug is server-side.
 
 ## Cardinality rules
 

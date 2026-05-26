@@ -118,6 +118,24 @@ func TestMigrationsPersistAvatarUploadAttempts(t *testing.T) {
 	}
 }
 
+func TestMigrationsPersistSessionListDebugCaptures(t *testing.T) {
+	migrations := strings.Join(schemaMigrations, "\n")
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS session_list_debug_captures",
+		"session_list_debug_captures_owner_created",
+		"session_list_debug_captures_session_created",
+		"snapshot      jsonb NOT NULL DEFAULT '{}'::jsonb",
+		"server_rows   jsonb NOT NULL DEFAULT '[]'::jsonb",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_list_debug_captures") > strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") {
+		t.Fatal("session-list debug capture storage should be declared before session rows")
+	}
+}
+
 func TestMigrationsPersistHermesActiveRunPointer(t *testing.T) {
 	migrations := strings.Join(schemaMigrations, "\n")
 	for _, want := range []string{

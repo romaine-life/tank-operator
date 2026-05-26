@@ -158,8 +158,9 @@ type SessionRecord struct {
 	RuntimeConfiguredAt string
 
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
-	// Empty means the row predates the deck assignment or that no active avatar
-	// exists for that kind, so clients should keep their fallback behavior.
+	// Visible production rows must have an agent avatar id before publication.
+	// Empty values are legacy/incomplete state; clients render them as missing
+	// identity instead of inventing a local fallback.
 	AgentAvatarID  string
 	SystemAvatarID string
 

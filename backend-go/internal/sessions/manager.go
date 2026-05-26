@@ -364,19 +364,28 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	// On pod-create failure after the registry write succeeds, we mark
 	// the row visible=false so the snapshot stops returning it.
 	podName := "session-" + sessionID
+	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if reserved && assignment.AgentAvatarID == "" {
+		return Info{}, fmt.Errorf("reserve session avatars: no agent avatars available")
+	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:          sessionID,
-			Email:       owner,
-			Mode:        mode,
-			Scope:       m.manifestOpts.SessionScope,
-			PodName:     podName,
-			Visible:     true,
-			RequestedAt: requestedAt,
-			UpdatedAt:   requestedAt,
-			Repos:       repos,
-			Model:       model,
-			Effort:      effort,
+			ID:             sessionID,
+			Email:          owner,
+			Mode:           mode,
+			Scope:          m.manifestOpts.SessionScope,
+			PodName:        podName,
+			Visible:        true,
+			RequestedAt:    requestedAt,
+			UpdatedAt:      requestedAt,
+			Repos:          repos,
+			Model:          model,
+			Effort:         effort,
+			AgentAvatarID:  assignment.AgentAvatarID,
+			SystemAvatarID: assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -406,43 +415,49 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 
 	info := Info{
-		ID:          sessionID,
-		PodName:     &podName,
-		Owner:       owner,
-		Status:      "Pending",
-		Mode:        mode,
-		RequestedAt: &requestedAt,
-		CreatedAt:   createdAt,
-		Repos:       repos,
-		Model:       model,
-		Effort:      effort,
+		ID:             sessionID,
+		PodName:        &podName,
+		Owner:          owner,
+		Status:         "Pending",
+		Mode:           mode,
+		RequestedAt:    &requestedAt,
+		CreatedAt:      createdAt,
+		Repos:          repos,
+		Model:          model,
+		Effort:         effort,
+		AgentAvatarID:  assignment.AgentAvatarID,
+		SystemAvatarID: assignment.SystemAvatarID,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
 	// snapshot's CreatedAt matches the pod object's creation timestamp.
 	if m.registry != nil && createdAt != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:          sessionID,
-			Email:       owner,
-			Mode:        mode,
-			Scope:       m.manifestOpts.SessionScope,
-			PodName:     podName,
-			Visible:     true,
-			RequestedAt: requestedAt,
-			CreatedAt:   *createdAt,
-			UpdatedAt:   requestedAt,
-			Repos:       repos,
-			Model:       model,
-			Effort:      effort,
+			ID:             sessionID,
+			Email:          owner,
+			Mode:           mode,
+			Scope:          m.manifestOpts.SessionScope,
+			PodName:        podName,
+			Visible:        true,
+			RequestedAt:    requestedAt,
+			CreatedAt:      *createdAt,
+			UpdatedAt:      requestedAt,
+			Repos:          repos,
+			Model:          model,
+			Effort:         effort,
+			AgentAvatarID:  assignment.AgentAvatarID,
+			SystemAvatarID: assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
 
-	assignment := m.assignSessionAvatars(ctx, owner, sessionID)
-	info.AgentAvatarID = assignment.AgentAvatarID
-	info.SystemAvatarID = assignment.SystemAvatarID
+	if !reserved && (assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "") {
+		assignment = m.assignSessionAvatars(ctx, owner, sessionID)
+		info.AgentAvatarID = assignment.AgentAvatarID
+		info.SystemAvatarID = assignment.SystemAvatarID
+	}
 
 	m.publishRow(ctx, owner, sessionID)
 	return info, nil
@@ -497,28 +512,39 @@ func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requested
 	// resolveSessionPod returns 4xx, handleSubmitTurn checks the mode and
 	// routes to the external backend bridge instead of NATS.
 	now := nowISO()
+	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if reserved && assignment.AgentAvatarID == "" {
+		return Info{}, fmt.Errorf("reserve no-pod session avatars: no agent avatars available")
+	}
 	rec := sessionmodel.SessionRecord{
-		ID:          sessionID,
-		Email:       owner,
-		Mode:        mode,
-		Scope:       m.manifestOpts.SessionScope,
-		PodName:     "",
-		Visible:     true,
-		RequestedAt: requestedAt,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		Status:      "Active",
-		ReadyAt:     now,
-		Repos:       repos,
-		Model:       model,
-		Effort:      effort,
+		ID:             sessionID,
+		Email:          owner,
+		Mode:           mode,
+		Scope:          m.manifestOpts.SessionScope,
+		PodName:        "",
+		Visible:        true,
+		RequestedAt:    requestedAt,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Status:         "Active",
+		ReadyAt:        now,
+		Repos:          repos,
+		Model:          model,
+		Effort:         effort,
+		AgentAvatarID:  assignment.AgentAvatarID,
+		SystemAvatarID: assignment.SystemAvatarID,
 	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, rec); regErr != nil {
 			return Info{}, fmt.Errorf("no-pod session registry upsert: %w", regErr)
 		}
 	}
-	assignment := m.assignSessionAvatars(ctx, owner, sessionID)
+	if !reserved && (assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "") {
+		assignment = m.assignSessionAvatars(ctx, owner, sessionID)
+	}
 
 	m.mu.Lock()
 	m.lastActivity[sessionID] = time.Now()
@@ -649,8 +675,26 @@ type runtimeConfigRegistry interface {
 	SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error
 }
 
+type sessionAvatarReserver interface {
+	ReserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
+}
+
 type sessionAvatarAssigner interface {
 	AssignSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
+}
+
+func (m *Manager) reserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, bool, error) {
+	reserver, ok := m.registry.(sessionAvatarReserver)
+	if !ok {
+		return sessionmodel.SessionAvatarAssignment{}, false, nil
+	}
+	assignment, err := reserver.ReserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		slog.Warn("session avatar reservation failed",
+			"session_id", sessionID, "owner", owner, "error", err)
+		return sessionmodel.SessionAvatarAssignment{}, true, fmt.Errorf("reserve session avatars: %w", err)
+	}
+	return assignment, true, nil
 }
 
 func (m *Manager) assignSessionAvatars(ctx context.Context, owner, sessionID string) sessionmodel.SessionAvatarAssignment {

@@ -45,6 +45,9 @@ func (s *Store) NextSessionID(ctx context.Context) (string, error) {
 // id, name set, mark-deleted) visible to the Phase 3 per-row UPDATE
 // wire alongside the SessionController-driven writes.
 func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) error {
+	if err := validateSessionRecordForWrite(record); err != nil {
+		return err
+	}
 	normalized := strings.ToLower(record.Email)
 	scope := record.Scope
 	if scope == "" {
@@ -129,6 +132,13 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		sidebarPosition,
 	)
 	return err
+}
+
+func validateSessionRecordForWrite(record sessionmodel.SessionRecord) error {
+	if record.Visible && strings.TrimSpace(record.AgentAvatarID) == "" {
+		return fmt.Errorf("visible session %q is missing durable agent avatar id", record.ID)
+	}
+	return nil
 }
 
 // SetRuntimeConfig records the model/effort options the pod-side runner

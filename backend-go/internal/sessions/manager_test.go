@@ -236,6 +236,80 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCreateWritesReservedAvatarsBeforeVisibleRow(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		nextID: "42",
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-42",
+			SystemAvatarID: "system-42",
+		},
+	}
+	emitter := &recordingRowEmitter{}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, emitter, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.AgentAvatarID != "agent-42" || info.SystemAvatarID != "system-42" {
+		t.Fatalf("info avatar assignment = (%q, %q), want reserved ids", info.AgentAvatarID, info.SystemAvatarID)
+	}
+	if len(registry.reserveCalls) != 1 || registry.reserveCalls[0] != "42" {
+		t.Fatalf("reserve calls = %#v, want [42]", registry.reserveCalls)
+	}
+	for _, record := range registry.upserts {
+		if record.ID != "42" || !record.Visible {
+			continue
+		}
+		if record.AgentAvatarID != "agent-42" || record.SystemAvatarID != "system-42" {
+			t.Fatalf("visible create upsert missing reserved avatars: %#v", record)
+		}
+	}
+	if len(emitter.ids) != 1 || emitter.ids[0] != "42" {
+		t.Fatalf("published rows = %#v, want [42]", emitter.ids)
+	}
+}
+
+func TestManagerCreateFailsBeforeVisibleRowWithoutReservedAgentAvatar(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{nextID: "43"}
+	emitter := &recordingRowEmitter{}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, emitter, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	_, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no agent avatars available") {
+		t.Fatalf("Create error = %v, want no-agent-avatar error", err)
+	}
+	if len(registry.upserts) != 0 {
+		t.Fatalf("registry upserts = %#v, want none before avatar reservation succeeds", registry.upserts)
+	}
+	pods, listErr := client.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("created pods = %d, want none before avatar reservation succeeds", len(pods.Items))
+	}
+	if len(emitter.ids) != 0 {
+		t.Fatalf("published rows = %#v, want none", emitter.ids)
+	}
+}
+
 func TestManagerReorderPersistsAndPublishesEveryRow(t *testing.T) {
 	registry := &managerTestRegistry{
 		records: []sessionmodel.SessionRecord{
@@ -314,8 +388,11 @@ func (r *recordingRowEmitter) PublishCurrentRow(_ context.Context, _ string, ses
 }
 
 type managerTestRegistry struct {
-	records []sessionmodel.SessionRecord
-	nextID  string
+	records          []sessionmodel.SessionRecord
+	upserts          []sessionmodel.SessionRecord
+	nextID           string
+	avatarAssignment sessionmodel.SessionAvatarAssignment
+	reserveCalls     []string
 }
 
 func (r *managerTestRegistry) List(_ context.Context, owner string) ([]sessionmodel.SessionRecord, error) {
@@ -345,6 +422,7 @@ func (r *managerTestRegistry) NextSessionID(context.Context) (string, error) {
 }
 
 func (r *managerTestRegistry) Upsert(_ context.Context, record sessionmodel.SessionRecord) error {
+	r.upserts = append(r.upserts, record)
 	for i, existing := range r.records {
 		if strings.EqualFold(existing.Email, record.Email) && existing.ID == record.ID {
 			r.records[i] = record
@@ -353,6 +431,11 @@ func (r *managerTestRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 	}
 	r.records = append(r.records, record)
 	return nil
+}
+
+func (r *managerTestRegistry) ReserveSessionAvatars(_ context.Context, _ string, sessionID string) (sessionmodel.SessionAvatarAssignment, error) {
+	r.reserveCalls = append(r.reserveCalls, sessionID)
+	return r.avatarAssignment, nil
 }
 
 func (r *managerTestRegistry) SetName(context.Context, string, string, *string) error { return nil }

@@ -13,7 +13,7 @@ import {
   XIcon,
 } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
-import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
+import { AgentAvatarIcon, requireSessionAvatar } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
@@ -69,7 +69,7 @@ function PortfolioWorkspaceScene() {
           </div>
           <ul className="sessions">
             <li className="is-open">
-              <AgentAvatarIcon avatar={getSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">design-showcase</span>
@@ -100,7 +100,7 @@ function PortfolioWorkspaceScene() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("avatar-review", "jp1-sattler")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">avatar-review</span>
@@ -121,7 +121,7 @@ function PortfolioWorkspaceScene() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("pi-review", "jp1-grant")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open">
                   <span className="session-id">pi-review</span>

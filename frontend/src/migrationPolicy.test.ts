@@ -13,7 +13,10 @@ const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
+const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
+const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
+const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -243,8 +246,31 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugSource.includes("MAX_EVENTS"), true);
   assert.equal(sessionListDebugSource.includes("sessionStorage"), true);
   assert.equal(sessionListDebugSource.includes("__tankSessionListDebug"), true);
+  assert.equal(
+    sessionListDebugSource.includes("/api/client-metrics/session-list-debug-capture"),
+    true,
+  );
+  assert.equal(sessionListDebugSource.includes("captureSessionListDebugSnapshot"), true);
+  assert.equal(sessionListDebugSource.includes(["created", "session", "name"].join("-") + "-mutated"), false);
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("Record 2m"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("startSessionListDebugRecording"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("event-sample"), true);
+  assert.equal(appSource.includes("Session-list diagnostics"), true);
+  assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
+});
+
+test("session rows do not fall back to client-hashed avatar identity", () => {
+  assert.equal(sessionAvatarsSource.includes("hashString"), false);
+  assert.equal(sessionAvatarsSource.includes("chooseAvatar"), false);
+  assert.equal(sessionAvatarsSource.includes("Math.imul"), false);
+  assert.equal(sessionAvatarsSource.includes("getSessionAvatar("), false);
+  assert.match(sessionAvatarsSource, /getSessionAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
+  assert.match(sessionAvatarsSource, /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
+  assert.equal(appSource.includes("session-avatar-missing"), true);
+  assert.equal(appSource.includes("display_name_source"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {

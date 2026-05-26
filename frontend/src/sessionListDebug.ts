@@ -1,13 +1,17 @@
+import { authedFetch } from "./auth";
+
 const STORAGE_KEY = "tank.sessionListDebug";
 const MAX_EVENTS = 240;
 const MAX_ROWS_PER_EVENT = 80;
 const MAX_DETAIL_KEYS = 24;
 const MAX_STRING_LENGTH = 280;
+const CAPTURE_ENDPOINT = "/api/client-metrics/session-list-debug-capture";
 
 export type SessionListDebugRow = {
   id: string;
   name?: string | null;
   display_name?: string | null;
+  display_name_source?: "durable" | "generated" | string | null;
   pod_name?: string | null;
   mode?: string | null;
   status?: string | null;
@@ -22,6 +26,21 @@ export type SessionListDebugRow = {
   requested_at?: string | null;
   created_at?: string | null;
   ready_at?: string | null;
+};
+
+export type SessionListDebugIssue = {
+  code: string;
+  surface: string;
+  session_id: string;
+  field?: string;
+  expected?: string | null;
+  actual?: string | null;
+};
+
+export type SessionListDebugDiagnostics = {
+  issue_count: number;
+  issues: SessionListDebugIssue[];
+  generated_display_names: string[];
 };
 
 export type SessionListDebugEvent = {
@@ -61,10 +80,38 @@ export type SessionListDebugSnapshot = {
 };
 
 type Listener = () => void;
+export type SessionListDebugCapturePayload = {
+  reason: string;
+  session_id: string;
+  source: string;
+  active_id?: string | null;
+  location?: string | null;
+  client_seq: number;
+  detail?: unknown;
+  snapshot: SessionListDebugSnapshot;
+};
+
+export type SessionListDebugCaptureResponse = {
+  capture_id?: string;
+  accepted?: boolean;
+};
+
+export type SessionListDebugCaptureInput = {
+  reason?: string;
+  session_id?: string | null;
+  source?: string;
+  active_id?: string | null;
+  detail?: unknown;
+};
+
+type CaptureReporter = (
+  payload: SessionListDebugCapturePayload,
+) => Promise<SessionListDebugCaptureResponse | void> | SessionListDebugCaptureResponse | void;
 
 const listeners = new Set<Listener>();
 
 let state: SessionListDebugSnapshot = readStoredSnapshot() ?? emptySnapshot();
+let captureReporter: CaptureReporter = defaultCaptureReporter;
 
 export function summarizeSessionListRow(value: unknown): SessionListDebugRow | null {
   if (!isRecord(value)) return null;
@@ -74,6 +121,7 @@ export function summarizeSessionListRow(value: unknown): SessionListDebugRow | n
     id,
     name: nullableStringField(value, "name"),
     display_name: nullableStringField(value, "display_name"),
+    display_name_source: nullableStringField(value, "display_name_source"),
     pod_name: nullableStringField(value, "pod_name"),
     mode: nullableStringField(value, "mode"),
     status: nullableStringField(value, "status"),
@@ -127,13 +175,14 @@ export function updateSessionListDebugStore(args: {
   rows: readonly unknown[];
   tombstones: readonly string[];
 }): void {
+  const rows = summarizeSessionListRows(args.rows);
   state = {
     ...state,
     updated_at: nowISO(),
     location: currentLocation(),
     store: {
       cursor: args.cursor,
-      rows: summarizeSessionListRows(args.rows),
+      rows,
       tombstones: [...args.tombstones],
       updated_at: nowISO(),
     },
@@ -180,6 +229,21 @@ export function getSessionListDebugSnapshot(): SessionListDebugSnapshot {
   };
 }
 
+export function analyzeSessionListDebugSnapshot(
+  snapshot: SessionListDebugSnapshot,
+): SessionListDebugDiagnostics {
+  const issues: SessionListDebugIssue[] = [];
+  const generatedDisplayNames = new Set<string>();
+  analyzeSessionListRows("store", snapshot.store?.rows ?? [], issues, generatedDisplayNames);
+  analyzeSessionListRows("render", snapshot.render?.sessions ?? [], issues, generatedDisplayNames);
+  analyzeStoreRenderIdentity(snapshot, issues);
+  return {
+    issue_count: issues.length,
+    issues,
+    generated_display_names: [...generatedDisplayNames].sort(),
+  };
+}
+
 export function subscribeSessionListDebug(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
@@ -187,7 +251,186 @@ export function subscribeSessionListDebug(listener: Listener): () => void {
 
 export function resetSessionListDebugForTest(): void {
   state = emptySnapshot();
+  captureReporter = defaultCaptureReporter;
   persistAndNotify();
+}
+
+export function setSessionListDebugCaptureReporterForTest(reporter: CaptureReporter): void {
+  captureReporter = reporter;
+}
+
+export async function captureSessionListDebugSnapshot(
+  input: SessionListDebugCaptureInput = {},
+): Promise<SessionListDebugCaptureResponse | void> {
+  const baseSnapshot = getSessionListDebugSnapshot();
+  const reason = captureReason(input.reason);
+  const sessionID = captureSessionID(input.session_id, baseSnapshot);
+  const activeID = input.active_id ?? baseSnapshot.render?.active_id ?? null;
+  const source = captureSource(input.source);
+
+  recordSessionListDebugEvent({
+    kind: "manual-capture-requested",
+    source,
+    reason,
+    session_id: sessionID,
+    active_id: activeID,
+    detail: input.detail,
+  });
+  const payloadSnapshot = getSessionListDebugSnapshot();
+  const diagnostics = analyzeSessionListDebugSnapshot(payloadSnapshot);
+
+  const payload: SessionListDebugCapturePayload = {
+    reason,
+    session_id: sessionID,
+    source,
+    active_id: activeID,
+    location: currentLocation(),
+    client_seq: state.seq,
+    detail: captureDetailWithDiagnostics(input.detail, diagnostics),
+    snapshot: payloadSnapshot,
+  };
+
+  try {
+    const result = await Promise.resolve(captureReporter(payload));
+    recordSessionListDebugEvent({
+      kind: "manual-capture-report-accepted",
+      source,
+      reason,
+      session_id: sessionID,
+      active_id: activeID,
+      detail: {
+        capture_id: result?.capture_id ?? null,
+        accepted: result?.accepted ?? true,
+      },
+    });
+    return result;
+  } catch (error) {
+    recordSessionListDebugEvent({
+      kind: "manual-capture-report-failed",
+      source,
+      reason,
+      session_id: sessionID,
+      active_id: activeID,
+      detail: { error: error instanceof Error ? error.message : String(error) },
+    });
+    throw error;
+  }
+}
+
+function analyzeSessionListRows(
+  surface: string,
+  rows: readonly SessionListDebugRow[],
+  issues: SessionListDebugIssue[],
+  generatedDisplayNames: Set<string>,
+): void {
+  for (const row of rows) {
+    const assignedAvatarID = normalizedString(row.agent_avatar_id);
+    const renderedAvatarID = normalizedString(row.rendered_avatar_id);
+    if (!assignedAvatarID) {
+      issues.push({
+        code: "missing_agent_avatar_assignment",
+        surface,
+        session_id: row.id,
+        field: "agent_avatar_id",
+        expected: "durable assigned avatar id",
+        actual: null,
+      });
+      if (renderedAvatarID) {
+        issues.push({
+          code: "rendered_avatar_without_assignment",
+          surface,
+          session_id: row.id,
+          field: "rendered_avatar_id",
+          expected: null,
+          actual: renderedAvatarID,
+        });
+      }
+    } else if (!renderedAvatarID && surface === "render") {
+      issues.push({
+        code: "unresolved_agent_avatar_assignment",
+        surface,
+        session_id: row.id,
+        field: "rendered_avatar_id",
+        expected: assignedAvatarID,
+        actual: null,
+      });
+    } else if (renderedAvatarID && renderedAvatarID !== assignedAvatarID) {
+      issues.push({
+        code: "rendered_avatar_mismatch",
+        surface,
+        session_id: row.id,
+        field: "rendered_avatar_id",
+        expected: assignedAvatarID,
+        actual: renderedAvatarID,
+      });
+    }
+    if (row.display_name_source === "generated") {
+      generatedDisplayNames.add(row.id);
+    }
+  }
+}
+
+function analyzeStoreRenderIdentity(
+  snapshot: SessionListDebugSnapshot,
+  issues: SessionListDebugIssue[],
+): void {
+  const storeRows = new Map<string, SessionListDebugRow>();
+  for (const row of snapshot.store?.rows ?? []) {
+    storeRows.set(row.id, row);
+  }
+  for (const renderRow of snapshot.render?.sessions ?? []) {
+    const storeRow = storeRows.get(renderRow.id);
+    if (!storeRow) continue;
+    compareIdentityField("agent_avatar_id", storeRow, renderRow, issues);
+    compareIdentityField("system_avatar_id", storeRow, renderRow, issues);
+    compareIdentityField("name", storeRow, renderRow, issues);
+  }
+}
+
+function compareIdentityField(
+  field: "agent_avatar_id" | "system_avatar_id" | "name",
+  storeRow: SessionListDebugRow,
+  renderRow: SessionListDebugRow,
+  issues: SessionListDebugIssue[],
+): void {
+  const expected = normalizedString(storeRow[field]);
+  const actual = normalizedString(renderRow[field]);
+  if (expected === actual) return;
+  issues.push({
+    code: "store_render_identity_mismatch",
+    surface: "store/render",
+    session_id: renderRow.id,
+    field,
+    expected,
+    actual,
+  });
+}
+
+function captureDetailWithDiagnostics(
+  detail: unknown,
+  diagnostics: SessionListDebugDiagnostics,
+): unknown {
+  const compactDetail = compactValue(detail ?? {}, 0);
+  const debugDiagnostics = {
+    issue_count: diagnostics.issue_count,
+    issues: diagnostics.issues,
+    generated_display_names: diagnostics.generated_display_names,
+  };
+  if (isRecord(compactDetail)) {
+    return {
+      ...compactDetail,
+      session_list_debug_diagnostics: debugDiagnostics,
+    };
+  }
+  return {
+    input_detail: compactDetail,
+    session_list_debug_diagnostics: debugDiagnostics,
+  };
+}
+
+function normalizedString(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function emptySnapshot(): SessionListDebugSnapshot {
@@ -210,6 +453,38 @@ function persistAndNotify(): void {
   }
   exposeSnapshot();
   for (const listener of listeners) listener();
+}
+
+function captureReason(raw: string | undefined): string {
+  const reason = raw?.trim();
+  return reason || "manual-capture";
+}
+
+function captureSource(raw: string | undefined): string {
+  const source = raw?.trim();
+  return source || "SessionListDebugPage";
+}
+
+function captureSessionID(
+  explicit: string | null | undefined,
+  snapshot: SessionListDebugSnapshot,
+): string {
+  const trimmed = explicit?.trim();
+  if (trimmed) return trimmed;
+  return snapshot.render?.active_id ?? snapshot.store?.rows[0]?.id ?? "session-list";
+}
+
+async function defaultCaptureReporter(
+  payload: SessionListDebugCapturePayload,
+): Promise<SessionListDebugCaptureResponse | void> {
+  if (typeof window === "undefined") return;
+  const res = await authedFetch(CAPTURE_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`session-list debug capture failed: ${res.status}`);
+  return (await res.json().catch(() => undefined)) as SessionListDebugCaptureResponse | undefined;
 }
 
 function exposeSnapshot(): void {

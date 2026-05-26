@@ -19,6 +19,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -158,8 +159,8 @@ import {
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
-  getSessionAvatar,
-  getSystemAvatar,
+  getSessionAvatarByID,
+  getSystemAvatarByID,
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
@@ -249,9 +250,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalEventId?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
-  // RunMessageBubble swaps in that session's deterministic avatar in
-  // place of the human's Gravatar so cross-session handoffs read as
-  // agent-authored, not user-authored.
+  // RunMessageBubble uses this as an agent-authored signal, but it must
+  // not synthesize a local avatar identity from the id.
   originSessionId?: string;
   // Durable AskUserQuestion answers + annotations, sourced from the
   // `tool.approval_resolved` event payload via conversationProjection.
@@ -543,6 +543,21 @@ const MODE_HINTS: Record<SessionMode, string> = {
   pi_config: "Pi /login sandbox",
 };
 
+const DEMO_AGENT_AVATAR_IDS = [
+  "jp1-grant",
+  "jp1-sattler",
+  "jp1-malcolm",
+  "jp1-hammond",
+  "jp1-nedry",
+  "jp1-muldoon",
+  "jp1-arnold",
+  "jp1-raptor",
+];
+
+function demoAgentAvatarID(index: number): string {
+  return DEMO_AGENT_AVATAR_IDS[Math.abs(index - 1) % DEMO_AGENT_AVATAR_IDS.length]!;
+}
+
 const DEMO_BASE_SESSIONS: Session[] = [
   {
     id: "claude-code",
@@ -555,6 +570,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(1),
   },
   {
     id: "codex-cli",
@@ -567,6 +583,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(2),
   },
   {
     id: "pi-agent",
@@ -579,6 +596,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(3),
   },
 ];
 
@@ -800,6 +818,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(index),
   };
 }
 
@@ -1155,16 +1174,30 @@ function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
   return (session.pod_name ?? session.id).replace(/^session-/, "").slice(0, 8);
 }
 
+type SessionDisplayNameSource = "durable" | "generated";
+
+function sessionDisplayNameParts(session: Session): {
+  value: string;
+  source: SessionDisplayNameSource;
+} {
+  if (session.name != null) {
+    return { value: session.name, source: "durable" };
+  }
+  return { value: defaultSessionName(session), source: "generated" };
+}
+
 function sessionDisplayName(session: Session): string {
-  return session.name ?? defaultSessionName(session);
+  return sessionDisplayNameParts(session).value;
 }
 
 function sessionListDebugRow(session: Session): SessionListDebugRow {
-  const avatar = getSessionAvatar(session.id, session.agent_avatar_id);
+  const avatar = getSessionAvatarByID(session.agent_avatar_id);
+  const displayName = sessionDisplayNameParts(session);
   return {
     id: session.id,
     name: session.name,
-    display_name: sessionDisplayName(session),
+    display_name: displayName.value,
+    display_name_source: displayName.source,
     pod_name: session.pod_name,
     mode: session.mode,
     status: session.status,
@@ -1174,9 +1207,9 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
       typeof session.sidebar_position === "number" ? session.sidebar_position : null,
     agent_avatar_id: session.agent_avatar_id ?? null,
     system_avatar_id: session.system_avatar_id ?? null,
-    rendered_avatar_id: avatar.id,
-    rendered_avatar_src: avatar.src,
-    rendered_avatar_custom: avatar.custom === true,
+    rendered_avatar_id: avatar?.id ?? null,
+    rendered_avatar_src: avatar?.src ?? null,
+    rendered_avatar_custom: avatar?.custom === true,
     requested_at: session.requested_at,
     created_at: session.created_at,
     ready_at: session.ready_at,
@@ -1721,6 +1754,29 @@ function Avatar({ user }: { user: SessionUser }) {
   );
 }
 
+function MissingSessionAvatarIcon({ className }: { className?: string }) {
+  return (
+    <span
+      className={["session-avatar-missing", className].filter(Boolean).join(" ")}
+      title="avatar assignment missing"
+      aria-label="avatar assignment missing"
+    >
+      <ImageIcon size={17} strokeWidth={2.1} aria-hidden="true" />
+    </span>
+  );
+}
+
+function SessionAvatarIcon({
+  avatar,
+  className,
+}: {
+  avatar: AgentAvatar | null;
+  className?: string;
+}) {
+  if (!avatar) return <MissingSessionAvatarIcon className={className} />;
+  return <AgentAvatarIcon avatar={avatar} className={className} />;
+}
+
 function ClusterHealthWidget({
   health,
   error,
@@ -2017,14 +2073,14 @@ function DemoLanding() {
               const statusDotClass = sessionStatusDotClass(s);
               const bootLabel = sessionBootLabel(s, Date.now());
               const runtimeLabel = sessionRuntimeLabel(s, Date.now());
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               return (
                 <li
                   key={s.id}
                   className={isActive ? "is-open" : ""}
                   onClick={() => setActiveDemoSession(s.id)}
                 >
-                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
+                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
@@ -4284,7 +4340,7 @@ function RunMessageBubble({
   canonicalMessage = true,
 }: {
   entry: TranscriptEntry;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
   highlighted: boolean;
@@ -4349,7 +4405,7 @@ function RunMessageBubble({
     >
       {variant === "assistant" && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
-          <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+          <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
       )}
       {variant === "system" && (
@@ -4430,12 +4486,10 @@ function RunMessageBubble({
       </div>
       {variant === "user" && (() => {
         // Cross-session handoff: a sibling tank-operator session posted
-        // this turn via mcp-tank-operator. Render the parent session's
-        // deterministic avatar in place of the human owner's Gravatar
-        // so the bubble reads as agent-authored. The user message is
-        // still owned by the same human — only the visual identity
-        // changes, mirroring how the assistant bubble already uses
-        // a session-derived avatar.
+        // this turn via mcp-tank-operator. Only render a session avatar
+        // when the durable message/session data names one; otherwise use
+        // the explicit missing-avatar glyph instead of inventing a local
+        // identity from the origin id.
         const originId = entry.originSessionId;
         if (originId) {
           return (
@@ -4443,8 +4497,8 @@ function RunMessageBubble({
               className="run-msg-avatar"
               data-origin-session-id={originId}
             >
-              <AgentAvatarIcon
-                avatar={getSessionAvatar(originId)}
+              <SessionAvatarIcon
+                avatar={getSessionAvatarByID(null)}
                 className="run-msg-ai-icon"
               />
             </span>
@@ -5687,7 +5741,7 @@ function RunTurnActivityGroup({
   group: Extract<EntryGroup, { kind: "activity" }>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
   showThinking: boolean;
@@ -5881,7 +5935,7 @@ export function RunMessages({
   onActivityOpen,
 }: {
   entries: TranscriptEntry[];
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar?: AgentAvatar | null;
   sessionId: string;
   sessionMode?: string;
@@ -6396,6 +6450,15 @@ function RunSettingsPanel({
                 )}
               </button>
             )}
+            <div className="run-settings-diagnostics">
+              <div className="run-settings-diagnostics-head">
+                <span className="run-settings-link-label">
+                  <ClipboardListIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>Session-list diagnostics</span>
+                </span>
+              </div>
+              <SessionListDebugCaptureControls source="SettingsAdmin" />
+            </div>
           </section>
         )
       ) : (
@@ -9303,12 +9366,12 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(
-    () => getSessionAvatar(session.id, session.agent_avatar_id),
-    [avatarCatalogVersion, session.agent_avatar_id, session.id],
+    () => getSessionAvatarByID(session.agent_avatar_id),
+    [avatarCatalogVersion, session.agent_avatar_id],
   );
   const systemAvatar = useMemo(
-    () => getSystemAvatar(session.id, session.system_avatar_id),
-    [avatarCatalogVersion, session.id, session.system_avatar_id],
+    () => getSystemAvatarByID(session.system_avatar_id),
+    [avatarCatalogVersion, session.system_avatar_id],
   );
   useEffect(() => {
     if (!visible) return;
@@ -9318,15 +9381,15 @@ function ChatPane({
       session_id: session.id,
       row: {
         ...sessionListDebugRow(session),
-        rendered_avatar_id: sessionAvatar.id,
-        rendered_avatar_src: sessionAvatar.src,
-        rendered_avatar_custom: sessionAvatar.custom === true,
+        rendered_avatar_id: sessionAvatar?.id ?? null,
+        rendered_avatar_src: sessionAvatar?.src ?? null,
+        rendered_avatar_custom: sessionAvatar?.custom === true,
       },
       detail: {
         avatar_catalog_version: avatarCatalogVersion,
-        session_avatar_id: sessionAvatar.id,
-        session_avatar_src: sessionAvatar.src,
-        session_avatar_custom: sessionAvatar.custom === true,
+        session_avatar_id: sessionAvatar?.id ?? null,
+        session_avatar_src: sessionAvatar?.src ?? null,
+        session_avatar_custom: sessionAvatar?.custom === true,
         system_avatar_id: systemAvatar?.id ?? null,
         system_avatar_src: systemAvatar?.src ?? null,
         system_avatar_custom: systemAvatar?.custom === true,
@@ -9336,9 +9399,9 @@ function ChatPane({
     visible,
     avatarCatalogVersion,
     session,
-    sessionAvatar.id,
-    sessionAvatar.src,
-    sessionAvatar.custom,
+    sessionAvatar?.id,
+    sessionAvatar?.src,
+    sessionAvatar?.custom,
     systemAvatar?.id,
     systemAvatar?.src,
     systemAvatar?.custom,
@@ -12591,7 +12654,7 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
               const bootLabel = sessionBootLabel(s, nowMs);
@@ -12610,7 +12673,7 @@ export function App() {
                   onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
-                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
+                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
