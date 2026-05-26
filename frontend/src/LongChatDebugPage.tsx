@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { WorkspaceShell } from "./WorkspaceShell";
-import { getSessionAvatar } from "./sessionAvatars";
+import { getSessionAvatarByID } from "./sessionAvatars";
 import {
   chatScrollElementSnapshot,
   logChatScrollEvent,
@@ -222,7 +222,7 @@ export function LongChatDebugPage() {
     }, 120);
   }, [atBottom, running, scrollParent]);
 
-  const avatar = getSessionAvatar(DEBUG_SESSION_ID);
+  const avatar = getSessionAvatarByID("jp1-malcolm");
 
   if (access === "loading") {
     return <DebugAccessScreen title="Loading debug session..." />;

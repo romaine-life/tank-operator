@@ -404,6 +404,25 @@ spec:
               `terminal_local_run_mismatch`) and inspect the relevant
               frontend/src/App.tsx currentRunRef/finalizeSdkRun path.
 
+        - alert: TankBrowserStaleRunningBlockedSubmit
+          expr: |
+            sum by (session_mode) (
+              increase(tank_session_event_client_events_total{event="stale_running_blocked_submit"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "browser recovered a stale running latch before submit on session_mode={{`{{ $labels.session_mode }}`}}"
+            runbook: |
+              The SPA was about to queue a follow-up because local
+              running=true, but durable conversation state was no
+              longer active. The submit guard cleared the stale latch
+              and sent the message immediately. Inspect recent session
+              activity_summary rows and terminal correlation telemetry
+              to decide whether the cause was a stale server activity
+              projection or a missed local-run finalization.
+
         - alert: TankBrowserTerminalLocalRunMismatch
           expr: |
             sum by (session_mode) (
@@ -629,6 +648,24 @@ spec:
               Inspect orchestrator logs for `chat-activity emitter:`
               lines.
 
+        - alert: TankSessionActivityLateInterruptIgnored
+          expr: |
+            sum by (status) (
+              increase(tank_session_activity_late_interrupt_ignored_total[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "activity fold ignored a late interrupt after status={{`{{ $labels.status }}`}}"
+            runbook: |
+              The chat→sidebar activity fold saw
+              turn.interrupt_requested after the durable state was no
+              longer active, so it preserved the terminal/ready/error
+              projection instead of downgrading the session row to
+              stopping. Check the originating stop request path and
+              correlate with browser stale-running submit telemetry.
+
         # Row-update producer outcome. RowWriter is the single seam
         # the K8s watch and activity emitter write through; a non-zero
         # failure rate means the sessions row column update SQL is
@@ -792,6 +829,65 @@ spec:
               affected tank-nats pod and verify each NATS replica is
               on its own node (anti-affinity guarantees this but a
               drain/upgrade window can temporarily violate it).
+
+        # Orphan-consumer sweep failing. The sweep is the durable
+        # remediation for stranded JetStream consumers (per-session
+        # data/control consumers that nothing deletes when a session
+        # goes away). If the sweep itself is broken, consumers
+        # accumulate without bound and eventually saturate the
+        # JetStream memory budget — observed at 725 consumers / 6
+        # live sessions on 2026-05-25. Sibling to
+        # TankSessionBusOrphanConsumersHigh below: this alert is
+        # "the cleanup tool is broken"; that one is "the cleanup
+        # tool is running but the backlog is growing anyway."
+        - alert: TankSessionBusOrphanSweepFailing
+          expr: rate(tank_session_bus_orphan_sweep_passes_total{result="error"}[1h]) > 0
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "orphan-consumer sweep has failed every pass in the last hour"
+            runbook: |
+              Per-pass slog line is "orphan consumer sweep failed"
+              (NATS list-consumers error) or "orphan consumer sweep:
+              list live sessions failed" (Postgres error). Inspect
+              tank-operator pod logs for the surrounding error.
+              Pair with TankNATSReconnectStorm (NATS-side) and
+              TankPgConnectionSaturation (Postgres-side) — the
+              sweep depends on both being healthy.
+
+        # Orphan consumers stayed high across multiple sweep cycles.
+        # The sweep runs hourly with a 15-minute MinAge floor; if
+        # this alert fires, deletes are either failing or new orphans
+        # are being created faster than the sweep can keep up. The
+        # 50-orphan threshold is roughly "an order of magnitude
+        # higher than legitimate active-consumer headroom" — 6
+        # active sessions × 2 consumers/provider × 2 providers = ~25
+        # legitimate; a sustained 50+ orphans means the cleanup is
+        # not keeping pace.
+        - alert: TankSessionBusOrphanConsumersHigh
+          expr: tank_session_bus_orphan_consumers > 50
+          for: 4h
+          labels:
+            severity: warning
+          annotations:
+            summary: "tank_session_bus_orphan_consumers stayed > 50 for 4h despite sweep running"
+            runbook: |
+              The sweep observed > 50 orphan-eligible consumers for
+              four consecutive hourly passes. Two failure modes:
+              (a) deletes are failing — check
+              tank_session_bus_orphan_consumer_delete_errors_total
+              rate; non-zero means NATS is refusing to remove
+              consumers (server-side ACL? consumer in a bad state?).
+              (b) deletes are succeeding but new orphans are being
+              created faster than cleanup — check
+              rate(tank_session_bus_orphan_consumers_deleted_total[1h])
+              against rate(tank_session_bus_consumers_scanned[1h]).
+              The consumer naming convention is
+              `{provider}_{scopeToken}_{sessionIdToken}` (data plane)
+              and `{provider}_control_{scopeToken}_{sessionIdToken}`
+              (control plane); see
+              backend-go/internal/sessionbus/sweep.go for the parser.
 
     - name: tank-operator.api-proxy
       rules:

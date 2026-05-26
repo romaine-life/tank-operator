@@ -52,8 +52,7 @@ export function StyleguideAvatars() {
         <h1 style={pageTitleStyle}>agent avatar pool</h1>
         <p style={{ ...captionStyle, marginBottom: 24 }}>
           {AGENT_AVATARS.length} entries in <code>AGENT_AVATARS</code>;
-          assigned to a session by a stable hash of <code>session_id</code>{" "}
-          (<code>getSessionAvatar</code>). Sources live under{" "}
+          resolved only from a durable assigned avatar id. Sources live under{" "}
           <code>frontend/public/assets/avatars/jp1-*.png</code>. Three
           render contexts ship: <code>.session-avatar</code> in the sidebar
           (42px, circle-cropped, edge-to-edge — no backdrop or padding) and{" "}

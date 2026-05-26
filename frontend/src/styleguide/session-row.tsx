@@ -1,6 +1,6 @@
 import { MonitorIcon, TerminalIcon, XIcon } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
-import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
+import { AgentAvatarIcon, requireSessionAvatar } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
@@ -46,7 +46,7 @@ export function StyleguideSessionRow() {
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
             <li className="is-open is-skill-test">
-              <AgentAvatarIcon avatar={getSessionAvatar("design-showcase", "jp1-raptor")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-raptor")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="design-showcase">
                   <span className="session-id">design-showcase</span>
@@ -71,7 +71,7 @@ export function StyleguideSessionRow() {
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("needs-input", "jp1-sattler")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-sattler")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="migration-plan">
                   <span className="session-id">migration-plan</span>
@@ -83,13 +83,10 @@ export function StyleguideSessionRow() {
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-needs-input" title="Needs input" aria-label="status: Needs input" />
                 <ModePair provider="anthropic" interaction="gui" label="Claude GUI" />
-                <span className="session-activity-chip is-input" title="Agent needs input" aria-label="Agent needs input">
-                  input
-                </span>
               </div>
             </li>
             <li>
-              <AgentAvatarIcon avatar={getSessionAvatar("codex-config", "jp1-malcolm")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-malcolm")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="codex-login">
                   <span className="session-id">codex-login</span>
@@ -109,7 +106,7 @@ export function StyleguideSessionRow() {
               </div>
             </li>
             <li className="is-closing">
-              <AgentAvatarIcon avatar={getSessionAvatar("closing", "jp1-grant")} className="session-avatar" />
+              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
               <div className="session-row-top">
                 <span className="session-open" title="session is closing">
                   <span className="session-id">cleanup-session</span>
@@ -121,7 +118,6 @@ export function StyleguideSessionRow() {
               <div className="session-row-bottom">
                 <span className="status-dot status-agent-stopping" title="Stopping" aria-label="status: Stopping" />
                 <ModePair provider="pi" interaction="cli" label="Pi CLI" />
-                <span className="session-closing-chip">closing</span>
               </div>
             </li>
           </ul>

@@ -118,6 +118,17 @@ Terminating/Failed/Removed transitions update the row's
 `terminating_at` only if the row is still visible; for invisible rows
 they are dropped at the controller.
 
+The first visible row must be render-complete. Create paths reserve the
+session's agent avatar ID before writing `visible=true` and preserve it
+on every visible create/update write; the system avatar ID is reserved
+from the same durable deck when an active system avatar exists. A client
+must never observe a new visible row with an empty agent avatar ID and
+then receive a different assigned avatar in a later row update; that
+transition is a user-visible identity change even when the final
+database state is correct. The frontend must not repair that class of
+backend fault by hashing or defaulting to a local avatar identity; an
+incomplete row is rendered as incomplete and captured by diagnostics.
+
 ### Wire shape: per-row UPDATE, not typed events
 
 NATS and Postgres have non-overlapping roles, mirroring the chat-window
@@ -192,6 +203,23 @@ which is why every server-side wonk has produced a user-visible bug.
    `sessionStorage` and exposes `window.__tankSessionListDebug()` so a
    reload of the debug route can still inspect the latest row, store,
    render, and avatar transitions from the current tab.
+6. **Explicit durable diagnostic capture**: Settings -> Admin exposes
+   `Capture Now` and `Record 2m` controls in-page, and
+   `/_debug/session-list` exposes the same controls alongside raw
+   client/server row state. The affected browser posts bounded
+   debug-ring snapshots to
+   `POST /api/client-metrics/session-list-debug-capture`; recording
+   runs in a page-level singleton so it survives leaving Settings to
+   create or open a session. Recording samples share a `detail.run_id`
+   and include both 10s interval samples and debounced event samples.
+   Captures include automatic identity diagnostics for missing assigned
+   avatars, rendered/assigned avatar mismatches, generated display
+   names, and store/render identity mismatches. The server stores each
+   client snapshot together with the current registry rows in
+   `session_list_debug_captures`, capped at the latest 200 captures per
+   owner/scope. Operators read the captured evidence from
+   `GET /api/debug/session-list-captures` without asking the user to open
+   browser devtools.
 
 The frontend SessionStore makes the user-visible view robust against
 any backend wonk by construction: the SPA cannot resurrect a deleted
@@ -437,8 +465,11 @@ standard:
   `tank_session_controller_reconcile_failure_total` with an alert.
 - **Observability**: `tank_session_row_writes_total{source}`,
   `tank_session_controller_reconcile_*`, `/api/debug/session-list-state`,
-  `/_debug/session-list`. The user can verify any sidebar bug
-  without browser devtools (per the standing constraint —
+  `/_debug/session-list`, Settings -> Admin session-list diagnostic
+  controls, and the durable explicit capture pair `POST
+  /api/client-metrics/session-list-debug-capture` /
+  `GET /api/debug/session-list-captures`. The user can verify any sidebar
+  bug without browser devtools (per the standing constraint —
   feedback_no_devtools_build_surfaces_instead).
 - **Tests cover the contract**: SessionStore behavior, controller
   reconcile loop, row-update wire shape, snapshot cursor semantics.

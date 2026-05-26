@@ -19,6 +19,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -86,6 +87,7 @@ import {
   reduceConversationEvents,
   type ConversationBackgroundTaskStatus,
   type ConversationReducerState,
+  type ConversationTurnTerminal,
 } from "./conversationReducer";
 import {
   projectConversationState,
@@ -109,7 +111,6 @@ import {
   SESSION_ACTIVITY_STATUS_LEGEND,
   normalizeSessionActivity,
   orderKeyAfter,
-  sessionActivityChips,
   sessionActivityDotStatus,
   sessionActivityStatusLabel,
   shouldRingForActivityTransition,
@@ -120,6 +121,7 @@ import {
   normalizeSessionRowUpdate,
   type SessionRow,
 } from "./sessionStore";
+import { conversationRunIsActive, decideFollowupSubmit } from "./submitLatch";
 import {
   logSessionListEvent,
   logSessionListSnapshot,
@@ -141,9 +143,13 @@ import {
   setActiveSessionMode,
 } from "./longTaskTelemetry";
 import {
+  useRelativeMinutes,
+  useRelativeSeconds,
+} from "./timeService";
+import {
   clusterHealthHeadline,
   clusterHealthIssueText,
-  clusterHealthNatsLoadLabel,
+  clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
   type ClusterHealthResponse,
   type ClusterHealthStatus,
@@ -157,8 +163,8 @@ import {
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
-  getSessionAvatar,
-  getSystemAvatar,
+  getSessionAvatarByID,
+  getSystemAvatarByID,
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
@@ -248,9 +254,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalEventId?: string;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
-  // RunMessageBubble swaps in that session's deterministic avatar in
-  // place of the human's Gravatar so cross-session handoffs read as
-  // agent-authored, not user-authored.
+  // RunMessageBubble uses this as an agent-authored signal, but it must
+  // not synthesize a local avatar identity from the id.
   originSessionId?: string;
   // Durable AskUserQuestion answers + annotations, sourced from the
   // `tool.approval_resolved` event payload via conversationProjection.
@@ -542,6 +547,21 @@ const MODE_HINTS: Record<SessionMode, string> = {
   pi_config: "Pi /login sandbox",
 };
 
+const DEMO_AGENT_AVATAR_IDS = [
+  "jp1-grant",
+  "jp1-sattler",
+  "jp1-malcolm",
+  "jp1-hammond",
+  "jp1-nedry",
+  "jp1-muldoon",
+  "jp1-arnold",
+  "jp1-raptor",
+];
+
+function demoAgentAvatarID(index: number): string {
+  return DEMO_AGENT_AVATAR_IDS[Math.abs(index - 1) % DEMO_AGENT_AVATAR_IDS.length]!;
+}
+
 const DEMO_BASE_SESSIONS: Session[] = [
   {
     id: "claude-code",
@@ -554,6 +574,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(1),
   },
   {
     id: "codex-cli",
@@ -566,6 +587,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(2),
   },
   {
     id: "pi-agent",
@@ -578,6 +600,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(3),
   },
 ];
 
@@ -799,6 +822,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
+    agent_avatar_id: demoAgentAvatarID(index),
   };
 }
 
@@ -1201,16 +1225,30 @@ function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
   return (session.pod_name ?? session.id).replace(/^session-/, "").slice(0, 8);
 }
 
+type SessionDisplayNameSource = "durable" | "generated";
+
+function sessionDisplayNameParts(session: Session): {
+  value: string;
+  source: SessionDisplayNameSource;
+} {
+  if (session.name != null) {
+    return { value: session.name, source: "durable" };
+  }
+  return { value: defaultSessionName(session), source: "generated" };
+}
+
 function sessionDisplayName(session: Session): string {
-  return session.name ?? defaultSessionName(session);
+  return sessionDisplayNameParts(session).value;
 }
 
 function sessionListDebugRow(session: Session): SessionListDebugRow {
-  const avatar = getSessionAvatar(session.id, session.agent_avatar_id);
+  const avatar = getSessionAvatarByID(session.agent_avatar_id);
+  const displayName = sessionDisplayNameParts(session);
   return {
     id: session.id,
     name: session.name,
-    display_name: sessionDisplayName(session),
+    display_name: displayName.value,
+    display_name_source: displayName.source,
     pod_name: session.pod_name,
     mode: session.mode,
     status: session.status,
@@ -1220,9 +1258,9 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
       typeof session.sidebar_position === "number" ? session.sidebar_position : null,
     agent_avatar_id: session.agent_avatar_id ?? null,
     system_avatar_id: session.system_avatar_id ?? null,
-    rendered_avatar_id: avatar.id,
-    rendered_avatar_src: avatar.src,
-    rendered_avatar_custom: avatar.custom === true,
+    rendered_avatar_id: avatar?.id ?? null,
+    rendered_avatar_src: avatar?.src ?? null,
+    rendered_avatar_custom: avatar?.custom === true,
     requested_at: session.requested_at,
     created_at: session.created_at,
     ready_at: session.ready_at,
@@ -1257,19 +1295,6 @@ function formatBootTime(ms: number): string {
   if (seconds < 1) return "<1s";
   if (seconds < 60) return `${seconds}s`;
   return formatRuntime(ms);
-}
-
-function sessionRuntimeLabel(session: Session, nowMs: number): string | null {
-  if (!session.created_at) return null;
-  const startedMs = Date.parse(session.created_at);
-  if (!Number.isFinite(startedMs)) return null;
-  return formatRuntime(nowMs - startedMs);
-}
-
-function sessionRuntimeTitle(session: Session, nowMs: number): string {
-  const startedMs = session.created_at ? Date.parse(session.created_at) : NaN;
-  const runtime = Number.isFinite(startedMs) ? formatRuntime(nowMs - startedMs) : "unknown";
-  return `running ${runtime}`;
 }
 
 function currentSessionSkillState(
@@ -1353,24 +1378,68 @@ function sessionBootStartMs(session: Session): number {
   return Number.isFinite(createdMs) ? createdMs : NaN;
 }
 
-function sessionBootLabel(session: Session, nowMs: number): string | null {
-  const startMs = sessionBootStartMs(session);
-  if (!Number.isFinite(startMs)) return null;
+// SessionStats renders the sidebar's ↓ boot-time and ↑ runtime
+// labels for one session row. The hooks (useRelativeSeconds /
+// useRelativeMinutes) subscribe to the singleton timeService at the
+// granularity the label actually displays, so re-renders only happen
+// when *this row's* bucket boundary is crossed — not on every clock
+// tick at the App root. Replaces the prior App-root `nowMs` ticker
+// that cascaded a full-tree re-render every 30s (and every 1s while
+// any session was Pending), which was the dominant
+// `correlation=idle` long-task source observed in
+// `tank_client_long_task_duration_seconds`.
+function SessionStats({ session }: { session: Session }) {
+  const bootStartMs = sessionBootStartMs(session);
   const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
-  if (Number.isFinite(readyMs)) return formatBootTime(readyMs - startMs);
-  if (session.status === "Pending") return formatBootTime(nowMs - startMs);
-  return null;
-}
-
-function sessionBootTitle(session: Session, nowMs: number): string {
-  const startMs = sessionBootStartMs(session);
-  if (!Number.isFinite(startMs)) return "startup time unknown";
-  const readyMs = session.ready_at ? Date.parse(session.ready_at) : NaN;
-  if (Number.isFinite(readyMs)) {
-    return `ready ${formatBootTime(readyMs - startMs)} after request`;
+  const bootFinalMs =
+    Number.isFinite(readyMs) && Number.isFinite(bootStartMs)
+      ? readyMs - bootStartMs
+      : null;
+  // Live boot ticker only runs while Pending and we don't yet have a
+  // final ready_at. Passing null here keeps the hook subscribed but
+  // makes its getSnapshot return null — useSyncExternalStore then
+  // dedupes and no re-render fires.
+  const liveBootStart =
+    bootFinalMs === null && session.status === "Pending" && Number.isFinite(bootStartMs)
+      ? bootStartMs
+      : null;
+  const liveBootSeconds = useRelativeSeconds(liveBootStart);
+  let bootLabel: string | null = null;
+  let bootTitle = "startup time unknown";
+  if (bootFinalMs !== null) {
+    bootLabel = formatBootTime(bootFinalMs);
+    bootTitle = `ready ${bootLabel} after request`;
+  } else if (liveBootStart !== null && liveBootSeconds !== null) {
+    bootLabel = formatBootTime(liveBootSeconds * 1000);
+    bootTitle = `starting for ${bootLabel} since request`;
   }
-  if (session.status === "Pending") return `starting for ${formatBootTime(nowMs - startMs)} since request`;
-  return "startup time unknown";
+
+  const createdMs = session.created_at ? Date.parse(session.created_at) : NaN;
+  const runtimeStartedAt = Number.isFinite(createdMs) ? createdMs : null;
+  const runtimeMinutes = useRelativeMinutes(runtimeStartedAt);
+  const runtimeLabel =
+    runtimeStartedAt !== null && runtimeMinutes !== null
+      ? formatRuntime(runtimeMinutes * 60_000)
+      : null;
+  const runtimeTitle = runtimeLabel ? `running ${runtimeLabel}` : "runtime unknown";
+
+  if (!bootLabel && !runtimeLabel) return null;
+  return (
+    <span className="session-stats">
+      {bootLabel && (
+        <span className="session-stat" title={bootTitle} aria-label={bootTitle}>
+          <span aria-hidden="true">↓</span>
+          <span>{bootLabel}</span>
+        </span>
+      )}
+      {runtimeLabel && (
+        <span className="session-stat" title={runtimeTitle} aria-label={runtimeTitle}>
+          <span aria-hidden="true">↑</span>
+          <span>{runtimeLabel}</span>
+        </span>
+      )}
+    </span>
+  );
 }
 
 function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
@@ -1433,17 +1502,13 @@ function clearGlimmungLaunchContext(): void {
 // ledger; the polling loop (only active while any session was
 // non-Active) is no longer needed.
 //
-// Two cadences for the shared `nowMs` clock:
-//   - BOOT: 1s while any session is Pending, so the sidebar ↓ boot label
-//     (second-resolution via formatBootTime) visibly counts up second by
-//     second during pod launch. A coarser interval here makes the counter
-//     look frozen and only "post an update when it's done loading."
-//   - IDLE: 30s once nothing is booting, since the ↑ runtime label is
-//     minute-resolution (formatRuntime returns "<1m" / "Nm" / "Nh" / "Nd")
-//     and doesn't need second-grain ticks — pod uptime lasts minutes-to-
-//     hours, so a slow tick is enough to catch minute boundaries.
-const SESSION_BOOT_TICK_MS = 1_000;
-const SESSION_RUNTIME_TICK_MS = 30_000;
+// Sidebar boot/runtime labels subscribe to the singleton timeService
+// (see SessionStats above). The previous design held `nowMs` as App-
+// root useState and ticked it from a setInterval, which cascaded a
+// full-tree re-render every 30s (or every 1s while any session was
+// Pending) — observed as 5+ second `correlation=idle` blocks in
+// `tank_client_long_task_duration_seconds`. Per-row hooks now subscribe
+// at the granularity each label actually renders at.
 const HOME_DEFAULT_SESSION_TITLE = "New session";
 
 function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
@@ -1767,17 +1832,75 @@ function Avatar({ user }: { user: SessionUser }) {
   );
 }
 
-function ClusterHealthWidget({
-  health,
-  error,
-  loading,
-  onRefresh,
+function MissingSessionAvatarIcon({ className }: { className?: string }) {
+  return (
+    <span
+      className={["session-avatar-missing", className].filter(Boolean).join(" ")}
+      title="avatar assignment missing"
+      aria-label="avatar assignment missing"
+    >
+      <ImageIcon size={17} strokeWidth={2.1} aria-hidden="true" />
+    </span>
+  );
+}
+
+function SessionAvatarIcon({
+  avatar,
+  className,
 }: {
-  health: ClusterHealthResponse | null;
-  error: string | null;
-  loading: boolean;
-  onRefresh: () => void;
+  avatar: AgentAvatar | null;
+  className?: string;
 }) {
+  if (!avatar) return <MissingSessionAvatarIcon className={className} />;
+  return <AgentAvatarIcon avatar={avatar} className={className} />;
+}
+
+// ClusterHealthWidget owns its own polling. The 30s setInterval +
+// state setters previously lived at App-root, which cascaded a
+// full-tree re-render every 30s — observed as `correlation=idle`
+// blocks in `tank_client_long_task_duration_seconds`. Co-locating the
+// polling here keeps the re-render scoped to this widget. `enabled`
+// gates the poll (only run when the user is signed in); flipping it
+// false tears down the state so a signed-out / styleguide render
+// stays at zero work.
+function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
+  const [health, setHealth] = useState<ClusterHealthResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!enabled) return;
+    setLoading(true);
+    try {
+      const res = await authedFetch("/api/cluster-health");
+      if (!res.ok) throw new Error(`cluster health failed: ${res.status}`);
+      setHealth((await res.json()) as ClusterHealthResponse);
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setHealth(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+    void load();
+    const interval = window.setInterval(() => {
+      void load();
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [enabled, load]);
+
+  const onRefresh = useCallback(() => {
+    void load();
+  }, [load]);
+
   const status: ClusterHealthStatus = error ? "unknown" : health?.status ?? "unknown";
   const headline = error ? "Cluster unknown" : clusterHealthHeadline(health);
   const issue = error || clusterHealthIssueText(health);
@@ -1789,45 +1912,60 @@ function ClusterHealthWidget({
       className={`cluster-health ${clusterHealthStatusClass(status)}`}
       aria-label="Cluster health"
     >
-      <button
-        type="button"
-        className="cluster-health-main"
-        onClick={onRefresh}
-        title={issue}
-        aria-label={`${headline}: ${issue}`}
-      >
-        <span className="cluster-health-status" aria-hidden="true">
-          {loading ? (
-            <Loader2Icon className="cluster-health-spin" />
-          ) : status === "healthy" ? (
-            <CheckIcon />
-          ) : status === "critical" ? (
-            <AlertCircleIcon />
-          ) : (
-            <ActivityIcon />
-          )}
-        </span>
-        <span className="cluster-health-body">
-          <span className="cluster-health-title">{headline}</span>
-          <span className="cluster-health-sub">{issue}</span>
-        </span>
-        <span className="cluster-health-refresh" aria-hidden="true">
-          <RotateCcwIcon />
-        </span>
-      </button>
-      <div className="cluster-health-metrics" aria-hidden={health ? undefined : "true"}>
-        <span title="Ready Kubernetes nodes">
-          <MonitorIcon />
-          <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
-        </span>
-        <span title="Ready Tank session pods">
-          <SquareTerminalIcon />
-          <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
-        </span>
-        <span title="NATS JetStream memory utilization">
-          <ActivityIcon />
-          <span>{clusterHealthNatsLoadLabel(nats)}</span>
-        </span>
+      <div className="cluster-health-panel">
+        <button
+          type="button"
+          className="cluster-health-main"
+          onClick={onRefresh}
+          title={issue}
+          aria-label={`${headline}: ${issue}`}
+        >
+          <span className="cluster-health-status" aria-hidden="true">
+            {loading ? (
+              <Loader2Icon className="cluster-health-spin" />
+            ) : status === "healthy" ? (
+              <CheckIcon />
+            ) : status === "critical" ? (
+              <AlertCircleIcon />
+            ) : (
+              <ActivityIcon />
+            )}
+          </span>
+          <span className="cluster-health-body">
+            <span className="cluster-health-title">{headline}</span>
+            <span className="cluster-health-sub">{issue}</span>
+          </span>
+          <span className="cluster-health-refresh" aria-hidden="true">
+            <RotateCcwIcon />
+          </span>
+        </button>
+        <dl
+          className="cluster-health-metrics"
+          aria-label="Cluster health metrics"
+          aria-hidden={health ? undefined : "true"}
+        >
+          <div className="cluster-health-metric" title="Ready Kubernetes nodes">
+            <dt>Nodes</dt>
+            <dd>
+              <MonitorIcon aria-hidden="true" />
+              <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Ready Tank session pods">
+            <dt>Sessions</dt>
+            <dd>
+              <SquareTerminalIcon aria-hidden="true" />
+              <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+            </dd>
+          </div>
+          <div className="cluster-health-metric" title="Reachable NATS monitors">
+            <dt>NATS</dt>
+            <dd>
+              <ActivityIcon aria-hidden="true" />
+              <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
+            </dd>
+          </div>
+        </dl>
       </div>
     </section>
   );
@@ -2046,16 +2184,14 @@ function DemoLanding() {
             {demoSessions.map((s) => {
               const isActive = s.id === selected?.id;
               const statusDotClass = sessionStatusDotClass(s);
-              const bootLabel = sessionBootLabel(s, Date.now());
-              const runtimeLabel = sessionRuntimeLabel(s, Date.now());
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               return (
                 <li
                   key={s.id}
                   className={isActive ? "is-open" : ""}
                   onClick={() => setActiveDemoSession(s.id)}
                 >
-                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
+                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
                       <span className="session-id">{sessionDisplayName(s)}</span>
@@ -2079,22 +2215,7 @@ function DemoLanding() {
                       aria-label={`status: ${s.status}`}
                     />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    {(bootLabel || runtimeLabel) && (
-                      <span className="session-stats">
-                        {bootLabel && (
-                          <span className="session-stat" title={sessionBootTitle(s, Date.now())}>
-                            <span aria-hidden="true">↓</span>
-                            <span>{bootLabel}</span>
-                          </span>
-                        )}
-                        {runtimeLabel && (
-                          <span className="session-stat" title={sessionRuntimeTitle(s, Date.now())}>
-                            <span aria-hidden="true">↑</span>
-                            <span>{runtimeLabel}</span>
-                          </span>
-                        )}
-                      </span>
-                    )}
+                    <SessionStats session={s} />
                     {s.mode === "claude_cli" && (
                       <span className="session-action session-remote is-icon" title="remote control">
                         <IconExternal />
@@ -2585,6 +2706,15 @@ function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
     };
   }
   return null;
+}
+
+function sdkTerminalResultFromConversationTerminal(
+  terminal: ConversationTurnTerminal | undefined,
+): SdkTerminalResult | null {
+  if (!terminal) return null;
+  if (terminal.status === "completed") return { status: "done" };
+  if (terminal.status === "interrupted") return { status: "stopped" };
+  return { status: "error", detail: terminal.detail };
 }
 
 function turnIdForBrowserClientNonce(clientNonce: string): string {
@@ -4370,7 +4500,7 @@ function RunMessageBubble({
   showAssistantAvatar = !ownedByTurnActivity,
 }: {
   entry: TranscriptEntry;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
   highlighted: boolean;
@@ -4439,7 +4569,7 @@ function RunMessageBubble({
     >
       {variant === "assistant" && showAssistantAvatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
-          <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+          <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
       )}
       {variant === "system" && (
@@ -4523,12 +4653,10 @@ function RunMessageBubble({
       </div>
       {variant === "user" && (() => {
         // Cross-session handoff: a sibling tank-operator session posted
-        // this turn via mcp-tank-operator. Render the parent session's
-        // deterministic avatar in place of the human owner's Gravatar
-        // so the bubble reads as agent-authored. The user message is
-        // still owned by the same human — only the visual identity
-        // changes, mirroring how the assistant bubble already uses
-        // a session-derived avatar.
+        // this turn via mcp-tank-operator. Only render a session avatar
+        // when the durable message/session data names one; otherwise use
+        // the explicit missing-avatar glyph instead of inventing a local
+        // identity from the origin id.
         const originId = entry.originSessionId;
         if (originId) {
           return (
@@ -4536,8 +4664,8 @@ function RunMessageBubble({
               className="run-msg-avatar"
               data-origin-session-id={originId}
             >
-              <AgentAvatarIcon
-                avatar={getSessionAvatar(originId)}
+              <SessionAvatarIcon
+                avatar={getSessionAvatarByID(null)}
                 className="run-msg-ai-icon"
               />
             </span>
@@ -5872,7 +6000,7 @@ function RunTurnThinkingBubble({
   onOpenTurn,
 }: {
   turnId: string;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string) => void;
 }) {
   return (
@@ -5884,7 +6012,7 @@ function RunTurnThinkingBubble({
       data-kind="turn-thinking"
     >
       <span className="run-msg-ai-avatar" aria-hidden="true">
-        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <button
         type="button"
@@ -5923,7 +6051,7 @@ function RunTurnActivityGroup({
   group: Extract<EntryGroup, { kind: "activity" }>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
   showThinking: boolean;
@@ -5971,7 +6099,7 @@ function RunTurnActivityGroup({
       data-inline-response={ownedAssistantEntries.length > 0 ? "true" : undefined}
     >
       <span className="run-turn-activity-avatar" aria-hidden="true">
-        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <div className="run-turn-activity-stack">
         <div className="run-turn-activity-content">
@@ -6125,7 +6253,7 @@ function RunTurnActivityScreen({
   turns: TurnViewItem[];
   selectedTurnId: string | null;
   onSelectTurn: (turnId: string) => void;
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
   showThinking: boolean;
@@ -6315,7 +6443,7 @@ export function RunMessages({
   onActivityOpen,
 }: {
   entries: TranscriptEntry[];
-  avatar: AgentAvatar;
+  avatar: AgentAvatar | null;
   systemAvatar?: AgentAvatar | null;
   sessionId: string;
   sessionMode?: string;
@@ -6847,6 +6975,15 @@ function RunSettingsPanel({
                 )}
               </button>
             )}
+            <div className="run-settings-diagnostics">
+              <div className="run-settings-diagnostics-head">
+                <span className="run-settings-link-label">
+                  <ClipboardListIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>Session-list diagnostics</span>
+                </span>
+              </div>
+              <SessionListDebugCaptureControls source="SettingsAdmin" />
+            </div>
           </section>
         )
       ) : (
@@ -7027,11 +7164,6 @@ function RunHelpScreen() {
                 ) : (
                   <span className="run-help-status-spacer" />
                 )}
-                {item.chip ? (
-                  <span className={`session-activity-chip is-${item.chip.tone}`}>
-                    {item.chip.label}
-                  </span>
-                ) : null}
               </div>
               <div className="run-help-status-copy">
                 <span className="run-help-status-label">{item.label}</span>
@@ -7468,11 +7600,7 @@ function ChatPane({
     const total = totalContextTokens(projection.lastUsage as ClaudeUsage | undefined);
     if (total > 0) setTokensUsed(total);
 
-    const sdkActive =
-      projection.runStatus === "submitted" ||
-      projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input" ||
-      projection.runStatus === "stopping";
+    const sdkActive = conversationRunIsActive(projection.runStatus);
     setRenderedActiveTurnId(sdkActive ? projection.activeTurnId : null);
     activeInterruptTargetRef.current = sdkActive
       ? projection.activeClientNonce ?? projection.activeTurnId
@@ -7879,11 +8007,7 @@ function ChatPane({
     if (!run || !running || queuedMessages.length === 0) return;
     if (queuedFollowupBlockedReportedRef.current === run.id) return;
     const projection = projectConversationState(sdkConversationStateRef.current);
-    const durableActive =
-      projection.runStatus === "submitted" ||
-      projection.runStatus === "streaming" ||
-      projection.runStatus === "needs_input" ||
-      projection.runStatus === "stopping";
+    const durableActive = conversationRunIsActive(projection.runStatus);
     if (durableActive) return;
     queuedFollowupBlockedReportedRef.current = run.id;
     logSessionEventStreamEvent("queued_followup_blocked_after_terminal", {
@@ -9374,7 +9498,18 @@ function ChatPane({
     // out, surface it but still let the run go ahead with what's ready.
     const composed = composePromptWithAttachments(trimmed);
     if (composed == null) return;
-    if (running) {
+    const projection = projectConversationState(sdkConversationStateRef.current);
+    const run = currentRunRef.current;
+    const terminal = sdkTerminalResultFromConversationTerminal(
+      run ? sdkConversationStateRef.current.turnTerminals[run.turnId] : undefined,
+    );
+    const submitDecision = decideFollowupSubmit({
+      running,
+      durableRunStatus: projection.runStatus,
+      hasLocalRun: run !== null,
+      localRunHasDurableTerminal: terminal !== null,
+    });
+    if (submitDecision.action === "queue") {
       // Queue message to send once the current run finishes. PromptInput
       // clears the textarea before this callback returns, so the visible
       // queued-message list is the user's confirmation that the submit stuck.
@@ -9383,6 +9518,19 @@ function ChatPane({
         { id: nextQueuedMessageId(), text: composed },
       ]);
       return;
+    }
+    if (submitDecision.staleReason) {
+      logSessionEventStreamEvent("stale_running_blocked_submit", {
+        sessionMode: session.mode,
+      });
+      if (run && terminal) {
+        finalizeSdkRun(run, terminal, { refreshHistory: false });
+      } else {
+        currentRunRef.current = null;
+        setRunning(false);
+        setRunStatus((prev) => (prev === "running" || prev === "stopping" ? "done" : prev));
+        setSdkConnectionState("idle");
+      }
     }
     startRun(composed);
   }
@@ -9773,12 +9921,12 @@ function ChatPane({
         : undefined;
 
   const sessionAvatar = useMemo(
-    () => getSessionAvatar(session.id, session.agent_avatar_id),
-    [avatarCatalogVersion, session.agent_avatar_id, session.id],
+    () => getSessionAvatarByID(session.agent_avatar_id),
+    [avatarCatalogVersion, session.agent_avatar_id],
   );
   const systemAvatar = useMemo(
-    () => getSystemAvatar(session.id, session.system_avatar_id),
-    [avatarCatalogVersion, session.id, session.system_avatar_id],
+    () => getSystemAvatarByID(session.system_avatar_id),
+    [avatarCatalogVersion, session.system_avatar_id],
   );
   useEffect(() => {
     if (!visible) return;
@@ -9788,15 +9936,15 @@ function ChatPane({
       session_id: session.id,
       row: {
         ...sessionListDebugRow(session),
-        rendered_avatar_id: sessionAvatar.id,
-        rendered_avatar_src: sessionAvatar.src,
-        rendered_avatar_custom: sessionAvatar.custom === true,
+        rendered_avatar_id: sessionAvatar?.id ?? null,
+        rendered_avatar_src: sessionAvatar?.src ?? null,
+        rendered_avatar_custom: sessionAvatar?.custom === true,
       },
       detail: {
         avatar_catalog_version: avatarCatalogVersion,
-        session_avatar_id: sessionAvatar.id,
-        session_avatar_src: sessionAvatar.src,
-        session_avatar_custom: sessionAvatar.custom === true,
+        session_avatar_id: sessionAvatar?.id ?? null,
+        session_avatar_src: sessionAvatar?.src ?? null,
+        session_avatar_custom: sessionAvatar?.custom === true,
         system_avatar_id: systemAvatar?.id ?? null,
         system_avatar_src: systemAvatar?.src ?? null,
         system_avatar_custom: systemAvatar?.custom === true,
@@ -9806,9 +9954,9 @@ function ChatPane({
     visible,
     avatarCatalogVersion,
     session,
-    sessionAvatar.id,
-    sessionAvatar.src,
-    sessionAvatar.custom,
+    sessionAvatar?.id,
+    sessionAvatar?.src,
+    sessionAvatar?.custom,
     systemAvatar?.id,
     systemAvatar?.src,
     systemAvatar?.custom,
@@ -11262,7 +11410,6 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -11363,37 +11510,10 @@ export function App() {
     await loadRuntimeAvatarCatalog();
     setAvatarCatalogVersion((version) => version + 1);
   }, []);
-  const [clusterHealth, setClusterHealth] = useState<ClusterHealthResponse | null>(null);
-  const [clusterHealthError, setClusterHealthError] = useState<string | null>(null);
-  const [clusterHealthLoading, setClusterHealthLoading] = useState(false);
-  const loadClusterHealth = useCallback(async () => {
-    if (!user) return;
-    setClusterHealthLoading(true);
-    try {
-      const res = await authedFetch("/api/cluster-health");
-      if (!res.ok) throw new Error(`cluster health failed: ${res.status}`);
-      setClusterHealth((await res.json()) as ClusterHealthResponse);
-      setClusterHealthError(null);
-    } catch (err) {
-      setClusterHealthError(errorMessage(err));
-    } finally {
-      setClusterHealthLoading(false);
-    }
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) {
-      setClusterHealth(null);
-      setClusterHealthError(null);
-      setClusterHealthLoading(false);
-      return;
-    }
-    void loadClusterHealth();
-    const interval = window.setInterval(() => {
-      void loadClusterHealth();
-    }, 30_000);
-    return () => window.clearInterval(interval);
-  }, [loadClusterHealth, user]);
+  // Cluster-health polling lives inside ClusterHealthWidget so the
+  // 30s setInterval + its setState calls don't cascade re-renders
+  // through the App-root tree. See SessionStats above for the same
+  // pattern applied to the per-row time labels.
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -12020,15 +12140,6 @@ export function App() {
     void refresh();
   }, [user, effectiveSessionScope]);
 
-  // While a pod is booting we need a 1s tick so the ↓ boot label counts up
-  // second by second. Once nothing's booting, fall back to the slow tick —
-  // the ↑ runtime label is minute-resolution and re-rendering the sidebar
-  // every second for hours of idle uptime would be wasted work.
-  const hasPendingSession = useMemo(
-    () => sessions.some((s) => s.status === "Pending"),
-    [sessions],
-  );
-
   // Keep the refs that the SSE reducer reads in sync with the latest
   // committed state. This lets the SSE useEffect close over a stable
   // user identity instead of every render's state, avoiding constant
@@ -12050,13 +12161,6 @@ export function App() {
       sessions: sessionListDebugRows(sessions),
     });
   }, [sessions, active, avatarCatalogVersion]);
-
-  useEffect(() => {
-    if (!user) return;
-    const tickMs = hasPendingSession ? SESSION_BOOT_TICK_MS : SESSION_RUNTIME_TICK_MS;
-    const t = setInterval(() => setNowMs(Date.now()), tickMs);
-    return () => clearInterval(t);
-  }, [user, hasPendingSession]);
 
   useEffect(() => {
     const context = glimmungLaunchContext.current;
@@ -13168,12 +13272,9 @@ export function App() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatar(s.id, s.agent_avatar_id);
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
               const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
-              const activityChips = sessionActivityChips(sessionActivities[s.id]);
-              const bootLabel = sessionBootLabel(s, nowMs);
-              const runtimeLabel = sessionRuntimeLabel(s, nowMs);
               const skillStateClass = sessionSkillStateClass(s);
               return (
                 <li
@@ -13188,7 +13289,7 @@ export function App() {
                   onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
                   title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
                 >
-                  <AgentAvatarIcon avatar={avatar} className="session-avatar" />
+                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
                   <div className="session-row-top">
                     {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
@@ -13219,40 +13320,7 @@ export function App() {
                       aria-label={`status: ${statusLabel}`}
                     />
                     <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    {(bootLabel || runtimeLabel) && (
-                      <span className="session-stats">
-                        {bootLabel && (
-                          <span
-                            className="session-stat"
-                            title={sessionBootTitle(s, nowMs)}
-                            aria-label={sessionBootTitle(s, nowMs)}
-                          >
-                            <span aria-hidden="true">↓</span>
-                            <span>{bootLabel}</span>
-                          </span>
-                        )}
-                        {runtimeLabel && (
-                          <span
-                            className="session-stat"
-                            title={sessionRuntimeTitle(s, nowMs)}
-                            aria-label={sessionRuntimeTitle(s, nowMs)}
-                          >
-                            <span aria-hidden="true">↑</span>
-                            <span>{runtimeLabel}</span>
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {activityChips.map((chip) => (
-                      <span
-                        key={chip.key}
-                        className={`session-activity-chip is-${chip.tone}`}
-                        title={chip.title}
-                        aria-label={chip.title}
-                      >
-                        {chip.label}
-                      </span>
-                    ))}
+                    <SessionStats session={s} />
                     {isClosing && <span className="session-closing-chip">closing</span>}
                     {CONFIG_MODES.has(s.mode) && (
                       <button
@@ -13275,14 +13343,7 @@ export function App() {
           </ul>
         </div>
 
-        <ClusterHealthWidget
-          health={clusterHealth}
-          error={clusterHealthError}
-          loading={clusterHealthLoading}
-          onRefresh={() => {
-            void loadClusterHealth();
-          }}
-        />
+        <ClusterHealthWidget enabled={Boolean(user)} />
 
         <div className="sidebar-footer" data-menu="profile">
           <button

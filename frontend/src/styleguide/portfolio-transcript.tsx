@@ -16,7 +16,7 @@ import {
 import { ChatComposer, type RunComposerMode } from "../ChatComposer";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
-import { AgentAvatarIcon, getSessionAvatar } from "../sessionAvatars";
+import { AgentAvatarIcon, getSessionAvatarByID } from "../sessionAvatars";
 import {
   BackLink,
   captionStyle,
@@ -60,7 +60,7 @@ function TranscriptMessage({
   showAssistantAvatar?: boolean;
   children: ReactNode;
 }) {
-  const avatar = getSessionAvatar("portfolio-transcript-state");
+  const avatar = getSessionAvatarByID("jp1-malcolm");
   return (
     <div
       className="run-transcript-message"
@@ -73,7 +73,7 @@ function TranscriptMessage({
       data-design-state={highlighted ? "highlighted" : variant}
       data-inspectable
     >
-      {variant === "assistant" && showAssistantAvatar && (
+      {variant === "assistant" && avatar && showAssistantAvatar && (
         <span className="run-msg-ai-avatar" aria-hidden="true">
           <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
         </span>
@@ -163,7 +163,7 @@ function TurnThinkingMessage({
   active: boolean;
   highlighted?: boolean;
 }) {
-  const avatar = getSessionAvatar("portfolio-transcript-state");
+  const avatar = getSessionAvatarByID("jp1-malcolm");
   return (
     <div
       className="run-transcript-message run-turn-thinking"
@@ -177,9 +177,11 @@ function TurnThinkingMessage({
       data-design-state={active ? "active" : "rest"}
       data-inspectable
     >
-      <span className="run-msg-ai-avatar" aria-hidden="true">
-        <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
-      </span>
+      {avatar && (
+        <span className="run-msg-ai-avatar" aria-hidden="true">
+          <AgentAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+        </span>
+      )}
       <button type="button" className="run-transcript-message-content run-turn-thinking-content">
         <span aria-hidden="true">...</span>
       </button>

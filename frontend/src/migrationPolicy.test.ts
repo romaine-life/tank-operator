@@ -13,7 +13,10 @@ const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
+const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
+const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
+const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
@@ -47,6 +50,58 @@ test("session activity is not refreshed by a steady interval", () => {
   assert.equal(/setInterval\(\s*refreshSessionActivity/.test(appSource), false);
 });
 
+test("App-root holds no periodic React state setters (cascade-prone pattern)", () => {
+  // Two App-root tickers used to live here and were the dominant source
+  // of `correlation=idle` long-task blocks (5+ s p95) observed via
+  // `tank_client_long_task_duration_seconds`. Both are retired:
+  //
+  //   1. `nowMs` / `setNowMs` ticker (1s while any session was Pending,
+  //      else 30s) → SessionStats now subscribes to the singleton
+  //      timeService at minute/second granularity, re-rendering only
+  //      the row whose bucket changed.
+  //   2. `clusterHealth*` + `loadClusterHealth` + 30s setInterval →
+  //      ClusterHealthWidget now owns its own state and polling.
+  //
+  // Re-introducing either pattern restores the cascading-rerender
+  // failure mode; this guard catches it at PR time. If a future
+  // surface legitimately needs a periodic refresh, scope it to its
+  // own component (or use the timeService for time-relative labels).
+  for (const forbidden of [
+    "setNowMs",
+    "hasPendingSession",
+    "SESSION_BOOT_TICK_MS",
+    "SESSION_RUNTIME_TICK_MS",
+    "setClusterHealth",
+    "loadClusterHealth",
+    "sessionBootLabel",
+    "sessionRuntimeLabel",
+    "sessionBootTitle",
+    "sessionRuntimeTitle",
+  ]) {
+    assert.equal(
+      new RegExp(`\\b${forbidden}\\b`).test(
+        appSource.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""),
+      ),
+      false,
+      `${forbidden} must not appear in App.tsx code (only in comments). The cascading-rerender pattern is retired; use timeService or co-locate the state with its consumer.`,
+    );
+  }
+  // Sidebar boot/runtime labels must use the timeService hooks, not
+  // wall-clock reads at render time. A bare Date.now() at render would
+  // give a stale label until the parent re-rendered for some other
+  // reason — the failure mode that the old nowMs ticker covered up.
+  assert.match(
+    appSource,
+    /from\s+"\.\/timeService"/,
+    "App.tsx must import from ./timeService for relative-time labels",
+  );
+  assert.match(
+    appSource,
+    /\buseRelative(Seconds|Minutes)\b/,
+    "App.tsx must call a timeService hook (useRelativeSeconds / useRelativeMinutes) so per-row labels stay live without an App-root ticker",
+  );
+});
+
 test("session activity status states have explicit sidebar styles", () => {
   for (const state of [
     "active",
@@ -56,6 +111,7 @@ test("session activity status states have explicit sidebar styles", () => {
     "agent-waiting",
     "agent-needs-input",
     "agent-stopping",
+    "agent-stopped",
     "agent-error",
   ]) {
     assert.equal(
@@ -64,13 +120,8 @@ test("session activity status states have explicit sidebar styles", () => {
       `missing status-dot style for ${state}`,
     );
   }
-  for (const state of ["input", "failed", "stopping", "stopped"]) {
-    assert.equal(
-      indexCssSource.includes(`.session-activity-chip.is-${state}`),
-      true,
-      `missing session-activity-chip style for ${state}`,
-    );
-  }
+  assert.equal(indexCssSource.includes(".session-activity-chip"), false);
+  assert.equal(appSource.includes("sessionActivityChips"), false);
 });
 
 test("chat transcript UI does not use the retired agent-ws route", () => {
@@ -281,8 +332,31 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugSource.includes("MAX_EVENTS"), true);
   assert.equal(sessionListDebugSource.includes("sessionStorage"), true);
   assert.equal(sessionListDebugSource.includes("__tankSessionListDebug"), true);
+  assert.equal(
+    sessionListDebugSource.includes("/api/client-metrics/session-list-debug-capture"),
+    true,
+  );
+  assert.equal(sessionListDebugSource.includes("captureSessionListDebugSnapshot"), true);
+  assert.equal(sessionListDebugSource.includes(["created", "session", "name"].join("-") + "-mutated"), false);
   assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
   assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("Record 2m"), true);
+  assert.equal(sessionListDebugCaptureControlsSource.includes("startSessionListDebugRecording"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(sessionListDebugRecorderSource.includes("event-sample"), true);
+  assert.equal(appSource.includes("Session-list diagnostics"), true);
+  assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
+});
+
+test("session rows do not fall back to client-hashed avatar identity", () => {
+  assert.equal(sessionAvatarsSource.includes("hashString"), false);
+  assert.equal(sessionAvatarsSource.includes("chooseAvatar"), false);
+  assert.equal(sessionAvatarsSource.includes("Math.imul"), false);
+  assert.equal(sessionAvatarsSource.includes("getSessionAvatar("), false);
+  assert.match(sessionAvatarsSource, /getSessionAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
+  assert.match(sessionAvatarsSource, /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
+  assert.equal(appSource.includes("session-avatar-missing"), true);
+  assert.equal(appSource.includes("display_name_source"), true);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {
@@ -344,7 +418,7 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before'), true);
   assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:focus::before'), false);
   assert.equal(indexCssSource.includes(".run-composer.run-composer-runpane:focus-within"), true);
-  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), true);
+  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), false);
   assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
   assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
   assert.equal(styleguideSharedSource.includes("agent-needs-input"), true);
@@ -523,10 +597,12 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.equal(sessionEventStreamTelemetrySource.includes("stream_silent_while_running"), true);
   assert.equal(sessionEventStreamTelemetrySource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(sessionEventStreamTelemetrySource.includes("queued_followup_blocked_after_terminal"), true);
+  assert.equal(sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("tank_event_received"'), true);
   assert.equal(appSource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("queued_followup_blocked_after_terminal"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("stale_running_blocked_submit"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("resync_required"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("stream_error"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("closed_error"'), true);

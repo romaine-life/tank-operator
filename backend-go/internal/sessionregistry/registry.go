@@ -140,6 +140,38 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	return records, rows.Err()
 }
 
+// ListAllIDsForScope returns every session_id in this orchestrator's
+// scope, regardless of owner. Used by the NATS orphan-consumer sweep
+// to decide which JetStream durable consumers still belong to a live
+// session — the sweep's "live" predicate is just "row exists in this
+// scope", visible or not. Soft-deleted (visible=false) rows still
+// count as live for the sweep purpose because the pod and its
+// consumers may still be terminating.
+//
+// Scope-wide rather than per-owner because consumer names encode
+// (scope, session_id) only — there is no owner dimension on the
+// consumer side.
+func (s *Store) ListAllIDsForScope(ctx context.Context) (map[string]struct{}, error) {
+	const q = `SELECT session_id FROM sessions WHERE session_scope = $1`
+	rows, err := s.pool.Query(ctx, q, s.scope)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		id = strings.TrimSpace(id)
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out, rows.Err()
+}
+
 // unmarshalJSONB turns a jsonb column's raw bytes into the
 // map[string]any the snapshot handler expects to render. Empty/NULL
 // columns return nil, which the SPA renders as "no state set."

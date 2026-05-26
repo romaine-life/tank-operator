@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { LogInIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch, bootstrapAuth, startLogin } from "./auth";
+import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import {
   getSessionListDebugSnapshot,
   subscribeSessionListDebug,
@@ -117,6 +118,7 @@ export function SessionListDebugPage() {
               <span>Sign in</span>
             </button>
           ) : null}
+          <SessionListDebugCaptureControls source="SessionListDebugPage" />
           <button type="button" className="debug-action-btn" onClick={() => void loadServerState()}>
             <RefreshCwIcon aria-hidden="true" />
             <span>Refresh</span>
@@ -217,7 +219,12 @@ function SessionRowsTable({ rows }: { rows: SessionListDebugRow[] }) {
           {rows.map((row) => (
             <tr key={row.id}>
               <td><code>{row.id}</code></td>
-              <td>{row.display_name ?? row.name ?? row.pod_name ?? ""}</td>
+              <td>
+                {row.display_name ?? row.name ?? row.pod_name ?? ""}
+                {row.display_name_source ? (
+                  <span className="debug-muted"> {row.display_name_source}</span>
+                ) : null}
+              </td>
               <td>{row.status ?? ""}</td>
               <td>
                 <code>{row.agent_avatar_id ?? "none"}</code>

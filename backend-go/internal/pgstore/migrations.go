@@ -145,6 +145,30 @@ var schemaMigrations = []string{
 		ON avatar_upload_attempts (created_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS avatar_upload_attempts_actor_created
 		ON avatar_upload_attempts (actor_email, created_at DESC)`,
+	// session_list_debug_captures is the durable client-side counterpart
+	// to /api/debug/session-list-state. The browser posts the bounded
+	// session-list debug ring when the user or operator explicitly
+	// captures the browser state or records a diagnostic window, so
+	// operators can diagnose without asking for devtools.
+	`CREATE TABLE IF NOT EXISTS session_list_debug_captures (
+		id            text PRIMARY KEY,
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		session_id    text NOT NULL DEFAULT '',
+		reason        text NOT NULL,
+		source        text NOT NULL DEFAULT '',
+		location      text NOT NULL DEFAULT '',
+		active_id     text NOT NULL DEFAULT '',
+		client_seq    bigint NOT NULL DEFAULT 0,
+		snapshot      jsonb NOT NULL DEFAULT '{}'::jsonb,
+		detail        jsonb NOT NULL DEFAULT '{}'::jsonb,
+		server_rows   jsonb NOT NULL DEFAULT '[]'::jsonb,
+		created_at    timestamptz NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS session_list_debug_captures_owner_created
+		ON session_list_debug_captures (owner_email, session_scope, created_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS session_list_debug_captures_session_created
+		ON session_list_debug_captures (owner_email, session_scope, session_id, created_at DESC)`,
 	`CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,
@@ -305,9 +329,9 @@ var schemaMigrations = []string{
 
 	// Session-pinned avatar assignment. The avatar deck is mutable as
 	// administrators add/delete assets, but an existing session's visible
-	// identity should not reshuffle on refresh. These columns are nullable so
-	// older rows and no-avatar system pools can continue to render through the
-	// frontend fallback path.
+	// identity should not reshuffle on refresh. These columns stay nullable so
+	// no-avatar system pools can be represented explicitly; the frontend must
+	// not synthesize a session identity when an assigned agent avatar is absent.
 	`ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS agent_avatar_id text`,
 	`ALTER TABLE sessions

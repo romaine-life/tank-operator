@@ -64,6 +64,17 @@ All metric names are prefixed `tank_`. The full namespace:
   `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
   `session_id`, email, raw route paths, or user-supplied event names as
   labels; unknown values collapse to `other` / `unknown`.
+- `tank_session_list_debug_capture_reports_total{result,reason}` —
+  browser-reported session-list debug captures ingested through
+  `POST /api/client-metrics/session-list-debug-capture`. The SPA sends
+  bounded `/_debug/session-list` snapshots only from explicit
+  Settings -> Admin or debug-page capture/record controls. `reason` is
+  a closed enum and unknown values collapse to `other`; the metric never
+  labels by owner, session id, path, or raw user input.
+- `tank_admin_debug_session_list_capture_reads_total{result}` — admin
+  reads of `GET /api/debug/session-list-captures`, the durable capture
+  store for client-side session-list diagnostics. Captures are retained
+  at the latest 200 records per owner/scope.
 - `tank_session_event_wake_published_total` /
   `tank_session_event_wake_received_total` /
   `tank_session_event_persist_to_wake_seconds` — the per-session SSE
@@ -88,13 +99,32 @@ All metric names are prefixed `tank_`. The full namespace:
   `event` (opened, ready, tank_event_received,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
-  resync_required, stream_error, closed_unmount, closed_error,
+  stale_running_blocked_submit, resync_required, stream_error, closed_unmount, closed_error,
   reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
   candidate-B zombie-SSE detector: the browser's silence watchdog
   observes the idle interval whenever a connected stream has gone
   >30 s without emitting events while a turn is in flight.
+- `tank_session_bus_orphan_consumers` /
+  `tank_session_bus_consumers_scanned` /
+  `tank_session_bus_orphan_consumers_deleted_total` /
+  `tank_session_bus_orphan_consumer_delete_errors_total` /
+  `tank_session_bus_orphan_sweep_passes_total{result}` — the durable
+  remediation surface for stranded JetStream consumers. Every (session,
+  provider) pair owns two durable consumers (data + control); the
+  runner-side `ensureConsumer` / `ensureControlConsumer` only creates,
+  so deleted sessions leak consumers indefinitely (observed at 725
+  consumers / 6 live sessions on 2026-05-25, ~50 % of the JetStream
+  RAM budget). The orchestrator runs `SweepOrphanConsumers` on a
+  5-minute initial delay then hourly; each pass lists consumers,
+  decodes session_id, deletes any orphan older than 15 minutes
+  (`MinAge` floor). The gauges are last-pass snapshots; the
+  `_deleted_total` / `_delete_errors_total` counters are cumulative.
+  Alerts: `TankSessionBusOrphanSweepFailing` (sweep itself broken),
+  `TankSessionBusOrphanConsumersHigh` (sweep running but backlog
+  growing). See `backend-go/internal/sessionbus/sweep.go` for the
+  decoder + per-pass logic.
 - `tank_client_long_task_*` — browser-reported main-thread long-task
   diagnostics ingested through `POST /api/client-metrics/long-tasks`.
   The SPA installs a `PerformanceObserver({type: "longtask"})` probe
@@ -129,6 +159,12 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_runner_turn_duration_seconds_count{outcome="interrupted"}`
   series to drive the `TankStopNotDelivered` / `TankStopNotTerminated`
   self-telling alerts (see Alerts § below).
+- `tank_session_activity_late_interrupt_ignored_total{status}` — the
+  chat→sidebar activity fold saw `turn.interrupt_requested` after the
+  durable fold had already reached a non-active status, so it preserved
+  `ready` / `error` / `stopped` instead of downgrading the session row
+  back to `stopping`. This is the server-side detector for stale
+  stop-clicks racing behind terminal turn events.
 - `tank_runner_*` — pod-side runner counters/histograms. The default
   `mode` label is "claude" or "codex", bound at module import.
   `tank_runner_item_outcome_total{outcome,reason}` counts bounded item
@@ -292,6 +328,35 @@ line per call (`caller_email`, `session_id`, `session_scope`,
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
 
+## Session List Capture Debug Surface
+
+`GET /api/debug/session-list-captures` (admin-only) returns durable
+browser-side session-list captures posted by
+`POST /api/client-metrics/session-list-debug-capture`. Each record
+contains the captured client snapshot, the capture detail, and the
+server registry rows at ingest time.
+
+Standard workflow for "new session showed another session's name or
+avatar":
+
+1. Ask the user to open Settings -> Admin in the affected browser and
+   click `Record 2m` before reproducing, or click `Capture Now` while
+   the bad render is visible. The standalone `/_debug/session-list`
+   page exposes the same controls plus raw client/server row state.
+   Recording runs in a page-level singleton, so it continues while the
+   user leaves Settings to create or open a session. Besides the 10s
+   interval samples, session-list debug events also trigger a debounced
+   `manual-record-sample` with `detail.phase=event-sample`; this keeps
+   short-lived bad renders in the durable capture stream.
+2. Read `GET /api/debug/session-list-captures?owner=<email>&limit=10`
+   and inspect the latest captures. Recording samples share
+   `detail.run_id`.
+3. Compare the captured browser `snapshot` rows with `server_rows`
+   recorded at ingest time. If `server_rows` is stable while the browser
+   snapshot shows the wrong `name` or avatar id, the bug is in the client
+   store/render/avatar resolution layer. If both disagree with the
+   create response, the bug is server-side.
+
 ## Cardinality rules
 
 These are the rules that keep Prometheus' active-series count bounded
@@ -350,7 +415,8 @@ declares one rule group per subsystem:
 - **Session bus / live transport**: schema-rejected events (steady-state
   must be zero), wake-publish failures, stream auth ticket store failures,
   terminal events missing `client_nonce`, browser terminal/local-run
-  mismatches, browser queued-followup-after-terminal reports, and
+  mismatches, browser queued-followup-after-terminal reports, stale
+  browser `running` latches blocking submit, and
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).

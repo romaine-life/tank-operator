@@ -27,6 +27,7 @@ export type SessionEventStreamMetricName =
   | "terminal_matched_by_turn_id"
   | "terminal_local_run_mismatch"
   | "queued_followup_blocked_after_terminal"
+  | "stale_running_blocked_submit"
   | "resync_required"
   | "stream_error"
   | "closed_unmount"

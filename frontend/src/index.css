@@ -99,9 +99,13 @@
   --status-error-fg: #ef6f6f;
   --status-pending-bg: var(--gray-850);
   --status-pending-fg: var(--gray-400);
-  --status-agent-working: #fbbf24;
-  --status-agent-waiting: #67e8f9;
+  --status-agent-ready: #a1a1aa;
+  --status-agent-running: #60a5fa;
   --status-agent-needs-input: #fb923c;
+  --status-agent-stopping: #fbbf24;
+  --status-agent-stopped: #71717a;
+  --status-agent-working: var(--status-agent-running);
+  --status-agent-waiting: var(--status-agent-ready);
   --skill-test-fg: #bef264;
   --skill-test-bg: rgba(132, 204, 22, 0.16);
   --skill-test-border: rgba(190, 242, 100, 0.24);
@@ -1895,7 +1899,8 @@ button:disabled {
 .status-dot.status-agent-waiting,
 .status-dot.status-codex-waiting { background: var(--status-agent-waiting); }
 .status-dot.status-agent-needs-input { background: var(--status-agent-needs-input); }
-.status-dot.status-agent-stopping { background: var(--status-agent-working); }
+.status-dot.status-agent-stopping { background: var(--status-agent-stopping); }
+.status-dot.status-agent-stopped { background: var(--status-agent-stopped); }
 .status-dot.status-agent-error { background: var(--status-error-fg); }
 
 .mode {
@@ -1951,6 +1956,21 @@ button:disabled {
   z-index: 0;
 }
 
+.session-avatar.session-avatar-missing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: initial;
+  color: rgba(207, 218, 232, 0.72);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.session-avatar.session-avatar-missing svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar.is-collapsed .session-avatar {
   display: block;
   position: static;
@@ -1965,46 +1985,13 @@ button:disabled {
   opacity: 1;
 }
 
-.session-closing-chip {
+.sidebar.is-collapsed .session-avatar.session-avatar-missing {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
 }
 
-.session-activity-chip {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  padding: 0.05rem var(--space-2);
-  border-radius: var(--radius-md);
-  text-transform: lowercase;
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-}
-
-.session-activity-chip.is-input {
-  background: rgba(251, 146, 60, 0.14);
-  color: var(--status-agent-needs-input);
-}
-
-.session-activity-chip.is-failed {
-  background: var(--status-error-bg);
-  color: var(--status-error-fg);
-}
-
-.session-activity-chip.is-stopping,
-.session-activity-chip.is-stopped {
-  background: var(--status-pending-bg);
-  color: var(--status-pending-fg);
+.sidebar.is-collapsed .session-avatar.session-avatar-missing svg {
+  width: 12px;
+  height: 12px;
 }
 
 .mode-claude_cli        { background: var(--mode-claude-cli-bg); color: var(--mode-claude-cli-fg); }
@@ -2026,6 +2013,17 @@ button:disabled {
   padding: var(--space-2) var(--space-3) 0;
 }
 
+.cluster-health-panel {
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-sidebar-control);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
+}
+
+.cluster-health-panel:hover {
+  background: var(--bg-sidebar-hover);
+}
+
 .cluster-health-main {
   width: 100%;
   min-height: 44px;
@@ -2034,15 +2032,13 @@ button:disabled {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2);
-  border-radius: var(--radius-lg);
-  background: var(--bg-sidebar-control);
+  background: transparent;
   color: var(--text-body);
   text-align: left;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
 }
 
 .cluster-health-main:hover:not(:disabled) {
-  background: var(--bg-sidebar-hover);
+  background: transparent;
   color: var(--text-primary);
 }
 
@@ -2124,17 +2120,46 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
-  padding: 5px 2px 0;
+  padding: 6px 0 7px;
+  margin: 0 var(--space-2);
+  border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
 
-.cluster-health-metrics span {
+.cluster-health-metric {
   min-width: 0;
+  display: grid;
+  grid-template-rows: auto auto;
+  justify-items: center;
+  gap: 2px;
+}
+
+.cluster-health-metric dt,
+.cluster-health-metric dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.cluster-health-metric dt {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.cluster-health-metric dd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   color: var(--text-muted);
   font-size: 10px;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2145,6 +2170,10 @@ button:disabled {
 
 .sidebar.is-collapsed .cluster-health {
   padding: var(--space-2) 0.5rem 0;
+}
+
+.sidebar.is-collapsed .cluster-health-panel {
+  width: 2.25rem;
 }
 
 .sidebar.is-collapsed .cluster-health-main {
@@ -3990,12 +4019,46 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
 }
 
 .run-settings-link-icon {
+  flex: 0 0 auto;
   width: 1rem;
   height: 1rem;
   color: var(--text-muted);
+}
+
+.run-settings-diagnostics {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-settings-diagnostics-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--text-body);
+  font-size: var(--text-sm);
+}
+
+.run-settings-diagnostics .session-list-capture-controls {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.run-settings-diagnostics .session-list-capture-actions {
+  width: 100%;
+}
+
+.run-settings-diagnostics .session-list-capture-btn {
+  flex: 1 1 0;
+  justify-content: center;
 }
 
 .run-settings-admin-heading {
@@ -6960,11 +7023,12 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript {
   --run-transcript-active-rail-left: 0.2rem;
   --run-transcript-message-inset-left: 0.7rem;
+  --run-transcript-row-gap: var(--space-3);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
   align-content: start;
-  gap: var(--space-3);
+  gap: var(--run-transcript-row-gap);
   font-family: var(--font-primary);
   font-size: var(--run-chat-font-sm);
   line-height: 1.55;
@@ -6977,6 +7041,14 @@ textarea.run-files-viewer-editor:focus {
   position: relative;
   isolation: isolate;
   transition: background var(--motion-fast, 120ms) ease;
+}
+
+/* Virtuoso wraps top-level transcript entries in measured data-index rows.
+   Padding those wrappers preserves the same visual air that non-virtualized
+   transcript fixtures get from the grid gap above. */
+.run-transcript [data-index] {
+  box-sizing: border-box;
+  padding-block: calc(var(--run-transcript-row-gap) / 2);
 }
 
 .run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript,
@@ -7156,6 +7228,21 @@ textarea.run-files-viewer-editor:focus {
   display: block;
   border-radius: 999px;
   object-fit: contain;
+}
+
+.run-msg-ai-icon.session-avatar-missing {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  object-fit: initial;
+  color: rgba(207, 218, 232, 0.72);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.run-msg-ai-icon.session-avatar-missing svg {
+  width: 17px;
+  height: 17px;
 }
 
 .run-transcript-message[data-variant="assistant"]::before {
@@ -7863,9 +7950,65 @@ textarea.run-files-viewer-editor:focus {
   height: 1rem;
 }
 
+.session-list-capture-controls,
+.session-list-capture-actions,
+.session-list-capture-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.session-list-capture-controls {
+  flex-wrap: wrap;
+}
+
+.session-list-capture-actions,
+.session-list-capture-meta {
+  flex-wrap: wrap;
+}
+
+.session-list-capture-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.session-list-capture-btn:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.session-list-capture-btn svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.session-list-capture-danger {
+  border-color: color-mix(in srgb, var(--danger, #ef4444) 45%, var(--border-subtle));
+  color: var(--danger, #ef4444);
+}
+
+.session-list-capture-danger:hover {
+  border-color: var(--danger, #ef4444);
+}
+
+.session-list-capture-meta {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
 .debug-session-list-summary {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: var(--space-3);
   margin: var(--space-4) 0;
 }
@@ -7965,6 +8108,11 @@ textarea.run-files-viewer-editor:focus {
 .debug-event code,
 .debug-json {
   font-family: var(--font-mono);
+}
+
+.debug-muted {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
 .debug-empty {
