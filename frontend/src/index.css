@@ -7183,9 +7183,9 @@ textarea.run-files-viewer-editor:focus {
   position: absolute;
   left: var(--run-transcript-active-rail-left);
   top: var(--space-5);
+  bottom: var(--space-3);
   z-index: 0;
   width: 2px;
-  height: min(5.75rem, calc(100% - (var(--space-5) * 2)));
   border-radius: 999px;
   background: linear-gradient(
     180deg,
