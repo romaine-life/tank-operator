@@ -296,17 +296,25 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingDuration startedAt=\{selected\.startedAt\}/,
+    /<RunTurnThinkingDuration turnId=\{selected\.turnId\} startedAt=\{selected\.startedAt\}/,
   );
-  // The startedAt fed to the thinking duration must come from the durable
-  // TurnActivitySummary, NOT from `shell.time` (which is the shell entry's
-  // last-projection timestamp and gets bumped on every update — using it
-  // pinned the duration at "0s" forever because each re-projection reset
-  // the live timer's reference point).
+  // The startedAt fed to the thinking duration starts from the durable
+  // TurnActivitySummary, but the live timer never trusts that prop after
+  // first sighting — it locks the per-turn start time into a
+  // module-level cache (and sessionStorage) keyed by turnId, because the
+  // backend's projected startedAt was observed drifting toward "now" as
+  // new events arrived and that drift was what pinned the visible
+  // duration at "0s".
   assert.equal(
     appSource.includes(
       "startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,",
     ),
+    true,
+  );
+  assert.equal(appSource.includes("turnThinkingStartCache"), true);
+  assert.equal(appSource.includes("resolveTurnThinkingStart"), true);
+  assert.equal(
+    appSource.includes("TURN_THINKING_START_CACHE_KEY_PREFIX"),
     true,
   );
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);

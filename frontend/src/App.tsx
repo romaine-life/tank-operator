@@ -6141,35 +6141,102 @@ function formatThinkingElapsed(ms: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-// Live-ticking elapsed-time readout for the "thinking" bubble. We mount a
-// 1s interval only while a turn is mid-flight, so a long session with many
-// completed turns has no timers running. `startedAt` is the activity
-// shell's start time (falling back to `entry.time` upstream); when it is
-// missing or unparseable we render nothing rather than "0s" so we never
-// invent a fake duration. `aria-live="off"` is intentional: the duration
-// changes every second and would otherwise spam screen readers with
-// useless announcements. The visual layer is decorative and the underlying
-// turn already has an `aria-label="Open turn"` on the button.
-function RunTurnThinkingDuration({ startedAt }: { startedAt?: string }) {
-  const startMs = useMemo(() => {
-    if (!startedAt) return null;
-    const parsed = Date.parse(startedAt);
-    return Number.isFinite(parsed) ? parsed : null;
-  }, [startedAt]);
+// Per-tab cache of turn start timestamps. The previous implementation
+// derived the timer's reference point from whatever `startedAt` prop the
+// parent passed on each render — and the backend's projected
+// `activity.startedAt` turned out to drift toward "now" as new events
+// arrived for the active turn (the projection's `activityEntries[0]`
+// effectively re-stamped each refresh), which kept resetting the timer
+// and produced "0s" forever. We sidestep that by writing the first
+// observed start time to a module-level map keyed by turnId. After that,
+// every render of every instance for that turn reads the same locked
+// value — re-renders, remounts (e.g. Virtuoso recycling), and even hard
+// refreshes within the same tab keep counting up. sessionStorage carries
+// the cache across refreshes; the in-memory map is the hot path.
+const TURN_THINKING_START_CACHE_KEY_PREFIX = "tank.thinking-turn-start.";
+const turnThinkingStartCache = new Map<string, number>();
+
+function turnThinkingStartCacheKey(turnId: string): string {
+  return `${TURN_THINKING_START_CACHE_KEY_PREFIX}${turnId}`;
+}
+
+function readPersistedTurnThinkingStart(turnId: string): number | null {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+  try {
+    const raw = window.sessionStorage.getItem(turnThinkingStartCacheKey(turnId));
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedTurnThinkingStart(turnId: string, value: number): void {
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(turnThinkingStartCacheKey(turnId), String(value));
+  } catch {
+    // sessionStorage may be unavailable (private mode, quota); the
+    // in-memory map is still authoritative for the current tab.
+  }
+}
+
+function resolveTurnThinkingStart(turnId: string, candidate: string | undefined): number {
+  const cached = turnThinkingStartCache.get(turnId);
+  if (cached != null) return cached;
+  const persisted = readPersistedTurnThinkingStart(turnId);
+  if (persisted != null) {
+    turnThinkingStartCache.set(turnId, persisted);
+    return persisted;
+  }
+  let chosen: number | null = null;
+  if (candidate) {
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) chosen = parsed;
+  }
+  if (chosen == null) chosen = Date.now();
+  turnThinkingStartCache.set(turnId, chosen);
+  writePersistedTurnThinkingStart(turnId, chosen);
+  return chosen;
+}
+
+// Live-ticking elapsed-time readout for the "thinking" bubble. The 1s
+// interval mounts only while the bubble is on screen, so a session with
+// many completed turns carries no timers. `aria-live="off"` is
+// intentional: the duration changes every second and would otherwise
+// spam screen readers with useless announcements. The visual layer is
+// decorative; the underlying turn button already has an
+// `aria-label="Open turn"`.
+function RunTurnThinkingDuration({
+  turnId,
+  startedAt,
+}: {
+  turnId: string;
+  startedAt?: string;
+}) {
+  const startMs = useMemo(
+    () => resolveTurnThinkingStart(turnId, startedAt),
+    // Lock onto the first start time we resolve for this turn — the cache
+    // makes subsequent calls idempotent, so excluding `startedAt` from the
+    // dep list is intentional and is what prevents the prop drift bug.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [turnId],
+  );
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (startMs == null) return;
     setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [startMs]);
-  if (startMs == null) return null;
+  }, [turnId]);
   const elapsed = formatThinkingElapsed(now - startMs);
   return (
     <span
       className="run-turn-thinking-duration"
       aria-live="off"
       data-design-element="thinking-duration"
+      data-turn-id={turnId}
+      title={`turn started ${new Date(startMs).toLocaleTimeString()}`}
     >
       {elapsed}
     </span>
@@ -6210,7 +6277,7 @@ function RunTurnThinkingBubble({
           <span>.</span>
           <span>.</span>
         </span>
-        <RunTurnThinkingDuration startedAt={startedAt} />
+        <RunTurnThinkingDuration turnId={turnId} startedAt={startedAt} />
       </button>
     </div>
   );
@@ -6613,7 +6680,7 @@ function RunTurnActivityScreen({
                   <span>.</span>
                   <span>.</span>
                 </span>
-                <RunTurnThinkingDuration startedAt={selected.startedAt} />
+                <RunTurnThinkingDuration turnId={selected.turnId} startedAt={selected.startedAt} />
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
