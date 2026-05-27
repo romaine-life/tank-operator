@@ -4372,8 +4372,27 @@ button:disabled {
     inset 3px 0 0 rgba(180, 180, 180, 0.34);
 }
 
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) {
+.run-main[aria-label="Transcript"],
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
+  --run-transcript-active-rail-left: 0.2rem;
+}
+
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within),
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
   outline: none;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(147, 197, 253, 0.92),
+      var(--run-surface-accent) 58%,
+      rgba(96, 165, 250, 0.18)
+    ) var(--run-transcript-active-rail-left) var(--space-5) / 2px calc(100% - var(--space-5) - var(--space-3)) no-repeat,
+    linear-gradient(
+      90deg,
+      rgba(96, 165, 250, 0.075),
+      rgba(96, 165, 250, 0.035) 4rem,
+      rgba(10, 10, 10, 0) 11rem
+    );
 }
 
 .styleguide-transcript-focus-shell {
@@ -7165,44 +7184,6 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript [data-index] {
   box-sizing: border-box;
   padding-block: calc(var(--run-transcript-row-gap) / 2);
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript {
-  background: linear-gradient(
-    90deg,
-    rgba(96, 165, 250, 0.075),
-    rgba(96, 165, 250, 0.035) 4rem,
-    rgba(10, 10, 10, 0) 11rem
-  );
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript::before {
-  content: "";
-  position: absolute;
-  left: var(--run-transcript-active-rail-left);
-  top: var(--space-5);
-  bottom: var(--space-3);
-  z-index: 0;
-  width: 2px;
-  border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    rgba(147, 197, 253, 0.92),
-    var(--run-surface-accent) 58%,
-    rgba(96, 165, 250, 0.18)
-  );
-  box-shadow:
-    0 0 0 1px rgba(96, 165, 250, 0.16),
-    0 0 18px rgba(96, 165, 250, 0.3);
-  pointer-events: none;
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript > *,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript > * {
-  position: relative;
-  z-index: 1;
 }
 
 .run-transcript-divider {

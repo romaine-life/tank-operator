@@ -434,7 +434,8 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-composer-surface-active"), true);
   assert.equal(indexCssSource.includes(".styleguide-transcript-focus-shell"), true);
   assert.equal(indexCssSource.includes(".run-composer.run-composer-interactive:focus-within"), true);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before'), true);
+  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within),'), true);
+  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before'), false);
   assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:focus::before'), false);
   assert.equal(indexCssSource.includes(".run-composer.run-composer-runpane:focus-within"), true);
   assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), false);
