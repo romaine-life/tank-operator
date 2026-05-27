@@ -564,6 +564,7 @@ test("SSE reconnect status stays out of transcript/composer flow", () => {
   assert.equal(appSource.includes("activeConnectionLabel"), true);
   assert.equal(indexCssSource.includes(".run-connection-pill"), true);
   assert.match(indexCssSource, /absolute title chrome[\s\S]*\.run-connection-pill/);
+  assert.match(indexCssSource, /\.workspace-title-overlay \.run-header-name-btn \{[\s\S]*flex: 0 1 auto;[\s\S]*text-align: left;/);
 });
 
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {

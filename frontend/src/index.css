@@ -2349,7 +2349,6 @@ button:disabled {
   min-height: calc(var(--text-lg) * 1.45);
 }
 
-.workspace-title-overlay .run-header-name-btn,
 .workspace-title-overlay .run-header-name-input {
   flex: 0 1 16rem;
   min-width: 0;
@@ -2358,9 +2357,14 @@ button:disabled {
 }
 
 .workspace-title-overlay .run-header-name-btn {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(16rem, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+  pointer-events: auto;
 }
 
 .demo-workspace {
