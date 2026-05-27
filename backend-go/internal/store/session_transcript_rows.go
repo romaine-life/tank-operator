@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,7 @@ type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
 	ReplaceForSession(ctx context.Context, tankSessionID string, entries []map[string]any) error
 	UpsertRows(ctx context.Context, tankSessionID string, entries []map[string]any) error
+	ListChangedAfterOrderKey(ctx context.Context, tankSessionID, afterOrderKey string, rows int) (TranscriptRowDeltaPage, error)
 	ListLatest(ctx context.Context, tankSessionID string, rows int) (TranscriptRowPage, error)
 	ListOldest(ctx context.Context, tankSessionID string, rows int) (TranscriptRowPage, error)
 	ListBefore(ctx context.Context, tankSessionID, beforeCursor string, rows int) (TranscriptRowPage, error)
@@ -34,6 +36,18 @@ type TranscriptRowPage struct {
 	NextCursor  string
 	FoundOldest bool
 	FoundNewest bool
+}
+
+type TranscriptRowDelta struct {
+	Row       map[string]any
+	OrderKey  string
+	UpdatedAt time.Time
+}
+
+type TranscriptRowDeltaPage struct {
+	Rows         []TranscriptRowDelta
+	NextOrderKey string
+	HasMore      bool
 }
 
 type transcriptRowStore struct {
@@ -86,6 +100,27 @@ func (s *transcriptRowStore) UpsertRows(ctx context.Context, tankSessionID strin
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *transcriptRowStore) ListChangedAfterOrderKey(ctx context.Context, tankSessionID, afterOrderKey string, rows int) (TranscriptRowDeltaPage, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	rows = normalizeTranscriptRowLimit(rows)
+	q := `
+		WITH changed_order_keys AS (
+			SELECT DISTINCT end_order_key
+			FROM session_transcript_rows
+			WHERE tank_session_id = $1
+				AND end_order_key > $2
+			ORDER BY end_order_key ASC
+			LIMIT $3
+		)
+		SELECT r.payload, r.end_order_key, r.updated_at
+		FROM session_transcript_rows r
+		JOIN changed_order_keys k ON k.end_order_key = r.end_order_key
+		WHERE r.tank_session_id = $1
+		ORDER BY r.end_order_key ASC, r.row_cursor ASC
+	`
+	return s.fetchRowDeltas(ctx, q, []any{storageKey, strings.TrimSpace(afterOrderKey), rows + 1}, rows)
 }
 
 func (s *transcriptRowStore) WithTranscriptMaterializationTx(ctx context.Context, tankSessionID string, fn func(context.Context, pgx.Tx) error) error {
@@ -384,6 +419,61 @@ func (s *transcriptRowStore) fetchRowsRaw(ctx context.Context, query string, arg
 	return out, cursors, foundEdge, nil
 }
 
+func (s *transcriptRowStore) fetchRowDeltas(ctx context.Context, query string, args []any, limit int) (TranscriptRowDeltaPage, error) {
+	if limit < 1 {
+		return TranscriptRowDeltaPage{}, nil
+	}
+	dbRows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return TranscriptRowDeltaPage{}, err
+	}
+	defer dbRows.Close()
+	out := make([]TranscriptRowDelta, 0, limit+1)
+	orderKeys := make([]string, 0, limit+1)
+	lastOrderKey := ""
+	for dbRows.Next() {
+		var payload []byte
+		var orderKey string
+		var updatedAt time.Time
+		if err := dbRows.Scan(&payload, &orderKey, &updatedAt); err != nil {
+			return TranscriptRowDeltaPage{}, err
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(payload, &entry); err != nil {
+			return TranscriptRowDeltaPage{}, fmt.Errorf("transcript row payload is not JSON: %w", err)
+		}
+		out = append(out, TranscriptRowDelta{Row: entry, OrderKey: orderKey, UpdatedAt: updatedAt})
+		if orderKey != lastOrderKey {
+			orderKeys = append(orderKeys, orderKey)
+			lastOrderKey = orderKey
+		}
+	}
+	if err := dbRows.Err(); err != nil {
+		return TranscriptRowDeltaPage{}, err
+	}
+	hasMore := len(orderKeys) > limit
+	if hasMore {
+		cutoff := orderKeys[limit-1]
+		kept := out[:0]
+		for _, delta := range out {
+			if delta.OrderKey > cutoff {
+				break
+			}
+			kept = append(kept, delta)
+		}
+		out = kept
+	}
+	nextOrderKey := ""
+	if len(out) > 0 {
+		nextOrderKey = out[len(out)-1].OrderKey
+	}
+	return TranscriptRowDeltaPage{
+		Rows:         out,
+		NextOrderKey: nextOrderKey,
+		HasMore:      hasMore,
+	}, nil
+}
+
 func insertTranscriptRows(ctx context.Context, tx pgx.Tx, storageKey string, entries []map[string]any) error {
 	for _, entry := range entries {
 		row, ok := transcriptRowFromEntry(entry)
@@ -443,6 +533,9 @@ func transcriptRowFromEntry(entry map[string]any) (transcriptRowRecord, bool) {
 				endOrderKey = v
 			}
 		}
+	}
+	if terminalOrderKey := transcriptRowString(entry, "turnTerminalOrderKey"); terminalOrderKey != "" && terminalOrderKey > endOrderKey {
+		endOrderKey = terminalOrderKey
 	}
 	return transcriptRowRecord{
 		ID:            id,
@@ -533,6 +626,9 @@ func (StubSessionTranscriptRowStore) ReplaceForSession(context.Context, string, 
 }
 func (StubSessionTranscriptRowStore) UpsertRows(context.Context, string, []map[string]any) error {
 	return nil
+}
+func (StubSessionTranscriptRowStore) ListChangedAfterOrderKey(context.Context, string, string, int) (TranscriptRowDeltaPage, error) {
+	return TranscriptRowDeltaPage{}, nil
 }
 func (StubSessionTranscriptRowStore) ListLatest(context.Context, string, int) (TranscriptRowPage, error) {
 	return TranscriptRowPage{Rows: []map[string]any{}, FoundOldest: true, FoundNewest: true}, nil

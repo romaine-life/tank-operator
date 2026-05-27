@@ -86,7 +86,7 @@ var (
 	}, []string{"anchor"})
 	sessionEventStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_emitted_total",
-		Help: "Events emitted to a connected SSE consumer (post-filter).",
+		Help: "Projected transcript-row batches emitted to a connected SSE consumer.",
 	})
 	sessionEventStreamHeartbeatTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_heartbeat_total",
@@ -97,13 +97,13 @@ var (
 		Help: "Failures setting up the per-session NATS wake subscription that drives SSE streams.",
 	})
 
-	// sessionEventStreamLagSeconds is a histogram of producer→browser lag.
+	// sessionEventStreamLagSeconds is a histogram of projection→browser lag.
 	// Replaces the prior last/max gauges, which couldn't be aggregated
 	// usefully across replicas. Buckets target the live-render path's
 	// expected latency band (10ms–10s).
 	sessionEventStreamLagSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "tank_session_event_stream_lag_seconds",
-		Help:    "End-to-end lag from durable event creation to SSE emission.",
+		Help:    "Lag from transcript-row materialization to SSE emission.",
 		Buckets: []float64{.01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
 	})
 
@@ -622,8 +622,8 @@ var (
 	// sessionEventStreamClientReceivedTotal is the candidate-C
 	// stethoscope: divergence between this counter and the
 	// server-side tank_session_event_stream_emitted_by_type_total
-	// for the same event_type means the SPA reducer is dropping
-	// events the SSE handler emitted.
+	// for transcript_rows means the SPA is dropping projected row
+	// batches the SSE handler emitted.
 	sessionEventStreamClientReceivedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "tank_session_event_client_received_total",
@@ -654,7 +654,7 @@ func recordSessionEventStreamClientEvent(event sessionEventStreamMetricEvent) {
 	mode := chatScrollSessionModeLabel(event.SessionMode)
 	eventLabel := sessionEventStreamClientEventLabel(event.Event)
 	sessionEventStreamClientEventsTotal.WithLabelValues(eventLabel, mode).Inc()
-	if eventLabel == "tank_event_received" {
+	if eventLabel == "transcript_rows_received" {
 		sessionEventStreamClientReceivedTotal.WithLabelValues(
 			sessionEventTypeLabel(event.EventType),
 			mode,
@@ -1477,11 +1477,11 @@ func sessionBusCommandReasonLabel(reason string) string {
 	}
 }
 
-// recordSessionEventStreamEmittedByType is the per-event-type bump that
-// pairs with the existing unlabeled tank_session_event_stream_emitted_total.
-// Event type is bucketed against the closed enum in
-// internal/conversation/types.go; unknown shapes collapse to "other" so
-// label cardinality stays bounded if a producer regresses.
+// recordSessionEventStreamEmittedByType is the per-event-type bump that pairs
+// with the existing unlabeled tank_session_event_stream_emitted_total. The
+// browser-facing stream now emits projected transcript-row batches, not raw Tank
+// item events; the remaining raw event labels are retained only for older
+// metrics continuity and collapse if they ever reappear unexpectedly.
 func recordSessionEventStreamEmittedByType(eventType string) {
 	sessionEventStreamEmittedByTypeTotal.WithLabelValues(sessionEventTypeLabel(eventType)).Inc()
 }
@@ -1501,7 +1501,8 @@ func sessionEventTypeLabel(raw string) string {
 		"item.completed",
 		"item.failed",
 		"tool.approval_requested",
-		"tool.approval_resolved":
+		"tool.approval_resolved",
+		"transcript_rows":
 		return raw
 	default:
 		return "other"
@@ -1605,6 +1606,17 @@ func recordSessionEventLag(event map[string]any) {
 	if eventTime.IsZero() {
 		return
 	}
+	recordSessionEventStreamLagSince(eventTime)
+}
+
+func recordSessionTranscriptRowLag(updatedAt time.Time) {
+	if updatedAt.IsZero() {
+		return
+	}
+	recordSessionEventStreamLagSince(updatedAt)
+}
+
+func recordSessionEventStreamLagSince(eventTime time.Time) {
 	lag := time.Since(eventTime)
 	if lag < 0 {
 		lag = 0

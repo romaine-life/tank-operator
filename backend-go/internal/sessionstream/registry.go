@@ -112,7 +112,7 @@ func (s *StreamState) RecordPageRead(now time.Time, emitCount int) {
 	}
 }
 
-// RecordEmit is called for each tank-event written to the SSE socket.
+// RecordEmit is called for each projected-row SSE event written to the socket.
 // The cursor advance is recorded so the admin endpoint can compare
 // against the durable ledger's tip.
 func (s *StreamState) RecordEmit(now time.Time, orderKey, eventType, cursorAfter string) {
@@ -150,21 +150,21 @@ func (s *StreamState) RecordHeartbeat(now time.Time) {
 // each kind fires, which lets the JSON consumer distinguish "never"
 // from "long ago."
 type Snapshot struct {
-	StreamID            string `json:"stream_id"`
-	SessionID           string `json:"session_id"`
-	StorageKey          string `json:"storage_key"`
-	Email               string `json:"email"`
-	OpenedAt            string `json:"opened_at"`
+	StreamID            string  `json:"stream_id"`
+	SessionID           string  `json:"session_id"`
+	StorageKey          string  `json:"storage_key"`
+	Email               string  `json:"email"`
+	OpenedAt            string  `json:"opened_at"`
 	OpenSeconds         float64 `json:"open_seconds"`
-	LastWakeAt          string `json:"last_wake_at,omitempty"`
-	LastWakeSubject     string `json:"last_wake_subject,omitempty"`
-	LastPageReadAt      string `json:"last_page_read_at,omitempty"`
-	LastPageEmitCount   int    `json:"last_page_emit_count"`
-	LastEmitAt          string `json:"last_emit_at,omitempty"`
-	LastEmitOrderKey    string `json:"last_emit_order_key,omitempty"`
-	LastEmitEventType   string `json:"last_emit_event_type,omitempty"`
-	CursorAfterOrderKey string `json:"cursor_after_order_key,omitempty"`
-	LastHeartbeatAt     string `json:"last_heartbeat_at,omitempty"`
+	LastWakeAt          string  `json:"last_wake_at,omitempty"`
+	LastWakeSubject     string  `json:"last_wake_subject,omitempty"`
+	LastPageReadAt      string  `json:"last_page_read_at,omitempty"`
+	LastPageEmitCount   int     `json:"last_page_emit_count"`
+	LastEmitAt          string  `json:"last_emit_at,omitempty"`
+	LastEmitOrderKey    string  `json:"last_emit_order_key,omitempty"`
+	LastEmitEventType   string  `json:"last_emit_event_type,omitempty"`
+	CursorAfterOrderKey string  `json:"cursor_after_order_key,omitempty"`
+	LastHeartbeatAt     string  `json:"last_heartbeat_at,omitempty"`
 
 	WakesReceived     int64 `json:"wakes_received"`
 	PagesReadEmpty    int64 `json:"pages_read_empty"`
