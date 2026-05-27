@@ -7438,6 +7438,7 @@ function ChatPane({
   session,
   visible,
   onSessionPatch,
+  onConnectionLabelChange,
   onForkMessage,
   pendingScrollMessageId,
   onScrollConsumed,
@@ -7456,6 +7457,7 @@ function ChatPane({
   session: Session;
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
+  onConnectionLabelChange: (id: string, label: string | null) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
@@ -10462,6 +10464,13 @@ function ChatPane({
   }, [activeTab, focusComposerTextarea, visible]);
 
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
+  const visibleConnectionLabel =
+    visible && activeTab === "chat" ? connectionLabel : null;
+
+  useEffect(() => {
+    onConnectionLabelChange(session.id, visibleConnectionLabel);
+    return () => onConnectionLabelChange(session.id, null);
+  }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
 
   async function sendInputReply(
     entry: TranscriptEntry,
@@ -11079,23 +11088,6 @@ function ChatPane({
         )}
       </>)}
       floatingBetweenBodyAndComposer={(<>
-      {/* Connectivity banner — only renders when the SSE stream is degraded
-          (connecting / connection_lost / resyncing). Healthy stream → no
-          banner. Replaces the connection label that used to ride on the
-          run-status pill. Run status itself (streaming / stopping / error)
-          now lives on the composer's Submit↔Stop button, and per-turn
-          errors land as durable transcript meta lines via the reducer +
-          projection path. */}
-      {activeTab === "chat" && connectionLabel && (
-        <div
-          className="run-connection-banner"
-          role="status"
-          aria-live="polite"
-        >
-          <span className="run-connection-label">{connectionLabel}</span>
-        </div>
-      )}
-
       {/* Floating jump-to-start button — symmetric with jump-to-latest.
           Slack/Discord ship the pair: ↑ takes you to the very first
           message of the session (anchor=oldest), ↓ takes you back to the
@@ -11919,6 +11911,16 @@ export function App() {
   const consumePendingScroll = useCallback(() => {
     setPendingScrollMessageId(null);
     clearInitialMessageId();
+  }, []);
+  const [sessionConnectionLabels, setSessionConnectionLabels] = useState<Record<string, string | undefined>>({});
+  const updateSessionConnectionLabel = useCallback((id: string, label: string | null) => {
+    setSessionConnectionLabels((prev) => {
+      if (prev[id] === (label ?? undefined)) return prev;
+      const next = { ...prev };
+      if (label) next[id] = label;
+      else delete next[id];
+      return next;
+    });
   }, []);
   const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
     readGlimmungLaunchContext()
@@ -13492,6 +13494,10 @@ export function App() {
   const activeWorkspaceSession = active == null
     ? null
     : sessions.find((session) => session.id === active) ?? null;
+  const activeConnectionLabel =
+    activeWorkspaceSession == null
+      ? null
+      : sessionConnectionLabels[activeWorkspaceSession.id] ?? null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -13581,6 +13587,15 @@ export function App() {
           </button>
         )
       ) : null}
+      {!useHomeTitleChrome && activeConnectionLabel && (
+        <span
+          className="run-connection-pill"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-connection-label">{activeConnectionLabel}</span>
+        </span>
+      )}
     </div>
   ) : null;
   const paneFontScale = runPrefs.chatFontScale;
@@ -14244,6 +14259,7 @@ export function App() {
                       session={s}
                       visible={active === s.id}
                       onSessionPatch={patchSession}
+                      onConnectionLabelChange={updateSessionConnectionLabel}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id

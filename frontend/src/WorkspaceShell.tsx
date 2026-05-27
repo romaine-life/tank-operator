@@ -36,9 +36,8 @@ export interface WorkspaceShellProps {
    */
   tabs?: ReactNode;
   /**
-   * Floating UI between the body and the composer footer — status pill,
-   * scroll-to-top, scroll-to-bottom. Optional; the home starter doesn't
-   * supply any.
+   * Floating UI between the body and the composer footer — scroll-to-top and
+   * scroll-to-bottom controls. Optional; the home starter doesn't supply any.
    */
   floatingBetweenBodyAndComposer?: ReactNode;
   /**
