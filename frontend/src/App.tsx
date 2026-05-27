@@ -3775,12 +3775,20 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
 }
 
 function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<EntryGroup, { kind: "thinking" }> {
+  // Prefer the projected TurnActivitySummary.startedAt: that is the durable
+  // turn-start order key derived from the first event in the turn and stays
+  // constant across re-projections. The shell entry's own `time` field gets
+  // refreshed each time the activity shell is re-projected (it tracks the
+  // latest event, not the turn start) — using it caused the duration to
+  // appear stuck at 0s while the turn was running. Fall through to the
+  // shell's own startedAt and time only when the activity summary is
+  // missing them (older fixtures, hand-built test entries).
   return {
     kind: "thinking",
     id: `turn-thinking-${turnId}`,
     turnId,
     shell,
-    startedAt: shell?.startedAt ?? shell?.time,
+    startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,
   };
 }
 

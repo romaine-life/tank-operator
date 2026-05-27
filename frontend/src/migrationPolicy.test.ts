@@ -298,8 +298,15 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
     appSource,
     /<RunTurnThinkingDuration startedAt=\{selected\.startedAt\}/,
   );
+  // The startedAt fed to the thinking duration must come from the durable
+  // TurnActivitySummary, NOT from `shell.time` (which is the shell entry's
+  // last-projection timestamp and gets bumped on every update — using it
+  // pinned the duration at "0s" forever because each re-projection reset
+  // the live timer's reference point).
   assert.equal(
-    appSource.includes("startedAt: shell?.startedAt ?? shell?.time,"),
+    appSource.includes(
+      "startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,",
+    ),
     true,
   );
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
