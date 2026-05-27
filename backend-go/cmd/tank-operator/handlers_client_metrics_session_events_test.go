@@ -14,7 +14,7 @@ func TestSessionEventStreamMetricsAcceptsValidBatch(t *testing.T) {
 	app := adminTestServer(t)
 	body := bytes.NewBufferString(`{"events":[
 			{"event":"opened","sessionMode":"claude_gui"},
-			{"event":"tank_event_received","eventType":"user_message.created","sessionMode":"claude_gui"},
+			{"event":"transcript_rows_received","eventType":"transcript_rows","sessionMode":"claude_gui"},
 			{"event":"stream_silent_while_running","sessionMode":"claude_gui","idleSeconds":42.5,"whileRunning":true},
 			{"event":"terminal_matched_by_turn_id","eventType":"turn.completed","sessionMode":"hermes_gui"},
 			{"event":"queued_followup_blocked_after_terminal","sessionMode":"hermes_gui"},

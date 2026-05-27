@@ -162,15 +162,19 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 // fanning out session.status:failed banner events. Upsert lands the
 // durable row; Wake nudges every open SSE stream on the session.
 type providerHealthEmitter struct {
-	events store.SessionEventStore
-	bus    *sessionbus.Bus
+	events       store.SessionEventStore
+	materializer transcriptRowsMaterializer
+	bus          *sessionbus.Bus
 }
 
 func (e providerHealthEmitter) Upsert(ctx context.Context, event map[string]any) error {
 	if e.events == nil {
 		return nil
 	}
-	return e.events.Upsert(ctx, event)
+	if err := e.events.Upsert(ctx, event); err != nil {
+		return err
+	}
+	return e.materializer.RefreshEvent(ctx, event)
 }
 
 func (e providerHealthEmitter) Wake(ctx context.Context, storageKey string) {
@@ -481,7 +485,7 @@ func main() {
 		providerHealthManager = providerhealth.NewManager(providerhealth.ManagerConfig{
 			Store:     providerHealthStore,
 			Pool:      pgPool,
-			Emitter:   providerHealthEmitter{events: sessionEventsStore, bus: sessionBus},
+			Emitter:   providerHealthEmitter{events: sessionEventsStore, materializer: transcriptMaterializer, bus: sessionBus},
 			Providers: providerConfigs,
 			Scope:     sessionScope,
 			Metrics:   promProviderHealthMetrics{},

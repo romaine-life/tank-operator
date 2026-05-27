@@ -587,7 +587,8 @@ test("live transcript tail state checks the actual scroll container", () => {
   assert.equal(appSource.includes("syncSdkVisualTailState"), true);
   assert.equal(appSource.includes("transcriptVisuallyAtBottom"), true);
   assert.match(appSource, /const atLiveTail = syncSdkVisualTailState\(\)/);
-  assert.match(appSource, /if \(!syncSdkVisualTailState\(\)\) return;/);
+  assert.match(appSource, /const atLiveTail = syncSdkVisualTailState\(\);[\s\S]{0,250}if \(!atLiveTail\)/);
+  assert.equal(appSource.includes("sdkPendingTailRowIdsRef"), true);
 });
 
 test("chat back-pagination keeps an explicit access path", () => {
@@ -626,8 +627,8 @@ test("workspace scroll container keeps the right scrollbar affordance stable", (
 });
 
 test("session-event SSE stream emits browser-side observability", () => {
-  // The candidate-B (zombie SSE) + candidate-C (reducer-drop)
-  // stethoscope on the browser side. If a future refactor silently
+  // The candidate-B (zombie SSE) + projected-row receipt stethoscope
+  // on the browser side. If a future refactor silently
   // removes the telemetry hooks, this guard breaks before the
   // diagnostic-only observability metric quietly stops shipping.
   assert.equal(
@@ -640,7 +641,7 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.equal(sessionEventStreamTelemetrySource.includes("queued_followup_blocked_after_terminal"), true);
   assert.equal(sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("tank_event_received"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("transcript_rows_received"'), true);
   assert.equal(appSource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("queued_followup_blocked_after_terminal"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("stale_running_blocked_submit"'), true);
@@ -649,13 +650,16 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.equal(appSource.includes('logSessionEventStreamEvent("closed_error"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("closed_unmount"'), true);
   assert.equal(appSource.includes("silenceWatchdogRef"), true);
-  // The receipt-count telemetry MUST observe before the reducer
-  // filter; if a future change swaps the order, the candidate-C
-  // signature would be invisible (server-emit vs client-receive
-  // delta would be measured at the wrong layer).
+  assert.equal(appSource.includes('addEventListener("transcript-rows"'), true);
+  assert.equal(appSource.includes('addEventListener("tank-event"'), false);
+  assert.equal(appSource.includes("applySdkDurableEvent"), false);
+  assert.equal(appSource.includes("eventCountsAsTailOutput"), false);
+  // The receipt-count telemetry MUST observe before the projected rows
+  // mutate UI state; otherwise server-emit vs client-receive deltas would
+  // be measured at the wrong layer.
   assert.match(
     appSource,
-    /logSessionEventStreamEvent\("tank_event_received"[\s\S]{0,200}applySdkDurableEvent/,
+    /logSessionEventStreamEvent\("transcript_rows_received"[\s\S]{0,250}applySdkTranscriptRows/,
   );
 });
 

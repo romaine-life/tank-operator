@@ -137,8 +137,9 @@ func stringMapField(values map[string]any, key string) string {
 }
 
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime
-// sessions. The browser writes work here and reads transcript events from the
-// durable SSE stream; runner-local transports are not part of the UI contract.
+// sessions. The browser writes work here and reads projected transcript rows
+// from the durable SSE stream; runner-local transports are not part of the UI
+// contract.
 func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {

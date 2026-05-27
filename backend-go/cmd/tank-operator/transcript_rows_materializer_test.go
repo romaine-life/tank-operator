@@ -28,6 +28,10 @@ func (s *recordingTranscriptRowsStore) UpsertRows(context.Context, string, []map
 	return nil
 }
 
+func (s *recordingTranscriptRowsStore) ListChangedAfterOrderKey(context.Context, string, string, int) (store.TranscriptRowDeltaPage, error) {
+	return store.TranscriptRowDeltaPage{}, nil
+}
+
 func (s *recordingTranscriptRowsStore) ListLatest(context.Context, string, int) (store.TranscriptRowPage, error) {
 	return store.TranscriptRowPage{}, nil
 }

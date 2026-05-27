@@ -91,16 +91,8 @@ import {
 import { transcriptVisuallyAtBottom } from "./transcriptScroll";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
-  initialConversationState,
-  reduceConversationEvents,
   type ConversationBackgroundTaskStatus,
-  type ConversationReducerState,
-  type ConversationTurnTerminal,
 } from "./conversationReducer";
-import {
-  projectConversationState,
-  type ConversationViewEntry,
-} from "./conversationProjection";
 import { McpIcon } from "./McpIcon";
 import { RepoPicker } from "./components/RepoPicker";
 import {
@@ -129,7 +121,7 @@ import {
   normalizeSessionRowUpdate,
   type SessionRow,
 } from "./sessionStore";
-import { conversationRunIsActive, decideFollowupSubmit } from "./submitLatch";
+import { decideFollowupSubmit } from "./submitLatch";
 import {
   logSessionListEvent,
   logSessionListSnapshot,
@@ -167,11 +159,6 @@ import {
   turnActivityGroupIsActive,
   turnActivityShellIsDurablyActive,
 } from "./turnActivityState";
-import {
-  isDurableTankConversationEvent,
-  isTankConversationEvent,
-  type TankConversationEvent,
-} from "../../runner-shared/conversation.js";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
   AgentAvatarIcon,
@@ -265,6 +252,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalStatus?: "completed" | "failed" | "interrupted";
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
+  turnTerminalOrderKey?: string;
+  turnUsage?: unknown;
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble uses this as an agent-authored signal, but it must
@@ -422,7 +411,7 @@ interface Session {
   rollout_state?: RolloutState | null;
   // Activity is the chat-derived sidebar indicator block. Backend
   // hydrates this from the latest session.activity_changed lifecycle
-  // event in GET /api/sessions; the durable SSE stream then keeps the
+  // event in GET /api/sessions; the session-list SSE stream then keeps the
   // separately-tracked sessionActivities map up to date. The field is
   // here for the initial-state extraction in normalizeSession; runtime
   // reads go through sessionActivities[id], not session.activity.
@@ -2647,10 +2636,6 @@ function appendSkillInvocation(
   );
 }
 
-function eventTimelineCursor(event: JsonObject): string | null {
-  return typeof event.order_key === "string" && event.order_key ? event.order_key : null;
-}
-
 function advanceTimelineCursor(current: string | null, next: string | null): string | null {
   if (!next) return current;
   if (!current || next > current) return next;
@@ -2671,10 +2656,6 @@ function sdkConnectionLabel(state: SdkConnectionState): string | null {
   }
 }
 
-function isSdkTimelineEvent(event: unknown): event is TankConversationEvent {
-  return isDurableTankConversationEvent(event) && typeof event.order_key === "string" && event.order_key.length > 0;
-}
-
 function isScheduleWakeupToolName(name: string | undefined): boolean {
   return (name ?? "").toLowerCase() === "schedulewakeup";
 }
@@ -2683,63 +2664,33 @@ function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
 }
 
-// eventCountsAsTailOutput mirrors store/session_events.go's
-// UnreadOutputItemTypes / UnreadOutputTurnTypes — content events that
-// render as new bubbles in the transcript. Lifecycle markers
-// (turn.submitted / turn.started / turn.completed, the user's own
-// user_message.created) are excluded so the pending-tail pill counter
-// only ticks on something the user would actually want to scroll down
-// to see.
-function eventCountsAsTailOutput(event: unknown): boolean {
-  if (!isTankConversationEvent(event)) return false;
-  if (event.actor === "user") return false;
-  const type = event.type;
-  return (
-    type === "item.started" ||
-    type === "item.completed" ||
-    type === "item.failed" ||
-    type === "tool.approval_requested" ||
-    type === "tool.approval_resolved" ||
-    type === "turn.failed" ||
-    type === "turn.command_failed" ||
-    type === "turn.interrupted"
-  );
-}
-
-function sdkTerminalResult(event: unknown): SdkTerminalResult | null {
-  if (!isTankConversationEvent(event)) return null;
-  const type = event.type;
-  if (type === "turn.completed") {
-    return { status: "done" };
-  }
-  if (type === "turn.interrupted") {
-    return { status: "stopped" };
-  }
-  if (type === "turn.failed") {
-    const error = event.payload?.error;
-    if (isProviderAbortMessage(error)) return { status: "stopped" };
-    return {
-      status: "error",
-      detail: typeof error === "string" ? error : shortJson(event.payload ?? event),
-    };
-  }
-  if (type === "turn.command_failed") {
-    const reason = event.payload?.reason;
-    return {
-      status: "error",
-      detail: typeof reason === "string" ? reason : shortJson(event.payload ?? event),
-    };
+function transcriptEntryTerminalResult(entry: TranscriptEntry): SdkTerminalResult | null {
+  if (entry.turnTerminalStatus === "completed") return { status: "done" };
+  if (entry.turnTerminalStatus === "interrupted") return { status: "stopped" };
+  if (entry.turnTerminalStatus === "failed") {
+    const metaDetail = entry.kind === "meta" ? entry.meta?.detail : undefined;
+    if (isProviderAbortMessage(metaDetail)) return { status: "stopped" };
+    return { status: "error", detail: metaDetail };
   }
   return null;
 }
 
-function sdkTerminalResultFromConversationTerminal(
-  terminal: ConversationTurnTerminal | undefined,
+function terminalResultForTurn(
+  entries: TranscriptEntry[],
+  turnId: string,
 ): SdkTerminalResult | null {
-  if (!terminal) return null;
-  if (terminal.status === "completed") return { status: "done" };
-  if (terminal.status === "interrupted") return { status: "stopped" };
-  return { status: "error", detail: terminal.detail };
+  const trimmedTurnId = turnId.trim();
+  if (!trimmedTurnId) return null;
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry.turnId !== trimmedTurnId && entry.activity?.turnId !== trimmedTurnId) continue;
+    const terminal = transcriptEntryTerminalResult(entry);
+    if (terminal) return terminal;
+    if (entry.kind === "turn_activity" && entry.activity?.status === "completed") {
+      return { status: "done" };
+    }
+  }
+  return null;
 }
 
 function turnIdForBrowserClientNonce(clientNonce: string): string {
@@ -2996,24 +2947,25 @@ function getContextWindow(modelId: string): number {
   return CONTEXT_WINDOW_BY_MODEL[modelId] ?? 200_000;
 }
 
-interface ClaudeUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_creation_input_tokens?: number;
-  cache_read_input_tokens?: number;
+function contextTokensFromUsage(usage: unknown): number {
+  if (!isJsonObject(usage)) return 0;
+  const tokenField = (key: string): number => {
+    const value = usage[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  };
+  return (
+    tokenField("input_tokens") +
+    tokenField("cache_creation_input_tokens") +
+    tokenField("cache_read_input_tokens")
+  );
 }
 
-/** Current-turn context size = the input that produced this response.
- *  cache_read counts as in-context tokens that were sent for free; we
- *  include it so the gauge reflects "how full is the window" not "how
- *  many tokens were billed". */
-function totalContextTokens(u: ClaudeUsage | undefined): number {
-  if (!u) return 0;
-  return (
-    (u.input_tokens ?? 0) +
-    (u.cache_creation_input_tokens ?? 0) +
-    (u.cache_read_input_tokens ?? 0)
-  );
+function latestContextTokens(entries: TranscriptEntry[]): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const total = contextTokensFromUsage(entries[i].turnUsage);
+    if (total > 0) return total;
+  }
+  return 0;
 }
 
 interface SlashCommand {
@@ -3391,7 +3343,7 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
 
 // transcriptComparable returns a stable JSON of the transcript's load-bearing
 // fields, used to short-circuit no-op replay updates. Chat sessions rebuild
-// from server-owned transcript rows; live SSE events are only the tail overlay.
+// from server-owned transcript rows; live SSE delivers the same projected rows.
 function transcriptComparable(entries: TranscriptEntry[]): string {
   return JSON.stringify(
     entries.map((entry) => {
@@ -3403,6 +3355,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           activity: entry.activity,
           activityIds: entry.activityIds,
           orderKey: entry.orderKey,
+          turnTerminalOrderKey: entry.turnTerminalOrderKey,
         };
       }
       if (entry.kind === "message") {
@@ -3414,6 +3367,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           durationMs: (entry as Record<string, unknown>).durationMs,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
+          turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
         };
       }
       if (entry.kind === "tool") {
@@ -3428,6 +3383,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           completedAt: entry.completedAt,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
+          turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
         };
       }
       if (entry.kind === "reasoning") {
@@ -3437,6 +3394,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           reasoning: entry.reasoning,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
+          turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
         };
       }
       if (entry.kind === "background_task") {
@@ -3459,6 +3418,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           completedAt: entry.completedAt,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
+          turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
         };
       }
       return {
@@ -3466,6 +3427,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
         meta: entry.meta,
         turnTerminalStatus: entry.turnTerminalStatus,
         turnTerminalAt: entry.turnTerminalAt,
+        turnTerminalOrderKey: entry.turnTerminalOrderKey,
+        turnUsage: entry.turnUsage,
       };
     }),
   );
@@ -3688,53 +3651,56 @@ function mergeProjectedTranscriptWindows(
   return out;
 }
 
-function orderedConversationEvents(events: TankConversationEvent[]): TankConversationEvent[] {
-  return events
-    .map((event, index) => ({ event, index }))
-    .sort((a, b) => {
-      const keyCompare = conversationEventSortKey(a.event).localeCompare(
-        conversationEventSortKey(b.event),
-      );
-      return keyCompare !== 0 ? keyCompare : a.index - b.index;
-    })
-    .map((item) => item.event);
+function projectedTranscriptEntryOrderKey(entry: TranscriptEntry): string {
+  if (entry.kind === "turn_activity") {
+    return entry.activity?.startOrderKey ?? entry.orderKey ?? "";
+  }
+  return entry.orderKey ?? "";
 }
 
-function conversationEventSortKey(event: TankConversationEvent): string {
-  return [
-    event.order_key ?? "",
-    event.created_at,
-    event.sequence == null ? "" : String(event.sequence).padStart(12, "0"),
-    event.event_id,
-  ].join("\u001f");
-}
-
-function conversationEntriesToTranscript(
-  entries: ConversationViewEntry[],
+function mergeProjectedTranscriptRowUpdates(
+  current: TranscriptEntry[],
+  updates: TranscriptEntry[],
 ): TranscriptEntry[] {
-  return entries.flatMap((entry) => {
-    if (entry.kind !== "message" || entry.role !== "user") {
-      return [entry as TranscriptEntry];
+  if (updates.length === 0) return current;
+  const terminalTurns = new Set<string>();
+  const activityTurns = new Set<string>();
+  const compactedRowIds = new Set<string>();
+  for (const entry of updates) {
+    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+    if (!turnId) continue;
+    if (entry.kind === "turn_activity") {
+      activityTurns.add(turnId);
+      for (const id of entry.activityIds ?? entry.activity?.compactedEntryIds ?? []) {
+        compactedRowIds.add(id);
+      }
     }
-    const display = entry.display;
-    if (!display || display.kind !== "skill_invocation") return [entry as TranscriptEntry];
-
-    return appendSkillInvocation(
-      [],
-      display.skill_name,
-      display.supplemental_text ?? "",
-      entry.time,
-    ).map((skillEntry, index) => ({
-      ...skillEntry,
-      transcriptSource: "server",
-      sourceEventId: entry.sourceEventId,
-      clientNonce: entry.clientNonce,
-      turnId: entry.turnId,
-      turnTerminalStatus: entry.turnTerminalStatus,
-      turnTerminalAt: entry.turnTerminalAt,
-      turnTerminalEventId: entry.turnTerminalEventId,
-      orderKey: entry.orderKey ? `${entry.orderKey}:skill:${index}` : undefined,
-    }));
+    if (transcriptEntryTerminalResult(entry)) terminalTurns.add(turnId);
+  }
+  const byId = new Map<string, TranscriptEntry>();
+  for (const entry of current) {
+    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+    if (compactedRowIds.has(entry.id)) {
+      continue;
+    }
+    if (
+      entry.kind === "turn_activity" &&
+      turnId &&
+      terminalTurns.has(turnId) &&
+      !activityTurns.has(turnId)
+    ) {
+      continue;
+    }
+    byId.set(entry.id, entry);
+  }
+  for (const entry of updates) byId.set(entry.id, entry);
+  return Array.from(byId.values()).sort((a, b) => {
+    const aKey = projectedTranscriptEntryOrderKey(a);
+    const bKey = projectedTranscriptEntryOrderKey(b);
+    if (aKey && bKey && aKey !== bKey) return aKey < bKey ? -1 : 1;
+    if (aKey && !bKey) return -1;
+    if (!aKey && bKey) return 1;
+    return a.id.localeCompare(b.id);
   });
 }
 
@@ -7500,9 +7466,6 @@ function ChatPane({
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerProjectedEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
-  const sdkServerEventsRef = useRef<TankConversationEvent[]>([]);
-  const sdkRealtimeEventsRef = useRef<TankConversationEvent[]>([]);
-  const sdkConversationStateRef = useRef<ConversationReducerState>(initialConversationState);
   const sdkAssistantDurationsRef = useRef<Map<string, number>>(new Map());
   const [running, setRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<LocalRunStatus>("idle");
@@ -7723,10 +7686,10 @@ function ChatPane({
   // affordance so the user knows the conversation moved. Cleared when
   // atBottomStateChange(true) fires. Slack/Discord ship the same pattern.
   const sdkAtBottomRef = useRef(true);
+  const sdkPendingTailRowIdsRef = useRef<Set<string>>(new Set());
   const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
-  const sdkProjectedRefreshTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -7760,10 +7723,9 @@ function ChatPane({
   } | null>(null);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
-  // Mirror of the durable projection's active turn — read, not written.
-  // Run status itself comes from the projection (see applySdkProjectionToUi
-  // and the turn.interrupt_requested handling in conversationReducer), not
-  // from a local flag.
+  // Mirror of the durable activity summary's active turn. The main transcript
+  // no longer reduces raw item events in the browser; projected row updates and
+  // session activity summaries own visible run state.
   const activeInterruptTargetRef = useRef<string | null>(null);
   const slashManualOpenRef = useRef(false);
   // Monotonic counter for entry ids — Date.now() collides during fast
@@ -7798,24 +7760,12 @@ function ChatPane({
       return durationMs == null ? entry : ({ ...entry, durationMs } as TranscriptEntry);
     });
   }
-  function reduceSdkConversationState(): ConversationReducerState {
-    return reduceConversationEvents(
-      orderedConversationEvents([
-        ...sdkServerEventsRef.current,
-        ...sdkRealtimeEventsRef.current,
-      ]),
-      initialConversationState,
-    );
-  }
   function syncSdkRenderedEntries(): void {
-    const state = reduceSdkConversationState();
-    sdkConversationStateRef.current = state;
-    const projection = projectConversationState(state);
-    const serverEntries =
-      sdkServerProjectedEntriesRef.current.length > 0
-        ? sdkServerProjectedEntriesRef.current
-        : conversationEntriesToTranscript(projection.entries);
-    sdkServerEntriesRef.current = applySdkAssistantDurations(serverEntries);
+    sdkServerEntriesRef.current = applySdkAssistantDurations(
+      sdkServerProjectedEntriesRef.current,
+    );
+    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current);
+    if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
       sdkRealtimeEntriesRef.current,
@@ -7827,48 +7777,7 @@ function ChatPane({
     setEntries((prev) =>
       transcriptComparable(prev) === transcriptComparable(merged) ? prev : merged,
     );
-    applySdkProjectionToUi(projection);
     scheduleSdkReadStateUpdate();
-  }
-  function applySdkProjectionToUi(
-    projection: ReturnType<typeof projectConversationState>,
-  ): void {
-    const total = totalContextTokens(projection.lastUsage as ClaudeUsage | undefined);
-    if (total > 0) setTokensUsed(total);
-
-    const sdkActive = conversationRunIsActive(projection.runStatus);
-    setRenderedActiveTurnId(sdkActive ? projection.activeTurnId : null);
-    activeInterruptTargetRef.current = sdkActive
-      ? projection.activeClientNonce ?? projection.activeTurnId
-      : null;
-    if (projection.activeToolName) {
-      setActiveTool(projection.activeToolName, projection.activeItemId);
-    } else if (!sdkActive) {
-      setActiveTool(null);
-    }
-
-    if (currentRunRef.current) {
-      if (sdkActive) {
-        setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
-        setRunning(true);
-      }
-      return;
-    }
-
-    if (sdkActive) {
-      setRunStatus(projection.runStatus === "stopping" ? "stopping" : "running");
-      setRunning(true);
-      return;
-    }
-
-    setRunning(false);
-    if (projection.runStatus === "error") {
-      setRunStatus("error");
-    } else if (projection.runStatus === "stopped") {
-      setRunStatus("done");
-    } else {
-      setRunStatus((prev) => (prev === "running" ? "done" : prev));
-    }
   }
   function applySdkActivitySummaryToUi(rawActivity: unknown): void {
     if (!rawActivity || typeof rawActivity !== "object" || Array.isArray(rawActivity)) {
@@ -7902,12 +7811,55 @@ function ChatPane({
       setRunStatus((prev) => (prev === "running" ? "done" : prev));
     }
   }
+  function applySdkTurnActivityRowsToUi(rows: TranscriptEntry[]): void {
+    let activeTurnId: string | null = null;
+    const inactiveTurns = new Set<string>();
+    for (const row of rows) {
+      const turnId = row.turnId ?? row.activity?.turnId ?? "";
+      if (!turnId) continue;
+      if (row.kind === "turn_activity") {
+        const activity = row.activity;
+        if (activity?.active === true || activity?.status === "active") {
+          activeTurnId = turnId;
+          continue;
+        }
+        if (activity?.status === "completed") inactiveTurns.add(turnId);
+      }
+      if (transcriptEntryTerminalResult(row)) inactiveTurns.add(turnId);
+    }
+    if (activeTurnId) {
+      setRenderedActiveTurnId(activeTurnId);
+      activeInterruptTargetRef.current = activeTurnId;
+      setRunStatus((prev) => (prev === "stopping" ? prev : "running"));
+      setRunning(true);
+      return;
+    }
+    if (inactiveTurns.size === 0) return;
+    setRenderedActiveTurnId((prev) => (prev && inactiveTurns.has(prev) ? null : prev));
+    if (
+      activeInterruptTargetRef.current &&
+      inactiveTurns.has(activeInterruptTargetRef.current)
+    ) {
+      activeInterruptTargetRef.current = null;
+      setActiveTool(null);
+      if (!currentRunRef.current) {
+        setRunning(false);
+        setRunStatus((prev) =>
+          prev === "running" || prev === "stopping" ? "done" : prev,
+        );
+      }
+    }
+  }
   function syncSdkVisualTailState(fallback = sdkAtBottomRef.current): boolean {
     const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, fallback);
     if (sdkAtBottomRef.current !== visuallyAtBottom) {
       sdkAtBottomRef.current = visuallyAtBottom;
       setUserScrolledUp(!visuallyAtBottom);
-      if (visuallyAtBottom) setSdkPendingTailCount(0);
+      if (visuallyAtBottom) {
+        sdkPendingTailRowIdsRef.current.clear();
+        setSdkPendingTailCount(0);
+        scheduleSdkReadStateUpdate();
+      }
     }
     return visuallyAtBottom;
   }
@@ -7915,10 +7867,8 @@ function ChatPane({
     projectedEntries: TranscriptEntry[],
     clearRealtime = false,
   ): void {
-    sdkServerEventsRef.current = [];
     sdkServerProjectedEntriesRef.current = projectedEntries;
     if (clearRealtime) {
-      sdkRealtimeEventsRef.current = [];
       sdkRealtimeEntriesRef.current = [];
     }
     syncSdkRenderedEntries();
@@ -7963,9 +7913,6 @@ function ChatPane({
     sdkServerEntriesRef.current = [];
     sdkServerProjectedEntriesRef.current = [];
     sdkRealtimeEntriesRef.current = [];
-    sdkServerEventsRef.current = [];
-    sdkRealtimeEventsRef.current = [];
-    sdkConversationStateRef.current = initialConversationState;
     setRenderedActiveTurnId(null);
     sdkTimelineCursorRef.current = null;
     sdkOldestLoadedCursorRef.current = null;
@@ -7978,9 +7925,11 @@ function ChatPane({
     clearScrollToLatestRequest();
     setScrollToOldestSignal(0);
     setUserScrolledUp(false);
+    sdkPendingTailRowIdsRef.current.clear();
     setSdkPendingTailCount(0);
     setSdkOlderError(null);
     setEntries([]);
+    setTokensUsed(0);
     setActivityEntriesByTurn({});
     setLoadingActivityTurns({});
     setSdkConnectionState("idle");
@@ -8009,16 +7958,10 @@ function ChatPane({
     );
     syncSdkRenderedEntries();
   }
-  function advanceSdkTimelineCursor(event: unknown): void {
-    if (!isSdkTimelineEvent(event)) return;
-    sdkTimelineCursorRef.current = advanceTimelineCursor(
-      sdkTimelineCursorRef.current,
-      eventTimelineCursor(event as unknown as JsonObject),
-    );
-  }
   function scheduleSdkReadStateUpdate(): void {
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
+    if (!sdkAtBottomRef.current) return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
     if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
@@ -8034,6 +7977,7 @@ function ChatPane({
   async function flushSdkReadStateUpdate(): Promise<void> {
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
+    if (!sdkAtBottomRef.current) return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
     if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
@@ -8076,64 +8020,50 @@ function ChatPane({
       }
     }
   }
-  function applySdkDurableEvent(event: JsonObject): void {
-    if (!isTankConversationEvent(event)) return;
-    advanceSdkTimelineCursor(event);
-    const atLiveTail = syncSdkVisualTailState();
-    const alreadySeen = sdkServerEventsRef.current.some(
-      (candidate) => candidate.event_id === event.event_id,
-    );
-    if (!alreadySeen) {
-      sdkServerEventsRef.current = orderedConversationEvents([
-        ...sdkServerEventsRef.current,
-        event,
-      ]);
-      // Streaming-back-read pill: count visible-output events that
-      // arrive while the user isn't viewing the live tail. Lifecycle
-      // markers (turn.*, tool.approval_*) shouldn't count — they don't
-      // produce new bubbles, just status transitions. Match the same
-      // policy the server-side UnreadOutputItemTypes uses for badging.
-      if (
-        !atLiveTail &&
-        eventCountsAsTailOutput(event as unknown as JsonObject)
-      ) {
-        setSdkPendingTailCount((count) => count + 1);
-      }
+  function applySdkTranscriptRows(rows: TranscriptEntry[], orderKey: string): void {
+    const cursor = orderKey.trim();
+    if (cursor) {
+      sdkTimelineCursorRef.current = advanceTimelineCursor(
+        sdkTimelineCursorRef.current,
+        cursor,
+      );
     }
-    syncSdkRenderedEntries();
-    if (!alreadySeen) scheduleProjectedTimelineRefresh();
+    const atLiveTail = syncSdkVisualTailState();
+    if (!atLiveTail) {
+      let added = 0;
+      for (const row of rows) {
+        if (sdkPendingTailRowIdsRef.current.has(row.id)) continue;
+        sdkPendingTailRowIdsRef.current.add(row.id);
+        added += 1;
+      }
+      if (added > 0) setSdkPendingTailCount((count) => count + added);
+    }
+
+    if (sdkFoundNewestRef.current) {
+      sdkServerProjectedEntriesRef.current = mergeProjectedTranscriptRowUpdates(
+        sdkServerProjectedEntriesRef.current,
+        rows,
+      );
+      syncSdkRenderedEntries();
+    }
+    applySdkTurnActivityRowsToUi(rows);
 
     const run = currentRunRef.current;
-    const terminal = sdkTerminalResult(event);
-    if (run && terminal) {
-      const matchedByClientNonce = event.client_nonce === run.id;
-      const matchedByTurnId = event.turn_id === run.turnId;
-      const reportKey = `${run.id}:${event.event_id}`;
-      if (!matchedByClientNonce && !terminalCorrelationReportedRef.current.has(reportKey)) {
-        terminalCorrelationReportedRef.current.add(reportKey);
-        logSessionEventStreamEvent(
-          matchedByTurnId ? "terminal_matched_by_turn_id" : "terminal_local_run_mismatch",
-          {
+    if (run) {
+      const terminal =
+        terminalResultForTurn(rows, run.turnId) ??
+        terminalResultForTurn(sdkServerProjectedEntriesRef.current, run.turnId);
+      if (terminal) {
+        if (!terminalCorrelationReportedRef.current.has(run.turnId)) {
+          terminalCorrelationReportedRef.current.add(run.turnId);
+          logSessionEventStreamEvent("terminal_matched_by_turn_id", {
             sessionMode: session.mode,
-            eventType: event.type,
-          },
-        );
-      }
-      if (matchedByClientNonce || matchedByTurnId) {
+            eventType: "transcript_rows",
+          });
+        }
         finalizeSdkRun(run, terminal, { refreshHistory: false });
       }
     }
-  }
-
-  function scheduleProjectedTimelineRefresh(): void {
-    if (!syncSdkVisualTailState()) return;
-    if (sdkProjectedRefreshTimerRef.current !== null) {
-      window.clearTimeout(sdkProjectedRefreshTimerRef.current);
-    }
-    sdkProjectedRefreshTimerRef.current = window.setTimeout(() => {
-      sdkProjectedRefreshTimerRef.current = null;
-      void refreshSdkRunHistoryResult(false, "projected-refresh");
-    }, 500);
   }
 
   // handleSdkAtBottomChange starts from Virtuoso's live-tail signal but
@@ -8148,7 +8078,11 @@ function ChatPane({
     const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, atBottom);
     sdkAtBottomRef.current = visuallyAtBottom;
     setUserScrolledUp(!visuallyAtBottom);
-    if (visuallyAtBottom) setSdkPendingTailCount(0);
+    if (visuallyAtBottom) {
+      sdkPendingTailRowIdsRef.current.clear();
+      setSdkPendingTailCount(0);
+      scheduleSdkReadStateUpdate();
+    }
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
     for (let i = sdkServerEntriesRef.current.length - 1; i >= 0; i -= 1) {
@@ -8183,10 +8117,6 @@ function ChatPane({
       if (sdkReadStateTimerRef.current !== null) {
         window.clearTimeout(sdkReadStateTimerRef.current);
         sdkReadStateTimerRef.current = null;
-      }
-      if (sdkProjectedRefreshTimerRef.current !== null) {
-        window.clearTimeout(sdkProjectedRefreshTimerRef.current);
-        sdkProjectedRefreshTimerRef.current = null;
       }
     };
   }, []);
@@ -8254,9 +8184,8 @@ function ChatPane({
     const run = currentRunRef.current;
     if (!run || !running || queuedMessages.length === 0) return;
     if (queuedFollowupBlockedReportedRef.current === run.id) return;
-    const projection = projectConversationState(sdkConversationStateRef.current);
-    const durableActive = conversationRunIsActive(projection.runStatus);
-    if (durableActive) return;
+    const terminal = terminalResultForTurn(sdkServerProjectedEntriesRef.current, run.turnId);
+    if (!terminal) return;
     queuedFollowupBlockedReportedRef.current = run.id;
     logSessionEventStreamEvent("queued_followup_blocked_after_terminal", {
       sessionMode: session.mode,
@@ -8300,9 +8229,9 @@ function ChatPane({
     return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, visible]);
 
-  // History replay hits the server-owned transcript-row read model. Live SSE
-  // still carries raw Tank events, but historical navigation no longer pages
-  // raw events or asks the browser to project them.
+  // History replay and live tail both hit the server-owned transcript-row read
+  // model. Raw Tank item events stay behind the Turn activity detail endpoint
+  // and never drive the main transcript browser state.
   function refreshSdkRunHistory(
     clearRealtime = false,
     source: SdkHistoryRefreshSource = "history",
@@ -8463,7 +8392,13 @@ function ChatPane({
       } else if (stickToLatestAfterLoad) {
         requestScrollToLatest("auto", source);
       }
-      return { replayed: projectedEntries.length > 0 };
+      const run = currentRunRef.current;
+      return {
+        replayed: projectedEntries.length > 0,
+        terminal: run
+          ? terminalResultForTurn(projectedEntries, run.turnId) ?? undefined
+          : undefined,
+      };
     };
     return load().catch((err) => ({
       replayed: false,
@@ -9623,13 +9558,9 @@ function ChatPane({
   }
 
   function cancelRun() {
-    // Stop is a durable boundary: cancelRun POSTs and the projection
-    // transitions runStatus → "stopping" off the resulting durable
-    // turn.interrupt_requested event. cancelRun does not set runStatus
-    // imperatively — see frontend/src/migrationPolicy.test.ts for the
-    // gate that pins this invariant.
-    const currentStatus = sdkConversationStateRef.current.runStatus;
-    if (currentStatus === "stopping" || currentStatus === "stopped") return;
+    // Stop is a durable boundary: cancelRun POSTs and the transcript row /
+    // activity streams reflect the resulting stopping or terminal state.
+    if (runStatus === "stopping" || runStatus === "done") return;
     const interruptTarget = activeInterruptTargetRef.current;
     if (!interruptTarget) {
       const id = nextEntryId("sdk-interrupt-error");
@@ -9750,14 +9681,18 @@ function ChatPane({
     // out, surface it but still let the run go ahead with what's ready.
     const composed = composePromptWithAttachments(trimmed);
     if (composed == null) return;
-    const projection = projectConversationState(sdkConversationStateRef.current);
     const run = currentRunRef.current;
-    const terminal = sdkTerminalResultFromConversationTerminal(
-      run ? sdkConversationStateRef.current.turnTerminals[run.turnId] : undefined,
-    );
+    const terminal = run
+      ? terminalResultForTurn(sdkServerProjectedEntriesRef.current, run.turnId)
+      : null;
     const submitDecision = decideFollowupSubmit({
       running,
-      durableRunStatus: projection.runStatus,
+      durableRunStatus:
+        runStatus === "stopping"
+          ? "stopping"
+          : running
+            ? "streaming"
+            : "ready",
       hasLocalRun: run !== null,
       localRunHasDurableTerminal: terminal !== null,
     });
@@ -9941,6 +9876,7 @@ function ChatPane({
       submitAccepted: false,
     };
     currentRunRef.current = run;
+    activeInterruptTargetRef.current = run.turnId;
     terminalCorrelationReportedRef.current = new Set();
     queuedFollowupBlockedReportedRef.current = null;
     const optimisticTime = nowIso();
@@ -9991,8 +9927,8 @@ function ChatPane({
       });
   }
 
-  // The canonical event log is the transcript transport. Terminal events close
-  // the local run state only after they arrive from the durable SSE stream.
+  // Terminal rows close the local run state only after they arrive from the
+  // server-owned transcript projection.
   function finalizeSdkRun(
     run: NonNullable<typeof currentRunRef.current>,
     terminal: SdkTerminalResult,
@@ -10081,7 +10017,7 @@ function ChatPane({
       silenceWatchdogRef.current?.reset();
       logSessionEventStreamEvent("ready", { sessionMode: session.mode });
     });
-    source.addEventListener("tank-event", (event) => {
+    source.addEventListener("transcript-rows", (event) => {
       const message = event as MessageEvent;
       let parsed: unknown;
       try {
@@ -10090,18 +10026,20 @@ function ChatPane({
         return;
       }
       if (!isJsonObject(parsed)) return;
-      // Telemetry first: even if applySdkDurableEvent's filter
-      // would drop this event (the candidate-C reducer-drop case),
-      // the receipt counter must still increment so the
-      // server-emit vs client-receive divergence is observable.
-      const eventType = typeof parsed.type === "string" ? parsed.type : "";
-      logSessionEventStreamEvent("tank_event_received", {
+      const projectedRows = normalizeProjectedTranscriptEntries(
+        Array.isArray(parsed.rows) ? parsed.rows : [],
+      );
+      if (projectedRows.length === 0) return;
+      logSessionEventStreamEvent("transcript_rows_received", {
         sessionMode: session.mode,
-        eventType,
+        eventType: "transcript_rows",
       });
       noteTankEvent();
       silenceWatchdogRef.current?.reset();
-      applySdkDurableEvent(parsed);
+      applySdkTranscriptRows(
+        projectedRows,
+        typeof parsed.order_key === "string" ? parsed.order_key : "",
+      );
     });
     source.addEventListener("resync_required", () => {
       source.close();

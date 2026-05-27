@@ -107,6 +107,8 @@ func (s fakeSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string)
 type fakeSessionTranscriptRowStore struct {
 	latestRows      int
 	oldestRows      int
+	changedAfter    string
+	changedRows     int
 	beforeCursor    string
 	beforeRows      int
 	aroundCursor    string
@@ -114,6 +116,7 @@ type fakeSessionTranscriptRowStore struct {
 	aroundAfter     int
 	resolveTimeline map[string]string
 	pages           map[string]store.TranscriptRowPage
+	deltaPages      map[string]store.TranscriptRowDeltaPage
 }
 
 func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
@@ -126,6 +129,12 @@ func (s *fakeSessionTranscriptRowStore) ReplaceForSession(context.Context, strin
 
 func (s *fakeSessionTranscriptRowStore) UpsertRows(context.Context, string, []map[string]any) error {
 	return nil
+}
+
+func (s *fakeSessionTranscriptRowStore) ListChangedAfterOrderKey(_ context.Context, _ string, afterOrderKey string, rows int) (store.TranscriptRowDeltaPage, error) {
+	s.changedAfter = afterOrderKey
+	s.changedRows = rows
+	return s.deltaPages[afterOrderKey], nil
 }
 
 func (s *fakeSessionTranscriptRowStore) ListLatest(_ context.Context, _ string, rows int) (store.TranscriptRowPage, error) {
@@ -358,6 +367,72 @@ func TestRunSessionTranscriptRowReadUsesRowStore(t *testing.T) {
 	_, _, status, err = runSessionTranscriptRowRead(context.Background(), rowStore, "63", missing)
 	if err == nil || status != http.StatusNotFound {
 		t.Fatalf("missing status=%d err=%v, want 404", status, err)
+	}
+}
+
+func TestWriteSessionEventStreamPageEmitsProjectedTranscriptRows(t *testing.T) {
+	rowStore := &fakeSessionTranscriptRowStore{
+		deltaPages: map[string]store.TranscriptRowDeltaPage{
+			"order-001": {
+				Rows: []store.TranscriptRowDelta{
+					{
+						OrderKey: "order-002",
+						Row: map[string]any{
+							"id":       "row-assistant",
+							"kind":     "message",
+							"role":     "assistant",
+							"text":     "done",
+							"orderKey": "order-002",
+						},
+					},
+					{
+						OrderKey: "order-002",
+						Row: map[string]any{
+							"id":       "turn-activity-turn-1",
+							"kind":     "turn_activity",
+							"turnId":   "turn-1",
+							"orderKey": "order-001",
+						},
+					},
+				},
+				NextOrderKey: "order-002",
+				HasMore:      true,
+			},
+		},
+	}
+	cursor := store.SessionEventCursor{AfterOrderKey: "order-001"}
+	rec := httptest.NewRecorder()
+
+	hasMore, count, err := (&appServer{}).writeSessionEventStreamPage(context.Background(), rec, rowStore, "63", &cursor, nil)
+	if err != nil {
+		t.Fatalf("write page failed: %v", err)
+	}
+	if !hasMore {
+		t.Fatal("hasMore = false, want true")
+	}
+	if count != 2 {
+		t.Fatalf("count = %d, want 2", count)
+	}
+	if rowStore.changedAfter != "order-001" || rowStore.changedRows != sessionEventStreamPageLimit {
+		t.Fatalf("row store cursor=%q rows=%d", rowStore.changedAfter, rowStore.changedRows)
+	}
+	if cursor.AfterOrderKey != "order-002" {
+		t.Fatalf("cursor.AfterOrderKey = %q, want order-002", cursor.AfterOrderKey)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"id: order-002\n",
+		"event: transcript-rows\n",
+		`"order_key":"order-002"`,
+		`"id":"row-assistant"`,
+		`"id":"turn-activity-turn-1"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("SSE body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "event: tank-event\n") {
+		t.Fatalf("SSE body leaked raw tank-event:\n%s", body)
 	}
 }
 

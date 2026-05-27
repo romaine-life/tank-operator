@@ -94,6 +94,7 @@ type turnTerminalProjection struct {
 	Time          string
 	SourceEventID string
 	Detail        string
+	Usage         any
 }
 
 func projectTranscriptEvents(events []map[string]any) transcriptProjection {
@@ -290,6 +291,7 @@ func (s *projectionState) applyTurnTerminal(event map[string]any, status string)
 		Time:          transcriptString(event, "created_at"),
 		SourceEventID: transcriptString(event, "event_id"),
 		Detail:        projectionErrorText(event),
+		Usage:         transcriptPayloadValue(event, "usage"),
 	}
 }
 
@@ -680,6 +682,10 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalStatus"] = terminal.Status
 	out["turnTerminalAt"] = terminal.Time
 	out["turnTerminalEventId"] = terminal.SourceEventID
+	out["turnTerminalOrderKey"] = terminal.OrderKey
+	if terminal.Usage != nil {
+		out["turnUsage"] = terminal.Usage
+	}
 	return out
 }
 
@@ -850,7 +856,7 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		out["startedAt"] = projectionFirstNonEmpty(transcriptMapString(first, "startedAt"), transcriptMapString(first, "time"))
 		out["completedAt"] = projectionFirstNonEmpty(transcriptMapString(last, "completedAt"), transcriptMapString(last, "turnTerminalAt"), transcriptMapString(last, "time"))
 		out["startOrderKey"] = transcriptMapString(first, "orderKey")
-		out["endOrderKey"] = transcriptMapString(last, "orderKey")
+		out["endOrderKey"] = projectionFirstNonEmpty(transcriptMapString(last, "turnTerminalOrderKey"), transcriptMapString(last, "orderKey"))
 		out["sourceEventId"] = transcriptMapString(first, "sourceEventId")
 	}
 	out["compactedCount"] = len(compactedEntries)

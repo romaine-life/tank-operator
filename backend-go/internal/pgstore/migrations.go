@@ -400,10 +400,12 @@ var schemaMigrations = []string{
 		PRIMARY KEY (tank_session_id, row_id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS session_transcript_rows_cursor
-		ON session_transcript_rows (tank_session_id, row_cursor)`,
+			ON session_transcript_rows (tank_session_id, row_cursor)`,
+	`CREATE INDEX IF NOT EXISTS session_transcript_rows_end_order
+			ON session_transcript_rows (tank_session_id, end_order_key, row_cursor)`,
 	`CREATE INDEX IF NOT EXISTS session_transcript_rows_turn
-		ON session_transcript_rows (tank_session_id, turn_id)
-		WHERE turn_id IS NOT NULL`,
+			ON session_transcript_rows (tank_session_id, turn_id)
+			WHERE turn_id IS NOT NULL`,
 	`CREATE INDEX IF NOT EXISTS session_transcript_rows_activity_ids
 		ON session_transcript_rows USING gin ((payload -> 'activityIds'))
 		WHERE payload ? 'activityIds'`,

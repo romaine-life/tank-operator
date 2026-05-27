@@ -87,16 +87,16 @@ All metric names are prefixed `tank_`. The full namespace:
   persister wake published", subject=..., storage_key=...,
   event_type=..., order_key=..., tank_session_id=...)` line.
 - `tank_session_event_stream_emitted_by_type_total{event_type}` —
-  per-Tank-event-type counter paired with
+  per-emitted browser stream counter paired with
   `tank_session_event_client_received_total{event_type, session_mode}`.
-  Divergence is the candidate-C reducer-drop signature (server emitted,
-  browser didn't render). `event_type` is the closed enum from
-  `internal/conversation/types.go`; unknown shapes collapse to
-  `other`.
+  The main transcript stream emits projected transcript-row batches as
+  `event_type="transcript_rows"`; older raw Tank event labels are retained
+  only for pre-migration metric continuity. Divergence means the server
+  emitted projected rows that the browser did not receive or process.
 - `tank_session_event_client_*` — browser-reported per-session SSE
   stream diagnostics ingested through
   `POST /api/client-metrics/session-events-stream`. Bounded labels:
-  `event` (opened, ready, tank_event_received,
+  `event` (opened, ready, transcript_rows_received,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
   stale_running_blocked_submit, resync_required, stream_error, closed_unmount, closed_error,
@@ -130,8 +130,9 @@ All metric names are prefixed `tank_`. The full namespace:
   The SPA installs a `PerformanceObserver({type: "longtask"})` probe
   at boot (`frontend/src/longTaskTelemetry.ts`) and reports every
   ≥50 ms main-thread block along with three correlation deltas: time
-  since the last tank-event SSE delivery, since the last session
-  switch, and since the last user scroll. Server-bucketed labels:
+  since the last projected-row SSE delivery (wire field name
+  `sinceTankEventMs` is historical), since the last session switch, and
+  since the last user scroll. Server-bucketed labels:
   `session_mode` (the chat-scroll mode allowlist), `attribution`
   (`self` / `other` / `unknown`, bucketed from
   `PerformanceLongTaskTiming.name`), and `correlation` (`event_burst`

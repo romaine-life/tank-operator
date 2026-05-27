@@ -35,11 +35,13 @@ The implementation has explicit durable and live boundaries:
   `session_events` table and wakes SSE streams only after the ledger write
   commits.
 - `backend-go/internal/store/session_events.go` reads `session_events` by
-  session and pages by canonical `order_key`.
-- `frontend/src/App.tsx` renders Claude and Codex SDK events through the Tank
-  conversation reducer/projection. It also owns status decisions such as
-  stopped vs error, active tool state, and reconnect behavior directly in the
-  pane.
+  session and pages by canonical `order_key` for audit/debug and Turn activity
+  detail.
+- `backend-go/internal/store/session_transcript_rows.go` materializes the
+  visible transcript read model from `session_events`. Both `/timeline` reads
+  and the per-session browser SSE stream use this projection.
+- `frontend/src/App.tsx` renders server-owned transcript rows. Provider raw
+  item/tool events stay behind Turn activity detail and debug surfaces.
 - The GUI chat path publishes durable SDK commands to NATS JetStream. A future
   provider should map provider output into the stable Tank protocol before
   touching frontend sidebar and chat state logic.
@@ -397,9 +399,9 @@ History reads:
 - Manual upward pagination reads older transcript rows:
   `GET /api/sessions/{session_id}/timeline?before_cursor=<row_cursor>&rows=8`
 - `/timeline` pages `session_transcript_rows`, the server-owned visible
-  transcript read model. Raw `session_events` remain the live SSE transport
-  and Turn activity detail source, but raw event counts are not a `/timeline`
-  API contract.
+  transcript read model. Raw `session_events` remain the Turn activity detail
+  and audit source, but raw event counts are not a `/timeline` or main
+  transcript live-stream API contract.
 - Managed Codex background terminal stop:
   `POST /api/sessions/{session_id}/background-tasks/{task_id}/stop`
   publishes a `stop_background_task` control-plane command. The Codex
@@ -547,11 +549,13 @@ process death and does not need to, per the durability boundary in
 docs/product-inspirations.md (the pod owns runtime scheduler state, not Cosmos).
 
 The UI consumes durable transcript delivery from
-`GET /api/sessions/{session_id}/events`, where SSE event ids are canonical
-`order_key` values and `Last-Event-ID` is the resume cursor. Unknown cursors
-produce `resync_required`; clients reload `/timeline` instead of silently
-skipping a gap. Open SSE streams do not poll any side endpoint for
-indicator state. Because browser-native EventSource cannot attach an
+`GET /api/sessions/{session_id}/events`. The stream emits `transcript-rows`
+SSE events whose payload is `{order_key, rows}` from `session_transcript_rows`;
+raw `item.*` and tool events are not sent to the main transcript pane. SSE
+event ids are canonical `order_key` values and `Last-Event-ID` is the resume
+cursor. Unknown cursors produce `resync_required`; clients reload `/timeline`
+instead of silently skipping a gap. Open SSE streams do not poll any side
+endpoint for indicator state. Because browser-native EventSource cannot attach an
 `Authorization` header, the SPA first calls `POST /api/auth/stream-ticket`
 with its auth.romaine.life bearer JWT and then opens EventSource with the
 short-lived opaque `stream_ticket` query carrier. The ticket is scoped to
@@ -833,8 +837,8 @@ Storage:
 - Keep the Postgres `session_events` table as the durable ledger, partitioned
   by `tank_session_id`.
 - Keep the Postgres `session_transcript_rows` table as the `/timeline` read
-  model, keyed by opaque transcript row cursors and refreshed from
-  `session_events` on each durable event write.
+  model and main transcript SSE source, keyed by opaque transcript row cursors
+  and refreshed from `session_events` on each durable event write.
 - Mark completed transcript-row backfills in
   `session_transcript_row_backfills`. Migration-created status rows are
   visible transcript rows, but they are not proof that historical turns have
@@ -853,7 +857,7 @@ Operational counters:
 
 - `/metrics` exposes the `tank_session_event_stream_*` counters
   (opens, reconnects, `resync_required`, stream errors, timeline read
-  failures, emitted events, heartbeats, wake-subscribe failures) and the
+  failures, emitted projected rows, heartbeats, wake-subscribe failures) and the
   `tank_session_event_stream_lag_seconds` histogram. See
   `docs/observability.md` for the full taxonomy and the Grafana panels.
 - `tank_stream_auth_ticket_total` covers the EventSource auth boundary; store
@@ -870,8 +874,9 @@ Operational counters:
 - New canonical Tank event types must be added to the JSON Schema first, then
   to the Go and TypeScript contract constants in the same change. The contract
   check is expected to fail until every package agrees.
-- Timeline replay and SSE delivery must produce the same reducer state for the
-  same canonical event sequence.
+- Timeline replay and per-session SSE delivery must consume the same
+  `session_transcript_rows` projection. The main transcript frontend must not
+  reduce raw provider/Tank item events as a parallel runtime path.
 - `client_nonce` is the idempotency boundary for user submission. The durable
   store should reject or return the existing event for duplicate nonces.
 - Browser connection state is never agent state. Disconnect, reconnecting, and

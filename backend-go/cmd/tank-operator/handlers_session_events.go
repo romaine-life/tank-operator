@@ -22,8 +22,8 @@ const (
 )
 
 // handleListSessionEvents returns the projected transcript-row read model.
-// The durable session_events ledger remains the source for live SSE,
-// replay, and Turn activity detail, but main transcript navigation pages
+// The durable session_events ledger remains the write source for projection
+// and Turn activity detail, but main transcript navigation pages
 // session_transcript_rows so the browser never asks for raw event windows.
 func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
@@ -145,9 +145,16 @@ func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request
 	s.handleListSessionEvents(w, r)
 }
 
-// handleSessionEventStream streams the durable transcript ledger over SSE.
-// Each browser event id is the Tank order_key, so native EventSource reconnects
-// resume from Last-Event-ID without relying on runner-local websocket state.
+// handleSessionEventStream streams the server-owned transcript row projection
+// over SSE. The durable session_events ledger remains the write source of truth
+// and the resume cursor, but the browser's main transcript receives only
+// top-level projected rows: messages, meta rows, background rows, and compacted
+// turn_activity shells. Raw item/tool events stay behind the Turn activity
+// detail endpoint and admin debug surfaces.
+//
+// Each browser event id is the latest Tank order_key represented by the emitted
+// projected rows, so native EventSource reconnects resume without relying on
+// runner-local websocket state.
 func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Request) {
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 	user, sessionScope, ok := s.requireBrowserStreamAuth(w, r, streamKindSessionEvents, sessionID)
@@ -159,6 +166,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	eventStore := s.sessionEventStoreForScope(sessionScope)
+	rowStore := s.sessionTranscriptRowStoreForScope(sessionScope)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -266,7 +274,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 
 	for {
 		cursorBefore := cursor.AfterOrderKey
-		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, eventStore, sessionID, &cursor, state)
+		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, rowStore, sessionID, &cursor, state)
 		if err != nil {
 			recordSessionEventStreamError()
 			slog.Warn("session event stream page failed",
@@ -286,7 +294,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 		state.RecordPageRead(time.Now(), count)
 		if count > 0 {
-			slog.Info("session event stream emitted events",
+			slog.Info("session event stream emitted transcript rows",
 				"session_id", sessionID,
 				"stream_id", streamID,
 				"count", count,
@@ -312,33 +320,61 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, eventStore store.SessionEventStore, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
-	if eventStore == nil {
-		eventStore = store.StubSessionEventStore{}
+func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, rowStore store.SessionTranscriptRowStore, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
+	if rowStore == nil {
+		rowStore = store.StubSessionTranscriptRowStore{}
 	}
-	page, err := eventStore.ListBySession(ctx, sessionID, *cursor, sessionEventStreamPageLimit)
+	page, err := rowStore.ListChangedAfterOrderKey(ctx, sessionID, cursor.AfterOrderKey, sessionEventStreamPageLimit)
 	if err != nil {
 		return false, 0, err
 	}
+	for _, delta := range page.Rows {
+		recordSessionTranscriptRowLag(delta.UpdatedAt)
+	}
 	count := 0
-	for _, event := range page.Events {
-		orderKey, _ := event["order_key"].(string)
+	for _, group := range transcriptRowDeltaGroups(page.Rows) {
+		orderKey := group.OrderKey
 		if orderKey == "" {
 			continue
 		}
-		recordSessionEventLag(event)
-		writeSSEJSONEvent(w, "tank-event", orderKey, event)
+		writeSSEJSONEvent(w, "transcript-rows", orderKey, map[string]any{
+			"order_key": orderKey,
+			"rows":      group.Rows,
+		})
 		cursor.AfterOrderKey = orderKey
-		count++
+		count += len(group.Rows)
 		sessionEventStreamEmittedTotal.Add(1)
-		eventType, _ := event["type"].(string)
-		recordSessionEventStreamEmittedByType(eventType)
-		state.RecordEmit(time.Now(), orderKey, eventType, orderKey)
+		recordSessionEventStreamEmittedByType("transcript_rows")
+		state.RecordEmit(time.Now(), orderKey, "transcript_rows", orderKey)
 	}
 	if page.NextOrderKey != "" {
 		cursor.AfterOrderKey = page.NextOrderKey
 	}
 	return page.HasMore, count, nil
+}
+
+type transcriptRowDeltaGroup struct {
+	OrderKey string
+	Rows     []map[string]any
+}
+
+func transcriptRowDeltaGroups(deltas []store.TranscriptRowDelta) []transcriptRowDeltaGroup {
+	groups := make([]transcriptRowDeltaGroup, 0, len(deltas))
+	for _, delta := range deltas {
+		orderKey := strings.TrimSpace(delta.OrderKey)
+		if orderKey == "" || delta.Row == nil {
+			continue
+		}
+		if len(groups) > 0 && groups[len(groups)-1].OrderKey == orderKey {
+			groups[len(groups)-1].Rows = append(groups[len(groups)-1].Rows, delta.Row)
+			continue
+		}
+		groups = append(groups, transcriptRowDeltaGroup{
+			OrderKey: orderKey,
+			Rows:     []map[string]any{delta.Row},
+		})
+	}
+	return groups
 }
 
 func (s *appServer) sessionEventCursorExists(ctx context.Context, eventStore store.SessionEventStore, sessionID string, cursor store.SessionEventCursor) (bool, error) {

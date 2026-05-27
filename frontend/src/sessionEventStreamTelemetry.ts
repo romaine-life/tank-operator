@@ -1,7 +1,7 @@
 import { authedFetch } from "./auth";
 
-// Per-session SSE event-stream telemetry. The candidate-B (zombie SSE)
-// and candidate-C (reducer-drop) stethoscope on the browser side.
+// Per-session transcript-row SSE telemetry. The candidate-B (zombie SSE)
+// and candidate-C (row-drop) stethoscope on the browser side.
 // Console logging is opt-in per browser with localStorage.tankDebug
 // = "session-events" (or a comma-separated list including that token).
 //
@@ -22,7 +22,7 @@ const FLUSH_DELAY_MS = 1_000;
 export type SessionEventStreamMetricName =
   | "opened"
   | "ready"
-  | "tank_event_received"
+  | "transcript_rows_received"
   | "stream_silent_while_running"
   | "terminal_matched_by_turn_id"
   | "terminal_local_run_mismatch"
@@ -137,8 +137,8 @@ if (typeof window !== "undefined") {
   window.addEventListener("pagehide", flush);
 }
 
-// SilenceWatchdog wraps a 30s "I haven't seen a tank event" timer per
-// SSE consumer. The caller resets the timer on every tank-event and on
+// SilenceWatchdog wraps a 30s "I haven't seen projected rows" timer per
+// SSE consumer. The caller resets the timer on every transcript-row batch and on
 // open; if the timer fires while a turn is in flight, the watchdog
 // emits a stream_silent_while_running metric with the observed idle
 // duration. Designed to be cheap (one setTimeout per session pane,
