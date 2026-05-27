@@ -140,7 +140,7 @@ func TestTranscriptRowsMaterializerStoresProjectedRowsForTurn(t *testing.T) {
 			"kind": "message",
 			"text": "done",
 		}),
-		projectionTestEvent("terminal", "005", "turn.completed", "runner", "codex", "turn-1", "", nil),
+		projectionTestEvent("terminal", "005", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
 	}
 	eventStore := fakeSessionEventStore{
 		pages: map[string]store.SessionEventPage{
@@ -185,7 +185,7 @@ func TestTranscriptRowsMaterializerLocksReadProjectionAndReplace(t *testing.T) {
 			"kind": "message",
 			"text": "done",
 		}),
-		projectionTestEvent("terminal", "004", "turn.completed", "runner", "codex", "turn-1", "", nil),
+		projectionTestEvent("terminal", "004", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:final")),
 	}
 	rowStore := &lockingTranscriptRowsStore{t: t}
 	eventStore := txAwareSessionEventStore{

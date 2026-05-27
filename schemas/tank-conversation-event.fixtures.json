@@ -146,6 +146,9 @@
         },
         "visibility": "durable",
         "payload": {
+          "final_answer": {
+            "timeline_ids": ["assistant-message"]
+          },
           "usage": {
             "input_tokens": 10,
             "output_tokens": 8

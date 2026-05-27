@@ -1334,6 +1334,10 @@ func transcriptMaterializationInvariantLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "active_shell_after_terminal":
 		return "active_shell_after_terminal"
+	case "completed_turn_missing_final_answer":
+		return "completed_turn_missing_final_answer"
+	case "completed_turn_final_answer_missing_entry":
+		return "completed_turn_final_answer_missing_entry"
 	default:
 		return "unknown"
 	}

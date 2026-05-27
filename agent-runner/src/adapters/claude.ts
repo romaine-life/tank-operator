@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { Config } from "../config.js";
-import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
+import type { TankConversationEvent, TankFinalAnswer } from "../../../runner-shared/conversation.js";
 import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 import { itemOutcomeTotal } from "../metrics.js";
 
@@ -20,6 +20,7 @@ export interface ClaudeTurnContext {
   clientNonce: string;
   interrupted: boolean;
   terminalEmitted: boolean;
+  finalAnswer?: TankFinalAnswer;
 }
 
 export function claudeUserMessageText(content: unknown): string {
@@ -72,32 +73,40 @@ export function canonicalEventsForClaudeMessage(
   }
   if (message.type === "assistant") {
     const events: TankConversationEvent[] = [];
+    const finalAnswerTimelineIDs: string[] = [];
+    const finalAnswerProviderItemIDs: string[] = [];
+    let hasToolUse = false;
     for (const [index, block] of claudeMessageContent(message).entries()) {
       if (!block || typeof block !== "object") continue;
       const item = block as Record<string, unknown>;
       if (item.type === "text") {
         const text = typeof item.text === "string" ? item.text : "";
         if (!text) continue;
-        events.push(
-          itemEvent({
-            sessionID: cfg.sessionId,
-            turnID: turn.turnID,
-            source: "claude",
-            type: "item.completed",
-            providerItemID: claudeBlockProviderItemID({
-              turnID: turn.turnID,
-              actorPart: "assistant",
-              providerID,
-              blockType: "text",
-              index,
-              block: item,
-            }),
-            actor: "assistant",
-            providerEventID: providerID,
-            payload: { kind: "message", text },
-          }),
-        );
+        const providerItemID = claudeBlockProviderItemID({
+          turnID: turn.turnID,
+          actorPart: "assistant",
+          providerID,
+          blockType: "text",
+          index,
+          block: item,
+        });
+        const event = itemEvent({
+          sessionID: cfg.sessionId,
+          turnID: turn.turnID,
+          source: "claude",
+          type: "item.completed",
+          providerItemID,
+          actor: "assistant",
+          providerEventID: providerID,
+          payload: { kind: "message", text },
+        });
+        events.push(event);
+        if (event.timeline_id) {
+          finalAnswerTimelineIDs.push(event.timeline_id);
+          finalAnswerProviderItemIDs.push(providerItemID);
+        }
       } else if (item.type === "tool_use") {
+        hasToolUse = true;
         const providerItemID =
           typeof item.id === "string" && item.id
             ? item.id
@@ -149,9 +158,18 @@ export function canonicalEventsForClaudeMessage(
         }
       }
     }
+    if (hasToolUse) {
+      turn.finalAnswer = undefined;
+    } else if (finalAnswerTimelineIDs.length > 0) {
+      turn.finalAnswer = {
+        timelineIDs: finalAnswerTimelineIDs,
+        providerItemIDs: finalAnswerProviderItemIDs,
+      };
+    }
     return events;
   }
   if (message.type === "user") {
+    turn.finalAnswer = undefined;
     return claudeMessageContent(message).flatMap((block, index): TankConversationEvent[] => {
       if (!block || typeof block !== "object") return [];
       const item = block as Record<string, unknown>;
@@ -221,6 +239,7 @@ export function canonicalEventsForClaudeMessage(
   if (message.type === "result") {
     if (turn.interrupted && turn.terminalEmitted) return [];
     const failed = message.is_error === true || message.subtype === "error";
+    const completed = !turn.interrupted && !failed;
     return [
       turnEvent({
         sessionID: cfg.sessionId,
@@ -231,6 +250,7 @@ export function canonicalEventsForClaudeMessage(
         reason: turn.interrupted ? "client_interrupt" : failed ? "provider_failure" : undefined,
         usage: message.usage,
         error: failed ? message.result ?? message.error : undefined,
+        finalAnswer: completed ? turn.finalAnswer : undefined,
         providerEventID: providerID,
       }),
     ];

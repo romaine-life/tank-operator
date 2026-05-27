@@ -167,13 +167,21 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("turn.submitted must be actor=runner source=tank")
 		}
 		return requirePayloadString(event, "status")
-	case EventTurnStarted, EventTurnCompleted, EventTurnFailed, EventTurnInterrupted:
+	case EventTurnStarted, EventTurnFailed, EventTurnInterrupted:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
 		}
 		if Actor(stringField(event, "actor")) != ActorRunner {
 			return fmt.Errorf("%s must be actor=runner", eventType)
 		}
+	case EventTurnCompleted:
+		if err := requireFields(event, "turn_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorRunner {
+			return fmt.Errorf("%s must be actor=runner", eventType)
+		}
+		return validateTurnCompletedPayload(event)
 	case EventTurnCommandFailed:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -310,6 +318,65 @@ func validateSessionStatusPayload(event map[string]any) error {
 	if status == "failed" {
 		if err := validateSessionStatusFailedExtension(event, payload); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func validateTurnCompletedPayload(event map[string]any) error {
+	rawPayload, ok := event["payload"]
+	if !ok {
+		return nil
+	}
+	payload, ok := rawPayload.(map[string]any)
+	if !ok {
+		return fmt.Errorf("payload must be an object for %s", stringField(event, "type"))
+	}
+	rawFinal, ok := payload["final_answer"]
+	if !ok {
+		return nil
+	}
+	finalAnswer, ok := rawFinal.(map[string]any)
+	if !ok {
+		return fmt.Errorf("payload.final_answer must be an object for %s", stringField(event, "type"))
+	}
+	if err := requireNonEmptyStringArray(finalAnswer, "timeline_ids"); err != nil {
+		return fmt.Errorf("payload.final_answer.%w", err)
+	}
+	if _, ok := finalAnswer["provider_item_ids"]; ok {
+		if err := requireNonEmptyStringArray(finalAnswer, "provider_item_ids"); err != nil {
+			return fmt.Errorf("payload.final_answer.%w", err)
+		}
+	}
+	return nil
+}
+
+func requireNonEmptyStringArray(record map[string]any, key string) error {
+	raw, ok := record[key]
+	if !ok {
+		return fmt.Errorf("%s is required", key)
+	}
+	var items []string
+	switch value := raw.(type) {
+	case []any:
+		for _, item := range value {
+			text, ok := item.(string)
+			if !ok {
+				return fmt.Errorf("%s must be a non-empty string array", key)
+			}
+			items = append(items, text)
+		}
+	case []string:
+		items = value
+	default:
+		return fmt.Errorf("%s must be a non-empty string array", key)
+	}
+	if len(items) == 0 {
+		return fmt.Errorf("%s must be a non-empty string array", key)
+	}
+	for _, text := range items {
+		if text == "" {
+			return fmt.Errorf("%s must be a non-empty string array", key)
 		}
 	}
 	return nil

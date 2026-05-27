@@ -309,20 +309,18 @@ learn the active turn from the session activity summary, but the shell's durable
 active flag is sufficient; timeline refresh ordering must not briefly remove
 the placeholder while another activity payload catches up.
 
-For an active turn, the client may condense assistant progress notes,
+For an active turn, the server may condense assistant progress notes,
 provisional assistant text, tool rows, reasoning blocks, background-task rows,
 and meta rows into a single Turn activity disclosure row as they arrive. A
-normal assistant message does not by itself declare that it is the final answer;
-without an explicit durable final-answer marker, the final answer is identified
-only after a successful terminal event.
+normal assistant message does not by itself declare that it is the final answer.
 
-For a turn that ended with `turn.completed` and produced at least one assistant
-message, the client identifies the final answer as the trailing assistant
-message/run for that turn. The final assistant answer is rendered in the main
-transcript as the settled assistant response. Pre-final activity may remain
-condensed into the same Turn activity row. The activity row may also contain an
-activity/log copy of assistant prose, including prose that later becomes the
-final answer, but that copy is not a second settled transcript message.
+For a turn that ended with `turn.completed`, `payload.final_answer.timeline_ids`
+is the durable final-answer fact. Those Tank timeline IDs are rendered in the
+main transcript as the settled assistant response. Every other non-user row for
+that completed turn remains activity/log material. The projection must not infer
+finality from provider ordering, adjacency, or a trailing assistant message/run.
+If a completed turn has assistant prose but no final-answer marker, the prose is
+kept in Turn activity rather than promoted to a settled transcript message.
 
 Failed turns, interrupted turns, and turns that never produce a final assistant
 message stay expanded so failure and stop context is not hidden.
@@ -366,7 +364,7 @@ Claude SDK adapter:
 | `system/task_started` | `shell_task.started` | `actor=tool`; `task_id` identifies the background shell task. The runner records task ownership so later notifications still attach to the spawning turn. |
 | `system/task_progress`, `system/task_updated` | `shell_task.updated` | Progress/status snapshots for an already-owned background task. |
 | `system/task_notification` terminal status | `shell_task.exited` | Terminal background task result (`completed`, `failed`, `stopped`, etc.) without changing session run status. |
-| `result` success | `turn.completed` | Include usage when present. |
+| `result` success | `turn.completed` | Include usage when present. Include `payload.final_answer` when the turn emitted a final assistant text item. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |
 | `stream_event`, status, hooks, plugin changes | ignored | Per-token deltas are not on the Tank surface; restoring requires re-adding `item.delta` + `live-only` together. |
@@ -382,7 +380,7 @@ Codex SDK adapter:
 | `userMessage` item echo | ignored (no Tank event) | Tank owns submitted user input through the backend-published `user_message.created` event. Provider echoes of that input must not enter the durable item stream or render as tool calls. |
 | `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
 | `commandExecution` with `source=unifiedExecStartup` or `source=unifiedExecInteraction` | `shell_task.started`, `shell_task.updated`, `shell_task.exited` | Codex App Server background terminals are session-owned processes. `processId` is the preferred `task_id`; `thread/backgroundTerminals/clean` is the explicit action that stops them. |
-| `turn.completed` | `turn.completed` | Include usage. |
+| `turn.completed` | `turn.completed` | Include usage. Include `payload.final_answer` when the turn emitted a final assistant message item. |
 | `turn.completed` with provider status `interrupted` | `turn.interrupted` | Codex App Server documents `turn/interrupt` as cancelling the active turn without terminating background terminals. |
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |

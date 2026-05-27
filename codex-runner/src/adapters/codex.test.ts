@@ -149,6 +149,65 @@ test("carries streamed Codex text into durable completion when final item omits 
   assert.equal(completed.payload?.delta, undefined);
 });
 
+test("marks only the latest completed Codex assistant message as the final answer", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn();
+  const preliminary = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.completed",
+    item: {
+      id: "item_agent_prelim",
+      type: "agent_message",
+      text: "I found two separate levers.",
+    },
+  });
+  const final = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.completed",
+    item: {
+      id: "item_agent_final",
+      type: "agent_message",
+      text: "Yes, use Ambience.",
+    },
+  });
+  const completed = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "turn.completed",
+    usage: { input_tokens: 10 },
+  });
+
+  assert.equal(preliminary.length, 1);
+  assert.equal(final.length, 1);
+  assert.equal(completed.length, 1);
+  assert.equal(isTankConversationEvent(stampTankEvent(completed[0]!)), true);
+  assert.deepEqual(completed[0]?.payload?.final_answer, {
+    timeline_ids: ["turn-run-123:item:item_agent_final"],
+    provider_item_ids: ["item_agent_final"],
+  });
+});
+
+test("clears a Codex assistant final-answer candidate when later tool activity arrives", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn();
+  adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.completed",
+    item: {
+      id: "item_agent_prelim",
+      type: "agent_message",
+      text: "I will inspect that.",
+    },
+  });
+  adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.started",
+    item: {
+      id: "item_command_after",
+      type: "command_execution",
+      command: "pwd",
+    },
+  });
+  const completed = adapter.canonicalEventsForCodexEvent(turn, { type: "turn.completed" });
+
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0]?.payload?.final_answer, undefined);
+});
+
 test("maps Codex tool items to Tank tool items with command payload", () => {
   const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
     type: "item.completed",

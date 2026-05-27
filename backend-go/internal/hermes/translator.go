@@ -34,6 +34,8 @@ type Translator struct {
 	simpleMessageText       strings.Builder             // accumulated Hermes message.delta text
 	assistantMessageEmitted bool
 	terminalKind            string // "completed" / "failed" / "interrupted" / ""
+	finalAnswerTimelineIDs  []string
+	finalAnswerProviderIDs  []string
 
 	// Metrics surface for the bridge / observability layer.
 	UnhandledCount   int
@@ -283,6 +285,7 @@ func (t *Translator) handleItemAdded(evt RunEvent) ([]map[string]any, error) {
 	case "message":
 		// item.started for an assistant text item carries an empty
 		// message — the actual content arrives via deltas + done.
+		t.clearFinalAnswer()
 		return []map[string]any{t.buildItem(itemArgs{
 			Type:           conversation.EventItemStarted,
 			Actor:          conversation.ActorAssistant,
@@ -290,6 +293,7 @@ func (t *Translator) handleItemAdded(evt RunEvent) ([]map[string]any, error) {
 			Payload:        map[string]any{"kind": "message", "text": ""},
 		})}, nil
 	case "function_call":
+		t.clearFinalAnswer()
 		title := item.Name
 		if title == "" {
 			title = "tool"
@@ -343,13 +347,16 @@ func (t *Translator) handleItemDone(evt RunEvent) ([]map[string]any, error) {
 			text = extractMessageText(item.Content)
 		}
 		t.assistantMessageEmitted = true
-		return []map[string]any{t.buildItem(itemArgs{
+		event := t.buildItem(itemArgs{
 			Type:           conversation.EventItemCompleted,
 			Actor:          conversation.ActorAssistant,
 			ProviderItemID: item.ID,
 			Payload:        map[string]any{"kind": "message", "text": text},
-		})}, nil
+		})
+		t.rememberFinalAnswer(event)
+		return []map[string]any{event}, nil
 	case "function_call":
+		t.clearFinalAnswer()
 		providerItemID := item.CallID
 		if providerItemID == "" {
 			providerItemID = item.ID
@@ -370,6 +377,7 @@ func (t *Translator) handleItemDone(evt RunEvent) ([]map[string]any, error) {
 			},
 		})}, nil
 	case "function_call_output":
+		t.clearFinalAnswer()
 		providerItemID := item.CallID
 		if providerItemID == "" {
 			providerItemID = item.ID
@@ -409,6 +417,15 @@ func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventTy
 	if eventType == conversation.EventTurnFailed {
 		payload["reason"] = "provider_failure"
 	}
+	events := []map[string]any{}
+	if eventType == conversation.EventTurnCompleted {
+		if assistant := t.emitSimpleAssistantMessage(evt); assistant != nil {
+			events = append(events, assistant)
+		}
+		if finalAnswer := t.finalAnswerPayload(); finalAnswer != nil {
+			payload["final_answer"] = finalAnswer
+		}
+	}
 	event := t.stamp(map[string]any{
 		"event_id":     t.cfg.TurnID + ":" + string(eventType),
 		"session_id":   t.cfg.SessionID,
@@ -423,12 +440,6 @@ func (t *Translator) handleTerminal(evt RunEvent, eventType conversation.EventTy
 	})
 	if len(payload) > 0 {
 		event["payload"] = payload
-	}
-	events := []map[string]any{}
-	if eventType == conversation.EventTurnCompleted {
-		if assistant := t.emitSimpleAssistantMessage(evt); assistant != nil {
-			events = append(events, assistant)
-		}
 	}
 	events = append(events, event)
 	return events
@@ -487,12 +498,46 @@ func (t *Translator) emitSimpleAssistantMessage(evt RunEvent) map[string]any {
 		return nil
 	}
 	t.assistantMessageEmitted = true
-	return t.buildItem(itemArgs{
+	event := t.buildItem(itemArgs{
 		Type:           conversation.EventItemCompleted,
 		Actor:          conversation.ActorAssistant,
 		ProviderItemID: "message",
 		Payload:        map[string]any{"kind": "message", "text": text},
 	})
+	t.rememberFinalAnswer(event)
+	return event
+}
+
+func (t *Translator) rememberFinalAnswer(event map[string]any) {
+	timelineID, _ := event["timeline_id"].(string)
+	providerID, _ := event["provider_item_id"].(string)
+	if strings.TrimSpace(timelineID) == "" {
+		return
+	}
+	t.finalAnswerTimelineIDs = []string{timelineID}
+	if strings.TrimSpace(providerID) != "" {
+		t.finalAnswerProviderIDs = []string{providerID}
+	} else {
+		t.finalAnswerProviderIDs = nil
+	}
+}
+
+func (t *Translator) clearFinalAnswer() {
+	t.finalAnswerTimelineIDs = nil
+	t.finalAnswerProviderIDs = nil
+}
+
+func (t *Translator) finalAnswerPayload() map[string]any {
+	if len(t.finalAnswerTimelineIDs) == 0 {
+		return nil
+	}
+	out := map[string]any{
+		"timeline_ids": append([]string(nil), t.finalAnswerTimelineIDs...),
+	}
+	if len(t.finalAnswerProviderIDs) > 0 {
+		out["provider_item_ids"] = append([]string(nil), t.finalAnswerProviderIDs...)
+	}
+	return out
 }
 
 func (t *Translator) terminalOutput(evt RunEvent) string {

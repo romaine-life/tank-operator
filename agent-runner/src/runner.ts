@@ -179,6 +179,7 @@ export interface PendingTurn {
   started: boolean;
   interrupted: boolean;
   terminalEmitted: boolean;
+  finalAnswer?: ClaudeTurnContext["finalAnswer"];
   commandRecord?: SessionCommandRecord;
   stopCommandHeartbeat?: () => void;
   // interruptOnStart carries any interrupt_turn record(s) that landed on
@@ -740,6 +741,7 @@ export class Runner {
       clientNonce: turn.clientNonce,
       interrupted: turn.interrupted,
       terminalEmitted: turn.terminalEmitted,
+      finalAnswer: turn.finalAnswer,
     };
   }
 

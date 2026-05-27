@@ -66,9 +66,9 @@ other.
   silently skipping a gap.
 - Ready/load transitions must not reset, reorder, or replace the transcript.
 - Active-turn assistant prose is provisional until a successful terminal event
-  or an explicit durable final-answer marker exists. Without such a marker, the
-  final answer is inferred from the trailing assistant message/run after
-  `turn.completed`.
+  carries an explicit durable final-answer marker. The server projection uses
+  `turn.completed.payload.final_answer.timeline_ids` as the only final-answer
+  source; it must not infer finality from a trailing assistant message/run.
 - A server-projected active `turn_activity` shell owns the visible running
   placeholder for that turn. The browser must not hide the `...` row while
   waiting for a separately-delivered activity summary to set the same active

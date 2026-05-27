@@ -73,6 +73,9 @@ func TestTranslator_HappyPath_TextOnlyResponse(t *testing.T) {
 	if itemDone == nil {
 		t.Fatalf("missing item.completed for message")
 	}
+	if e := eventOfType(out, string(conversation.EventTurnCompleted)); e != nil {
+		assertFinalAnswer(t, e, itemDone)
+	}
 	payload, _ := itemDone["payload"].(map[string]any)
 	if got, _ := payload["text"].(string); got != "Hello, world." {
 		t.Errorf("payload.text = %q, want %q", got, "Hello, world.")
@@ -113,6 +116,8 @@ func TestTranslator_HermesRunStream_MessageDeltaAndCompletedOutput(t *testing.T)
 	}
 	if e := eventOfType(out, string(conversation.EventTurnCompleted)); e == nil {
 		t.Fatalf("missing turn.completed")
+	} else {
+		assertFinalAnswer(t, e, itemDone)
 	}
 }
 
@@ -133,6 +138,11 @@ func TestTranslator_HermesRunCompletedOutputOnly(t *testing.T) {
 	if got, _ := payload["text"].(string); got != "final text" {
 		t.Errorf("payload.text = %q, want final text", got)
 	}
+	completed := eventOfType(out, string(conversation.EventTurnCompleted))
+	if completed == nil {
+		t.Fatalf("missing turn.completed")
+	}
+	assertFinalAnswer(t, completed, itemDone)
 }
 
 func TestTranslator_TurnStartedOnlyOnce(t *testing.T) {
@@ -379,6 +389,29 @@ func TestParseSSE_UsesEventFieldFromBareDataFrames(t *testing.T) {
 // ─── helpers ────────────────────────────────────────────────────────────
 
 func rawJSON(s string) json.RawMessage { return json.RawMessage(s) }
+
+func assertFinalAnswer(t *testing.T, terminal map[string]any, item map[string]any) {
+	t.Helper()
+	payload, _ := terminal["payload"].(map[string]any)
+	finalAnswer, _ := payload["final_answer"].(map[string]any)
+	if finalAnswer == nil {
+		t.Fatalf("turn.completed missing payload.final_answer: %#v", terminal)
+	}
+	timelineIDs, _ := finalAnswer["timeline_ids"].([]string)
+	if len(timelineIDs) != 1 {
+		t.Fatalf("final_answer.timeline_ids = %#v, want one id", finalAnswer["timeline_ids"])
+	}
+	if got, _ := item["timeline_id"].(string); timelineIDs[0] != got {
+		t.Fatalf("final_answer.timeline_ids[0] = %q, want item timeline_id %q", timelineIDs[0], got)
+	}
+	providerIDs, _ := finalAnswer["provider_item_ids"].([]string)
+	if len(providerIDs) != 1 {
+		t.Fatalf("final_answer.provider_item_ids = %#v, want one id", finalAnswer["provider_item_ids"])
+	}
+	if got, _ := item["provider_item_id"].(string); providerIDs[0] != got {
+		t.Fatalf("final_answer.provider_item_ids[0] = %q, want item provider_item_id %q", providerIDs[0], got)
+	}
+}
 
 func dump(v any) string {
 	b, _ := json.MarshalIndent(v, "", "  ")
