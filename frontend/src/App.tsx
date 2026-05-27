@@ -106,7 +106,11 @@ import {
   readHomeSelectedRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
-import { labelAttachments } from "./attachmentLabels";
+import {
+  composeAttachmentDisplayText,
+  composeAttachmentPathText,
+  labelAttachments,
+} from "./attachmentLabels";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -2560,13 +2564,7 @@ function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: strin
 }
 
 function composeLaunchUserPrompt(text: string, attachments: { label?: string; name: string }[]): string {
-  const trimmed = text.trim();
-  if (attachments.length === 0) return trimmed;
-  const attachmentList = attachments
-    .map((attachment) => `- ${attachment.label || attachment.name}`)
-    .join("\n");
-  const attachmentText = `Attachments:\n${attachmentList}`;
-  return trimmed ? `${trimmed}\n\n${attachmentText}` : attachmentText;
+  return composeAttachmentDisplayText(text, attachments);
 }
 
 function attachmentDisplayTitle(attachment: { errorMsg?: string; label?: string; name: string }): string {
@@ -2905,6 +2903,11 @@ interface QueuedMessage {
   text: string;
   displayText?: string;
   skillName?: string;
+}
+
+interface ComposedAttachmentPrompt {
+  prompt: string;
+  displayText: string;
 }
 
 interface McpServerEntry {
@@ -9092,7 +9095,7 @@ function ChatPane({
     if (!supportsFileAttachments) return;
     if (!files) return;
     for (const f of Array.from(files)) {
-      // Be permissive on file type — Claude's Read tool handles many.
+      // Be permissive on file type; the agent runtime can load many formats.
       void uploadAttachment(f);
     }
   }
@@ -9478,8 +9481,8 @@ function ChatPane({
     const cursor = ta.selectionStart ?? start;
     const before = ta.value.slice(0, start);
     const after = ta.value.slice(cursor);
-    // Insert the absolute /workspace path so claude can pass it directly
-    // to the Read tool without re-resolving.
+    // Insert the absolute /workspace path so the agent can load it without
+    // re-resolving.
     const insert = `/workspace/${relPath} `;
     const newValue = before + insert + after;
     const setter = Object.getOwnPropertyDescriptor(
@@ -9718,7 +9721,11 @@ function ChatPane({
       // queued-message list is the user's confirmation that the submit stuck.
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: composed },
+        {
+          id: nextQueuedMessageId(),
+          text: composed.prompt,
+          displayText: composed.displayText,
+        },
       ]);
       return;
     }
@@ -9735,20 +9742,15 @@ function ChatPane({
         setSdkConnectionState("idle");
       }
     }
-    startRun(composed);
+    startRun(composed.prompt, composed.displayText);
   }
 
-  function composePromptWithAttachments(trimmed: string): string | null {
+  function composePromptWithAttachments(trimmed: string): ComposedAttachmentPrompt | null {
     const ready = attachments.filter((a) => a.status === "ready");
     const stillUploading = attachments.some((a) => a.status === "uploading");
     if (stillUploading) return null;
-    let composed = trimmed;
-    if (ready.length > 0) {
-      const lines = ready
-        .map((a) => `- ${a.absPath}`)
-        .join("\n");
-      composed = `${trimmed}\n\nAttachments (use the Read tool to load):\n${lines}`;
-    }
+    const prompt = composeAttachmentPathText(trimmed, ready.map((a) => a.absPath));
+    const displayText = composeAttachmentDisplayText(trimmed, ready);
     // Clear attachment state once they've been baked into the run (or queue).
     setAttachments((prev) => {
       for (const a of prev) {
@@ -9756,7 +9758,7 @@ function ChatPane({
       }
       return [];
     });
-    return composed;
+    return { prompt, displayText };
   }
 
   function submitSkillInvocation(skillName: string, promptText = "") {
@@ -9859,7 +9861,7 @@ function ChatPane({
         appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
       );
     });
-    submitSkillInvocation("test", composed);
+    submitSkillInvocation("test", composed.prompt);
   }
 
   function startGuiRollout() {
@@ -13056,9 +13058,7 @@ export function App() {
           });
           const composedPrompt =
             uploadedPaths.length > 0
-              ? `${seedPrompt}${seedPrompt ? "\n\n" : ""}Attachments (use the Read tool to load):\n${uploadedPaths
-                  .map((p) => `- ${p.absPath}`)
-                  .join("\n")}`
+              ? composeAttachmentPathText(seedPrompt, uploadedPaths.map((p) => p.absPath))
               : seedPrompt;
           const turnPrompt = requestedInitialSkillName
             ? composeSkillPrompt(mode, requestedInitialSkillName, composedPrompt)

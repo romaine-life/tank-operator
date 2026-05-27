@@ -8,6 +8,11 @@ export interface ExistingAttachmentLabel {
   name?: string;
 }
 
+export interface AttachmentDisplaySource {
+  label?: string;
+  name: string;
+}
+
 export interface LabeledAttachment<T extends AttachmentLabelSource> {
   file: T;
   label: string;
@@ -45,6 +50,26 @@ export function labelAttachments<T extends AttachmentLabelSource>(
     used.add(label);
     return { file, label };
   });
+}
+
+export function composeAttachmentDisplayText(
+  text: string,
+  attachments: readonly AttachmentDisplaySource[],
+): string {
+  const labels = attachments.map((attachment) => attachment.label || attachment.name);
+  return composeAttachmentBlock(text, labels);
+}
+
+export function composeAttachmentPathText(text: string, paths: readonly string[]): string {
+  return composeAttachmentBlock(text, paths);
+}
+
+function composeAttachmentBlock(text: string, items: readonly string[]): string {
+  const trimmed = text.trim();
+  if (items.length === 0) return trimmed;
+  const attachmentList = items.map((item) => `- ${item}`).join("\n");
+  const attachmentText = `Attachments:\n${attachmentList}`;
+  return trimmed ? `${trimmed}\n\n${attachmentText}` : attachmentText;
 }
 
 function nextAttachmentLabel(file: AttachmentLabelSource, used: Set<string>): string {

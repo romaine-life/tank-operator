@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { labelAttachments } from "./attachmentLabels.ts";
+import {
+  composeAttachmentDisplayText,
+  composeAttachmentPathText,
+  labelAttachments,
+} from "./attachmentLabels.ts";
 
 test("labels repeated generic clipboard images as screenshots", () => {
   assert.deepEqual(
@@ -42,5 +46,25 @@ test("uses attachment labels for generic non-image files", () => {
       { name: "", type: "application/octet-stream" },
     ]).map((item) => item.label),
     ["Attachment 1", "Attachment 2"],
+  );
+});
+
+test("composes user-visible attachment text from labels", () => {
+  assert.equal(
+    composeAttachmentDisplayText("please compare these", [
+      { name: "image.png", label: "Screenshot 1" },
+      { name: "image.png", label: "Screenshot 2" },
+    ]),
+    "please compare these\n\nAttachments:\n- Screenshot 1\n- Screenshot 2",
+  );
+});
+
+test("composes runner attachment text from paths without tool instructions", () => {
+  assert.equal(
+    composeAttachmentPathText("please compare these", [
+      "/workspace/screenshots/1.png",
+      "/workspace/screenshots/2.png",
+    ]),
+    "please compare these\n\nAttachments:\n- /workspace/screenshots/1.png\n- /workspace/screenshots/2.png",
   );
 });
