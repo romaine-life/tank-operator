@@ -282,6 +282,33 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-dots"), true);
 });
 
+test("thinking bubble renders an elapsed-time readout while a turn is live", () => {
+  // The bouncing-dots indicator alone gave no signal for how long a turn
+  // had been working, which made stuck-vs-slow indistinguishable. The
+  // duration component sits alongside the dots and ticks every second
+  // while the turn remains active.
+  assert.equal(appSource.includes("function formatThinkingElapsed"), true);
+  assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
+  assert.equal(appSource.includes("run-turn-thinking-duration"), true);
+  assert.match(
+    appSource,
+    /<RunTurnThinkingBubble[\s\S]{0,200}startedAt=\{g\.startedAt\}/,
+  );
+  assert.match(
+    appSource,
+    /<RunTurnThinkingDuration startedAt=\{selected\.startedAt\}/,
+  );
+  assert.equal(
+    appSource.includes("startedAt: shell?.startedAt ?? shell?.time,"),
+    true,
+  );
+  assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("run-turn-thinking-duration"),
+    true,
+  );
+});
+
 test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(

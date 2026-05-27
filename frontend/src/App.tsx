@@ -3715,7 +3715,7 @@ type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string }
   | {
       kind: "activity";
       id: string;
@@ -3780,6 +3780,7 @@ function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<Ent
     id: `turn-thinking-${turnId}`,
     turnId,
     shell,
+    startedAt: shell?.startedAt ?? shell?.time,
   };
 }
 
@@ -6114,13 +6115,68 @@ function buildTurnViewItems(
     });
 }
 
+// Formats elapsed milliseconds for the thinking indicator. Stays compact so
+// it sits naturally alongside the bouncing dots: sub-minute renders as
+// "12s", under an hour renders as "6m 12s", and an hour or longer collapses
+// the seconds slot to keep the visual width bounded ("1h 4m"). Negative
+// inputs clamp to zero so a clock skew between client and server never
+// produces a weird "-3s" while a turn is genuinely live.
+function formatThinkingElapsed(ms: number): string {
+  const clamped = ms > 0 ? ms : 0;
+  const totalSeconds = Math.floor(clamped / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) return `${totalMinutes}m ${seconds}s`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
+}
+
+// Live-ticking elapsed-time readout for the "thinking" bubble. We mount a
+// 1s interval only while a turn is mid-flight, so a long session with many
+// completed turns has no timers running. `startedAt` is the activity
+// shell's start time (falling back to `entry.time` upstream); when it is
+// missing or unparseable we render nothing rather than "0s" so we never
+// invent a fake duration. `aria-live="off"` is intentional: the duration
+// changes every second and would otherwise spam screen readers with
+// useless announcements. The visual layer is decorative and the underlying
+// turn already has an `aria-label="Open turn"` on the button.
+function RunTurnThinkingDuration({ startedAt }: { startedAt?: string }) {
+  const startMs = useMemo(() => {
+    if (!startedAt) return null;
+    const parsed = Date.parse(startedAt);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [startedAt]);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (startMs == null) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [startMs]);
+  if (startMs == null) return null;
+  const elapsed = formatThinkingElapsed(now - startMs);
+  return (
+    <span
+      className="run-turn-thinking-duration"
+      aria-live="off"
+      data-design-element="thinking-duration"
+    >
+      {elapsed}
+    </span>
+  );
+}
+
 function RunTurnThinkingBubble({
   turnId,
   avatar,
+  startedAt,
   onOpenTurn,
 }: {
   turnId: string;
   avatar: AgentAvatar | null;
+  startedAt?: string;
   onOpenTurn?: (turnId: string) => void;
 }) {
   return (
@@ -6146,6 +6202,7 @@ function RunTurnThinkingBubble({
           <span>.</span>
           <span>.</span>
         </span>
+        <RunTurnThinkingDuration startedAt={startedAt} />
       </button>
     </div>
   );
@@ -6548,6 +6605,7 @@ function RunTurnActivityScreen({
                   <span>.</span>
                   <span>.</span>
                 </span>
+                <RunTurnThinkingDuration startedAt={selected.startedAt} />
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
@@ -6920,6 +6978,7 @@ export function RunMessages({
           <RunTurnThinkingBubble
             turnId={g.turnId}
             avatar={avatar}
+            startedAt={g.startedAt}
             onOpenTurn={onOpenTurn}
           />
         );
