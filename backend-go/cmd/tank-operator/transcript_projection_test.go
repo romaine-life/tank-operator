@@ -20,7 +20,7 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 			"kind": "message",
 			"text": "done",
 		}),
-		projectionTestEvent("terminal", "005", "turn.completed", "runner", "codex", "turn-1", "", nil),
+		projectionTestEvent("terminal", "005", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
 	}
 
 	projection := projectTranscriptEvents(events)
@@ -53,6 +53,67 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	}
 	if got, want := body.CompactedEntryIDs, []string{"turn-1:item:tool-1"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("compacted ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestProjectTranscriptEventsUsesExplicitFinalAnswerMarker(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "which message is final?",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("prelim", "002", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:prelim", map[string]any{
+			"kind": "agent_message",
+			"text": "preliminary progress",
+		}),
+		projectionTestEvent("final", "003", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:final", map[string]any{
+			"kind": "agent_message",
+			"text": "final answer",
+		}),
+		projectionTestEvent("terminal", "004", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if got, want := projection.Entries[1]["kind"], "turn_activity"; got != want {
+		t.Fatalf("middle entry kind = %v, want %s", got, want)
+	}
+	if got, want := projection.Entries[2]["id"], "turn-1:item:final"; got != want {
+		t.Fatalf("visible assistant id = %v, want %s", got, want)
+	}
+	body := projection.ActivityBodies["turn-1"]
+	if got, want := body.CompactedEntryIDs, []string{"turn-1:item:prelim"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("compacted ids = %#v, want %#v", got, want)
+	}
+	if got, want := len(body.Entries), 2; got != want {
+		t.Fatalf("activity body entries = %d, want %d", got, want)
+	}
+}
+
+func TestProjectTranscriptEventsCompactsUnmarkedCompletedAssistantMessages(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "missing marker",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("assistant", "002", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:assistant", map[string]any{
+			"kind": "agent_message",
+			"text": "unmarked",
+		}),
+		projectionTestEvent("terminal", "003", "turn.completed", "runner", "codex", "turn-1", "", nil),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if projection.Entries[1]["kind"] != "turn_activity" {
+		t.Fatalf("unmarked assistant should be compacted into activity: %#v", projection.Entries)
+	}
+	if _, ok := projection.ActivityBodies["turn-1"]; !ok {
+		t.Fatal("missing activity body for unmarked completed turn")
 	}
 }
 
@@ -113,4 +174,12 @@ func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, ti
 		event["payload"] = payload
 	}
 	return event
+}
+
+func projectionFinalAnswerPayload(timelineIDs ...string) map[string]any {
+	return map[string]any{
+		"final_answer": map[string]any{
+			"timeline_ids": timelineIDs,
+		},
+	}
 }

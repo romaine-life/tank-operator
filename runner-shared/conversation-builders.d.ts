@@ -1,4 +1,5 @@
 import type {
+  TankFinalAnswer,
   TankActor,
   TankConversationEvent,
 } from "./conversation.js";
@@ -35,6 +36,7 @@ export interface TurnEventArgs {
   reason?: string;
   usage?: unknown;
   error?: unknown;
+  finalAnswer?: TankFinalAnswer;
   providerEventID?: string;
 }
 

@@ -75,6 +75,7 @@ export function turnEvent(args) {
   if (args.reason) payload.reason = args.reason;
   if (args.usage !== undefined) payload.usage = args.usage;
   if (args.error !== undefined) payload.error = args.error;
+  if (args.finalAnswer !== undefined) payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
   const event = {
     event_id: `${args.turnID}:${args.type}:${args.reason ?? args.providerEventID ?? "runner"}`,
     conversation_id: args.sessionID,
@@ -94,6 +95,37 @@ export function turnEvent(args) {
   if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
   if (Object.keys(payload).length > 0) event.payload = payload;
   return event;
+}
+
+function normalizeFinalAnswer(finalAnswer) {
+  if (!finalAnswer || typeof finalAnswer !== "object" || Array.isArray(finalAnswer)) {
+    throw new TypeError("finalAnswer must be an object");
+  }
+  const timelineIDs = nonEmptyStringArray(finalAnswer.timelineIDs ?? finalAnswer.timeline_ids, "finalAnswer.timelineIDs");
+  const providerItemIDs = optionalNonEmptyStringArray(
+    finalAnswer.providerItemIDs ?? finalAnswer.provider_item_ids,
+    "finalAnswer.providerItemIDs",
+  );
+  const out = { timeline_ids: timelineIDs };
+  if (providerItemIDs !== undefined) out.provider_item_ids = providerItemIDs;
+  return out;
+}
+
+function nonEmptyStringArray(value, field) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${field} must be a non-empty string array`);
+  }
+  return value.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new TypeError(`${field} must be a non-empty string array`);
+    }
+    return item.trim();
+  });
+}
+
+function optionalNonEmptyStringArray(value, field) {
+  if (value === undefined) return undefined;
+  return nonEmptyStringArray(value, field);
 }
 
 export function itemEvent(args) {

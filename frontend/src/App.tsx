@@ -154,7 +154,6 @@ import {
   type ClusterHealthResponse,
   type ClusterHealthStatus,
 } from "./clusterHealth";
-import { compactCompletedTurnEntries } from "./turnCompaction";
 import {
   turnActivityGroupIsActive,
   turnActivityShellIsDurablyActive,
@@ -3908,15 +3907,8 @@ function groupTranscriptEntries(
     flushTranscriptToolBucket(groups, bucket);
     return groups;
   }
-  for (const group of compactCompletedTurnEntries(entries, true, activeTurnId)) {
-    if (group.kind === "activity") {
-      flushTranscriptToolBucket(groups, bucket);
-      if (group.active) {
-        groups.push(turnThinkingGroup(group.turnId));
-      }
-      continue;
-    }
-    pushTranscriptEntryGroup(groups, group.entry, bucket);
+  for (const entry of entries) {
+    pushTranscriptEntryGroup(groups, entry, bucket);
   }
   flushTranscriptToolBucket(groups, bucket);
   return groups;

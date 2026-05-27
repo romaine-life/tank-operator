@@ -747,6 +747,118 @@ var schemaMigrations = []string{
 		  AND session_events.order_key = command_exit.order_key
 		  AND command_exit.exit_code <> 0`,
 
+	// Backfill the durable final-answer marker for completed historical turns
+	// before the projection stopped inferring finality at read time. This is a
+	// one-shot data transform: runtime projection intentionally has no
+	// trailing-assistant fallback. The backfill marks the last assistant message
+	// item before a completed terminal, grouping same-provider-event text
+	// blocks for Claude-style multi-block final answers. If any non-final turn
+	// activity landed after that assistant message, the turn is left unmarked.
+	`WITH completed_terminals AS (
+		  SELECT tank_session_id, order_key AS terminal_order_key, turn_id
+		  FROM session_events
+		  WHERE event_type = 'turn.completed'
+		    AND turn_id IS NOT NULL
+		    AND payload#>'{payload,final_answer}' IS NULL
+		),
+		last_assistant AS (
+		  SELECT DISTINCT ON (c.tank_session_id, c.terminal_order_key)
+		    c.tank_session_id,
+		    c.terminal_order_key,
+		    c.turn_id,
+		    i.order_key AS assistant_order_key,
+		    COALESCE(i.payload#>>'{producer,provider_event_id}', '') AS provider_event_id
+		  FROM completed_terminals c
+		  JOIN session_events i
+		    ON i.tank_session_id = c.tank_session_id
+		   AND i.turn_id = c.turn_id
+		   AND i.order_key < c.terminal_order_key
+		   AND i.event_type = 'item.completed'
+		   AND i.payload->>'actor' = 'assistant'
+		   AND i.payload->'payload'->>'kind' IN ('message', 'agent_message')
+		   AND COALESCE(BTRIM(i.payload->'payload'->>'text'), '') <> ''
+		   AND COALESCE(i.payload->>'timeline_id', '') <> ''
+		  ORDER BY c.tank_session_id, c.terminal_order_key, i.order_key DESC
+		),
+		last_non_final_activity AS (
+		  SELECT
+		    c.tank_session_id,
+		    c.terminal_order_key,
+		    MAX(i.order_key) AS boundary_order_key
+		  FROM completed_terminals c
+		  LEFT JOIN session_events i
+		    ON i.tank_session_id = c.tank_session_id
+		   AND i.turn_id = c.turn_id
+		   AND i.order_key < c.terminal_order_key
+		   AND i.event_type <> 'user_message.created'
+		   AND NOT (
+		     i.event_type = 'item.completed'
+		     AND i.payload->>'actor' = 'assistant'
+		     AND i.payload->'payload'->>'kind' IN ('message', 'agent_message')
+		     AND COALESCE(BTRIM(i.payload->'payload'->>'text'), '') <> ''
+		     AND COALESCE(i.payload->>'timeline_id', '') <> ''
+		   )
+		  GROUP BY c.tank_session_id, c.terminal_order_key
+		),
+		final_items AS (
+		  SELECT
+		    la.tank_session_id,
+		    la.terminal_order_key,
+		    i.order_key,
+		    i.payload->>'timeline_id' AS timeline_id,
+		    COALESCE(i.payload->>'provider_item_id', '') AS provider_item_id
+		  FROM last_assistant la
+		  JOIN last_non_final_activity boundary
+		    ON boundary.tank_session_id = la.tank_session_id
+		   AND boundary.terminal_order_key = la.terminal_order_key
+		  JOIN session_events i
+		    ON i.tank_session_id = la.tank_session_id
+		   AND i.turn_id = la.turn_id
+		   AND i.order_key < la.terminal_order_key
+		   AND i.event_type = 'item.completed'
+		   AND i.payload->>'actor' = 'assistant'
+		   AND i.payload->'payload'->>'kind' IN ('message', 'agent_message')
+		   AND COALESCE(BTRIM(i.payload->'payload'->>'text'), '') <> ''
+		   AND COALESCE(i.payload->>'timeline_id', '') <> ''
+		   AND i.order_key > COALESCE(boundary.boundary_order_key, '')
+		   AND (
+		     (la.provider_event_id <> '' AND i.payload#>>'{producer,provider_event_id}' = la.provider_event_id)
+		     OR (la.provider_event_id = '' AND i.order_key = la.assistant_order_key)
+		   )
+		  WHERE la.assistant_order_key > COALESCE(boundary.boundary_order_key, '')
+		),
+		final_answers AS (
+		  SELECT
+		    tank_session_id,
+		    terminal_order_key,
+		    jsonb_strip_nulls(jsonb_build_object(
+		      'timeline_ids',
+		      jsonb_agg(timeline_id ORDER BY order_key),
+		      'provider_item_ids',
+		      CASE
+		        WHEN COUNT(NULLIF(provider_item_id, '')) > 0 THEN
+		          jsonb_agg(provider_item_id ORDER BY order_key) FILTER (WHERE provider_item_id <> '')
+		        ELSE NULL
+		      END
+		    )) AS final_answer
+		  FROM final_items
+		  GROUP BY tank_session_id, terminal_order_key
+		)
+		UPDATE session_events se
+		SET payload = jsonb_set(
+		  CASE
+		    WHEN jsonb_typeof(se.payload->'payload') = 'object' THEN se.payload
+		    ELSE jsonb_set(se.payload, '{payload}', '{}'::jsonb, true)
+		  END,
+		  '{payload,final_answer}',
+		  fa.final_answer,
+		  true
+		)
+		FROM final_answers fa
+		WHERE se.tank_session_id = fa.tank_session_id
+		  AND se.order_key = fa.terminal_order_key
+		  AND se.payload#>'{payload,final_answer}' IS NULL`,
+
 	// `session_counters` â€” monotonic session-id allocator, one row per scope.
 	// Replaces the Cosmos `session-counter[:scope]` document the previous
 	// store kept under a sentinel email. The atomic INCREMENT-AND-RETURN
