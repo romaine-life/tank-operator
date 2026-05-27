@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -6141,29 +6141,46 @@ function formatThinkingElapsed(ms: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-// Per-tab cache of turn start timestamps. The previous implementation
-// derived the timer's reference point from whatever `startedAt` prop the
-// parent passed on each render — and the backend's projected
-// `activity.startedAt` turned out to drift toward "now" as new events
-// arrived for the active turn (the projection's `activityEntries[0]`
-// effectively re-stamped each refresh), which kept resetting the timer
-// and produced "0s" forever. We sidestep that by writing the first
-// observed start time to a module-level map keyed by turnId. After that,
-// every render of every instance for that turn reads the same locked
-// value — re-renders, remounts (e.g. Virtuoso recycling), and even hard
-// refreshes within the same tab keep counting up. sessionStorage carries
-// the cache across refreshes; the in-memory map is the hot path.
-const TURN_THINKING_START_CACHE_KEY_PREFIX = "tank.thinking-turn-start.";
+// =====================================================================
+// Thinking-bubble elapsed-time timer.
+//
+// Earlier revisions tried to anchor the timer to the backend's
+// projected `activity.startedAt`. That source kept ambushing the timer
+// — it could be empty before the first activity event landed, it could
+// flip values mid-flight when the projection's `first` entry changed,
+// and any stale `sessionStorage` from a previous tab could end up
+// pinned at an "earlier than reality" baseline. Symptoms included
+// "stuck at 0s forever", "stuck at a value that's higher than time
+// since submit", and "lag before the seconds start ticking up".
+//
+// New approach (per user direction): the timer is a purely client-side
+// stopwatch anchored to **the first moment the UI renders the bubble
+// for a given (user, turn) pair**. Backend timestamps are no longer
+// consulted. The anchor is captured eagerly in module-level state on
+// the first read for the pair and mirrored to `sessionStorage` so a
+// mid-turn refresh keeps the same anchor. A `useSyncExternalStore`
+// ticker drives one-second re-renders for every concurrent bubble off
+// a single shared interval — there is no per-component setInterval,
+// so Virtuoso remounting an item can never clear the interval before
+// it fires.
+//
+// Keying by user email avoids cross-account contamination: if user A
+// signs out and user B signs in within the same browser tab,
+// `sessionStorage` still has A's anchors but they're under A's
+// namespace and never read by B.
+// =====================================================================
+
+const TURN_THINKING_START_CACHE_KEY_PREFIX = "tank.thinking-turn-start.v3.";
 const turnThinkingStartCache = new Map<string, number>();
 
-function turnThinkingStartCacheKey(turnId: string): string {
-  return `${TURN_THINKING_START_CACHE_KEY_PREFIX}${turnId}`;
+function turnThinkingStartCacheKey(userKey: string, turnId: string): string {
+  return `${TURN_THINKING_START_CACHE_KEY_PREFIX}${userKey}:${turnId}`;
 }
 
-function readPersistedTurnThinkingStart(turnId: string): number | null {
+function readPersistedTurnThinkingStart(cacheKey: string): number | null {
   if (typeof window === "undefined" || !window.sessionStorage) return null;
   try {
-    const raw = window.sessionStorage.getItem(turnThinkingStartCacheKey(turnId));
+    const raw = window.sessionStorage.getItem(cacheKey);
     if (!raw) return null;
     const value = Number(raw);
     return Number.isFinite(value) ? value : null;
@@ -6172,117 +6189,110 @@ function readPersistedTurnThinkingStart(turnId: string): number | null {
   }
 }
 
-function writePersistedTurnThinkingStart(turnId: string, value: number): void {
+function writePersistedTurnThinkingStart(cacheKey: string, value: number): void {
   if (typeof window === "undefined" || !window.sessionStorage) return;
   try {
-    window.sessionStorage.setItem(turnThinkingStartCacheKey(turnId), String(value));
+    window.sessionStorage.setItem(cacheKey, String(value));
   } catch {
-    // sessionStorage may be unavailable (private mode, quota); the
-    // in-memory map is still authoritative for the current tab.
+    // sessionStorage may be unavailable (private mode, quota). The
+    // in-memory Map is still authoritative for the current tab; we
+    // just lose the refresh-survival guarantee.
   }
 }
 
-function resolveTurnThinkingStart(turnId: string, candidate: string | undefined): number {
-  // The durable source of truth is `activity.startedAt` from the
-  // backend's TurnActivitySummary — it's computed off the turn's first
-  // event order key and is stable across re-projections. When we have
-  // a parseable candidate we always trust it and write it to the
-  // cache (this also overwrites any stale sessionStorage entry from a
-  // previous run that might be earlier than today's reality).
-  let parsed: number | null = null;
-  if (candidate) {
-    const value = Date.parse(candidate);
-    if (Number.isFinite(value)) parsed = value;
-  }
-  if (parsed != null) {
-    turnThinkingStartCache.set(turnId, parsed);
-    writePersistedTurnThinkingStart(turnId, parsed);
-    return parsed;
-  }
-  // No durable candidate yet — fall back to whatever we previously
-  // observed for this turn (covers hard refreshes mid-turn) or to
-  // Date.now() so a freshly-submitted turn starts counting from "now"
-  // before the projection lands. We do not write Date.now() to the
-  // cache; once the durable startedAt arrives it gets to overwrite.
-  const fromMemory = turnThinkingStartCache.get(turnId);
+// Lazily capture the very first wall-clock moment the UI renders the
+// thinking bubble for a (user, turn) pair. The capture is idempotent —
+// subsequent calls always return the same number. This is the entire
+// anchor for the stopwatch; no backend timestamp participates.
+function resolveTurnThinkingStart(userKey: string, turnId: string): number {
+  const cacheKey = turnThinkingStartCacheKey(userKey, turnId);
+  const fromMemory = turnThinkingStartCache.get(cacheKey);
   if (fromMemory != null) return fromMemory;
-  const fromPersisted = readPersistedTurnThinkingStart(turnId);
+  const fromPersisted = readPersistedTurnThinkingStart(cacheKey);
   if (fromPersisted != null) {
-    turnThinkingStartCache.set(turnId, fromPersisted);
+    turnThinkingStartCache.set(cacheKey, fromPersisted);
     return fromPersisted;
   }
-  return Date.now();
-}
-
-// Shared 1-second ticker. The thinking bubble used to own its
-// interval in a useEffect; if the component remounted faster than 1s
-// (Virtuoso recycles items aggressively when new entries push the
-// scroll position around), the interval was cleared and reinitialized
-// before it ever fired, so `setNow` never advanced and the display
-// stayed at "0s". A module-level subscription pattern survives
-// remounts and shares one timer across every concurrent bubble.
-const turnThinkingNowSubscribers = new Set<() => void>();
-let turnThinkingNowIntervalId: number | null = null;
-
-function ensureTurnThinkingNowTicker(): void {
-  if (turnThinkingNowIntervalId != null) return;
-  if (typeof window === "undefined") return;
-  turnThinkingNowIntervalId = window.setInterval(() => {
-    for (const notify of turnThinkingNowSubscribers) {
-      try {
-        notify();
-      } catch {
-        // a single bad subscriber must not break the ticker for everyone
-      }
-    }
-  }, 1000);
-}
-
-function stopTurnThinkingNowTickerIfIdle(): void {
-  if (turnThinkingNowSubscribers.size > 0) return;
-  if (turnThinkingNowIntervalId == null) return;
-  if (typeof window === "undefined") return;
-  window.clearInterval(turnThinkingNowIntervalId);
-  turnThinkingNowIntervalId = null;
-}
-
-function useTickingNow(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const notify = () => setNow(Date.now());
-    turnThinkingNowSubscribers.add(notify);
-    ensureTurnThinkingNowTicker();
-    // Pull a fresh reading immediately so a remount that lands
-    // mid-tick still shows the right elapsed value on its first
-    // render after mount.
-    setNow(Date.now());
-    return () => {
-      turnThinkingNowSubscribers.delete(notify);
-      stopTurnThinkingNowTickerIfIdle();
-    };
-  }, []);
+  const now = Date.now();
+  turnThinkingStartCache.set(cacheKey, now);
+  writePersistedTurnThinkingStart(cacheKey, now);
   return now;
 }
 
-// Live-ticking elapsed-time readout for the "thinking" bubble. A
-// shared 1s ticker (`useTickingNow`) drives the re-render so any
-// number of concurrent bubbles cost one timer total. `aria-live="off"`
-// is intentional: the duration changes every second and would
-// otherwise spam screen readers with useless announcements. The
-// visual layer is decorative; the underlying turn button already has
-// an `aria-label="Open turn"`.
+// Shared 1-second ticker driven through `useSyncExternalStore`. One
+// interval, any number of subscribers; React handles snapshot
+// consistency and re-render scheduling. This is the bit that
+// guarantees "the counter actually counts up one second at a time"
+// even when the parent (or Virtuoso) is remounting the bubble
+// frequently — there is no per-component interval to lose.
+let turnThinkingTickerNow = Date.now();
+const turnThinkingTickerListeners = new Set<() => void>();
+let turnThinkingTickerInterval: number | null = null;
+
+function turnThinkingTickerNotifyAll(): void {
+  for (const listener of turnThinkingTickerListeners) {
+    try {
+      listener();
+    } catch {
+      // A single bad subscriber must not break the ticker for everyone.
+    }
+  }
+}
+
+function startTurnThinkingTicker(): void {
+  if (turnThinkingTickerInterval != null) return;
+  if (typeof window === "undefined") return;
+  turnThinkingTickerInterval = window.setInterval(() => {
+    turnThinkingTickerNow = Date.now();
+    turnThinkingTickerNotifyAll();
+  }, 1000);
+}
+
+function stopTurnThinkingTickerIfIdle(): void {
+  if (turnThinkingTickerListeners.size > 0) return;
+  if (turnThinkingTickerInterval == null) return;
+  if (typeof window === "undefined") return;
+  window.clearInterval(turnThinkingTickerInterval);
+  turnThinkingTickerInterval = null;
+}
+
+function subscribeTurnThinkingTicker(listener: () => void): () => void {
+  turnThinkingTickerListeners.add(listener);
+  startTurnThinkingTicker();
+  // Snap to the current wall clock immediately so a remount that
+  // lands mid-tick still sees the latest value on its first render.
+  turnThinkingTickerNow = Date.now();
+  return () => {
+    turnThinkingTickerListeners.delete(listener);
+    stopTurnThinkingTickerIfIdle();
+  };
+}
+
+function getTurnThinkingTickerSnapshot(): number {
+  return turnThinkingTickerNow;
+}
+
+function useTurnThinkingNow(): number {
+  return useSyncExternalStore(
+    subscribeTurnThinkingTicker,
+    getTurnThinkingTickerSnapshot,
+    getTurnThinkingTickerSnapshot,
+  );
+}
+
+// Live-ticking elapsed-time readout for the "thinking" bubble.
+// `aria-live="off"` is intentional: the duration changes every second
+// and would otherwise spam screen readers with useless announcements.
+// The underlying turn button already has an `aria-label="Open turn"`.
 function RunTurnThinkingDuration({
+  userKey,
   turnId,
-  startedAt,
 }: {
+  userKey: string;
   turnId: string;
-  startedAt?: string;
 }) {
-  // Re-resolve on every render so the durable startedAt always wins
-  // over a Date.now() fallback once it lands; cache writes are
-  // idempotent.
-  const startMs = resolveTurnThinkingStart(turnId, startedAt);
-  const now = useTickingNow();
+  const startMs = resolveTurnThinkingStart(userKey, turnId);
+  const now = useTurnThinkingNow();
   const elapsed = formatThinkingElapsed(now - startMs);
   return (
     <span
@@ -6290,7 +6300,7 @@ function RunTurnThinkingDuration({
       aria-live="off"
       data-design-element="thinking-duration"
       data-turn-id={turnId}
-      title={`turn started ${new Date(startMs).toLocaleTimeString()}`}
+      title={`UI timer started ${new Date(startMs).toLocaleTimeString()}`}
     >
       {elapsed}
     </span>
@@ -6298,14 +6308,14 @@ function RunTurnThinkingDuration({
 }
 
 function RunTurnThinkingBubble({
+  userKey,
   turnId,
   avatar,
-  startedAt,
   onOpenTurn,
 }: {
+  userKey: string;
   turnId: string;
   avatar: AgentAvatar | null;
-  startedAt?: string;
   onOpenTurn?: (turnId: string) => void;
 }) {
   return (
@@ -6331,7 +6341,7 @@ function RunTurnThinkingBubble({
           <span>.</span>
           <span>.</span>
         </span>
-        <RunTurnThinkingDuration turnId={turnId} startedAt={startedAt} />
+        <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
       </button>
     </div>
   );
@@ -6569,6 +6579,7 @@ function RunTurnActivityScreen({
   autoExpandTools,
   showTimestamps,
   showDuration,
+  userKey,
   loadingActivityTurns,
   onOpenBackgroundTask,
 }: {
@@ -6582,6 +6593,9 @@ function RunTurnActivityScreen({
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  // Stable identifier for the currently signed-in user. See the
+  // matching prop on RunMessages for the rationale.
+  userKey: string;
   loadingActivityTurns: Record<string, boolean | undefined>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
 }) {
@@ -6734,7 +6748,7 @@ function RunTurnActivityScreen({
                   <span>.</span>
                   <span>.</span>
                 </span>
-                <RunTurnThinkingDuration turnId={selected.turnId} startedAt={selected.startedAt} />
+                <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
@@ -6778,6 +6792,7 @@ export function RunMessages({
   activeTurnId = null,
   showTimestamps,
   showDuration,
+  userKey,
   onQuote,
   onFork,
   onOpenTurn,
@@ -6800,6 +6815,11 @@ export function RunMessages({
   sessionId: string;
   sessionMode?: string;
   telemetrySurface?: string;
+  // Stable identifier for the currently signed-in user. Used to
+  // namespace the thinking-bubble timer's per-(user, turn) anchor so
+  // a second account signed in on the same browser tab can't inherit
+  // anchors written by the first account.
+  userKey: string;
   // Set when the SPA cold-started with ?message=<entry.id>. RunMessages
   // searches the loaded groups for that id and, when found, scrolls
   // Virtuoso to it and lights up a highlight pulse on the bubble. If
@@ -7105,9 +7125,9 @@ export function RunMessages({
       if (g.kind === "thinking") {
         return (
           <RunTurnThinkingBubble
+            userKey={userKey}
             turnId={g.turnId}
             avatar={avatar}
-            startedAt={g.startedAt}
             onOpenTurn={onOpenTurn}
           />
         );
@@ -11062,6 +11082,7 @@ function ChatPane({
             autoExpandTools={runPrefs.autoExpandTools}
             showTimestamps={runPrefs.showTimestamps}
             showDuration={runPrefs.showDuration}
+            userKey={user?.sub ?? user?.email ?? "anon"}
             loadingActivityTurns={loadingActivityTurns}
             onOpenBackgroundTask={openBackgroundPage}
           />
@@ -11163,6 +11184,7 @@ function ChatPane({
               activeTurnId={renderedActiveTurnId}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
+              userKey={user?.sub ?? user?.email ?? "anon"}
               onQuote={readOnly ? undefined : appendQuotedMessage}
               onFork={
                 readOnly

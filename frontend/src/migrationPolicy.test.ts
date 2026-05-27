@@ -287,29 +287,33 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   // had been working, which made stuck-vs-slow indistinguishable. The
   // duration component sits alongside the dots and ticks every second
   // while the turn remains active.
+  //
+  // The timer is a purely client-side stopwatch anchored to the first
+  // moment the UI renders the bubble for a (user, turn) pair. Backend
+  // timestamps are intentionally NOT consulted — earlier revisions tried
+  // and kept getting ambushed by a moving `activity.startedAt`, stale
+  // sessionStorage from previous tabs, or empty values during the
+  // pre-projection window. The anchor is captured eagerly on first read
+  // and mirrored to sessionStorage so a mid-turn refresh keeps counting
+  // from the same baseline.
   assert.equal(appSource.includes("function formatThinkingElapsed"), true);
   assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
   assert.equal(appSource.includes("run-turn-thinking-duration"), true);
   assert.match(
     appSource,
-    /<RunTurnThinkingBubble[\s\S]{0,200}startedAt=\{g\.startedAt\}/,
+    /<RunTurnThinkingBubble[\s\S]{0,200}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/,
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingDuration turnId=\{selected\.turnId\} startedAt=\{selected\.startedAt\}/,
+    /<RunTurnThinkingDuration userKey=\{userKey\} turnId=\{selected\.turnId\}/,
   );
-  // The startedAt fed to the thinking duration starts from the durable
-  // TurnActivitySummary, but the live timer never trusts that prop after
-  // first sighting — it locks the per-turn start time into a
-  // module-level cache (and sessionStorage) keyed by turnId, because the
-  // backend's projected startedAt was observed drifting toward "now" as
-  // new events arrived and that drift was what pinned the visible
-  // duration at "0s".
-  assert.equal(
-    appSource.includes(
-      "startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,",
-    ),
-    true,
+  // No backend timestamp should leak into the timer's anchor — the
+  // resolver takes only (userKey, turnId) and never reads a startedAt
+  // prop. If a future refactor tries to add one back, this assertion
+  // makes it visible.
+  assert.match(
+    appSource,
+    /function resolveTurnThinkingStart\(userKey: string, turnId: string\): number/,
   );
   assert.equal(appSource.includes("turnThinkingStartCache"), true);
   assert.equal(appSource.includes("resolveTurnThinkingStart"), true);
@@ -317,12 +321,20 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
     appSource.includes("TURN_THINKING_START_CACHE_KEY_PREFIX"),
     true,
   );
-  // The thinking duration uses a module-level shared ticker so
-  // multiple remounts can't each lose their interval before it
-  // fires (Virtuoso recycles items aggressively when new entries
-  // push scroll position around).
-  assert.equal(appSource.includes("useTickingNow"), true);
-  assert.equal(appSource.includes("turnThinkingNowSubscribers"), true);
+  // The thinking duration uses a module-level shared ticker driven
+  // through useSyncExternalStore so multiple remounts can't each lose
+  // their interval before it fires (Virtuoso recycles items
+  // aggressively when new entries push scroll position around). One
+  // setInterval, every concurrent bubble subscribes.
+  assert.equal(appSource.includes("useTurnThinkingNow"), true);
+  assert.equal(appSource.includes("useSyncExternalStore"), true);
+  assert.equal(appSource.includes("turnThinkingTickerListeners"), true);
+  // Per-user keying so a second account signed in on the same tab
+  // can't inherit anchors written by the first account.
+  assert.match(
+    appSource,
+    /userKey=\{user\?\.sub \?\? user\?\.email \?\? "anon"\}/,
+  );
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
   assert.equal(
     styleguidePortfolioTranscriptSource.includes("run-turn-thinking-duration"),
