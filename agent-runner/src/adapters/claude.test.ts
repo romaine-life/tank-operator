@@ -112,6 +112,82 @@ test("adapter gives each text block in one Claude message a unique canonical id"
   for (const event of events) assertTankEventFixture(event);
 });
 
+test("adapter carries explicit Claude final-answer ids on successful result", () => {
+  const ctx = turn();
+  const assistant = canonicalEventsForClaudeMessage(
+    cfg(),
+    ctx,
+    {
+      type: "assistant",
+      uuid: "claude-msg-final",
+      message: {
+        content: [
+          { type: "text", text: "First final paragraph." },
+          { type: "text", text: "Second final paragraph." },
+        ],
+      },
+    },
+    new Set<string>(),
+  );
+  assert.equal(assistant.length, 2);
+
+  const result = canonicalEventsForClaudeMessage(
+    cfg(),
+    ctx,
+    {
+      type: "result",
+      subtype: "success",
+      uuid: "claude-result-success",
+    },
+    new Set<string>(),
+  );
+
+  assert.equal(result.length, 1);
+  assertTankEventFixture(result[0]!);
+  assert.equal(result[0]?.type, "turn.completed");
+  assert.deepEqual(result[0]?.payload?.final_answer, {
+    timeline_ids: [
+      "turn-run-123:item:assistant:claude-msg-final:text:0",
+      "turn-run-123:item:assistant:claude-msg-final:text:1",
+    ],
+    provider_item_ids: [
+      "assistant:claude-msg-final:text:0",
+      "assistant:claude-msg-final:text:1",
+    ],
+  });
+});
+
+test("adapter does not mark Claude assistant text with tool_use as final", () => {
+  const ctx = turn();
+  canonicalEventsForClaudeMessage(
+    cfg(),
+    ctx,
+    {
+      type: "assistant",
+      uuid: "claude-msg-tool",
+      message: {
+        content: [
+          { type: "text", text: "I will inspect the file." },
+          { type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "README.md" } },
+        ],
+      },
+    },
+    new Set<string>(),
+  );
+  const result = canonicalEventsForClaudeMessage(
+    cfg(),
+    ctx,
+    {
+      type: "result",
+      subtype: "success",
+      uuid: "claude-result-no-final",
+    },
+    new Set<string>(),
+  );
+
+  assert.equal(result[0]?.payload?.final_answer, undefined);
+});
+
 test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
   const needsInputProviderItemIDs = new Set<string>();
   const requested = canonicalEventsForClaudeMessage(

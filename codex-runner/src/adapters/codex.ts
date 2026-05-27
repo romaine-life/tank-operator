@@ -32,6 +32,7 @@ function codexItemText(item: Record<string, unknown>): string | undefined {
 
 export class CodexTankEventAdapter {
   private readonly itemTextByID = new Map<string, string>();
+  private readonly finalAnswerByTurn = new Map<string, { timelineIDs: string[]; providerItemIDs: string[] }>();
   private readonly pendingUnifiedExecStarts = new Map<string, Record<string, unknown>>();
   private readonly promotedUnifiedExecStarts = new Set<string>();
 
@@ -44,7 +45,8 @@ export class CodexTankEventAdapter {
     const providerID = codexProviderEventID(event);
     if (event.type === "turn.completed") {
       const shellEvents = this.promotePendingUnifiedExecStarts(turn);
-      this.itemTextByID.clear();
+      const finalAnswer = this.finalAnswerByTurn.get(turn.turnID);
+      this.clearTurnState(turn.turnID);
       return [
         ...shellEvents,
         turnEvent({
@@ -54,13 +56,14 @@ export class CodexTankEventAdapter {
           source: "codex",
           type: "turn.completed",
           usage: event.usage,
+          finalAnswer,
           providerEventID: providerID,
         }),
       ];
     }
     if (event.type === "turn.interrupted") {
       const shellEvents = this.promotePendingUnifiedExecStarts(turn);
-      this.itemTextByID.clear();
+      this.clearTurnState(turn.turnID);
       return [
         ...shellEvents,
         turnEvent({
@@ -76,7 +79,7 @@ export class CodexTankEventAdapter {
     }
     if (event.type === "turn.failed" || event.type === "error") {
       const shellEvents = this.promotePendingUnifiedExecStarts(turn);
-      this.itemTextByID.clear();
+      this.clearTurnState(turn.turnID);
       return [
         ...shellEvents,
         turnEvent({
@@ -162,18 +165,25 @@ export class CodexTankEventAdapter {
     if (event.type === "item.completed") itemOutcomeTotal.labels(outcome.kind, outcome.reason ?? "none").inc();
     if (event.type === "item.started") this.rememberItemText(providerItemID, codexItemText(itemRecord));
     if (event.type === "item.completed") this.itemTextByID.delete(providerItemID);
-    return [
-      itemEvent({
-        sessionID: this.cfg.sessionId,
-        turnID: turn.turnID,
-        source: "codex",
-        type,
-        providerItemID,
-        actor,
-        providerEventID: providerID,
-        payload,
-      }),
-    ];
+    const tankEvent = itemEvent({
+      sessionID: this.cfg.sessionId,
+      turnID: turn.turnID,
+      source: "codex",
+      type,
+      providerItemID,
+      actor,
+      providerEventID: providerID,
+      payload,
+    });
+    if (event.type === "item.completed" && isCodexFinalAnswerItem(tankEvent)) {
+      this.finalAnswerByTurn.set(turn.turnID, {
+        timelineIDs: [String(tankEvent.timeline_id)],
+        providerItemIDs: [providerItemID],
+      });
+    } else if (event.type === "item.started" || event.type === "item.completed") {
+      this.finalAnswerByTurn.delete(turn.turnID);
+    }
+    return [tankEvent];
   }
 
   private codexItemPayload(
@@ -207,6 +217,11 @@ export class CodexTankEventAdapter {
 
   private rememberItemText(providerItemID: string, text: string | undefined): void {
     if (text !== undefined) this.itemTextByID.set(providerItemID, text);
+  }
+
+  private clearTurnState(turnID: string): void {
+    this.itemTextByID.clear();
+    this.finalAnswerByTurn.delete(turnID);
   }
 
   private rememberPendingUnifiedExecStart(providerItemID: string, item: Record<string, unknown>): void {
@@ -268,6 +283,17 @@ export class CodexTankEventAdapter {
       }),
     ];
   }
+}
+
+function isCodexFinalAnswerItem(event: TankConversationEvent): boolean {
+  const kind = event.payload?.kind;
+  return event.type === "item.completed" &&
+    event.actor === "assistant" &&
+    (kind === "agent_message" || kind === "message") &&
+    typeof event.timeline_id === "string" &&
+    event.timeline_id.length > 0 &&
+    typeof event.payload?.text === "string" &&
+    event.payload.text.trim().length > 0;
 }
 
 type ItemOutcome =

@@ -248,6 +248,34 @@
         "status": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
+    "finalAnswer": {
+      "description": "The durable assistant item(s) that make up the user-visible final answer for a completed turn. Projection must use these Tank timeline IDs instead of inferring finality from provider item ordering.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeline_ids"],
+      "properties": {
+        "timeline_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "provider_item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        }
+      }
+    },
+    "turnCompletedPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "reason": { "type": "string" },
+        "usage": {},
+        "error": {},
+        "final_answer": { "$ref": "#/$defs/finalAnswer" }
+      }
+    },
     "sessionStatusPayload": {
       "type": "object",
       "additionalProperties": true,
@@ -360,6 +388,14 @@
         "required": ["turn_id"],
         "properties": {
           "actor": { "const": "runner" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "turn.completed" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/turnCompletedPayload" }
         }
       }
     },

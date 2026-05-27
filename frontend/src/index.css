@@ -4364,16 +4364,31 @@ button:disabled {
     box-shadow var(--motion-fast, 120ms) ease;
 }
 
-.run-main[aria-label="New session setup"]:focus,
-.demo-workspace[aria-label="New session setup"]:focus {
-  outline: none;
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.09),
-    inset 3px 0 0 rgba(180, 180, 180, 0.34);
+.run-main[aria-label="Transcript"],
+.run-main[aria-label="New session setup"],
+.demo-workspace[aria-label="New session setup"],
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
+  --run-transcript-active-rail-left: 0.2rem;
 }
 
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) {
+.run-main[aria-label="Transcript"]:is(:focus, :focus-within),
+.run-main[aria-label="New session setup"]:is(:focus, :focus-within),
+.demo-workspace[aria-label="New session setup"]:is(:focus, :focus-within),
+.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
   outline: none;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(147, 197, 253, 0.92),
+      var(--run-surface-accent, rgba(96, 165, 250, 0.72)) 58%,
+      rgba(96, 165, 250, 0.18)
+    ) var(--run-transcript-active-rail-left) var(--space-5) / 2px calc(100% - var(--space-5) - var(--space-3)) no-repeat,
+    linear-gradient(
+      90deg,
+      rgba(96, 165, 250, 0.075),
+      rgba(96, 165, 250, 0.035) 4rem,
+      rgba(10, 10, 10, 0) 11rem
+    );
 }
 
 .styleguide-transcript-focus-shell {
@@ -4937,33 +4952,39 @@ button:disabled {
 }
 
 /* Interactive composer shells keep the text box + send button visually live
-   even while sibling tool buttons are disabled. The blue outline is always
-   visible; the textarea caret already communicates focus. */
-.run-composer.run-composer-interactive,
-.run-composer.run-composer-runpane {
-  border-color: rgba(110, 168, 255, 0.42);
-  background: rgba(255, 255, 255, 0.025);
+   even while sibling tool buttons are disabled. Home and transcript composers
+   share this treatment; their page-specific classes are layout hooks only. */
+.run-composer.run-composer-interactive {
+  --run-composer-active-accent: var(--run-surface-accent, rgba(96, 165, 250, 0.72));
+  --run-composer-active-accent-soft: var(--run-surface-accent-soft, rgba(96, 165, 250, 0.16));
+  --run-composer-active-wash: var(
+    --run-surface-active-wash,
+    linear-gradient(
+      90deg,
+      rgba(96, 165, 250, 0.045),
+      rgba(10, 10, 10, 0) 8.5rem
+    )
+  );
+  --run-composer-active-shadow: var(
+    --run-surface-active-shadow,
+    inset 0 0 0 1px rgba(96, 165, 250, 0.16),
+    inset 0 1px 0 rgba(147, 197, 253, 0.12)
+  );
+  position: relative;
+  border-color: var(--run-composer-active-accent-soft);
+  background:
+    var(--run-composer-active-wash),
+    rgba(255, 255, 255, 0.025);
   box-shadow:
-    0 0 0 1px rgba(110, 168, 255, 0.12),
-    0 18px 36px rgba(0, 0, 0, 0.22);
+    var(--run-composer-active-shadow),
+    0 16px 36px rgba(0, 0, 0, 0.24);
   transition:
     border-color var(--motion-fast, 120ms) ease,
     box-shadow var(--motion-fast, 120ms) ease,
     background var(--motion-fast, 120ms) ease;
 }
 
-.run-composer.run-composer-runpane {
-  position: relative;
-  border-color: var(--run-surface-accent-soft);
-  background:
-    var(--run-surface-active-wash),
-    rgba(255, 255, 255, 0.025);
-  box-shadow:
-    var(--run-surface-active-shadow),
-    0 16px 36px rgba(0, 0, 0, 0.24);
-}
-
-.run-composer.run-composer-runpane::before {
+.run-composer.run-composer-interactive::before {
   content: "";
   position: absolute;
   left: 0.55rem;
@@ -4975,7 +4996,7 @@ button:disabled {
   background: linear-gradient(
     180deg,
     rgba(147, 197, 253, 0.92),
-    var(--run-surface-accent) 58%,
+    var(--run-composer-active-accent) 58%,
     rgba(96, 165, 250, 0.18)
   );
   box-shadow:
@@ -4984,12 +5005,12 @@ button:disabled {
   pointer-events: none;
 }
 
-.run-composer.run-composer-runpane > * {
+.run-composer.run-composer-interactive > * {
   position: relative;
   z-index: 1;
 }
 
-.run-composer.run-composer-runpane:focus-within {
+.run-composer.run-composer-interactive:focus-within {
   border-color: rgba(147, 197, 253, 0.9);
   background:
     linear-gradient(90deg, rgba(96, 165, 250, 0.09), rgba(255, 255, 255, 0.035) 10rem),
@@ -5001,7 +5022,7 @@ button:disabled {
     0 0 34px -14px rgba(96, 165, 250, 0.95);
 }
 
-.run-composer.run-composer-runpane:focus-within::before {
+.run-composer.run-composer-interactive:focus-within::before {
   background: linear-gradient(
     180deg,
     rgba(191, 219, 254, 0.98),
@@ -5013,28 +5034,25 @@ button:disabled {
     0 0 22px rgba(96, 165, 250, 0.48);
 }
 
-.run-composer.run-composer-runpane:focus-within .run-composer-textarea {
+.run-composer.run-composer-interactive:focus-within .run-composer-textarea {
   border-radius: 0.6rem;
   background: rgba(96, 165, 250, 0.045) !important;
 }
 
-.run-composer.run-composer-runpane:focus-within .run-composer-footer {
+.run-composer.run-composer-interactive:focus-within .run-composer-footer {
   border-radius: 0.6rem;
   background: rgba(96, 165, 250, 0.05);
 }
 
-.run-composer.run-composer-interactive > [data-slot="input-group"],
-.run-composer.run-composer-runpane > [data-slot="input-group"] {
+.run-composer.run-composer-interactive > [data-slot="input-group"] {
   opacity: 1 !important;
 }
 
-.run-composer.run-composer-interactive .run-composer-hint,
-.run-composer.run-composer-runpane .run-composer-hint {
+.run-composer.run-composer-interactive .run-composer-hint {
   color: var(--text-secondary);
 }
 
-.run-composer.run-composer-interactive .run-composer-textarea::placeholder,
-.run-composer.run-composer-runpane .run-composer-textarea::placeholder {
+.run-composer.run-composer-interactive .run-composer-textarea::placeholder {
   color: rgba(255, 255, 255, 0.42);
 }
 
@@ -7245,44 +7263,6 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript [data-index] {
   box-sizing: border-box;
   padding-block: calc(var(--run-transcript-row-gap) / 2);
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript {
-  background: linear-gradient(
-    90deg,
-    rgba(96, 165, 250, 0.075),
-    rgba(96, 165, 250, 0.035) 4rem,
-    rgba(10, 10, 10, 0) 11rem
-  );
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript::before {
-  content: "";
-  position: absolute;
-  left: var(--run-transcript-active-rail-left);
-  top: var(--space-5);
-  z-index: 0;
-  width: 2px;
-  height: min(5.75rem, calc(100% - (var(--space-5) * 2)));
-  border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    rgba(147, 197, 253, 0.92),
-    var(--run-surface-accent) 58%,
-    rgba(96, 165, 250, 0.18)
-  );
-  box-shadow:
-    0 0 0 1px rgba(96, 165, 250, 0.16),
-    0 0 18px rgba(96, 165, 250, 0.3);
-  pointer-events: none;
-}
-
-.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript > *,
-.styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active .run-transcript > * {
-  position: relative;
-  z-index: 1;
 }
 
 .run-transcript-divider {

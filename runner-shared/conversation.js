@@ -93,10 +93,13 @@ function isValidEventByType(event) {
         hasStrings(event, ["turn_id", "client_nonce"]) &&
         isStringPayload(event.payload, "status");
     case "turn.started":
-    case "turn.completed":
     case "turn.failed":
     case "turn.interrupted":
       return event.actor === "runner" && hasStrings(event, ["turn_id"]);
+    case "turn.completed":
+      return event.actor === "runner" &&
+        hasStrings(event, ["turn_id"]) &&
+        isTurnCompletedPayload(event.payload);
     case "turn.command_failed":
       return event.actor === "system" &&
         event.source === "tank" &&
@@ -175,6 +178,25 @@ function isStringPayload(payload, key) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   const value = payload[key];
   return typeof value === "string" && value.length > 0;
+}
+
+function isTurnCompletedPayload(payload) {
+  if (payload === undefined) return true;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (payload.final_answer === undefined) return true;
+  return isFinalAnswer(payload.final_answer);
+}
+
+function isFinalAnswer(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (!isNonEmptyStringArray(value.timeline_ids)) return false;
+  return value.provider_item_ids === undefined || isNonEmptyStringArray(value.provider_item_ids);
+}
+
+function isNonEmptyStringArray(value) {
+  return Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === "string" && item.length > 0);
 }
 
 function isSessionStatusPayload(payload) {

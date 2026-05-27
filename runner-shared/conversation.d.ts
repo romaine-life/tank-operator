@@ -57,6 +57,11 @@ export type TankItemOutcome =
     }
   | { kind: "execution_failed"; reason: "provider_item_error" };
 
+export interface TankFinalAnswer {
+  timelineIDs: string[];
+  providerItemIDs?: string[];
+}
+
 export interface TankConversationEvent<
   TPayload extends Record<string, unknown> = Record<string, unknown>,
 > {

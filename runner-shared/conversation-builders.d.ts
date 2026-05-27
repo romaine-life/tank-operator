@@ -1,4 +1,5 @@
 import type {
+  TankFinalAnswer,
   TankActor,
   TankConversationEvent,
   UserMessageAttachmentDisplay,
@@ -37,6 +38,7 @@ export interface TurnEventArgs {
   reason?: string;
   usage?: unknown;
   error?: unknown;
+  finalAnswer?: TankFinalAnswer;
   providerEventID?: string;
 }
 
