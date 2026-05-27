@@ -6183,43 +6183,94 @@ function writePersistedTurnThinkingStart(turnId: string, value: number): void {
 }
 
 function resolveTurnThinkingStart(turnId: string, candidate: string | undefined): number {
-  // We always settle on the EARLIEST plausible start time for the turn.
-  // Two sources can contribute: a cached value from a prior render in
-  // this tab (module Map or sessionStorage) and a parsed `candidate`
-  // ISO timestamp from the activity summary. Taking `min` of whatever
-  // we have gives us monotonic improvement: if the bubble first
-  // appeared while the activity summary was still empty we cached
-  // `Date.now()` as a placeholder, and as soon as the durable
-  // `activity.startedAt` arrives (necessarily an earlier wall-clock
-  // time than the placeholder, because the turn began before its
-  // events were projected) we adopt it. The cache mirrors to
-  // sessionStorage so a hard refresh keeps the timer monotonic.
-  const fromMemory = turnThinkingStartCache.get(turnId);
-  const fromPersisted = fromMemory == null ? readPersistedTurnThinkingStart(turnId) : null;
+  // The durable source of truth is `activity.startedAt` from the
+  // backend's TurnActivitySummary — it's computed off the turn's first
+  // event order key and is stable across re-projections. When we have
+  // a parseable candidate we always trust it and write it to the
+  // cache (this also overwrites any stale sessionStorage entry from a
+  // previous run that might be earlier than today's reality).
   let parsed: number | null = null;
   if (candidate) {
     const value = Date.parse(candidate);
     if (Number.isFinite(value)) parsed = value;
   }
-  const observations = [fromMemory, fromPersisted, parsed].filter(
-    (entry): entry is number => entry != null,
-  );
-  // Fall back to "now" only when nothing else is available — this lets
-  // a freshly-submitted turn start counting immediately, before the
-  // backend projection lands.
-  const chosen = observations.length > 0 ? Math.min(...observations) : Date.now();
-  if (fromMemory !== chosen) turnThinkingStartCache.set(turnId, chosen);
-  if (fromPersisted !== chosen) writePersistedTurnThinkingStart(turnId, chosen);
-  return chosen;
+  if (parsed != null) {
+    turnThinkingStartCache.set(turnId, parsed);
+    writePersistedTurnThinkingStart(turnId, parsed);
+    return parsed;
+  }
+  // No durable candidate yet — fall back to whatever we previously
+  // observed for this turn (covers hard refreshes mid-turn) or to
+  // Date.now() so a freshly-submitted turn starts counting from "now"
+  // before the projection lands. We do not write Date.now() to the
+  // cache; once the durable startedAt arrives it gets to overwrite.
+  const fromMemory = turnThinkingStartCache.get(turnId);
+  if (fromMemory != null) return fromMemory;
+  const fromPersisted = readPersistedTurnThinkingStart(turnId);
+  if (fromPersisted != null) {
+    turnThinkingStartCache.set(turnId, fromPersisted);
+    return fromPersisted;
+  }
+  return Date.now();
 }
 
-// Live-ticking elapsed-time readout for the "thinking" bubble. The 1s
-// interval mounts only while the bubble is on screen, so a session with
-// many completed turns carries no timers. `aria-live="off"` is
-// intentional: the duration changes every second and would otherwise
-// spam screen readers with useless announcements. The visual layer is
-// decorative; the underlying turn button already has an
-// `aria-label="Open turn"`.
+// Shared 1-second ticker. The thinking bubble used to own its
+// interval in a useEffect; if the component remounted faster than 1s
+// (Virtuoso recycles items aggressively when new entries push the
+// scroll position around), the interval was cleared and reinitialized
+// before it ever fired, so `setNow` never advanced and the display
+// stayed at "0s". A module-level subscription pattern survives
+// remounts and shares one timer across every concurrent bubble.
+const turnThinkingNowSubscribers = new Set<() => void>();
+let turnThinkingNowIntervalId: number | null = null;
+
+function ensureTurnThinkingNowTicker(): void {
+  if (turnThinkingNowIntervalId != null) return;
+  if (typeof window === "undefined") return;
+  turnThinkingNowIntervalId = window.setInterval(() => {
+    for (const notify of turnThinkingNowSubscribers) {
+      try {
+        notify();
+      } catch {
+        // a single bad subscriber must not break the ticker for everyone
+      }
+    }
+  }, 1000);
+}
+
+function stopTurnThinkingNowTickerIfIdle(): void {
+  if (turnThinkingNowSubscribers.size > 0) return;
+  if (turnThinkingNowIntervalId == null) return;
+  if (typeof window === "undefined") return;
+  window.clearInterval(turnThinkingNowIntervalId);
+  turnThinkingNowIntervalId = null;
+}
+
+function useTickingNow(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const notify = () => setNow(Date.now());
+    turnThinkingNowSubscribers.add(notify);
+    ensureTurnThinkingNowTicker();
+    // Pull a fresh reading immediately so a remount that lands
+    // mid-tick still shows the right elapsed value on its first
+    // render after mount.
+    setNow(Date.now());
+    return () => {
+      turnThinkingNowSubscribers.delete(notify);
+      stopTurnThinkingNowTickerIfIdle();
+    };
+  }, []);
+  return now;
+}
+
+// Live-ticking elapsed-time readout for the "thinking" bubble. A
+// shared 1s ticker (`useTickingNow`) drives the re-render so any
+// number of concurrent bubbles cost one timer total. `aria-live="off"`
+// is intentional: the duration changes every second and would
+// otherwise spam screen readers with useless announcements. The
+// visual layer is decorative; the underlying turn button already has
+// an `aria-label="Open turn"`.
 function RunTurnThinkingDuration({
   turnId,
   startedAt,
@@ -6227,18 +6278,11 @@ function RunTurnThinkingDuration({
   turnId: string;
   startedAt?: string;
 }) {
-  // Re-resolve on every render so a later-arriving durable startedAt
-  // (cheaper than Date.now()) can revise the cached value downward. The
-  // resolver itself is monotone — once a value is locked in, only an
-  // earlier observation can replace it — so this can never make the
-  // counter jump backwards (i.e. shrink mid-flight).
+  // Re-resolve on every render so the durable startedAt always wins
+  // over a Date.now() fallback once it lands; cache writes are
+  // idempotent.
   const startMs = resolveTurnThinkingStart(turnId, startedAt);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [turnId]);
+  const now = useTickingNow();
   const elapsed = formatThinkingElapsed(now - startMs);
   return (
     <span

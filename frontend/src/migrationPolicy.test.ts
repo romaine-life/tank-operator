@@ -317,6 +317,12 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
     appSource.includes("TURN_THINKING_START_CACHE_KEY_PREFIX"),
     true,
   );
+  // The thinking duration uses a module-level shared ticker so
+  // multiple remounts can't each lose their interval before it
+  // fires (Virtuoso recycles items aggressively when new entries
+  // push scroll position around).
+  assert.equal(appSource.includes("useTickingNow"), true);
+  assert.equal(appSource.includes("turnThinkingNowSubscribers"), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
   assert.equal(
     styleguidePortfolioTranscriptSource.includes("run-turn-thinking-duration"),
