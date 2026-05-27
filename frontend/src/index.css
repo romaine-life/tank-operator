@@ -2336,8 +2336,10 @@ button:disabled {
   z-index: 20;
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   min-width: 0;
-  width: min(16rem, calc(100% - (2 * var(--space-5))));
+  width: min(31rem, calc(100% - (2 * var(--space-5))));
+  pointer-events: none;
 }
 
 .workspace-title-spacer {
@@ -2349,7 +2351,10 @@ button:disabled {
 
 .workspace-title-overlay .run-header-name-btn,
 .workspace-title-overlay .run-header-name-input {
+  flex: 0 1 16rem;
+  min-width: 0;
   max-width: 100%;
+  pointer-events: auto;
 }
 
 .workspace-title-overlay .run-header-name-btn {
@@ -3232,6 +3237,20 @@ button:disabled {
   flex-direction: column;
   gap: 0.05rem;
   min-width: 0;
+}
+
+.run-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-header-title-row .run-header-name-btn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-header-name {
@@ -5804,28 +5823,34 @@ textarea.run-files-viewer-editor:focus {
   cursor: default;
 }
 
-/* SSE connectivity banner — only renders when the live event stream is
-   degraded (connecting / connection_lost / resyncing). Healthy stream:
-   no banner. Replaces the old run-status pill's connectionLabel slot;
-   run status now lives on the composer's Submit↔Stop button and per-turn
-   errors are durable transcript meta lines. */
-.run-connection-banner {
+/* SSE connectivity pill — rendered beside the session title when the live
+   event stream is degraded (connecting / connection_lost / resyncing). It
+   lives in the absolute title chrome so transient reconnects do not move the
+   transcript or composer. */
+.run-connection-pill {
   flex: 0 0 auto;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin: 0 var(--space-5) var(--space-2);
-  padding: 0.35rem 0.75rem;
+  min-height: 1.45rem;
+  max-width: 9.5rem;
+  padding: 0.18rem 0.58rem;
   border-radius: 999px;
   border: 1px solid rgba(251, 191, 36, 0.25);
   background: linear-gradient(180deg, rgba(251, 191, 36, 0.08), rgba(251, 191, 36, 0.03));
   font-family: var(--font-primary);
   font-size: var(--text-xs);
+  line-height: 1.1;
+  pointer-events: none;
 }
 
 .run-connection-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: rgba(251, 191, 36, 0.85);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
 }
 
 /* "Load earlier messages" pill — sits at the top of the transcript when

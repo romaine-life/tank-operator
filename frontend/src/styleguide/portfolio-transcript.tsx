@@ -461,9 +461,14 @@ export function StyleguidePortfolioTranscript() {
                 className="styleguide-transcript-focus-shell"
                 title={
                   <>
-                    <button className="run-header-name-btn" type="button">
-                      transcript-states
-                    </button>
+                    <div className="run-header-title-row">
+                      <button className="run-header-name-btn" type="button">
+                        transcript-states
+                      </button>
+                      <span className="run-connection-pill" role="status" aria-live="polite">
+                        <span className="run-connection-label">Connecting</span>
+                      </span>
+                    </div>
                     <p className="run-header-sub">mocked codex gui session</p>
                   </>
                 }

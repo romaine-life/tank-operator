@@ -557,6 +557,15 @@ test("workspace title editor survives session creation", () => {
   assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
 });
 
+test("SSE reconnect status stays out of transcript/composer flow", () => {
+  assert.equal(appSource.includes("run-connection-banner"), false);
+  assert.equal(indexCssSource.includes(".run-connection-banner"), false);
+  assert.equal(appSource.includes("onConnectionLabelChange"), true);
+  assert.equal(appSource.includes("activeConnectionLabel"), true);
+  assert.equal(indexCssSource.includes(".run-connection-pill"), true);
+  assert.match(indexCssSource, /absolute title chrome[\s\S]*\.run-connection-pill/);
+});
+
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
