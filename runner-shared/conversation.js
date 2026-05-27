@@ -148,6 +148,7 @@ function hasStrings(event, keys) {
 function isUserMessagePayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   if (typeof payload.text !== "string" || !payload.text) return false;
+  if (payload.attachments !== undefined && !isUserMessageAttachments(payload.attachments)) return false;
   return isUserMessageDisplay(payload.display);
 }
 
@@ -157,6 +158,20 @@ function isUserMessageDisplay(display) {
   return display.kind === "skill_invocation" &&
     isSkillName(display.skill_name) &&
     (display.supplemental_text === undefined || typeof display.supplemental_text === "string");
+}
+
+function isUserMessageAttachments(attachments) {
+  if (!Array.isArray(attachments) || attachments.length > 32) return false;
+  return attachments.every((attachment) => {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return false;
+    if (typeof attachment.label !== "string" || !attachment.label) return false;
+    if (typeof attachment.name !== "string" || !attachment.name) return false;
+    if (attachment.kind !== "image" && attachment.kind !== "file") return false;
+    if (attachment.path !== undefined && (typeof attachment.path !== "string" || !attachment.path)) return false;
+    if (attachment.absPath !== undefined && (typeof attachment.absPath !== "string" || !attachment.absPath)) return false;
+    return attachment.size === undefined ||
+      (typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0);
+  });
 }
 
 function isStringPayload(payload, key) {

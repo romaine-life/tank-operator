@@ -240,6 +240,9 @@ func (s *projectionState) applyUserMessage(event map[string]any) {
 	if display := transcriptPayloadMap(event, "display"); display != nil {
 		entry["display"] = display
 	}
+	if attachments := transcriptPayloadAttachments(event); len(attachments) > 0 {
+		entry["attachments"] = attachments
+	}
 	if origin := transcriptString(event, "origin_session_id"); origin != "" {
 		entry["originSessionId"] = origin
 	}
@@ -1177,6 +1180,53 @@ func transcriptPayloadMap(event map[string]any, key string) map[string]any {
 	return transcriptAnyMap(transcriptPayloadValue(event, key))
 }
 
+func transcriptPayloadAttachments(event map[string]any) []map[string]any {
+	var raw []any
+	switch value := transcriptPayloadValue(event, "attachments").(type) {
+	case []any:
+		raw = value
+	case []map[string]any:
+		raw = make([]any, 0, len(value))
+		for _, item := range value {
+			raw = append(raw, item)
+		}
+	default:
+		return nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		record := transcriptAnyMap(item)
+		if record == nil {
+			continue
+		}
+		label := projectionFirstNonEmpty(transcriptMapString(record, "label"), transcriptMapString(record, "name"))
+		name := projectionFirstNonEmpty(transcriptMapString(record, "name"), label)
+		if label == "" || name == "" {
+			continue
+		}
+		kind := transcriptMapString(record, "kind")
+		if kind != "image" {
+			kind = "file"
+		}
+		attachment := map[string]any{
+			"label": label,
+			"name":  name,
+			"kind":  kind,
+		}
+		if path := transcriptMapString(record, "path"); path != "" {
+			attachment["path"] = path
+		}
+		if absPath := projectionFirstNonEmpty(transcriptMapString(record, "absPath"), transcriptMapString(record, "abs_path")); absPath != "" {
+			attachment["absPath"] = absPath
+		}
+		if size, ok := transcriptNumeric(record["size"]); ok && size >= 0 {
+			attachment["size"] = size
+		}
+		out = append(out, attachment)
+	}
+	return out
+}
+
 func transcriptMap(entry map[string]any, key string) map[string]any {
 	return transcriptAnyMap(entry[key])
 }
@@ -1215,6 +1265,19 @@ func transcriptAnyMap(value any) map[string]any {
 		return out
 	}
 	return nil
+}
+
+func transcriptNumeric(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func cloneAnyMap(input map[string]any) map[string]any {

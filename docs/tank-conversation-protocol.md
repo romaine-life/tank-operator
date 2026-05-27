@@ -503,7 +503,8 @@ not remain indefinitely submitted.
 
 Attachment-backed SDK launches set `initial_turn.deferred=true`. The create
 request still writes `user_message.created` before startup status, using the
-user's text plus attachment names as the durable display text. After the pod is
+user's text as the durable display text and `payload.attachments` as structured
+transcript metadata. After the pod is
 ready and files are uploaded into the workspace, the SPA submits the same
 `client_nonce` to `POST /api/sessions/{session_id}/turns` with
 `existing_user_message=true`; the backend writes only `turn.submitted` and
@@ -520,7 +521,18 @@ Body:
 ```json
 {
   "client_nonce": "turn_abc123",
-  "prompt": "Implement the change",
+  "prompt": "Compare these\n\nAttachments:\n- /workspace/screenshots/1.png",
+  "display_text": "Compare these",
+  "display_attachments": [
+    {
+      "label": "Screenshot 1",
+      "name": "image.png",
+      "kind": "image",
+      "path": "screenshots/1.png",
+      "abs_path": "/workspace/screenshots/1.png",
+      "size": 12345
+    }
+  ],
   "model": "claude-sonnet-4-6",
   "permission_mode": "bypassPermissions",
   "skill_name": "test",
@@ -535,6 +547,12 @@ events directly to `session_events`, then publishes a durable JetStream
 `submit_turn` command keyed by `client_nonce`. The runner consumes commands
 through a durable per-session/per-provider consumer and calls JetStream
 `working()` while a long turn is in flight.
+`prompt` is the executable runner input. `display_text` is optional and, when
+present, is the durable `user_message.created` transcript text.
+`display_attachments` is optional structured display metadata for user
+attachments. The SPA uses this split for attachment-backed follow-up turns: the
+user-visible row renders attachments as transcript UI, while the runner prompt
+carries workspace paths.
 When `existing_user_message=true`, the user row must already have been written
 by the launch-time create boundary, so this endpoint writes `turn.submitted`
 only.

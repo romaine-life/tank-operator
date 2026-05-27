@@ -39,6 +39,15 @@ export type UserMessageDisplay =
   | { kind: "plain" }
   | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
 
+export interface UserMessageAttachmentDisplay {
+  label: string;
+  name: string;
+  kind: "image" | "file";
+  path?: string;
+  absPath?: string;
+  size?: number;
+}
+
 export type TankItemOutcome =
   | { kind: "ok" }
   | {

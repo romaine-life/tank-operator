@@ -8,6 +8,7 @@ import type {
   ConversationTurnTerminalStatus,
 } from "./conversationReducer";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
+import type { MessageAttachmentDisplay } from "./attachmentLabels";
 
 export type ConversationViewEntry =
   | ConversationMessageEntry
@@ -21,6 +22,7 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   role: "user" | "assistant" | "system";
   text: string;
   display?: UserMessageDisplay;
+  attachments?: MessageAttachmentDisplay[];
   // Set when a user-role message was posted by a sibling tank-operator
   // session via the mcp-tank-operator handoff path. The renderer uses
   // this to pick the parent session's avatar instead of the human
@@ -147,9 +149,10 @@ export function projectConversationState(
             id: message.id,
             kind: "message" as const,
             role: message.role,
-            text,
-            display: message.display,
-            turnId: message.turnId,
+	            text,
+	            display: message.display,
+	            attachments: message.attachments,
+	            turnId: message.turnId,
             clientNonce: message.clientNonce,
             time: message.createdAt ?? "",
             sourceEventId: message.sourceEventId,

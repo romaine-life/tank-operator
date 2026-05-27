@@ -1,4 +1,5 @@
 import type { TankConversationEvent, UserMessageDisplay } from "../../runner-shared/conversation.js";
+import type { MessageAttachmentDisplay } from "./attachmentLabels";
 
 export type ConversationRunStatus =
   | "ready"
@@ -25,6 +26,7 @@ export interface ConversationMessage {
   turnId?: string;
   clientNonce?: string;
   display?: UserMessageDisplay;
+  attachments?: MessageAttachmentDisplay[];
   orderKey?: string;
   sourceEventId?: string;
   createdAt?: string;
@@ -352,11 +354,12 @@ function applyUserMessage(
   const message: ConversationMessage = {
     id: event.timeline_id,
     role: "user",
-    text,
-    turnId: event.turn_id,
-    clientNonce: event.client_nonce,
-    display: userMessageDisplay(event),
-    orderKey: event.order_key,
+	    text,
+	    turnId: event.turn_id,
+	    clientNonce: event.client_nonce,
+	    display: userMessageDisplay(event),
+	    attachments: userMessageAttachments(event),
+	    orderKey: event.order_key,
     sourceEventId: event.event_id,
     createdAt: event.created_at,
     ...(originSessionId ? { originSessionId } : {}),
@@ -689,6 +692,38 @@ function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | 
       ? { supplemental_text: record.supplemental_text }
       : {}),
   };
+}
+
+function userMessageAttachments(event: TankConversationEvent): MessageAttachmentDisplay[] | undefined {
+  const raw = event.payload?.attachments;
+  if (!Array.isArray(raw)) return undefined;
+  const attachments = raw
+    .map((item): MessageAttachmentDisplay | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      const label = typeof record.label === "string" ? record.label.trim() : "";
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      if (!label && !name) return null;
+      const path = typeof record.path === "string" ? record.path.trim() : "";
+      const absPath = typeof record.absPath === "string"
+        ? record.absPath.trim()
+        : typeof record.abs_path === "string"
+          ? record.abs_path.trim()
+          : "";
+      const size = typeof record.size === "number" && Number.isFinite(record.size)
+        ? record.size
+        : undefined;
+      return {
+        label: label || name,
+        name: name || label,
+        kind: record.kind === "image" ? "image" : "file",
+        ...(path ? { path } : {}),
+        ...(absPath ? { absPath } : {}),
+        ...(size != null ? { size } : {}),
+      };
+    })
+    .filter((item): item is MessageAttachmentDisplay => item !== null);
+  return attachments.length > 0 ? attachments : undefined;
 }
 
 function errorText(event: TankConversationEvent): string | null {

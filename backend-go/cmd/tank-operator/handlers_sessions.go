@@ -39,13 +39,14 @@ func repoSelectionBucket(count int) string {
 }
 
 type createSessionInitialTurnRequest struct {
-	ClientNonce    string `json:"client_nonce"`
-	Prompt         string `json:"prompt"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	PermissionMode string `json:"permission_mode,omitempty"`
-	SkillName      string `json:"skill_name,omitempty"`
-	Deferred       bool   `json:"deferred,omitempty"`
+	ClientNonce        string                               `json:"client_nonce"`
+	Prompt             string                               `json:"prompt"`
+	DisplayAttachments []conversation.UserMessageAttachment `json:"display_attachments,omitempty"`
+	Model              string                               `json:"model,omitempty"`
+	Effort             string                               `json:"effort,omitempty"`
+	PermissionMode     string                               `json:"permission_mode,omitempty"`
+	SkillName          string                               `json:"skill_name,omitempty"`
+	Deferred           bool                                 `json:"deferred,omitempty"`
 }
 
 func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTurnRequest) (createSessionInitialTurnRequest, int, string) {
@@ -70,6 +71,10 @@ func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTur
 	if len([]byte(prompt)) > maxSDKTurnPromptBytes {
 		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.prompt too large"
 	}
+	displayAttachments, attachmentStatus, attachmentDetail := normalizeDisplayAttachments(turn.DisplayAttachments)
+	if attachmentStatus != 0 {
+		return createSessionInitialTurnRequest{}, attachmentStatus, "initial_turn." + attachmentDetail
+	}
 	skillName := validateSkillName(turn.SkillName)
 	if strings.TrimSpace(turn.SkillName) != "" && skillName == "" {
 		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.skill_name is invalid"
@@ -85,13 +90,14 @@ func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTur
 		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.effort is invalid; want one of low|medium|high|xhigh|max"
 	}
 	return createSessionInitialTurnRequest{
-		ClientNonce:    clientNonce,
-		Prompt:         prompt,
-		Model:          strings.TrimSpace(turn.Model),
-		Effort:         effort,
-		PermissionMode: strings.TrimSpace(turn.PermissionMode),
-		SkillName:      skillName,
-		Deferred:       turn.Deferred,
+		ClientNonce:        clientNonce,
+		Prompt:             prompt,
+		DisplayAttachments: displayAttachments,
+		Model:              strings.TrimSpace(turn.Model),
+		Effort:             effort,
+		PermissionMode:     strings.TrimSpace(turn.PermissionMode),
+		SkillName:          skillName,
+		Deferred:           turn.Deferred,
 	}, 0, ""
 }
 
@@ -191,18 +197,19 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 			}
 		} else {
 			if _, status, detail := s.enqueueSDKTurn(r.Context(), owner, info.ID, sdkTurnRequest{
-				ClientNonce:      initialTurn.ClientNonce,
-				RequireNonce:     true,
-				Prompt:           initialTurn.Prompt,
-				Model:            initialTurn.Model,
-				Effort:           initialTurn.Effort,
-				PermissionMode:   initialTurn.PermissionMode,
-				SkillName:        initialTurn.SkillName,
-				FollowUp:         false,
-				AllowBeforeReady: true,
-				SessionMode:      info.Mode,
-				CreatedAt:        launchTurnAt,
-				OrderBase:        launchTurnAt,
+				ClientNonce:        initialTurn.ClientNonce,
+				RequireNonce:       true,
+				Prompt:             initialTurn.Prompt,
+				DisplayAttachments: initialTurn.DisplayAttachments,
+				Model:              initialTurn.Model,
+				Effort:             initialTurn.Effort,
+				PermissionMode:     initialTurn.PermissionMode,
+				SkillName:          initialTurn.SkillName,
+				FollowUp:           false,
+				AllowBeforeReady:   true,
+				SessionMode:        info.Mode,
+				CreatedAt:          launchTurnAt,
+				OrderBase:          launchTurnAt,
 			}); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "submit initial turn", detail)
 				writeError(w, status, detail)
@@ -272,6 +279,7 @@ func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, se
 		ClientNonce:       turn.ClientNonce,
 		Text:              turn.Prompt,
 		Message:           map[string]any{"role": "user", "content": turn.Prompt},
+		Attachments:       turn.DisplayAttachments,
 		Runtime:           runtime,
 		SkillName:         turn.SkillName,
 		Now:               createdAt.UTC(),

@@ -203,6 +203,54 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	body := `{
+		"client_nonce":"turn-attach_123",
+		"prompt":"compare these\n\nAttachments:\n- /workspace/screenshots/1.png",
+		"display_text":"compare these",
+		"display_attachments":[
+			{"label":"Screenshot 1","name":"image.png","kind":"image","path":"screenshots/1.png","abs_path":"/workspace/screenshots/1.png","size":123}
+		]
+	}`
+	req := authedTurnRequest(t, "63", body)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Prompt; got != "compare these\n\nAttachments:\n- /workspace/screenshots/1.png" {
+		t.Fatalf("command prompt = %q", got)
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", len(es.upserts))
+	}
+	payload, ok := es.upserts[0]["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("user event payload missing: %#v", es.upserts[0])
+	}
+	if got, _ := payload["text"].(string); got != "compare these" {
+		t.Fatalf("durable user text = %q", got)
+	}
+	attachments, ok := payload["attachments"].([]map[string]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("durable user attachments = %#v", payload["attachments"])
+	}
+	if got, _ := attachments[0]["label"].(string); got != "Screenshot 1" {
+		t.Fatalf("attachment label = %q", got)
+	}
+	if got, _ := attachments[0]["absPath"].(string); got != "/workspace/screenshots/1.png" {
+		t.Fatalf("attachment absPath = %q", got)
+	}
+}
+
 func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 	bus := &recordingSessionBus{}
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
@@ -343,7 +391,7 @@ func TestCreateSessionInitialTurnDeferredReusesUserMessage(t *testing.T) {
 
 	turnReq := authedTurnRequest(t, created.ID, `{
 		"client_nonce":"turn-launch_attach",
-		"prompt":"launch prompt\n\nAttachments (use the Read tool to load):\n- /workspace/.attachments/123-notes.txt",
+		"prompt":"launch prompt\n\nAttachments:\n- /workspace/.attachments/123-notes.txt",
 		"existing_user_message":true
 	}`)
 	turnResp := httptest.NewRecorder()
@@ -362,7 +410,7 @@ func TestCreateSessionInitialTurnDeferredReusesUserMessage(t *testing.T) {
 	if len(bus.commands) != 1 {
 		t.Fatalf("commands after deferred submit = %d, want 1", len(bus.commands))
 	}
-	if got := bus.commands[0].Prompt; got != "launch prompt\n\nAttachments (use the Read tool to load):\n- /workspace/.attachments/123-notes.txt" {
+	if got := bus.commands[0].Prompt; got != "launch prompt\n\nAttachments:\n- /workspace/.attachments/123-notes.txt" {
 		t.Fatalf("command prompt = %q", got)
 	}
 }

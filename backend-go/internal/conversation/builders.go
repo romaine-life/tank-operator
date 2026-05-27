@@ -85,6 +85,10 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 			},
 		}),
 	}
+	if attachments := userMessageAttachments(args.Attachments); len(attachments) > 0 {
+		payload := events[0]["payload"].(map[string]any)
+		payload["attachments"] = attachments
+	}
 	originSessionID := strings.TrimSpace(args.OriginSessionID)
 	for _, event := range events {
 		if args.SessionStorageKey != "" {
@@ -117,6 +121,7 @@ type UserSubmissionArgs struct {
 	ClientNonce       string
 	Text              string
 	Message           any
+	Attachments       []UserMessageAttachment
 	Runtime           string
 	SkillName         string
 	// OriginSessionID identifies the sibling tank-operator session that
@@ -124,8 +129,60 @@ type UserSubmissionArgs struct {
 	// spawn_run_session). Empty for human-typed browser turns. Only
 	// stamped on the emitted events when it differs from SessionID —
 	// a session sending a prompt to itself reads as a normal user turn.
-	OriginSessionID   string
-	Now               time.Time
+	OriginSessionID string
+	Now             time.Time
+}
+
+type UserMessageAttachment struct {
+	Label   string `json:"label"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	AbsPath string `json:"abs_path"`
+	Size    int64  `json:"size"`
+}
+
+func userMessageAttachments(input []UserMessageAttachment) []map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(input))
+	for _, attachment := range input {
+		label := strings.TrimSpace(attachment.Label)
+		name := strings.TrimSpace(attachment.Name)
+		if label == "" && name == "" {
+			continue
+		}
+		kind := strings.TrimSpace(attachment.Kind)
+		if kind != "image" {
+			kind = "file"
+		}
+		item := map[string]any{
+			"label": firstNonEmpty(label, name),
+			"name":  firstNonEmpty(name, label),
+			"kind":  kind,
+		}
+		if path := strings.TrimSpace(attachment.Path); path != "" {
+			item["path"] = path
+		}
+		if absPath := strings.TrimSpace(attachment.AbsPath); absPath != "" {
+			item["absPath"] = absPath
+		}
+		if attachment.Size > 0 {
+			item["size"] = attachment.Size
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // TurnCommandFailedArgs describes the durable event emitted when the

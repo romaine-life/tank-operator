@@ -152,6 +152,8 @@ type SubmitArgs struct {
 	Email           string
 	ClientNonce     string
 	Text            string
+	DisplayText     string
+	Attachments     []conversation.UserMessageAttachment
 	Instructions    string // optional; layered on top of Hermes' core prompt
 	SkillName       string
 	OmitUserMessage bool
@@ -177,6 +179,10 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 	if args.Text == "" {
 		return SubmitResult{}, errors.New("text is required")
 	}
+	displayText := strings.TrimSpace(args.DisplayText)
+	if displayText == "" {
+		displayText = args.Text
+	}
 	now := args.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -192,7 +198,9 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 		SessionID:         args.SessionID,
 		SessionStorageKey: storageKey,
 		Email:             args.Email,
-		Text:              args.Text,
+		Text:              displayText,
+		Message:           map[string]any{"role": "user", "content": displayText},
+		Attachments:       args.Attachments,
 		ClientNonce:       args.ClientNonce,
 		Runtime:           "hermes",
 		SkillName:         args.SkillName,
