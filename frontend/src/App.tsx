@@ -7720,9 +7720,10 @@ function ChatPane({
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
     id: string;
-    turnId: string;
-    prompt: string;
-    skillName?: string;
+	    turnId: string;
+	    prompt: string;
+	    displayText: string;
+	    skillName?: string;
     followUp: boolean;
     model: string;
     // effort is the reasoning level the user picked in the launchpad
@@ -9783,6 +9784,9 @@ function ChatPane({
       body: JSON.stringify({
         client_nonce: run.id,
         prompt: run.prompt,
+        ...(!run.skillName && run.displayText && run.displayText !== run.prompt
+          ? { display_text: run.displayText }
+          : {}),
         model: run.model,
         // effort is forwarded only when set — the backend's
         // validateEffort treats empty string as "use the runner's
@@ -9883,6 +9887,7 @@ function ChatPane({
       id,
       turnId: turnIdForBrowserClientNonce(id),
       prompt: trimmed,
+      displayText,
       skillName,
       followUp,
       model: isClaude || isCodex

@@ -10,7 +10,7 @@ test("links screenshot attachment workspace paths", () => {
   const markdown = [
     "look at this",
     "",
-    "Attachments (use the Read tool to load):",
+    "Attachments:",
     "- /workspace/screenshots/1.png",
   ].join("\n");
 
@@ -19,7 +19,7 @@ test("links screenshot attachment workspace paths", () => {
     [
       "look at this",
       "",
-      "Attachments (use the Read tool to load):",
+      "Attachments:",
       "- [/workspace/screenshots/1.png](</workspace/screenshots/1.png>)",
     ].join("\n"),
   );

@@ -154,6 +154,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	var body struct {
 		ClientNonce         string `json:"client_nonce"`
 		Prompt              string `json:"prompt"`
+		DisplayText         string `json:"display_text"`
 		Model               string `json:"model"`
 		Effort              string `json:"effort"`
 		PermissionMode      string `json:"permission_mode"`
@@ -172,6 +173,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		ClientNonce:     body.ClientNonce,
 		RequireNonce:    true,
 		Prompt:          body.Prompt,
+		DisplayText:     body.DisplayText,
 		Model:           body.Model,
 		Effort:          body.Effort,
 		PermissionMode:  body.PermissionMode,
@@ -580,6 +582,7 @@ type sdkTurnRequest struct {
 	ClientNonce      string
 	RequireNonce     bool
 	Prompt           string
+	DisplayText      string
 	Model            string
 	Effort           string
 	PermissionMode   string
@@ -652,6 +655,13 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if len([]byte(prompt)) > maxSDKTurnPromptBytes {
 		return nil, http.StatusBadRequest, "prompt too large"
 	}
+	displayText := strings.TrimSpace(req.DisplayText)
+	if displayText == "" {
+		displayText = prompt
+	}
+	if len([]byte(displayText)) > maxSDKTurnPromptBytes {
+		return nil, http.StatusBadRequest, "display_text too large"
+	}
 
 	sessionMode := strings.TrimSpace(req.SessionMode)
 	var podName *string
@@ -679,6 +689,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			Email:           email,
 			ClientNonce:     clientNonce,
 			Text:            prompt,
+			DisplayText:     displayText,
 			SkillName:       validateSkillName(req.SkillName),
 			OmitUserMessage: req.OmitUserMessage,
 			Now:             createdAt,
@@ -741,8 +752,8 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		SessionStorageKey: storageKey,
 		Email:             email,
 		ClientNonce:       clientNonce,
-		Text:              prompt,
-		Message:           map[string]any{"role": "user", "content": prompt},
+		Text:              displayText,
+		Message:           map[string]any{"role": "user", "content": displayText},
 		Runtime:           provider,
 		SkillName:         skillName,
 		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
