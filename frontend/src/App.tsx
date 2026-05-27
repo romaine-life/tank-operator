@@ -106,6 +106,7 @@ import {
   readHomeSelectedRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
+import { labelAttachments } from "./attachmentLabels";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -2558,12 +2559,20 @@ function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: strin
   return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
 }
 
-function composeLaunchUserPrompt(text: string, attachments: { name: string }[]): string {
+function composeLaunchUserPrompt(text: string, attachments: { label?: string; name: string }[]): string {
   const trimmed = text.trim();
   if (attachments.length === 0) return trimmed;
-  const attachmentList = attachments.map((attachment) => `- ${attachment.name}`).join("\n");
+  const attachmentList = attachments
+    .map((attachment) => `- ${attachment.label || attachment.name}`)
+    .join("\n");
   const attachmentText = `Attachments:\n${attachmentList}`;
   return trimmed ? `${trimmed}\n\n${attachmentText}` : attachmentText;
+}
+
+function attachmentDisplayTitle(attachment: { errorMsg?: string; label?: string; name: string }): string {
+  if (attachment.errorMsg) return attachment.errorMsg;
+  const label = attachment.label || attachment.name;
+  return label === attachment.name ? label : `${label} (${attachment.name})`;
 }
 
 function initialMessageModeDirective(mode: InitialMessageMode): string {
@@ -2845,6 +2854,7 @@ interface HomePendingAttachment {
   id: string;
   file: File;
   name: string;
+  label: string;
   size: number;
   previewUrl?: string;
 }
@@ -2852,6 +2862,7 @@ interface HomePendingAttachment {
 interface ComposerAttachment {
   id: string; // local-only id for keying
   name: string;
+  label: string;
   /** Path relative to /workspace. Images land in `screenshots/<n>.<ext>`
    *  (server picks the next free id atomically); other uploads land in
    *  `.attachments/<unix-ns>-<sanitized-name>`. Server-decided either way. */
@@ -9000,25 +9011,30 @@ function ChatPane({
 
   async function uploadAttachment(file: File) {
     const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const uploadName = file.name || "file";
     const previewUrl = file.type.startsWith("image/")
       ? URL.createObjectURL(file)
       : undefined;
-    setAttachments((prev) => [
-      ...prev,
-      {
-        id,
-        name: file.name || "file",
-        path: "",
-        absPath: "",
-        size: file.size,
-        previewUrl,
-        status: "uploading",
-      },
-    ]);
+    setAttachments((prev) => {
+      const [{ label }] = labelAttachments([file], prev);
+      return [
+        ...prev,
+        {
+          id,
+          name: uploadName,
+          label,
+          path: "",
+          absPath: "",
+          size: file.size,
+          previewUrl,
+          status: "uploading",
+        },
+      ];
+    });
     try {
       // Raw-body upload (orchestrator image doesn't ship python-multipart).
       const res = await authedFetch(
-        `/api/sessions/${session.id}/files/upload?name=${encodeURIComponent(file.name)}`,
+        `/api/sessions/${session.id}/files/upload?name=${encodeURIComponent(uploadName)}`,
         {
           method: "POST",
           headers: {
@@ -9043,7 +9059,7 @@ function ChatPane({
                 ...a,
                 path: body.path,
                 absPath: body.abs_path,
-                name: body.name,
+                name: body.name || a.name,
                 status: "ready",
               }
             : a,
@@ -11099,7 +11115,7 @@ function ChatPane({
                 <div
                   key={a.id}
                   className={`run-composer-chip run-composer-chip-${a.status}`}
-                  title={a.errorMsg ?? a.name}
+                  title={attachmentDisplayTitle(a)}
                 >
                   {a.previewUrl ? (
                     <img
@@ -11111,7 +11127,7 @@ function ChatPane({
                   ) : (
                     <FileIcon size={14} aria-hidden="true" />
                   )}
-                  <span className="run-composer-chip-name">{a.name}</span>
+                  <span className="run-composer-chip-name">{a.label}</span>
                   {a.status === "uploading" && (
                     <Loader2Icon size={12} className="run-spin" aria-hidden="true" />
                   )}
@@ -11122,7 +11138,7 @@ function ChatPane({
                       e.preventDefault();
                       removeAttachment(a.id);
                     }}
-                    aria-label={`Remove ${a.name}`}
+                    aria-label={`Remove ${a.label}`}
                   >
                     <XIcon size={11} aria-hidden="true" />
                   </button>
@@ -11752,10 +11768,11 @@ export function App() {
     if (list.length === 0) return;
     setHomeAttachments((prev) => [
       ...prev,
-      ...list.map((file) => ({
+      ...labelAttachments(list, prev).map(({ file, label }) => ({
         id: `home-att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         file,
         name: file.name || "file",
+        label,
         size: file.size,
         previewUrl: file.type.startsWith("image/")
           ? URL.createObjectURL(file)
@@ -14044,7 +14061,7 @@ export function App() {
                     <div
                       key={a.id}
                       className="run-composer-chip run-composer-chip-ready"
-                      title={a.name}
+                      title={attachmentDisplayTitle(a)}
                     >
                       {a.previewUrl ? (
                         <img
@@ -14056,7 +14073,7 @@ export function App() {
                       ) : (
                         <FileIcon size={14} aria-hidden="true" />
                       )}
-                      <span className="run-composer-chip-name">{a.name}</span>
+                      <span className="run-composer-chip-name">{a.label}</span>
                       <button
                         type="button"
                         className="run-composer-chip-remove"
@@ -14064,7 +14081,7 @@ export function App() {
                           e.preventDefault();
                           removeHomeAttachment(a.id);
                         }}
-                        aria-label={`Remove ${a.name}`}
+                        aria-label={`Remove ${a.label}`}
                       >
                         <XIcon size={11} aria-hidden="true" />
                       </button>
