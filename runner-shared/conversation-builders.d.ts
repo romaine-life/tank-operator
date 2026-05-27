@@ -1,6 +1,7 @@
 import type {
   TankActor,
   TankConversationEvent,
+  UserMessageAttachmentDisplay,
 } from "./conversation.js";
 
 export function turnIDForClientNonce(clientNonce: string): string;
@@ -13,6 +14,7 @@ export interface UserSubmissionArgs {
   clientNonce: string;
   text: string;
   message: unknown;
+  attachments?: UserMessageAttachmentDisplay[];
   runtime: "claude" | "codex";
   skillName?: string;
   now?: string;

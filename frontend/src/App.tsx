@@ -110,6 +110,9 @@ import {
   composeAttachmentDisplayText,
   composeAttachmentPathText,
   labelAttachments,
+  messageAttachmentDisplays,
+  splitLegacyAttachmentDisplayText,
+  type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { ProviderIcon } from "./providerIcons";
 import {
@@ -259,6 +262,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalEventId?: string;
   turnTerminalOrderKey?: string;
   turnUsage?: unknown;
+  attachments?: MessageAttachmentDisplay[];
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
   // RunMessageBubble uses this as an agent-authored signal, but it must
@@ -2902,12 +2906,14 @@ interface QueuedMessage {
   id: string;
   text: string;
   displayText?: string;
+  displayAttachments?: MessageAttachmentDisplay[];
   skillName?: string;
 }
 
 interface ComposedAttachmentPrompt {
   prompt: string;
   displayText: string;
+  displayAttachments: MessageAttachmentDisplay[];
 }
 
 interface McpServerEntry {
@@ -3378,6 +3384,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           id: entry.id,
           role: entry.role,
           text: entry.text,
+          attachments: entry.attachments,
           durationMs: (entry as Record<string, unknown>).durationMs,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
@@ -3491,6 +3498,7 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
     ...record,
     id,
     kind,
+    ...(kind === "message" ? { attachments: normalizeMessageAttachments(record.attachments) } : {}),
   } as TranscriptEntry;
 }
 
@@ -3520,6 +3528,36 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
 function normalizeStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out = raw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeMessageAttachments(raw: unknown): MessageAttachmentDisplay[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw
+    .map((item): MessageAttachmentDisplay | null => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const record = item as Record<string, unknown>;
+      const label = typeof record.label === "string" ? record.label.trim() : "";
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      if (!label && !name) return null;
+      const kind = record.kind === "image" ? "image" : "file";
+      const path = typeof record.path === "string" ? record.path.trim() : "";
+      const absPath = typeof record.absPath === "string" ? record.absPath.trim() : "";
+      const previewUrl = typeof record.previewUrl === "string" ? record.previewUrl.trim() : "";
+      const size = typeof record.size === "number" && Number.isFinite(record.size)
+        ? record.size
+        : undefined;
+      return {
+        label: label || name,
+        name: name || label,
+        kind,
+        ...(path ? { path } : {}),
+        ...(absPath ? { absPath } : {}),
+        ...(size != null ? { size } : {}),
+        ...(previewUrl ? { previewUrl } : {}),
+      };
+    })
+    .filter((item): item is MessageAttachmentDisplay => item !== null);
   return out.length > 0 ? out : undefined;
 }
 
@@ -4550,6 +4588,141 @@ function RunMarkdown({ children }: { children: string }) {
   );
 }
 
+function attachmentWorkspaceTarget(attachment: MessageAttachmentDisplay): WorkspacePathTarget | null {
+  return normalizeWorkspacePathTarget(attachment.path || attachment.absPath || "");
+}
+
+function attachmentTitle(attachment: MessageAttachmentDisplay): string {
+  const bits = [attachment.label];
+  if (attachment.name && attachment.name !== attachment.label) bits.push(attachment.name);
+  if (typeof attachment.size === "number") bits.push(humanFileSize(attachment.size));
+  return bits.join(" · ");
+}
+
+function attachmentPayloadsForApi(attachments: readonly MessageAttachmentDisplay[]) {
+  return attachments.map((attachment) => ({
+    label: attachment.label,
+    name: attachment.name,
+    kind: attachment.kind,
+    ...(attachment.path ? { path: attachment.path } : {}),
+    ...(attachment.absPath ? { abs_path: attachment.absPath } : {}),
+    ...(typeof attachment.size === "number" ? { size: attachment.size } : {}),
+  }));
+}
+
+function AttachmentPreview({
+  attachment,
+  sessionId,
+}: {
+  attachment: MessageAttachmentDisplay;
+  sessionId: string;
+}) {
+  const target = attachmentWorkspaceTarget(attachment);
+  const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (attachment.previewUrl || attachment.kind !== "image" || !target?.path) {
+      setObjectUrl(null);
+      return () => undefined;
+    }
+    let cancelled = false;
+    let url: string | null = null;
+    void authedFetch(
+      `/api/sessions/${sessionId}/files/raw?path=${encodeURIComponent(target.path)}`,
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        url = URL.createObjectURL(blob);
+        setObjectUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setObjectUrl(null);
+      });
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [attachment.kind, attachment.previewUrl, sessionId, target?.path]);
+
+  const src = attachment.previewUrl || objectUrl;
+  if (attachment.kind === "image" && src) {
+    return (
+      <img
+        className="run-message-attachment-thumb"
+        src={src}
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+  const Icon = attachment.kind === "image" ? ImageIcon : FileIcon;
+  return (
+    <span className="run-message-attachment-icon" aria-hidden="true">
+      <Icon size={16} />
+    </span>
+  );
+}
+
+function RunMessageAttachments({
+  attachments,
+  sessionId,
+}: {
+  attachments: readonly MessageAttachmentDisplay[];
+  sessionId: string;
+}) {
+  const { openWorkspacePath } = useContext(RunContext);
+  if (attachments.length === 0) return null;
+  return (
+    <div className="run-message-attachments" aria-label="Attachments">
+      {attachments.map((attachment, index) => {
+        const target = attachmentWorkspaceTarget(attachment);
+        const content = (
+          <>
+            <AttachmentPreview attachment={attachment} sessionId={sessionId} />
+            <span className="run-message-attachment-meta">
+              <span className="run-message-attachment-name">{attachment.label}</span>
+              {typeof attachment.size === "number" && (
+                <span className="run-message-attachment-size">
+                  {humanFileSize(attachment.size)}
+                </span>
+              )}
+            </span>
+          </>
+        );
+        const key = `${attachment.label}-${attachment.name}-${attachment.path ?? ""}-${index}`;
+        if (!target) {
+          return (
+            <div
+              key={key}
+              className="run-message-attachment"
+              title={attachmentTitle(attachment)}
+            >
+              {content}
+            </div>
+          );
+        }
+        return (
+          <button
+            key={key}
+            type="button"
+            className="run-message-attachment run-message-attachment-action"
+            title={attachmentTitle(attachment)}
+            onClick={(e) => {
+              e.stopPropagation();
+              openWorkspacePath(target);
+            }}
+          >
+            {content}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 interface InputReplyPayload {
   answers: Record<string, string[]>;
   annotations?: Record<string, { preview?: string; notes?: string }>;
@@ -4633,6 +4806,15 @@ function RunMessageBubble({
         ? TankIcon
         : ListChecksIcon;
   const SkillActionIcon = skillActionIcon;
+  const explicitAttachments = entry.attachments ?? [];
+  const legacyAttachmentParts =
+    variant === "user" && !isSkillAction && explicitAttachments.length === 0
+      ? splitLegacyAttachmentDisplayText(text)
+      : null;
+  const visibleText = legacyAttachmentParts?.text ?? text;
+  const visibleAttachments = explicitAttachments.length > 0
+    ? explicitAttachments
+    : legacyAttachmentParts?.attachments ?? [];
   const time = formatMessageTime(entry.time);
   const durationMs = (entry as Record<string, unknown>).durationMs as number | undefined;
   const alwaysVisible = showTimestamps || showDuration;
@@ -4683,7 +4865,7 @@ function RunMessageBubble({
               )}
             </span>
           ) : (
-            <RunMarkdown>{text}</RunMarkdown>
+            <RunMarkdown>{visibleText}</RunMarkdown>
           )}
           {variant === "system" && messageActionLabel && messageActionHref && (
             <a
@@ -4696,6 +4878,12 @@ function RunMessageBubble({
             </a>
           )}
         </div>
+        {variant === "user" && visibleAttachments.length > 0 && (
+          <RunMessageAttachments
+            attachments={visibleAttachments}
+            sessionId={sessionId}
+          />
+        )}
         <div
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
@@ -4710,11 +4898,11 @@ function RunMessageBubble({
             <>
               {onQuote && (
                 <>
-                  <QuoteButton text={text} style="fence" onQuote={onQuote} />
-                  <QuoteButton text={text} style="blockquote" onQuote={onQuote} />
+                  <QuoteButton text={visibleText} style="fence" onQuote={onQuote} />
+                  <QuoteButton text={visibleText} style="blockquote" onQuote={onQuote} />
                 </>
               )}
-              <CopyButton text={text} />
+              <CopyButton text={visibleText} />
               {canonicalMessage && !entry.localOnly && (
                 <LinkButton sessionId={sessionId} entryId={entry.id} />
               )}
@@ -7720,10 +7908,11 @@ function ChatPane({
     useState<SdkConnectionState>("idle");
   const currentRunRef = useRef<{
     id: string;
-	    turnId: string;
-	    prompt: string;
-	    displayText: string;
-	    skillName?: string;
+    turnId: string;
+    prompt: string;
+    displayText: string;
+    displayAttachments: MessageAttachmentDisplay[];
+    skillName?: string;
     followUp: boolean;
     model: string;
     // effort is the reasoning level the user picked in the launchpad
@@ -8188,7 +8377,12 @@ function ChatPane({
     if (!running && queuedMessages.length > 0) {
       const [nextMessage, ...remaining] = queuedMessages;
       setQueuedMessages(remaining);
-      startRun(nextMessage.text, nextMessage.displayText, nextMessage.skillName);
+      startRun(
+        nextMessage.text,
+        nextMessage.displayText,
+        nextMessage.skillName,
+        nextMessage.displayAttachments,
+      );
     }
   // startRun is intentionally omitted — it's redefined each render, and
   // useEffect's closure gives us the fresh version when deps actually change.
@@ -9726,6 +9920,7 @@ function ChatPane({
           id: nextQueuedMessageId(),
           text: composed.prompt,
           displayText: composed.displayText,
+          displayAttachments: composed.displayAttachments,
         },
       ]);
       return;
@@ -9743,7 +9938,7 @@ function ChatPane({
         setSdkConnectionState("idle");
       }
     }
-    startRun(composed.prompt, composed.displayText);
+    startRun(composed.prompt, composed.displayText, undefined, composed.displayAttachments);
   }
 
   function composePromptWithAttachments(trimmed: string): ComposedAttachmentPrompt | null {
@@ -9752,6 +9947,7 @@ function ChatPane({
     if (stillUploading) return null;
     const prompt = composeAttachmentPathText(trimmed, ready.map((a) => a.absPath));
     const displayText = composeAttachmentDisplayText(trimmed, ready);
+    const displayAttachments = messageAttachmentDisplays(ready);
     // Clear attachment state once they've been baked into the run (or queue).
     setAttachments((prev) => {
       for (const a of prev) {
@@ -9759,7 +9955,7 @@ function ChatPane({
       }
       return [];
     });
-    return { prompt, displayText };
+    return { prompt, displayText, displayAttachments };
   }
 
   function submitSkillInvocation(skillName: string, promptText = "") {
@@ -9786,6 +9982,9 @@ function ChatPane({
         prompt: run.prompt,
         ...(!run.skillName && run.displayText && run.displayText !== run.prompt
           ? { display_text: run.displayText }
+          : {}),
+        ...(!run.skillName && run.displayAttachments.length > 0
+          ? { display_attachments: attachmentPayloadsForApi(run.displayAttachments) }
           : {}),
         model: run.model,
         // effort is forwarded only when set — the backend's
@@ -9878,7 +10077,12 @@ function ChatPane({
     submitSkillInvocation("rollout");
   }
 
-  function startRun(trimmed: string, displayText = trimmed, skillName?: string) {
+  function startRun(
+    trimmed: string,
+    displayText = trimmed,
+    skillName?: string,
+    displayAttachments: MessageAttachmentDisplay[] = [],
+  ) {
     primeTurnCompleteSound();
     const followUp = entries.length > 0;
     const turnStart = Date.now();
@@ -9888,6 +10092,7 @@ function ChatPane({
       turnId: turnIdForBrowserClientNonce(id),
       prompt: trimmed,
       displayText,
+      displayAttachments,
       skillName,
       followUp,
       model: isClaude || isCodex
@@ -9912,12 +10117,13 @@ function ChatPane({
       );
     } else {
       const userEntry = {
-          id: nextEntryId("user"),
-          kind: "message",
-          role: "user",
-          text: displayText,
-          time: optimisticTime,
-        } as TranscriptEntry;
+        id: nextEntryId("user"),
+        kind: "message",
+        role: "user",
+        text: displayText,
+        attachments: displayAttachments,
+        time: optimisticTime,
+      } as TranscriptEntry;
       appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
     if (visible) requestScrollToLatest("auto", "submit");
@@ -12912,6 +13118,7 @@ export function App() {
     const seedTurnDeferredAtCreate =
       seedInitialTurnAtCreate && SDK_CHAT_MODES.has(mode) && pendingHomeAttachments.length > 0;
     const seedTurnSubmittedAtCreate = seedInitialTurnAtCreate && !seedTurnDeferredAtCreate;
+    const launchDisplayAttachments = messageAttachmentDisplays(pendingHomeAttachments);
     const launchUserPrompt = composeLaunchUserPrompt(seedPrompt, pendingHomeAttachments);
     const createTimeTurnPrompt = requestedInitialSkillName
       ? composeSkillPrompt(mode, requestedInitialSkillName, launchUserPrompt)
@@ -12920,6 +13127,9 @@ export function App() {
       ? {
           client_nonce: seedClientNonce,
           prompt: createTimeTurnPrompt,
+          ...(launchDisplayAttachments.length > 0
+            ? { display_attachments: attachmentPayloadsForApi(launchDisplayAttachments) }
+            : {}),
           ...(seedTurnDeferredAtCreate ? { deferred: true } : {}),
           permission_mode: initialPermissionMode,
           ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),

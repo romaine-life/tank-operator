@@ -56,6 +56,40 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "compare these",
+			"display": map[string]any{"kind": "plain"},
+			"attachments": []any{
+				map[string]any{
+					"label":   "Screenshot 1",
+					"name":    "image.png",
+					"kind":    "image",
+					"path":    "screenshots/1.png",
+					"absPath": "/workspace/screenshots/1.png",
+					"size":    float64(123),
+				},
+			},
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	attachments, ok := projection.Entries[0]["attachments"].([]map[string]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("attachments = %#v", projection.Entries[0]["attachments"])
+	}
+	if got := attachments[0]["label"]; got != "Screenshot 1" {
+		t.Fatalf("attachment label = %#v", got)
+	}
+	if got := attachments[0]["absPath"]; got != "/workspace/screenshots/1.png" {
+		t.Fatalf("attachment absPath = %#v", got)
+	}
+}
+
 func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

@@ -153,6 +153,7 @@ type SubmitArgs struct {
 	ClientNonce     string
 	Text            string
 	DisplayText     string
+	Attachments     []conversation.UserMessageAttachment
 	Instructions    string // optional; layered on top of Hermes' core prompt
 	SkillName       string
 	OmitUserMessage bool
@@ -199,6 +200,7 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 		Email:             args.Email,
 		Text:              displayText,
 		Message:           map[string]any{"role": "user", "content": displayText},
+		Attachments:       args.Attachments,
 		ClientNonce:       args.ClientNonce,
 		Runtime:           "hermes",
 		SkillName:         args.SkillName,

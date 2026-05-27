@@ -209,7 +209,10 @@ func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
 	body := `{
 		"client_nonce":"turn-attach_123",
 		"prompt":"compare these\n\nAttachments:\n- /workspace/screenshots/1.png",
-		"display_text":"compare these\n\nAttachments:\n- Screenshot 1"
+		"display_text":"compare these",
+		"display_attachments":[
+			{"label":"Screenshot 1","name":"image.png","kind":"image","path":"screenshots/1.png","abs_path":"/workspace/screenshots/1.png","size":123}
+		]
 	}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
@@ -233,8 +236,18 @@ func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
 	if !ok {
 		t.Fatalf("user event payload missing: %#v", es.upserts[0])
 	}
-	if got, _ := payload["text"].(string); got != "compare these\n\nAttachments:\n- Screenshot 1" {
+	if got, _ := payload["text"].(string); got != "compare these" {
 		t.Fatalf("durable user text = %q", got)
+	}
+	attachments, ok := payload["attachments"].([]map[string]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("durable user attachments = %#v", payload["attachments"])
+	}
+	if got, _ := attachments[0]["label"].(string); got != "Screenshot 1" {
+		t.Fatalf("attachment label = %q", got)
+	}
+	if got, _ := attachments[0]["absPath"].(string); got != "/workspace/screenshots/1.png" {
+		t.Fatalf("attachment absPath = %q", got)
 	}
 }
 

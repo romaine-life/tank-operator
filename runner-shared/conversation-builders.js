@@ -30,6 +30,7 @@ export function userSubmissionEvents(args) {
   const turnID = turnIDForClientNonce(clientNonce);
   const producer = { name: `${args.runtime}-runner`, runtime: args.runtime };
   const display = userMessageDisplay(args.skillName, text);
+  const attachments = userMessageAttachments(args.attachments);
   return {
     turnID,
     userMessage: {
@@ -45,11 +46,12 @@ export function userSubmissionEvents(args) {
       created_at: createdAt,
       producer,
       visibility: "durable",
-      payload: {
-        text,
-        message: args.message,
-        display,
-      },
+	      payload: {
+	        text,
+	        message: args.message,
+	        display,
+	        ...(attachments.length > 0 ? { attachments } : {}),
+	      },
     },
     turnSubmitted: {
       event_id: `${turnID}:turn.submitted`,
@@ -68,6 +70,25 @@ export function userSubmissionEvents(args) {
       },
     },
   };
+}
+
+function userMessageAttachments(input) {
+  if (!Array.isArray(input)) return [];
+  return input.flatMap((attachment) => {
+    if (!attachment || typeof attachment !== "object") return [];
+    const label = String(attachment.label || attachment.name || "").trim();
+    const name = String(attachment.name || attachment.label || "").trim();
+    if (!label || !name) return [];
+    const kind = attachment.kind === "image" ? "image" : "file";
+    return [{
+      label,
+      name,
+      kind,
+      ...(typeof attachment.path === "string" && attachment.path.trim() ? { path: attachment.path.trim() } : {}),
+      ...(typeof attachment.absPath === "string" && attachment.absPath.trim() ? { absPath: attachment.absPath.trim() } : {}),
+      ...(typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0 ? { size: attachment.size } : {}),
+    }];
+  });
 }
 
 export function turnEvent(args) {

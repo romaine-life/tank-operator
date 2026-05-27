@@ -136,6 +136,47 @@ func stringMapField(values map[string]any, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func normalizeDisplayAttachments(input []conversation.UserMessageAttachment) ([]conversation.UserMessageAttachment, int, string) {
+	if len(input) == 0 {
+		return nil, 0, ""
+	}
+	if len(input) > 32 {
+		return nil, http.StatusBadRequest, "display_attachments too many"
+	}
+	out := make([]conversation.UserMessageAttachment, 0, len(input))
+	for _, attachment := range input {
+		label := strings.TrimSpace(attachment.Label)
+		name := strings.TrimSpace(attachment.Name)
+		if label == "" && name == "" {
+			continue
+		}
+		if len([]byte(label)) > 160 || len([]byte(name)) > 240 {
+			return nil, http.StatusBadRequest, "display_attachments label too large"
+		}
+		kind := strings.TrimSpace(attachment.Kind)
+		if kind != "image" {
+			kind = "file"
+		}
+		path := strings.TrimSpace(attachment.Path)
+		absPath := strings.TrimSpace(attachment.AbsPath)
+		if len([]byte(path)) > 1024 || len([]byte(absPath)) > 1024 {
+			return nil, http.StatusBadRequest, "display_attachments path too large"
+		}
+		if attachment.Size < 0 {
+			return nil, http.StatusBadRequest, "display_attachments size is invalid"
+		}
+		out = append(out, conversation.UserMessageAttachment{
+			Label:   label,
+			Name:    name,
+			Kind:    kind,
+			Path:    path,
+			AbsPath: absPath,
+			Size:    attachment.Size,
+		})
+	}
+	return out, 0, ""
+}
+
 // handleEnqueueSessionTurn is the durable submit boundary for SDK runtime
 // sessions. The browser writes work here and reads projected transcript rows
 // from the durable SSE stream; runner-local transports are not part of the UI
@@ -152,16 +193,17 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		ClientNonce         string `json:"client_nonce"`
-		Prompt              string `json:"prompt"`
-		DisplayText         string `json:"display_text"`
-		Model               string `json:"model"`
-		Effort              string `json:"effort"`
-		PermissionMode      string `json:"permission_mode"`
-		SkillName           string `json:"skill_name"`
-		FollowUp            bool   `json:"follow_up"`
-		OriginSessionID     string `json:"origin_session_id"`
-		ExistingUserMessage bool   `json:"existing_user_message"`
+		ClientNonce         string                               `json:"client_nonce"`
+		Prompt              string                               `json:"prompt"`
+		DisplayText         string                               `json:"display_text"`
+		DisplayAttachments  []conversation.UserMessageAttachment `json:"display_attachments"`
+		Model               string                               `json:"model"`
+		Effort              string                               `json:"effort"`
+		PermissionMode      string                               `json:"permission_mode"`
+		SkillName           string                               `json:"skill_name"`
+		FollowUp            bool                                 `json:"follow_up"`
+		OriginSessionID     string                               `json:"origin_session_id"`
+		ExistingUserMessage bool                                 `json:"existing_user_message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -170,17 +212,18 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 
 	owner := user.OwnerEmail()
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
-		ClientNonce:     body.ClientNonce,
-		RequireNonce:    true,
-		Prompt:          body.Prompt,
-		DisplayText:     body.DisplayText,
-		Model:           body.Model,
-		Effort:          body.Effort,
-		PermissionMode:  body.PermissionMode,
-		SkillName:       body.SkillName,
-		FollowUp:        body.FollowUp,
-		OmitUserMessage: body.ExistingUserMessage,
-		OriginSessionID: body.OriginSessionID,
+		ClientNonce:        body.ClientNonce,
+		RequireNonce:       true,
+		Prompt:             body.Prompt,
+		DisplayText:        body.DisplayText,
+		DisplayAttachments: body.DisplayAttachments,
+		Model:              body.Model,
+		Effort:             body.Effort,
+		PermissionMode:     body.PermissionMode,
+		SkillName:          body.SkillName,
+		FollowUp:           body.FollowUp,
+		OmitUserMessage:    body.ExistingUserMessage,
+		OriginSessionID:    body.OriginSessionID,
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -579,20 +622,21 @@ func inputReplyPayloadSize(answers map[string][]string, annotations map[string]s
 }
 
 type sdkTurnRequest struct {
-	ClientNonce      string
-	RequireNonce     bool
-	Prompt           string
-	DisplayText      string
-	Model            string
-	Effort           string
-	PermissionMode   string
-	SkillName        string
-	FollowUp         bool
-	AllowBeforeReady bool
-	OmitUserMessage  bool
-	SessionMode      string
-	CreatedAt        time.Time
-	OrderBase        time.Time
+	ClientNonce        string
+	RequireNonce       bool
+	Prompt             string
+	DisplayText        string
+	DisplayAttachments []conversation.UserMessageAttachment
+	Model              string
+	Effort             string
+	PermissionMode     string
+	SkillName          string
+	FollowUp           bool
+	AllowBeforeReady   bool
+	OmitUserMessage    bool
+	SessionMode        string
+	CreatedAt          time.Time
+	OrderBase          time.Time
 	// OriginSessionID identifies the sibling tank-operator session that
 	// authored this turn via an MCP handoff, or the source session for a
 	// browser-created fork. Human-typed browser turns leave it empty.
@@ -662,6 +706,10 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if len([]byte(displayText)) > maxSDKTurnPromptBytes {
 		return nil, http.StatusBadRequest, "display_text too large"
 	}
+	displayAttachments, status, detail := normalizeDisplayAttachments(req.DisplayAttachments)
+	if status != 0 {
+		return nil, status, detail
+	}
 
 	sessionMode := strings.TrimSpace(req.SessionMode)
 	var podName *string
@@ -690,6 +738,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			ClientNonce:     clientNonce,
 			Text:            prompt,
 			DisplayText:     displayText,
+			Attachments:     displayAttachments,
 			SkillName:       validateSkillName(req.SkillName),
 			OmitUserMessage: req.OmitUserMessage,
 			Now:             createdAt,
@@ -754,6 +803,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		ClientNonce:       clientNonce,
 		Text:              displayText,
 		Message:           map[string]any{"role": "user", "content": displayText},
+		Attachments:       displayAttachments,
 		Runtime:           provider,
 		SkillName:         skillName,
 		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),

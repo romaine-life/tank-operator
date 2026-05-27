@@ -6,6 +6,7 @@ package conversation
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -248,7 +249,7 @@ func validateUserMessageCreated(event map[string]any) error {
 	}
 	switch stringField(display, "kind") {
 	case "plain":
-		return nil
+		return validateUserMessageAttachments(payload["attachments"])
 	case "skill_invocation":
 		skillName := stringField(display, "skill_name")
 		if !skillNamePattern.MatchString(skillName) {
@@ -259,10 +260,62 @@ func validateUserMessageCreated(event map[string]any) error {
 				return fmt.Errorf("payload.display.supplemental_text must be a string")
 			}
 		}
-		return nil
+		return validateUserMessageAttachments(payload["attachments"])
 	default:
 		return fmt.Errorf("payload.display.kind must be plain or skill_invocation")
 	}
+}
+
+func validateUserMessageAttachments(raw any) error {
+	if raw == nil {
+		return nil
+	}
+	items, ok := raw.([]map[string]any)
+	if !ok {
+		if generic, isGeneric := raw.([]any); isGeneric {
+			items = make([]map[string]any, 0, len(generic))
+			for _, item := range generic {
+				record, isRecord := item.(map[string]any)
+				if !isRecord {
+					return fmt.Errorf("payload.attachments items must be objects")
+				}
+				items = append(items, record)
+			}
+		} else {
+			return fmt.Errorf("payload.attachments must be an array")
+		}
+	}
+	if len(items) > 32 {
+		return fmt.Errorf("payload.attachments must have at most 32 items")
+	}
+	for _, item := range items {
+		if stringField(item, "label") == "" {
+			return fmt.Errorf("payload.attachments.label is required")
+		}
+		if stringField(item, "name") == "" {
+			return fmt.Errorf("payload.attachments.name is required")
+		}
+		kind := stringField(item, "kind")
+		if kind != "image" && kind != "file" {
+			return fmt.Errorf("payload.attachments.kind must be image or file")
+		}
+		if value, ok := item["path"]; ok {
+			if text, isString := value.(string); !isString || strings.TrimSpace(text) == "" {
+				return fmt.Errorf("payload.attachments.path must be a non-empty string")
+			}
+		}
+		if value, ok := item["absPath"]; ok {
+			if text, isString := value.(string); !isString || strings.TrimSpace(text) == "" {
+				return fmt.Errorf("payload.attachments.absPath must be a non-empty string")
+			}
+		}
+		if value, ok := item["size"]; ok {
+			if size, isNumber := numericField(value); !isNumber || size < 0 {
+				return fmt.Errorf("payload.attachments.size must be non-negative")
+			}
+		}
+	}
+	return nil
 }
 
 func requireFields(event map[string]any, fields ...string) error {
@@ -428,6 +481,19 @@ func validateShellTaskPayload(event map[string]any) error {
 func stringField(event map[string]any, field string) string {
 	value, _ := event[field].(string)
 	return value
+}
+
+func numericField(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func validActor(actor Actor) bool {
