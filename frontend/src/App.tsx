@@ -6183,21 +6183,33 @@ function writePersistedTurnThinkingStart(turnId: string, value: number): void {
 }
 
 function resolveTurnThinkingStart(turnId: string, candidate: string | undefined): number {
-  const cached = turnThinkingStartCache.get(turnId);
-  if (cached != null) return cached;
-  const persisted = readPersistedTurnThinkingStart(turnId);
-  if (persisted != null) {
-    turnThinkingStartCache.set(turnId, persisted);
-    return persisted;
-  }
-  let chosen: number | null = null;
+  // We always settle on the EARLIEST plausible start time for the turn.
+  // Two sources can contribute: a cached value from a prior render in
+  // this tab (module Map or sessionStorage) and a parsed `candidate`
+  // ISO timestamp from the activity summary. Taking `min` of whatever
+  // we have gives us monotonic improvement: if the bubble first
+  // appeared while the activity summary was still empty we cached
+  // `Date.now()` as a placeholder, and as soon as the durable
+  // `activity.startedAt` arrives (necessarily an earlier wall-clock
+  // time than the placeholder, because the turn began before its
+  // events were projected) we adopt it. The cache mirrors to
+  // sessionStorage so a hard refresh keeps the timer monotonic.
+  const fromMemory = turnThinkingStartCache.get(turnId);
+  const fromPersisted = fromMemory == null ? readPersistedTurnThinkingStart(turnId) : null;
+  let parsed: number | null = null;
   if (candidate) {
-    const parsed = Date.parse(candidate);
-    if (Number.isFinite(parsed)) chosen = parsed;
+    const value = Date.parse(candidate);
+    if (Number.isFinite(value)) parsed = value;
   }
-  if (chosen == null) chosen = Date.now();
-  turnThinkingStartCache.set(turnId, chosen);
-  writePersistedTurnThinkingStart(turnId, chosen);
+  const observations = [fromMemory, fromPersisted, parsed].filter(
+    (entry): entry is number => entry != null,
+  );
+  // Fall back to "now" only when nothing else is available — this lets
+  // a freshly-submitted turn start counting immediately, before the
+  // backend projection lands.
+  const chosen = observations.length > 0 ? Math.min(...observations) : Date.now();
+  if (fromMemory !== chosen) turnThinkingStartCache.set(turnId, chosen);
+  if (fromPersisted !== chosen) writePersistedTurnThinkingStart(turnId, chosen);
   return chosen;
 }
 
@@ -6215,14 +6227,12 @@ function RunTurnThinkingDuration({
   turnId: string;
   startedAt?: string;
 }) {
-  const startMs = useMemo(
-    () => resolveTurnThinkingStart(turnId, startedAt),
-    // Lock onto the first start time we resolve for this turn — the cache
-    // makes subsequent calls idempotent, so excluding `startedAt` from the
-    // dep list is intentional and is what prevents the prop drift bug.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [turnId],
-  );
+  // Re-resolve on every render so a later-arriving durable startedAt
+  // (cheaper than Date.now()) can revise the cached value downward. The
+  // resolver itself is monotone — once a value is locked in, only an
+  // earlier observation can replace it — so this can never make the
+  // counter jump backwards (i.e. shrink mid-flight).
+  const startMs = resolveTurnThinkingStart(turnId, startedAt);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     setNow(Date.now());
