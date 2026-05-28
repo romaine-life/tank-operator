@@ -7,8 +7,10 @@ import { StyleguideInspector } from "./inspector";
 import {
   captionStyle,
   headStyle,
+  MainAppButton,
   pageTitleStyle,
   sectionStyle,
+  styleguideTopNavStyle,
 } from "./shared";
 
 const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: string }[] }[] = [
@@ -62,7 +64,10 @@ export function StyleguideIndex() {
   return (
     <StyleguideInspector>
       <div style={{ maxWidth: 880 }}>
-        <h1 style={pageTitleStyle}>tank-operator — styleguide</h1>
+        <div style={styleguideTopNavStyle}>
+          <h1 style={pageTitleStyle}>tank-operator — styleguide</h1>
+          <MainAppButton />
+        </div>
         <p style={{ ...captionStyle, marginBottom: 24 }}>
           Visual catalog of components shipped by tank-operator's React app.
           Reviewers get this URL alongside every PR; agents update it whenever
