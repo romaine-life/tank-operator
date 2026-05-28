@@ -11590,11 +11590,11 @@ function ChatPane({
           </>
         )}
       </>)}
-      floatingBetweenBodyAndComposer={(<>
-      {/* Non-intrusive edge cues for transcript overflow. These keep the
+      floatingBetweenBodyAndComposer={activeTab === "chat" ? (<>
+      {/* Non-intrusive edge glows for transcript overflow. These keep the
           explicit jump actions while avoiding floating arrow buttons over
-          message content while the navigation-mode signal is still being
-          hardened. */}
+          avatars or message content while the navigation-mode signal is
+          still being hardened. */}
       {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && navigationMode === "historical-anchor" && (
         <button
           type="button"
@@ -11614,7 +11614,7 @@ function ChatPane({
         </button>
       )}
 
-      {/* The tail cue is deliberately just a side highlight. The aria-label
+      {/* The tail cue is deliberately just an edge glow. The aria-label
           carries the exact pending count, but the visible UI stays quiet. */}
       {activeTab === "chat" && renderedEntries.length > 0 && (
         <button
@@ -11645,7 +11645,7 @@ function ChatPane({
         </button>
       )}
 
-      </>)}
+      </>) : null}
       composerAbove={(<>
           {dragActive && (
             <div className="run-composer-drop-overlay" aria-hidden="true">

@@ -36,8 +36,8 @@ export interface WorkspaceShellProps {
    */
   tabs?: ReactNode;
   /**
-   * Floating UI between the body and the composer footer — scroll-to-top and
-   * scroll-to-bottom controls. Optional; the home starter doesn't supply any.
+   * Floating UI over the scrollable body — transcript edge cues and related
+   * jump controls. Optional; the home starter doesn't supply any.
    */
   floatingBetweenBodyAndComposer?: ReactNode;
   /**
@@ -98,6 +98,7 @@ export function WorkspaceShell({
   onComposerWrapPaste,
 }: WorkspaceShellProps) {
   const hasHeader = title != null || tabs != null;
+  const hasFloating = floatingBetweenBodyAndComposer != null;
 
   return (
     <section className={["run-panel", className].filter(Boolean).join(" ")} style={style}>
@@ -112,20 +113,22 @@ export function WorkspaceShell({
         </header>
       )}
 
-      <main
-        className={["run-main", bodyClassName].filter(Boolean).join(" ")}
-        ref={bodyRef}
-        tabIndex={-1}
-        aria-label={bodyAriaLabel}
-      >
-        {body}
-      </main>
+      <div className={["run-main-frame", hasFloating ? "run-main-frame-floating" : ""].join(" ")}>
+        <main
+          className={["run-main", bodyClassName].filter(Boolean).join(" ")}
+          ref={bodyRef}
+          tabIndex={-1}
+          aria-label={bodyAriaLabel}
+        >
+          {body}
+        </main>
 
-      {floatingBetweenBodyAndComposer != null && (
-        <div className="run-floating-between">
-          {floatingBetweenBodyAndComposer}
-        </div>
-      )}
+        {hasFloating && (
+          <div className="run-floating-between">
+            {floatingBetweenBodyAndComposer}
+          </div>
+        )}
+      </div>
 
       {composerVisible && (
         <footer
