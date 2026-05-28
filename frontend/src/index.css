@@ -5139,6 +5139,81 @@ button:disabled {
   color: var(--text-primary);
 }
 
+/* Transcript overflow cues — slim right-edge targets that preserve jump
+   behavior without placing circular buttons over message content. */
+.run-transcript-edge-cue {
+  position: absolute;
+  right: 0.35rem;
+  bottom: calc(100% + var(--space-2));
+  width: 1.5rem;
+  height: 3.4rem;
+  display: inline-flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  z-index: 5;
+  opacity: 0.72;
+  transform: translateX(0);
+  transition:
+    opacity var(--motion-base, 200ms) ease,
+    transform var(--motion-base, 200ms) ease;
+}
+
+.run-transcript-edge-cue-top {
+  bottom: calc(100% + var(--space-2) + 4rem);
+}
+
+.run-transcript-edge-cue-hidden {
+  opacity: 0;
+  transform: translateX(0.35rem);
+  pointer-events: none;
+}
+
+.run-transcript-edge-cue-rail {
+  width: 3px;
+  margin: 0.4rem 0.25rem 0.4rem 0;
+  border-radius: 999px;
+  background: rgba(148, 197, 253, 0.72);
+  box-shadow: 0 0 14px rgba(96, 165, 250, 0.35);
+  transition:
+    width var(--motion-fast, 140ms) ease,
+    background var(--motion-fast, 140ms) ease,
+    box-shadow var(--motion-fast, 140ms) ease;
+}
+
+.run-transcript-edge-cue-top .run-transcript-edge-cue-rail {
+  background: rgba(226, 232, 240, 0.5);
+  box-shadow: 0 0 10px rgba(226, 232, 240, 0.18);
+}
+
+.run-transcript-edge-cue-pending .run-transcript-edge-cue-rail {
+  width: 4px;
+  background: rgba(110, 168, 255, 0.95);
+  box-shadow: 0 0 18px rgba(80, 145, 240, 0.55);
+}
+
+.run-transcript-edge-cue:hover,
+.run-transcript-edge-cue:focus-visible {
+  opacity: 1;
+}
+
+.run-transcript-edge-cue:hover .run-transcript-edge-cue-rail,
+.run-transcript-edge-cue:focus-visible .run-transcript-edge-cue-rail {
+  width: 5px;
+  background: rgba(191, 219, 254, 0.95);
+  box-shadow: 0 0 18px rgba(147, 197, 253, 0.58);
+}
+
+.run-transcript-edge-cue:focus-visible {
+  outline: 2px solid rgba(147, 197, 253, 0.9);
+  outline-offset: 2px;
+}
+
 /* Floating "scroll to latest" button — pinned bottom-right at the boundary
    between the transcript scroller and composer while the user is scrolled
    away from the bottom. Uses opacity + translate transition so it fades
