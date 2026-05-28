@@ -45,6 +45,11 @@ state is separate from work state.
   executable turn submission reuses that durable row after upload.
 - Provider-specific event streams are adapter inputs. The frontend renders the
   Tank conversation protocol, not raw provider wire formats.
+- The main transcript is a settled conversation projection, not the default sink
+  for provider events. Assistant prose enters it only through explicit
+  final-answer promotion on a successful turn; tool output, reasoning, progress,
+  failed work, and stopped work stay in Turn activity unless the protocol
+  explicitly promotes them.
 - Transcript deep links resolve through the durable conversation ledger. A
   copied message URL may name the rendered transcript `timeline_id`, but the
   server translates it to an `order_key` and returns a bounded page around

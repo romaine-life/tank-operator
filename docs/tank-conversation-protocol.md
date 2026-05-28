@@ -290,12 +290,17 @@ projection has two distinct surfaces:
   turn.
 - The main transcript is the settled conversation projection.
 
-Rows must not visibly bounce between those surfaces. If an event is eligible
-for Turn activity, the server transcript projection classifies it before first
-paint; the frontend must not render the event as a standalone main-transcript
-row and later move that same rendered row into Turn activity. Conversely,
-content shown inside Turn activity while a turn is active is provisional
-activity output, not a settled transcript row being promoted later.
+The main transcript is promotion-only. User messages, durable session/system
+notices, terminal meta rows, and explicitly promoted final-answer assistant rows
+belong there. Provider activity, reasoning, tool output, background-task rows,
+assistant progress notes, provisional assistant prose, and failure/stop context
+belong to Turn activity by default. Rows must not visibly bounce between those
+surfaces. If an event is eligible for Turn activity, the server transcript
+projection classifies it before first paint; the frontend must not render the
+event as a standalone main-transcript row and later move that same rendered row
+into Turn activity. Conversely, content shown inside Turn activity while a turn
+is active is provisional activity output, not a settled transcript row being
+promoted later.
 
 Historical timeline reads return first-class `turn_activity` rows. These rows
 load collapsed by default and carry summary metadata only: turn id, activity
@@ -322,8 +327,12 @@ finality from provider ordering, adjacency, or a trailing assistant message/run.
 If a completed turn has assistant prose but no final-answer marker, the prose is
 kept in Turn activity rather than promoted to a settled transcript message.
 
-Failed turns, interrupted turns, and turns that never produce a final assistant
-message stay expanded so failure and stop context is not hidden.
+Failed turns, interrupted turns, and turns that never produce a successful
+`turn.completed` final-answer marker do not have settled assistant responses.
+Their non-user rows remain Turn activity material. The main transcript may show
+the user message and terminal meta context, while the Turn activity row may
+default open or carry failure/stop summary metadata so context is visible
+without dumping child activity rows into the settled conversation surface.
 
 Deep links still target durable `timeline_id` values. Opening a link to a
 compacted activity item expands the Turn activity row around that item. When the
