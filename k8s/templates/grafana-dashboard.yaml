@@ -479,6 +479,36 @@ data:
           ]
         },
         {
+          "id": 28,
+          "title": "Conversation read cursor stagnant sessions",
+          "description": "Server-side cross-check for the transcript navigation latch. Per-pass count of open SSE streams whose user's conversation_read_state cursor lags the session's durable tail while the session is idle (status=ready, active_turn_id=null). Pairs with the navigation-mode client telemetry — TankChatScrollUserAtBottomLatched ANDs both signals to distinguish 'browser bug producing transitions' from 'durable consequence is actually happening at scale'. The 'skipped' series (active_turn / caught_up / missing) confirm the sampler is running and partitioning correctly when stagnant_total is flat.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 120 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (session_mode, scope) (rate(tank_conversation_read_cursor_stagnant_total[5m]))",
+              "legendFormat": "stagnant {{`{{ session_mode }}`}} {{`{{ scope }}`}}"
+            },
+            {
+              "expr": "sum (rate(tank_conversation_read_cursor_skipped_active_turn_total[5m]))",
+              "legendFormat": "skipped active-turn"
+            },
+            {
+              "expr": "sum (rate(tank_conversation_read_cursor_skipped_caught_up_total[5m]))",
+              "legendFormat": "skipped caught-up"
+            },
+            {
+              "expr": "sum (rate(tank_conversation_read_cursor_skipped_missing_total[5m]))",
+              "legendFormat": "skipped missing-row"
+            },
+            {
+              "expr": "sum by (reason) (rate(tank_conversation_read_cursor_sample_errors_total[5m]))",
+              "legendFormat": "sampler error {{`{{ reason }}`}}"
+            }
+          ]
+        },
+        {
           "id": 27,
           "title": "Bottom-distance at chat-scroll events (p50 / p95)",
           "description": "Distance from the transcript viewport bottom at the moment client-side chat-scroll events fire. Useful to confirm the retired latch's smoking-gun signature (p95 of bottom_distance in the 100–500 px range during followOutput smooth-scroll catch-up) is not recurring after the navigation-mode refactor.",

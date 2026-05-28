@@ -66,6 +66,28 @@ All metric names are prefixed `tank_`. The full namespace:
   `TankChatScrollUserAtBottomLatched` alert: when the alert fires,
   the runbook points operators at this endpoint to resolve which
   sessions are durably lagging.
+- `tank_conversation_read_cursor_stagnant_total{session_mode, scope}` —
+  the orchestrator-side cross-check counter for the transcript
+  navigation latch failure mode. Increments once per sample pass for
+  every open SSE stream whose user's `conversation_read_state` cursor
+  lags the session's durable tail while the session is durably idle
+  (`status=ready` or `Active` with `active_turn_id=null`). The
+  sampler runs every 60s in `internal/conversationreadstate.Sampler`;
+  the `session_mode` allowlist mirrors the chat-scroll label set, and
+  `scope` collapses to `default` / `slot` / `other` / `unknown` so
+  test-slot proliferation does not bloat cardinality. Paired
+  negative-confirmation counters
+  (`tank_conversation_read_cursor_skipped_active_turn_total`,
+  `tank_conversation_read_cursor_skipped_caught_up_total`,
+  `tank_conversation_read_cursor_skipped_missing_total`,
+  `tank_conversation_read_cursor_sample_errors_total{reason}`)
+  surface "the sampler is running, it just isn't finding stagnation"
+  so a flat stagnant series is distinguishable from a stopped
+  sampler. The `TankChatScrollUserAtBottomLatched` alert ANDs this
+  rate with the client-side
+  `navigation-mode-entered-historical-anchor` rate; either alone is
+  ambiguous (real user gesture vs. real user reading history), both
+  elevated together is the load-bearing evidence.
 - `tank_chat_scroll_client_*` - browser-reported transcript scroll
   diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
   Labels are server-bucketed only: `event`, `surface`, `session_mode`,
@@ -482,17 +504,20 @@ declares one rule group per subsystem:
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
 - **Transcript navigation**: `TankChatScrollUserAtBottomLatched` fires
-  when the browser-side NavigationMode state machine reports rising
-  "entered historical-anchor" transitions at a sustained rate. The
-  retired bug class read DOM-distance heuristics during
-  react-virtuoso's followOutput smooth-scroll catch-up window and
-  latched the navigation state into historical-anchor even when the
-  user was visually at the live tail; the new state machine
+  when BOTH the browser-side NavigationMode state machine reports
+  rising "entered historical-anchor" transitions AND the
+  orchestrator-side cursor-stagnation sampler observes idle sessions
+  whose `conversation_read_state` cursor lags the durable tail at
+  the same rate. The AND is load-bearing: either signal alone is
+  ambiguous (real user gesture vs. real user reading history); both
+  elevated together is the durable evidence the retired DOM-distance
+  latch bug class is recurring. The new state machine
   (`frontend/src/navigationMode.ts`) is driven by user-gesture
   events only, with `virtuoso-at-bottom-true` as a one-way
-  return-to-tail signal. Runbook calls
-  `GET /api/debug/conversation-read-state` for the durable
-  per-session lag computation.
+  return-to-tail signal. Runbook walks the aggregate trends, the
+  per-session debug endpoint
+  (`GET /api/debug/conversation-read-state`), structured SPA logs,
+  and the per-stream registry.
 - **Stop chain self-telling**: `TankStopNotDelivered` fires if the
   backend persists Stop requests faster than runners' control-plane
   consumer claims `interrupt_turn` commands (the data/control plane

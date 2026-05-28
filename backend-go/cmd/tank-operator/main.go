@@ -35,6 +35,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -561,6 +562,31 @@ func main() {
 	srv.registerRoutes(mux)
 	if pgPool != nil {
 		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
+	}
+
+	// 13.5. Start the conversation read-cursor stagnation sampler.
+	// It snapshots the open-SSE-stream registry every 60s, joins each
+	// stream against the durable sessions row + conversation_read_state
+	// cursor, and increments tank_conversation_read_cursor_stagnant_total
+	// when an idle session's cursor lags the durable tail. Pairs with
+	// the client-side navigation-mode telemetry as the
+	// `TankConversationReadCursorStagnant` alert's load-bearing input.
+	// Disabled when pgPool is nil (stub mode).
+	if pgPool != nil {
+		sampler := conversationreadstate.NewSampler(conversationreadstate.SamplerConfig{
+			Registry: srv.streamRegistry,
+			Lookup: conversationreadstate.SessionLookupFromQuery{
+				Pool: pgPool,
+			},
+			ReadStates: func(scope string) conversationreadstate.ReadStateLookup {
+				return srv.readStateStoreForScope(scope)
+			},
+			Counter:    conversationReadCursorCounterAdapter{},
+			LocalScope: sessionScope,
+		})
+		if sampler != nil {
+			go sampler.Run(ctx)
+		}
 	}
 
 	// 14. Listen and serve. Every request flows through

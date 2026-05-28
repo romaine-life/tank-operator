@@ -512,57 +512,83 @@ spec:
               slow consumer warnings). Diagnostic only — does not
               page.
 
-        # Transcript navigation latch. Fires when the browser-side
+        # Transcript navigation latch. Fires when BOTH the browser-side
         # NavigationMode state machine reports rising "entered
-        # historical-anchor" transitions whose reason field could only
-        # come from a user gesture (wheel/keydown/touchmove) — i.e. an
-        # automatic mechanism (followOutput catch-up, virtuoso edge,
-        # SSE row burst) shouldn't be able to drive the mode anywhere
-        # but live-tail. A sustained nonzero rate here is the signal
-        # that the retired DOM-distance latch bug class is recurring
-        # in a new shape, or that gestures are firing without the user
-        # actually scrolling.
+        # historical-anchor" transitions AND the orchestrator-side
+        # cursor-stagnation sampler observes idle sessions whose
+        # conversation_read_state cursor lags the durable tail. The
+        # AND is the load-bearing structure: the client signal alone
+        # could be a real user gesture; the server signal alone could
+        # be a user legitimately reading history. Both elevated at
+        # once is the durable evidence the navigation-mode refactor's
+        # retired bug class (or a regression in its shape) is
+        # recurring.
         #
-        # Reason granularity rides in the structured-log
-        # payload (`reason="user-scroll-up"|"up-button"|…`); operators
-        # follow the runbook below to resolve the specific session.
+        # Reason granularity rides in the structured-log payload
+        # (`reason="user-scroll-up"|"up-button"|…`); the durable
+        # per-session lag computation lives at
+        # GET /api/debug/conversation-read-state. The runbook walks
+        # both surfaces.
         - alert: TankChatScrollUserAtBottomLatched
           expr: |
-            sum (
-              rate(tank_chat_scroll_client_events_total{event="navigation-mode-entered-historical-anchor",surface="session"}[15m])
-            ) > 0.05
+            (
+              sum (
+                rate(tank_chat_scroll_client_events_total{event="navigation-mode-entered-historical-anchor",surface="session"}[15m])
+              ) > 0.05
+            )
+            and on()
+            (
+              sum (
+                rate(tank_conversation_read_cursor_stagnant_total[15m])
+              ) > 0.05
+            )
           for: 15m
           labels:
             severity: warning
           annotations:
-            summary: "transcript navigation entering historical-anchor mode at sustained rate"
+            summary: "transcript navigation latch: client mode-transition rate AND server cursor-stagnation rate both elevated"
             runbook: |
               The browser-side NavigationMode state machine reports
               ongoing transitions from live-tail to historical-anchor
-              at >0.05/sec sustained for 15m. The mode is supposed to
-              transition only on explicit user intent; a sustained
-              rate is suspicious.
+              at >0.05/sec sustained for 15m, AND the orchestrator's
+              cursor-stagnation sampler is observing idle sessions
+              whose conversation_read_state cursor lags the durable
+              tail at the same rate. Both elevated at once is the
+              load-bearing evidence; either alone is ambiguous.
 
-              Diagnostic surfaces:
+              Diagnostic surfaces (in escalation order):
 
-              1. Durable per-session view —
+              1. Aggregate trends —
+                 tank_chat_scroll_client_events_total{event="navigation-mode-entered-historical-anchor"}
+                 (client signal) and
+                 tank_conversation_read_cursor_stagnant_total{session_mode, scope}
+                 (server signal). The dashboard's "Transcript
+                 navigation mode transitions" + "Conversation read
+                 cursor stagnant sessions" panels carry both. If the
+                 client rate moves but the server rate is flat, the
+                 latch is producing transitions but cursors are still
+                 catching up — the navigation-mode refactor is
+                 absorbing the damage. If both move together, the
+                 durable footprint is back.
+              2. Durable per-session view —
                  GET /api/debug/conversation-read-state?session_id=<id>
                  returns sessions.activity_summary + the
                  conversation_read_state cursor + a computed
-                 cursor_lags flag. The session-269 case (2026-05-27)
-                 had session_status="ready",
-                 active_turn_id=null, cursor_lags=true. If
-                 cursor_lags is true while a session is durably
-                 idle, the latch is producing the durable footprint.
-              2. SPA structured logs —
+                 cursor_lags flag. The retired bug-class case
+                 (session 269, 2026-05-27) had session_status="ready",
+                 active_turn_id=null, cursor_lags=true. Pick an
+                 affected user from the sampler's slog line
+                 (msg="conversation read state sampler: pass complete")
+                 and query this endpoint for each.
+              3. SPA structured logs —
                  `slog grep '"browser chat scroll event".*"event":"navigation-mode-entered-historical-anchor"'`
                  carries the bounded `reason` field
                  (user-scroll-up, up-button, jump-oldest,
                  keyboard-home, session-open-anchored). A surge
                  dominated by reason=user-scroll-up while sessions
-                 are durably idle (per the debug endpoint) means an
-                 automatic mechanism is misfiring as a gesture.
-              3. Per-stream live state —
+                 are durably idle (per #2) means an automatic
+                 mechanism is misfiring as a gesture.
+              4. Per-stream live state —
                  GET /api/debug/session-event-streams?session_id=<id>
                  shows last_emit_at, cursor_after_order_key,
                  emits_total. If emits_total kept climbing while
@@ -571,11 +597,10 @@ spec:
                  client-side regression.
 
               Source of truth: Postgres conversation_read_state and
-              sessions tables. The retired bug class lived in
-              frontend/src/transcriptScroll.ts (the
-              TRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX DOM heuristic). The
-              migration guard in scripts/check-removed-chat-runtime.mjs
-              blocks reintroduction of the symbols by name.
+              sessions tables. The retired bug class lived in the
+              frontend at scripts/check-removed-chat-runtime.mjs's
+              navigation-mode entry — the migration guard blocks
+              reintroduction of the symbols by name.
 
         - alert: TankTurnTerminalMissingClientNonce
           expr: |
