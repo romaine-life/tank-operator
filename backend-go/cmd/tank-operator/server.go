@@ -205,6 +205,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// and with the avatar-upload-attempts surface as the existing
 	// "admin debug counterpart to a user-facing read" template.
 	mux.HandleFunc("GET /api/debug/session-event-ledger", s.handleDebugSessionEventLedger)
+	// Admin-only debug surface for the durable conversation_read_state
+	// cursor + sessions.activity_summary view. Pairs with the
+	// TankChatScrollUserAtBottomLatched alert: when the alert fires,
+	// the runbook directs the operator here for a per-session lag
+	// computation against the durable ledger.
+	mux.HandleFunc("GET /api/debug/conversation-read-state", s.handleDebugConversationReadState)
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)

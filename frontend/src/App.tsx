@@ -88,7 +88,13 @@ import {
   logSessionEventStreamEvent,
   type SilenceWatchdog,
 } from "./sessionEventStreamTelemetry";
-import { transcriptVisuallyAtBottom } from "./transcriptScroll";
+import {
+  DEFAULT_NAVIGATION_MODE,
+  type NavigationMode,
+  type NavigationModeReason,
+  navigationModeTelemetryEvent,
+  transitionNavigationMode,
+} from "./navigationMode";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -7978,10 +7984,20 @@ function ChatPane({
   const [mcpServers, setMcpServers] = useState<McpServerEntry[] | null>(null);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
-  // Auto-scroll bookkeeping — track whether the user has scrolled away from
-  // the bottom; if so, suppress auto-scroll on new entries and offer the
-  // floating "scroll to bottom" button.
-  const [userScrolledUp, setUserScrolledUp] = useState(false);
+  // Transcript navigation mode — see ./navigationMode.ts and
+  // docs/features/transcript-navigation/contract.md. The mode owns "is
+  // the user reading the live tail or anchored to history" as an
+  // explicit state-transition machine; it is NOT derived from DOM
+  // measurements of the scroll container (the retired bug class was a
+  // DOM-distance heuristic that latched true during react-virtuoso's
+  // followOutput smooth-scroll catch-up window, leaving the
+  // scroll-to-bottom affordance visible at the live tail and freezing
+  // the durable conversation_read_state cursor — observed on session
+  // 269, 2026-05-27).
+  const [navigationMode, setNavigationMode] = useState<NavigationMode>(
+    DEFAULT_NAVIGATION_MODE,
+  );
+  const navigationModeRef = useRef<NavigationMode>(DEFAULT_NAVIGATION_MODE);
   // Composer attachments — uploaded to /workspace/.attachments and referenced
   // in the prompt so Claude can Read them via tool use.
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -8080,14 +8096,18 @@ function ChatPane({
       enabled: false,
     });
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
-  // Streaming-while-back-reading bookkeeping. While the user is reading
-  // older context (atBottom=false), incoming SSE events get appended to
-  // the window — Virtuoso correctly renders them at the bottom of the
-  // virtualized list without moving the user's scroll position. The pill
-  // counter surfaces those events as a clickable "N new messages below ↓"
-  // affordance so the user knows the conversation moved. Cleared when
-  // atBottomStateChange(true) fires. Slack/Discord ship the same pattern.
-  const sdkAtBottomRef = useRef(true);
+  // Streaming-while-back-reading bookkeeping. While the user is in
+  // historical-anchor mode, incoming SSE events get appended to the
+  // window — Virtuoso correctly renders them at the bottom of the
+  // virtualized list without moving the user's scroll position. The
+  // pill counter surfaces those events as a clickable "N new messages
+  // below ↓" affordance so the user knows the conversation moved.
+  // Cleared when the navigation mode transitions back to live-tail.
+  // Slack/Discord ship the same pattern; what we don't do (and what
+  // bit us pre-#XXX) is count non-message rows (tool calls, activity
+  // shells) toward the pill — the counter is gated on row.kind ===
+  // "message" because a "2 new" badge that represents two tool ticks
+  // misrepresents the conversation's actual unread surface.
   const sdkPendingTailRowIdsRef = useRef<Set<string>>(new Set());
   const [sdkPendingTailCount, setSdkPendingTailCount] = useState(0);
   const sdkReadStateInFlightRef = useRef<string | null>(null);
@@ -8254,18 +8274,49 @@ function ChatPane({
       }
     }
   }
-  function syncSdkVisualTailState(fallback = sdkAtBottomRef.current): boolean {
-    const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, fallback);
-    if (sdkAtBottomRef.current !== visuallyAtBottom) {
-      sdkAtBottomRef.current = visuallyAtBottom;
-      setUserScrolledUp(!visuallyAtBottom);
-      if (visuallyAtBottom) {
+  // dispatchNavigationMode is the only function that mutates the
+  // transcript's navigation mode. Every call site that represents a
+  // user intent — submit, button click, keyboard nav, session open,
+  // explicit user-scroll gesture, or virtuoso's "back at bottom"
+  // signal — names a NavigationModeReason and routes through here.
+  // The mode is never derived from continuous DOM measurement of the
+  // scroll container (see ./navigationMode.ts for the migration
+  // rationale).
+  //
+  // Side effects on entering live-tail:
+  //   - Clear the "N new messages below" pending set + pill count.
+  //   - Schedule a durable read-state advance so
+  //     conversation_read_state.last_read_order_key catches the live
+  //     tail (the durable footprint of "user has caught up").
+  //
+  // Side effects on entering historical-anchor: none beyond mode
+  // state. The pending-tail counter starts incrementing as new
+  // message-kind rows arrive (applySdkTranscriptRows).
+  //
+  // Every dispatch — regardless of whether the mode actually changed —
+  // emits a chat-scroll telemetry event so the durable client-metric
+  // surface records every user-intent transition. The bounded event
+  // name is the new ./navigationMode.ts label; the reason rides in the
+  // structured-log payload. Cardinality stays inside the existing
+  // chat-scroll allowlist.
+  function dispatchNavigationMode(reason: NavigationModeReason): void {
+    const transition = transitionNavigationMode(navigationModeRef.current, reason);
+    if (transition.changed) {
+      navigationModeRef.current = transition.to;
+      setNavigationMode(transition.to);
+      if (transition.to === "live-tail") {
         sdkPendingTailRowIdsRef.current.clear();
         setSdkPendingTailCount(0);
         scheduleSdkReadStateUpdate();
       }
     }
-    return visuallyAtBottom;
+    logChatScrollEvent(navigationModeTelemetryEvent(transition.to), {
+      surface: "session",
+      sessionId: session.id,
+      sessionMode: session.mode,
+      reason,
+      ...chatScrollElementSnapshot(transcriptScrollEl),
+    });
   }
   function replaceSdkServerRows(
     projectedEntries: TranscriptEntry[],
@@ -8322,13 +8373,17 @@ function ChatPane({
     sdkOldestLoadedCursorRef.current = null;
     sdkFoundOldestRef.current = false;
     sdkFoundNewestRef.current = false;
-    sdkAtBottomRef.current = true;
     setSdkFoundOldest(false);
     setSdkFoundNewest(false);
     setSdkLoadingOlder(false);
     clearScrollToLatestRequest();
     setScrollToOldestSignal(0);
-    setUserScrolledUp(false);
+    // Reset the navigation mode synchronously alongside the rest of the
+    // window state. The mode is dispatched below via
+    // dispatchNavigationMode for the *intent* (session-open-tail vs
+    // session-open-anchored) so telemetry records the open.
+    navigationModeRef.current = DEFAULT_NAVIGATION_MODE;
+    setNavigationMode(DEFAULT_NAVIGATION_MODE);
     sdkPendingTailRowIdsRef.current.clear();
     setSdkPendingTailCount(0);
     setSdkOlderError(null);
@@ -8365,7 +8420,12 @@ function ChatPane({
   function scheduleSdkReadStateUpdate(): void {
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
-    if (!sdkAtBottomRef.current) return;
+    // Read-cursor advancement is gated on navigation mode. The durable
+    // contract is "the cursor moves only when the user is reading the
+    // live tail" — historical-anchor mode is by definition the user
+    // reading earlier history, so advancing the cursor would say they
+    // have read events they're explicitly anchored away from.
+    if (navigationModeRef.current !== "live-tail") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
     if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
@@ -8381,7 +8441,7 @@ function ChatPane({
   async function flushSdkReadStateUpdate(): Promise<void> {
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
-    if (!sdkAtBottomRef.current) return;
+    if (navigationModeRef.current !== "live-tail") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
     if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
@@ -8432,10 +8492,18 @@ function ChatPane({
         cursor,
       );
     }
-    const atLiveTail = syncSdkVisualTailState();
-    if (!atLiveTail) {
+    // The "N new messages below ↓" pill counts user-facing messages
+    // only — not tool calls, reasoning blocks, meta entries,
+    // background-task placeholders, or turn-activity shells. A
+    // streaming turn produces many non-message rows; surfacing them
+    // in the pill misrepresents "what's below" because the user
+    // thinks of unread conversation as messages, not as the projected
+    // transcript-row count. The kind === "message" filter encodes
+    // that user-facing semantic.
+    if (navigationModeRef.current === "historical-anchor") {
       let added = 0;
       for (const row of rows) {
+        if (row.kind !== "message") continue;
         if (sdkPendingTailRowIdsRef.current.has(row.id)) continue;
         sdkPendingTailRowIdsRef.current.add(row.id);
         added += 1;
@@ -8470,22 +8538,22 @@ function ChatPane({
     }
   }
 
-  // handleSdkAtBottomChange starts from Virtuoso's live-tail signal but
-  // verifies it against the actual scroll container. The DOM check covers
-  // cases where virtualization keeps the callback stale while the user is
-  // visibly above the bottom. Two side effects:
-  //   - Mirror to userScrolledUp so the existing scroll-to-bottom button
-  //     visibility CSS still works.
-  //   - When transitioning to atBottom=true, clear the pending-tail
-  //     pill counter — the user has now seen those events.
+  // handleSdkAtBottomChange consumes react-virtuoso's at-bottom signal
+  // asymmetrically: a true edge transitions us back to live-tail (the
+  // user has manually scrolled all the way down — a legitimate
+  // "return to tail" intent that no other gesture path covers), but a
+  // false edge is intentionally ignored. The leaving-live-tail
+  // direction is owned exclusively by explicit user gestures
+  // (wheel/keydown/touchmove) and explicit nav controls; trusting
+  // Virtuoso's "false" signal as a mode input is what created the
+  // retired bug class — followOutput's smooth-scroll catch-up window
+  // briefly reports false even when the user is at the visual bottom,
+  // and that false transition latched the old layout-state mirror
+  // into "true" indefinitely (see ./navigationMode.ts for the named
+  // retired symbols and the migration guard that blocks them).
   function handleSdkAtBottomChange(atBottom: boolean): void {
-    const visuallyAtBottom = transcriptVisuallyAtBottom(transcriptScrollEl, atBottom);
-    sdkAtBottomRef.current = visuallyAtBottom;
-    setUserScrolledUp(!visuallyAtBottom);
-    if (visuallyAtBottom) {
-      sdkPendingTailRowIdsRef.current.clear();
-      setSdkPendingTailCount(0);
-      scheduleSdkReadStateUpdate();
+    if (atBottom) {
+      dispatchNavigationMode("virtuoso-at-bottom-true");
     }
   }
   function updateSdkLastAssistantDuration(durationMs: number): void {
@@ -8547,6 +8615,9 @@ function ChatPane({
         scrollToLatestOnReady: !hasExplicitTarget,
       },
     );
+    dispatchNavigationMode(
+      hasExplicitTarget ? "session-open-anchored" : "session-open-tail",
+    );
   }, [pendingScrollMessageId, session.id, session.status, visible]);
 
   useEffect(() => {
@@ -8603,9 +8674,11 @@ function ChatPane({
 
   // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
   // keeps the user pinned to the live tail when at-bottom, and
-  // `atBottomStateChange` is the durable boolean source for
-  // `setUserScrolledUp` (no more 24px hysteresis listener, no more manual
-  // scrollTop=scrollHeight effect). See RunMessages for the wiring.
+  // `atBottomStateChange(true)` is the one-way signal that returns the
+  // navigation mode to live-tail when the user manually scrolls all
+  // the way down. `atBottomStateChange(false)` is intentionally NOT
+  // wired — see handleSdkAtBottomChange for the asymmetry rationale.
+  // See RunMessages for the wiring.
 
   // History replay is intentionally not limited to empty transcript state: a
   // run can finish while the tab is closed, leaving a stale partial transcript.
@@ -8684,7 +8757,7 @@ function ChatPane({
       const scrollToLatestOnReady =
         timelineBootstrapScrollToLatestRef.current && anchor === "newest";
       const stickToLatestAfterLoad =
-        source === "projected-refresh" && syncSdkVisualTailState();
+        source === "projected-refresh" && navigationModeRef.current === "live-tail";
       if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
         timelineBootstrapScrollToLatestRef.current = false;
       }
@@ -8839,6 +8912,11 @@ function ChatPane({
         ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       try {
+        // Older-missing-cursor recovery: the user was back-paginating
+        // and the cursor went stale. They are by definition reading
+        // history, so the jump-oldest reason transitions / confirms
+        // historical-anchor mode.
+        dispatchNavigationMode("jump-oldest");
         await jumpSdkToOldest("older-missing-cursor");
         setScrollToOldestSignal((value) => value + 1);
       } catch (err) {
@@ -9125,6 +9203,7 @@ function ChatPane({
     sdkTranscriptKeyboardNavInFlightRef.current = "oldest";
     setSdkOlderError(null);
     try {
+      dispatchNavigationMode("keyboard-home");
       if (!sdkFoundOldestRef.current) {
         await jumpSdkToOldest("keyboard");
       }
@@ -9144,10 +9223,10 @@ function ChatPane({
     if (sdkTranscriptKeyboardNavInFlightRef.current) return;
     sdkTranscriptKeyboardNavInFlightRef.current = "newest";
     try {
+      dispatchNavigationMode("keyboard-end");
       if (!sdkFoundNewestRef.current) {
         await jumpSdkToLatest("keyboard");
       }
-      setSdkPendingTailCount(0);
       requestScrollToLatest("smooth", "keyboard");
     } finally {
       if (sdkTranscriptKeyboardNavInFlightRef.current === "newest") {
@@ -9686,6 +9765,60 @@ function ChatPane({
     transcriptScrollEl,
     visible,
   ]);
+
+  // User-initiated scroll-up gestures transition the navigation mode
+  // from live-tail to historical-anchor. This is the only DOM-side
+  // input to mode transitions; intentionally NO continuous DOM-distance
+  // measurement of the scroll container is consulted (the retired bug
+  // class read scrollHeight/scrollTop mid-followOutput-smooth-scroll
+  // and latched the mode wrongly). Listening on input events is what
+  // captures *user intent* without confusing it with programmatic
+  // scroll catch-up.
+  //
+  // We gate on the current mode being live-tail before dispatching;
+  // gestures while already in historical-anchor are no-ops (the user
+  // is already where they're trying to go). That gate keeps the
+  // emitted telemetry stream meaningful — every fire represents a
+  // real leaving-live-tail intent.
+  useEffect(() => {
+    if (!visible || activeTab !== "chat" || !transcriptScrollEl) return;
+    const target = transcriptScrollEl;
+    const dispatchScrollUp = () => {
+      if (navigationModeRef.current !== "live-tail") return;
+      dispatchNavigationMode("user-scroll-up");
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) dispatchScrollUp();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "ArrowUp" || e.key === "PageUp") dispatchScrollUp();
+    };
+    let touchStartY: number | null = null;
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (touchStartY === null) return;
+      const currentY = e.touches[0]?.clientY;
+      if (currentY === undefined) return;
+      // 4 px keeps tap-and-release out of the scroll-intent signal
+      // while still capturing the start of any real swipe-down (which
+      // scrolls the content up). This is a one-shot intent detector
+      // per touch sequence, not a continuous-position threshold.
+      if (currentY - touchStartY > 4) dispatchScrollUp();
+    };
+    target.addEventListener("wheel", onWheel, { passive: true });
+    target.addEventListener("keydown", onKey);
+    target.addEventListener("touchstart", onTouchStart, { passive: true });
+    target.addEventListener("touchmove", onTouchMove, { passive: true });
+    return () => {
+      target.removeEventListener("wheel", onWheel);
+      target.removeEventListener("keydown", onKey);
+      target.removeEventListener("touchstart", onTouchStart);
+      target.removeEventListener("touchmove", onTouchMove);
+    };
+  }, [activeTab, transcriptScrollEl, visible]);
 
   // Esc-to-abort while streaming. Mirrors cloudcli's "ESC" kbd hint on the
   // Stop pill. Capture phase so it fires even if focus is in the textarea.
@@ -10326,7 +10459,10 @@ function ChatPane({
       } as TranscriptEntry;
       appendSdkRealtimeEntries(markLocalEntries([userEntry], run.id));
     }
-    if (visible) requestScrollToLatest("auto", "submit");
+    if (visible) {
+      dispatchNavigationMode("submit");
+      requestScrollToLatest("auto", "submit");
+    }
     setRunStatus("running");
     setRunning(true);
     setActiveTool(null);
@@ -11465,12 +11601,13 @@ function ChatPane({
           (loaded window doesn't include the oldest event yet). Hidden
           while scrolled-to-bottom on a fresh session so the at-tail UI
           isn't cluttered. Sits above the scroll-to-bottom button. */}
-      {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && userScrolledUp && (
+      {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && navigationMode === "historical-anchor" && (
         <button
           type="button"
           className="run-scroll-to-top"
           onClick={() => {
             const reachOldest = async () => {
+              dispatchNavigationMode("up-button");
               await jumpSdkToOldest("button");
               setScrollToOldestSignal((value) => value + 1);
             };
@@ -11492,12 +11629,12 @@ function ChatPane({
         <button
           type="button"
           className={`run-scroll-to-bottom${
-            userScrolledUp || !sdkFoundNewest ? "" : " run-scroll-to-bottom-hidden"
+            navigationMode === "historical-anchor" || !sdkFoundNewest ? "" : " run-scroll-to-bottom-hidden"
           }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
           onClick={() => {
             const reachNewest = async () => {
+              dispatchNavigationMode("down-button");
               await jumpSdkToLatest("button");
-              setSdkPendingTailCount(0);
               requestScrollToLatest("smooth", "manual");
             };
             void reachNewest();

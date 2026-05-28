@@ -160,6 +160,76 @@ func TestHandleChatScrollMetricsLogsThinkingRowInvariantContext(t *testing.T) {
 	}
 }
 
+func TestHandleChatScrollMetricsRecordsNavigationModeTransitions(t *testing.T) {
+	// The two navigation-mode event names are the durable
+	// observability surface for the user-trust failure that motivated
+	// the navigation-mode refactor (session 269, 2026-05-27). The
+	// allowlist must accept both, the structured slog must carry the
+	// bounded reason, and the Prometheus event counter must increment
+	// without leaking the reason into a high-cardinality label.
+	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
+	req := httptest.NewRequest(http.MethodPost, "/api/client-metrics/chat-scroll", strings.NewReader(`{
+		"events": [
+			{
+				"event": "navigation-mode-entered-historical-anchor",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "269",
+				"reason": "user-scroll-up",
+				"hasScrollParent": true,
+				"bottomDistance": 12
+			},
+			{
+				"event": "navigation-mode-entered-live-tail",
+				"surface": "session",
+				"sessionMode": "claude_gui",
+				"sessionId": "269",
+				"reason": "down-button",
+				"hasScrollParent": true,
+				"bottomDistance": 0
+			}
+		]
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	var logs bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(prevLogger)
+
+	app.handleChatScrollMetrics(res, req)
+
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("metrics status = %d body=%s, want 202", res.Code, res.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		`"event":"navigation-mode-entered-historical-anchor"`,
+		`"event":"navigation-mode-entered-live-tail"`,
+		`"reason":"user-scroll-up"`,
+		`"reason":"down-button"`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("slog output missing %s; got: %s", want, logged)
+		}
+	}
+
+	metrics := scrapePrometheus(t)
+	for _, want := range []string{
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="navigation-mode-entered-historical-anchor",has_scroll_parent="true",session_mode="claude_gui",surface="session"}`,
+		`tank_chat_scroll_client_events_total{at_bottom="unknown",event="navigation-mode-entered-live-tail",has_scroll_parent="true",session_mode="claude_gui",surface="session"}`,
+	} {
+		if !strings.Contains(metrics, want) {
+			t.Fatalf("scrape missing %s\n%s", want, metrics)
+		}
+	}
+	if strings.Contains(metrics, `reason="user-scroll-up"`) ||
+		strings.Contains(metrics, `reason="down-button"`) {
+		t.Fatalf("scrape leaked reason as a high-cardinality label:\n%s", metrics)
+	}
+}
+
 func TestHandleChatScrollMetricsRejectsUnboundedBatch(t *testing.T) {
 	app := &appServer{verifier: auth.NewVerifier(testJWT(t))}
 	var body bytes.Buffer

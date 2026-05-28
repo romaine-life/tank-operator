@@ -935,6 +935,22 @@ var (
 		},
 		[]string{"result"},
 	)
+
+	// debugConversationReadStateReadsTotal is the volume signal for the
+	// admin-only `GET /api/debug/conversation-read-state` surface — the
+	// per-session diagnostic counterpart to the navigation-mode
+	// observability story. Pair with the
+	// `TankChatScrollUserAtBottomLatched` alert in
+	// k8s/templates/observability.yaml: when the alert fires, the
+	// runbook directs the operator at this endpoint for the durable
+	// state of a specific (session, owner) pair.
+	debugConversationReadStateReadsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_debug_conversation_read_state_reads_total",
+			Help: "Admin reads of /api/debug/conversation-read-state, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
 )
 
 func recordDebugSessionEventLedgerRead(result string) {
@@ -944,6 +960,21 @@ func recordDebugSessionEventLedgerRead(result string) {
 }
 
 func debugSessionEventLedgerResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordDebugConversationReadStateRead(result string) {
+	debugConversationReadStateReadsTotal.WithLabelValues(
+		debugConversationReadStateResultLabel(result),
+	).Inc()
+}
+
+func debugConversationReadStateResultLabel(result string) string {
 	switch result {
 	case "ok", "empty", "bad_request", "forbidden", "store_error", "not_configured":
 		return result
