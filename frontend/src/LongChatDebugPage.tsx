@@ -292,6 +292,7 @@ export function LongChatDebugPage() {
               autoExpandTools={false}
               showTimestamps
               showDuration={false}
+              userKey="debug"
               onQuote={() => undefined}
               scrollParent={scrollParent}
               onStartReached={prependOlder}

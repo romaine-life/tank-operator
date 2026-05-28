@@ -7565,6 +7565,25 @@ textarea.run-files-viewer-editor:focus {
   min-width: 1.35em;
 }
 
+.run-turn-thinking-duration {
+  display: inline-block;
+  margin-left: 0.55em;
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+  /* Reserve enough room for "59m 59s" so the dots don't reflow each tick. */
+  min-width: 4.6em;
+  text-align: left;
+}
+
+.run-turn-view-thinking .run-turn-thinking-duration {
+  margin-left: 0.65em;
+}
+
 .run-turn-thinking-dots span {
   display: inline-block;
   line-height: 1;

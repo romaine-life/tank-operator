@@ -195,6 +195,17 @@ function TurnThinkingMessage({
           <span>.</span>
           <span>.</span>
         </span>
+        {/* Static specimen mirrors a mid-run turn so the styleguide shows the
+            same elapsed-time slot the live transcript renders. The actual
+            App.tsx bubble drives the readout off the activity shell's
+            startedAt; here we just freeze a representative value so layout
+            and color decisions can be reviewed without a live timer. */}
+        <span
+          className="run-turn-thinking-duration"
+          data-design-element="thinking-duration"
+        >
+          6m 12s
+        </span>
       </button>
     </div>
   );

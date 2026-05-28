@@ -1,4 +1,4 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AnchorHTMLAttributes,
   ComponentProps,
@@ -3767,7 +3767,7 @@ type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string }
   | {
       kind: "activity";
       id: string;
@@ -3827,11 +3827,20 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
 }
 
 function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<EntryGroup, { kind: "thinking" }> {
+  // Prefer the projected TurnActivitySummary.startedAt: that is the durable
+  // turn-start order key derived from the first event in the turn and stays
+  // constant across re-projections. The shell entry's own `time` field gets
+  // refreshed each time the activity shell is re-projected (it tracks the
+  // latest event, not the turn start) — using it caused the duration to
+  // appear stuck at 0s while the turn was running. Fall through to the
+  // shell's own startedAt and time only when the activity summary is
+  // missing them (older fixtures, hand-built test entries).
   return {
     kind: "thinking",
     id: `turn-thinking-${turnId}`,
     turnId,
     shell,
+    startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,
   };
 }
 
@@ -6316,11 +6325,197 @@ function buildTurnViewItems(
     });
 }
 
+// Formats elapsed milliseconds for the thinking indicator. Stays compact so
+// it sits naturally alongside the bouncing dots: sub-minute renders as
+// "12s", under an hour renders as "6m 12s", and an hour or longer collapses
+// the seconds slot to keep the visual width bounded ("1h 4m"). Negative
+// inputs clamp to zero so a clock skew between client and server never
+// produces a weird "-3s" while a turn is genuinely live.
+function formatThinkingElapsed(ms: number): string {
+  const clamped = ms > 0 ? ms : 0;
+  const totalSeconds = Math.floor(clamped / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (totalMinutes < 60) return `${totalMinutes}m ${seconds}s`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
+}
+
+// =====================================================================
+// Thinking-bubble elapsed-time timer.
+//
+// Earlier revisions tried to anchor the timer to the backend's
+// projected `activity.startedAt`. That source kept ambushing the timer
+// — it could be empty before the first activity event landed, it could
+// flip values mid-flight when the projection's `first` entry changed,
+// and any stale `sessionStorage` from a previous tab could end up
+// pinned at an "earlier than reality" baseline. Symptoms included
+// "stuck at 0s forever", "stuck at a value that's higher than time
+// since submit", and "lag before the seconds start ticking up".
+//
+// New approach (per user direction): the timer is a purely client-side
+// stopwatch anchored to **the first moment the UI renders the bubble
+// for a given (user, turn) pair**. Backend timestamps are no longer
+// consulted. The anchor is captured eagerly in module-level state on
+// the first read for the pair and mirrored to `sessionStorage` so a
+// mid-turn refresh keeps the same anchor. A `useSyncExternalStore`
+// ticker drives one-second re-renders for every concurrent bubble off
+// a single shared interval — there is no per-component setInterval,
+// so Virtuoso remounting an item can never clear the interval before
+// it fires.
+//
+// Keying by user email avoids cross-account contamination: if user A
+// signs out and user B signs in within the same browser tab,
+// `sessionStorage` still has A's anchors but they're under A's
+// namespace and never read by B.
+// =====================================================================
+
+const TURN_THINKING_START_CACHE_KEY_PREFIX = "tank.thinking-turn-start.v3.";
+const turnThinkingStartCache = new Map<string, number>();
+
+function turnThinkingStartCacheKey(userKey: string, turnId: string): string {
+  return `${TURN_THINKING_START_CACHE_KEY_PREFIX}${userKey}:${turnId}`;
+}
+
+function readPersistedTurnThinkingStart(cacheKey: string): number | null {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+  try {
+    const raw = window.sessionStorage.getItem(cacheKey);
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedTurnThinkingStart(cacheKey: string, value: number): void {
+  if (typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(cacheKey, String(value));
+  } catch {
+    // sessionStorage may be unavailable (private mode, quota). The
+    // in-memory Map is still authoritative for the current tab; we
+    // just lose the refresh-survival guarantee.
+  }
+}
+
+// Lazily capture the very first wall-clock moment the UI renders the
+// thinking bubble for a (user, turn) pair. The capture is idempotent —
+// subsequent calls always return the same number. This is the entire
+// anchor for the stopwatch; no backend timestamp participates.
+function resolveTurnThinkingStart(userKey: string, turnId: string): number {
+  const cacheKey = turnThinkingStartCacheKey(userKey, turnId);
+  const fromMemory = turnThinkingStartCache.get(cacheKey);
+  if (fromMemory != null) return fromMemory;
+  const fromPersisted = readPersistedTurnThinkingStart(cacheKey);
+  if (fromPersisted != null) {
+    turnThinkingStartCache.set(cacheKey, fromPersisted);
+    return fromPersisted;
+  }
+  const now = Date.now();
+  turnThinkingStartCache.set(cacheKey, now);
+  writePersistedTurnThinkingStart(cacheKey, now);
+  return now;
+}
+
+// Shared 1-second ticker driven through `useSyncExternalStore`. One
+// interval, any number of subscribers; React handles snapshot
+// consistency and re-render scheduling. This is the bit that
+// guarantees "the counter actually counts up one second at a time"
+// even when the parent (or Virtuoso) is remounting the bubble
+// frequently — there is no per-component interval to lose.
+let turnThinkingTickerNow = Date.now();
+const turnThinkingTickerListeners = new Set<() => void>();
+let turnThinkingTickerInterval: number | null = null;
+
+function turnThinkingTickerNotifyAll(): void {
+  for (const listener of turnThinkingTickerListeners) {
+    try {
+      listener();
+    } catch {
+      // A single bad subscriber must not break the ticker for everyone.
+    }
+  }
+}
+
+function startTurnThinkingTicker(): void {
+  if (turnThinkingTickerInterval != null) return;
+  if (typeof window === "undefined") return;
+  turnThinkingTickerInterval = window.setInterval(() => {
+    turnThinkingTickerNow = Date.now();
+    turnThinkingTickerNotifyAll();
+  }, 1000);
+}
+
+function stopTurnThinkingTickerIfIdle(): void {
+  if (turnThinkingTickerListeners.size > 0) return;
+  if (turnThinkingTickerInterval == null) return;
+  if (typeof window === "undefined") return;
+  window.clearInterval(turnThinkingTickerInterval);
+  turnThinkingTickerInterval = null;
+}
+
+function subscribeTurnThinkingTicker(listener: () => void): () => void {
+  turnThinkingTickerListeners.add(listener);
+  startTurnThinkingTicker();
+  // Snap to the current wall clock immediately so a remount that
+  // lands mid-tick still sees the latest value on its first render.
+  turnThinkingTickerNow = Date.now();
+  return () => {
+    turnThinkingTickerListeners.delete(listener);
+    stopTurnThinkingTickerIfIdle();
+  };
+}
+
+function getTurnThinkingTickerSnapshot(): number {
+  return turnThinkingTickerNow;
+}
+
+function useTurnThinkingNow(): number {
+  return useSyncExternalStore(
+    subscribeTurnThinkingTicker,
+    getTurnThinkingTickerSnapshot,
+    getTurnThinkingTickerSnapshot,
+  );
+}
+
+// Live-ticking elapsed-time readout for the "thinking" bubble.
+// `aria-live="off"` is intentional: the duration changes every second
+// and would otherwise spam screen readers with useless announcements.
+// The underlying turn button already has an `aria-label="Open turn"`.
+function RunTurnThinkingDuration({
+  userKey,
+  turnId,
+}: {
+  userKey: string;
+  turnId: string;
+}) {
+  const startMs = resolveTurnThinkingStart(userKey, turnId);
+  const now = useTurnThinkingNow();
+  const elapsed = formatThinkingElapsed(now - startMs);
+  return (
+    <span
+      className="run-turn-thinking-duration"
+      aria-live="off"
+      data-design-element="thinking-duration"
+      data-turn-id={turnId}
+      title={`UI timer started ${new Date(startMs).toLocaleTimeString()}`}
+    >
+      {elapsed}
+    </span>
+  );
+}
+
 function RunTurnThinkingBubble({
+  userKey,
   turnId,
   avatar,
   onOpenTurn,
 }: {
+  userKey: string;
   turnId: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string) => void;
@@ -6348,6 +6543,7 @@ function RunTurnThinkingBubble({
           <span>.</span>
           <span>.</span>
         </span>
+        <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
       </button>
     </div>
   );
@@ -6585,6 +6781,7 @@ function RunTurnActivityScreen({
   autoExpandTools,
   showTimestamps,
   showDuration,
+  userKey,
   loadingActivityTurns,
   onOpenBackgroundTask,
 }: {
@@ -6598,6 +6795,9 @@ function RunTurnActivityScreen({
   autoExpandTools: boolean;
   showTimestamps: boolean;
   showDuration: boolean;
+  // Stable identifier for the currently signed-in user. See the
+  // matching prop on RunMessages for the rationale.
+  userKey: string;
   loadingActivityTurns: Record<string, boolean | undefined>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
 }) {
@@ -6750,6 +6950,7 @@ function RunTurnActivityScreen({
                   <span>.</span>
                   <span>.</span>
                 </span>
+                <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
@@ -6793,6 +6994,7 @@ export function RunMessages({
   activeTurnId = null,
   showTimestamps,
   showDuration,
+  userKey,
   onQuote,
   onFork,
   onOpenTurn,
@@ -6815,6 +7017,11 @@ export function RunMessages({
   sessionId: string;
   sessionMode?: string;
   telemetrySurface?: string;
+  // Stable identifier for the currently signed-in user. Used to
+  // namespace the thinking-bubble timer's per-(user, turn) anchor so
+  // a second account signed in on the same browser tab can't inherit
+  // anchors written by the first account.
+  userKey: string;
   // Set when the SPA cold-started with ?message=<entry.id>. RunMessages
   // searches the loaded groups for that id and, when found, scrolls
   // Virtuoso to it and lights up a highlight pulse on the bubble. If
@@ -7120,6 +7327,7 @@ export function RunMessages({
       if (g.kind === "thinking") {
         return (
           <RunTurnThinkingBubble
+            userKey={userKey}
             turnId={g.turnId}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
@@ -11103,6 +11311,7 @@ function ChatPane({
             autoExpandTools={runPrefs.autoExpandTools}
             showTimestamps={runPrefs.showTimestamps}
             showDuration={runPrefs.showDuration}
+            userKey={user?.sub ?? user?.email ?? "anon"}
             loadingActivityTurns={loadingActivityTurns}
             onOpenBackgroundTask={openBackgroundPage}
           />
@@ -11204,6 +11413,7 @@ function ChatPane({
               activeTurnId={renderedActiveTurnId}
               showTimestamps={runPrefs.showTimestamps}
               showDuration={runPrefs.showDuration}
+              userKey={user?.sub ?? user?.email ?? "anon"}
               onQuote={readOnly ? undefined : appendQuotedMessage}
               onFork={
                 readOnly
