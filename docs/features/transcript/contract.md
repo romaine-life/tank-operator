@@ -73,6 +73,13 @@ other.
   placeholder for that turn. The browser must not hide the `...` row while
   waiting for a separately-delivered activity summary to set the same active
   turn id.
+- An interrupted or failed turn projects an activity shell on the same shape
+  as a completed turn whenever it produced any non-meta work. Without a
+  successful terminal there is no durable final-answer marker, so tool calls,
+  partial assistant prose, reasoning, and background tasks all live inside
+  the shell. The shell carries `status: "interrupted"` or `status: "failed"`,
+  and the durable `Stop requested` and `Stopped` / `Turn failed` meta entries
+  remain visible in the main transcript outside the shell.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
@@ -126,3 +133,7 @@ other.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.
+- An interrupted turn that produced tool calls and partial assistant prose
+  projects a single `turn_activity` shell wrapping that work, with the
+  `Stop requested` and `Stopped` meta markers visible after the shell. Tool
+  rows must not appear inline between the user message and the terminal meta.
