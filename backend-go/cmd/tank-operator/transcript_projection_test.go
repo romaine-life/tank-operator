@@ -184,6 +184,98 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 	}
 }
 
+func TestProjectTranscriptEventsKeepsInterruptedTurnActivityOutOfMainTranscript(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "cancel this",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("note", "003", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:note", map[string]any{
+			"kind": "message",
+			"text": "working on it",
+		}),
+		projectionTestEvent("tool", "004", "item.started", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":    "command_execution",
+			"command": "sleep 30",
+		}),
+		projectionTestEvent("turn-1:turn.interrupt_requested", "005", "turn.interrupt_requested", "system", "tank", "turn-1", "", nil),
+		projectionTestEvent("terminal", "006", "turn.interrupted", "runner", "codex", "turn-1", "", map[string]any{
+			"reason": "client_interrupt",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if projection.Entries[0]["kind"] != "message" || projection.Entries[1]["kind"] != "turn_activity" || projection.Entries[2]["kind"] != "meta" {
+		t.Fatalf("entry kinds = [%v %v %v], want message/turn_activity/meta", projection.Entries[0]["kind"], projection.Entries[1]["kind"], projection.Entries[2]["kind"])
+	}
+	activity := projection.Entries[1]["activity"].(map[string]any)
+	if activity["status"] != "interrupted" || activity["active"] == true {
+		t.Fatalf("activity summary = %#v, want interrupted inactive turn activity", activity)
+	}
+	if got, want := activity["childCount"], 3; got != want {
+		t.Fatalf("activity childCount = %v, want %v", got, want)
+	}
+	for _, entry := range projection.Entries {
+		if entry["id"] == "turn-1:item:note" || entry["id"] == "turn-1:item:tool" || entry["id"] == "turn-1:turn.interrupt_requested" {
+			t.Fatalf("activity child leaked into main transcript: %#v", entry)
+		}
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("missing activity body for interrupted turn")
+	}
+	if got, want := body.CompactedEntryIDs, []string{"turn-1:item:note", "turn-1:item:tool", "turn-1:turn.interrupt_requested"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("compacted ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "try this",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("note", "003", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:note", map[string]any{
+			"kind": "message",
+			"text": "attempting",
+		}),
+		projectionTestEvent("tool", "004", "item.failed", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":  "command_execution",
+			"error": "boom",
+		}),
+		projectionTestEvent("terminal", "005", "turn.failed", "runner", "codex", "turn-1", "", map[string]any{
+			"reason": "provider_failure",
+			"error":  "provider failed",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if projection.Entries[0]["kind"] != "message" || projection.Entries[1]["kind"] != "turn_activity" || projection.Entries[2]["kind"] != "meta" {
+		t.Fatalf("entry kinds = [%v %v %v], want message/turn_activity/meta", projection.Entries[0]["kind"], projection.Entries[1]["kind"], projection.Entries[2]["kind"])
+	}
+	activity := projection.Entries[1]["activity"].(map[string]any)
+	if activity["status"] != "failed" || activity["active"] == true {
+		t.Fatalf("activity summary = %#v, want failed inactive turn activity", activity)
+	}
+	terminal := projection.Entries[2]
+	if meta, ok := terminal["meta"].(map[string]any); !ok || meta["title"] != "Turn failed" {
+		t.Fatalf("terminal meta = %#v, want Turn failed", terminal)
+	}
+	for _, entry := range projection.Entries {
+		if entry["id"] == "turn-1:item:note" || entry["id"] == "turn-1:item:tool" {
+			t.Fatalf("activity child leaked into main transcript: %#v", entry)
+		}
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

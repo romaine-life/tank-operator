@@ -18,11 +18,13 @@ from durable events.
 
 Compacted agent activity is a server-owned projection of the same durable
 transcript ledger, not a second ledger. The Turn activity row is an activity/log
-surface; the main transcript is the settled conversation surface. Historical
-timeline reads return Turn activity as primary collapsed rows, with child
-entries loaded on expansion. The UI may duplicate assistant prose across those
-projections, but it must not visibly move a rendered row from one surface to the
-other.
+surface; the main transcript is the settled conversation surface. The main
+transcript is promotion-only: provider activity, reasoning, tool output, and
+provisional assistant prose must not default into it. Historical timeline reads
+return Turn activity as primary collapsed rows, with child entries loaded on
+expansion. The UI may duplicate assistant prose across those projections only
+when a successful terminal event explicitly marks that prose as the final
+answer; it must not visibly move a rendered row from one surface to the other.
 
 ## Sources Of Truth
 
@@ -31,6 +33,9 @@ other.
 - `session.status` events own startup notices shown inside the transcript.
 - The Tank conversation protocol owns the projection rules for Turn activity
   versus settled transcript messages.
+- `turn.completed.payload.final_answer.timeline_ids` is the only durable fact
+  that promotes assistant prose from activity/log material into a settled
+  main-transcript assistant response.
 - Provider SDK events are inputs that must be converted to Tank events before
   the UI depends on them.
 - SSE is a live follower of durable events, not the transcript store.
@@ -69,6 +74,10 @@ other.
   carries an explicit durable final-answer marker. The server projection uses
   `turn.completed.payload.final_answer.timeline_ids` as the only final-answer
   source; it must not infer finality from a trailing assistant message/run.
+- Failed, interrupted, and otherwise non-successful turns do not have a final
+  assistant answer. Their non-user activity stays in Turn activity, with terminal
+  context surfaced by the Turn activity disclosure row and the terminal meta
+  line, not by expanding child provider rows into the main transcript.
 - A server-projected active `turn_activity` shell owns the visible running
   placeholder for that turn. The browser must not hide the `...` row while
   waiting for a separately-delivered activity summary to set the same active
@@ -126,3 +135,6 @@ other.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.
+- Failed or interrupted turns keep their non-user rows in Turn activity and show
+  only the user message plus terminal context in the main transcript unless a
+  later successful `turn.completed` with explicit final-answer ids wins the race.

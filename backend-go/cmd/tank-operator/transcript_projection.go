@@ -695,7 +695,7 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 }
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, terminals map[string]turnTerminalProjection) transcriptProjection {
-	activities := append(completedProjectedActivities(entries, terminals), activeProjectedActivities(entries, activeTurnID)...)
+	activities := append(terminalProjectedActivities(entries, terminals), activeProjectedActivities(entries, activeTurnID)...)
 	if len(activities) == 0 {
 		return transcriptProjection{Entries: entries, ActivityBodies: map[string]turnActivityBody{}}
 	}
@@ -739,7 +739,7 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 	return transcriptProjection{Entries: out, ActivityBodies: bodies}
 }
 
-func completedProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection) []turnActivityBody {
+func terminalProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection) []turnActivityBody {
 	turnIndexes := map[string][]int{}
 	turnOrder := []string{}
 	for idx, entry := range entries {
@@ -756,21 +756,24 @@ func completedProjectedActivities(entries []map[string]any, terminals map[string
 	for _, turnID := range turnOrder {
 		indexes := turnIndexes[turnID]
 		terminal, ok := terminals[turnID]
-		if !ok || terminal.Status != "completed" {
+		if !ok {
 			continue
 		}
-		if len(terminal.FinalAnswerIDs) == 0 && turnHasAssistantMessage(entries, indexes) {
+		if terminal.Status == "completed" && len(terminal.FinalAnswerIDs) == 0 && turnHasAssistantMessage(entries, indexes) {
 			recordTranscriptMaterializationInvariantViolation("completed_turn_missing_final_answer", "completed")
 		}
-		finalIndexes := finalAnswerProjectedIndexes(entries, indexes, terminal.FinalAnswerIDs)
-		if len(terminal.FinalAnswerIDs) > 0 && len(finalIndexes) == 0 {
-			recordTranscriptMaterializationInvariantViolation("completed_turn_final_answer_missing_entry", "completed")
+		finalIndexes := map[int]bool{}
+		if terminal.Status == "completed" {
+			finalIndexes = finalAnswerProjectedIndexes(entries, indexes, terminal.FinalAnswerIDs)
+			if len(terminal.FinalAnswerIDs) > 0 && len(finalIndexes) == 0 {
+				recordTranscriptMaterializationInvariantViolation("completed_turn_final_answer_missing_entry", "completed")
+			}
 		}
 		var compacted []map[string]any
 		var activityEntries []map[string]any
 		for _, idx := range indexes {
 			entry := entries[idx]
-			if isProjectedUserMessage(entry) {
+			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
@@ -781,7 +784,7 @@ func completedProjectedActivities(entries []map[string]any, terminals map[string
 		if len(compacted) == 0 {
 			continue
 		}
-		activities = append(activities, makeTurnActivityBody(turnID, "completed", activityEntries, compacted, false))
+		activities = append(activities, makeTurnActivityBody(turnID, terminal.Status, activityEntries, compacted, false))
 	}
 	return activities
 }
@@ -910,6 +913,10 @@ func isProjectedUserMessage(entry map[string]any) bool {
 
 func isProjectedAssistantMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "assistant"
+}
+
+func isProjectionTerminalMetaEntry(entry map[string]any, terminal turnTerminalProjection) bool {
+	return transcriptMapString(entry, "id") == "turn-terminal:"+terminal.SourceEventID
 }
 
 func isProjectionToolLikeItem(item *projectionItem) bool {
