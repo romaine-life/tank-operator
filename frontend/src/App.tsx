@@ -15,6 +15,7 @@ import {
   Streamdown,
   type Components as StreamdownComponents,
 } from "streamdown";
+import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
@@ -184,6 +185,7 @@ import { openAvatarPreview } from "./avatarPreview";
 import {
   linkWorkspacePathsInMarkdown,
   normalizeWorkspacePathTarget,
+  splitWorkspacePathsInText,
   workspacePathFromHref,
   type WorkspacePathTarget,
 } from "./workspaceLinks";
@@ -259,6 +261,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
+  display?: UserMessageDisplay;
   startedAt?: string;
   updatedAt?: string;
   completedAt?: string;
@@ -4595,6 +4598,24 @@ function RunMarkdown({ children }: { children: string }) {
   );
 }
 
+function RunPlainText({ children }: { children: string }) {
+  const segments = useMemo(() => splitWorkspacePathsInText(children), [children]);
+  return (
+    <span className="run-plain-message-text">
+      {segments.map((segment, index) => {
+        if (segment.kind === "workspace_path") {
+          return (
+            <RunMarkdownLink key={index} href={segment.href}>
+              {segment.text}
+            </RunMarkdownLink>
+          );
+        }
+        return segment.text;
+      })}
+    </span>
+  );
+}
+
 function attachmentWorkspaceTarget(attachment: MessageAttachmentDisplay): WorkspacePathTarget | null {
   return normalizeWorkspacePathTarget(attachment.path || attachment.absPath || "");
 }
@@ -4779,8 +4800,18 @@ function RunMessageBubble({
   const variant =
     entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
   const { user } = useContext(RunContext);
-  const text = entry.text ?? "";
+  const entryText = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
+  const durableSkillDisplay =
+    variant === "user" && entry.display?.kind === "skill_invocation"
+      ? entry.display
+      : null;
+  const explicitSkillName = (entry as Record<string, unknown>).skillName;
+  const skillName =
+    (typeof explicitSkillName === "string" && explicitSkillName.length > 0
+      ? explicitSkillName
+      : durableSkillDisplay?.skill_name) ?? "";
+  const text = durableSkillDisplay ? skillActionText(skillName) : entryText;
   // session.status:failed transcripts events carry severity="error" and
   // an optional action (e.g. "Re-sign-in to Codex"). The renderer
   // surfaces both: data-severity drives error-bubble styling; action
@@ -4800,12 +4831,11 @@ function RunMessageBubble({
     messageAction && typeof messageAction.href === "string" && messageAction.href.length > 0
       ? messageAction.href
       : undefined;
-  const isSkillAction = messageKind === "skill-action";
-  const skillName = (entry as Record<string, unknown>).skillName;
+  const isSkillAction = messageKind === "skill-action" || durableSkillDisplay !== null;
   const skillSupplementalText =
     typeof (entry as Record<string, unknown>).skillSupplementalText === "string"
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
-      : "";
+      : durableSkillDisplay?.supplemental_text ?? "";
   const skillActionIcon =
     skillName === "test"
       ? FlaskConicalIcon
@@ -4872,7 +4902,11 @@ function RunMessageBubble({
               )}
             </span>
           ) : (
-            <RunMarkdown>{visibleText}</RunMarkdown>
+            variant === "user" ? (
+              <RunPlainText>{visibleText}</RunPlainText>
+            ) : (
+              <RunMarkdown>{visibleText}</RunMarkdown>
+            )
           )}
           {variant === "system" && messageActionLabel && messageActionHref && (
             <a

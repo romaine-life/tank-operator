@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   linkWorkspacePathsInMarkdown,
+  splitWorkspacePathsInText,
   workspacePathFromHref,
 } from "./workspaceLinks.ts";
 
@@ -36,6 +37,17 @@ test("keeps line numbers inside workspace path links", () => {
   assert.equal(
     linkWorkspacePathsInMarkdown("Open /workspace/src/App.tsx:42."),
     "Open [/workspace/src/App.tsx:42](</workspace/src/App.tsx:42>).",
+  );
+});
+
+test("splits plain text workspace paths without dropping newlines", () => {
+  assert.deepEqual(
+    splitWorkspacePathsInText("a)\nOpen /workspace/src/App.tsx:42.\nb)"),
+    [
+      { kind: "text", text: "a)\nOpen " },
+      { kind: "workspace_path", text: "/workspace/src/App.tsx:42", href: "/workspace/src/App.tsx:42" },
+      { kind: "text", text: ".\nb)" },
+    ],
   );
 });
 
