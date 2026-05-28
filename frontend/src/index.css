@@ -5139,17 +5139,18 @@ button:disabled {
   color: var(--text-primary);
 }
 
-/* Transcript overflow cues — slim right-edge targets that preserve jump
+/* Transcript overflow cues — slim left-edge targets that preserve jump
    behavior without placing circular buttons over message content. */
 .run-transcript-edge-cue {
   position: absolute;
-  right: 0.35rem;
+  left: 0.75rem;
+  right: auto;
   bottom: calc(100% + var(--space-2));
   width: 1.5rem;
   height: 3.4rem;
   display: inline-flex;
   align-items: stretch;
-  justify-content: flex-end;
+  justify-content: flex-start;
   padding: 0;
   border: 0;
   border-radius: 999px;
@@ -5170,13 +5171,13 @@ button:disabled {
 
 .run-transcript-edge-cue-hidden {
   opacity: 0;
-  transform: translateX(0.35rem);
+  transform: translateX(-0.35rem);
   pointer-events: none;
 }
 
 .run-transcript-edge-cue-rail {
   width: 3px;
-  margin: 0.4rem 0.25rem 0.4rem 0;
+  margin: 0.4rem 0 0.4rem 0.25rem;
   border-radius: 999px;
   background: rgba(148, 197, 253, 0.72);
   box-shadow: 0 0 14px rgba(96, 165, 250, 0.35);
