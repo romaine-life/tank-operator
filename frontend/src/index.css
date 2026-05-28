@@ -7685,6 +7685,13 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
+.run-plain-message-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  white-space: pre-wrap;
+}
+
 .run-transcript-message-text [data-streamdown="code-block"] {
   min-width: 0;
   max-width: 100%;

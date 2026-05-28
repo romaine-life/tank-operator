@@ -12,6 +12,10 @@ export interface WorkspacePathTarget {
   line: number | null;
 }
 
+export type WorkspaceTextSegment =
+  | { kind: "text"; text: string }
+  | { kind: "workspace_path"; text: string; href: string };
+
 function splitTrailingPathPunctuation(path: string): { href: string; trailing: string } {
   let href = path;
   let trailing = "";
@@ -162,6 +166,46 @@ function linkWorkspacePathsOutsideInlineCode(line: string): string {
 
   out += linkWorkspacePathsInTextChunk(line.slice(chunkStart));
   return out;
+}
+
+export function splitWorkspacePathsInText(text: string): WorkspaceTextSegment[] {
+  const segments: WorkspaceTextSegment[] = [];
+  let cursor = 0;
+  WORKSPACE_PATH_RE.lastIndex = 0;
+
+  const pushText = (value: string) => {
+    if (!value) return;
+    const previous = segments[segments.length - 1];
+    if (previous?.kind === "text") {
+      previous.text += value;
+      return;
+    }
+    segments.push({ kind: "text", text: value });
+  };
+
+  for (let match = WORKSPACE_PATH_RE.exec(text); match; match = WORKSPACE_PATH_RE.exec(text)) {
+    const rawPath = match[0];
+    const index = match.index;
+    if (!canLinkWorkspacePath(text, index)) continue;
+
+    const { href, trailing } = splitTrailingPathPunctuation(rawPath);
+    if (!href || href === "/workspace" || href === "workspace") continue;
+    if (!normalizeWorkspacePathTarget(href)) continue;
+
+    if (index > cursor) {
+      pushText(text.slice(cursor, index));
+    }
+    segments.push({ kind: "workspace_path", text: href, href });
+    if (trailing) {
+      pushText(trailing);
+    }
+    cursor = index + rawPath.length;
+  }
+
+  if (cursor < text.length) {
+    pushText(text.slice(cursor));
+  }
+  return segments.length > 0 ? segments : [{ kind: "text", text }];
 }
 
 export function linkWorkspacePathsInMarkdown(markdown: string): string {
