@@ -951,6 +951,60 @@ var (
 		},
 		[]string{"result"},
 	)
+
+	// conversationReadCursorStagnantTotal is the durable cross-check
+	// for the transcript navigation latch failure mode. Increments
+	// once per sample pass for every (session_mode, scope) tuple where
+	// the orchestrator observed an open SSE stream against an idle
+	// session whose conversation_read_state cursor lags behind the
+	// durable tail. Pairs with
+	// `tank_chat_scroll_client_events_total{event="navigation-mode-entered-historical-anchor"}`
+	// — the client-side signal answers "the SPA reports the mode
+	// transition"; this signal answers "the durable consequence
+	// (stuck cursor) is visible from Postgres." Sampling runs in
+	// `internal/conversationreadstate.Sampler.Run`; the bounded
+	// scope and session_mode labels come from the sampler-side
+	// allowlist functions.
+	conversationReadCursorStagnantTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_conversation_read_cursor_stagnant_total",
+			Help: "Open SSE streams whose user's conversation_read_state cursor lags an idle session's durable tail at sample time.",
+		},
+		[]string{"session_mode", "scope"},
+	)
+	// The four "skipped" series are the negative-confirmation
+	// surface for the sampler — they answer "the sampler is running;
+	// it just isn't finding stagnation right now," without which a
+	// flat stagnant_total counter is indistinguishable from a
+	// stopped sampler.
+	conversationReadCursorSkippedActiveTurnTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_conversation_read_cursor_skipped_active_turn_total",
+			Help: "Open streams the sampler skipped because the session has an active turn (lag is expected).",
+		},
+		[]string{"session_mode", "scope"},
+	)
+	conversationReadCursorSkippedCaughtUpTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_conversation_read_cursor_skipped_caught_up_total",
+			Help: "Open streams the sampler skipped because the user's read cursor matches the durable tail.",
+		},
+		[]string{"session_mode", "scope"},
+	)
+	conversationReadCursorSkippedMissingTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_conversation_read_cursor_skipped_missing_total",
+			Help: "Open streams the sampler skipped because no session row was found (soft-deleted or scope mismatch).",
+		},
+		[]string{"scope"},
+	)
+	conversationReadCursorSampleErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_conversation_read_cursor_sample_errors_total",
+			Help: "Sampler pass errors, labeled by bounded reason (session_lookup, read_state_lookup).",
+		},
+		[]string{"reason"},
+	)
 )
 
 func recordDebugSessionEventLedgerRead(result string) {
@@ -972,6 +1026,80 @@ func recordDebugConversationReadStateRead(result string) {
 	debugConversationReadStateReadsTotal.WithLabelValues(
 		debugConversationReadStateResultLabel(result),
 	).Inc()
+}
+
+// conversationReadCursorCounterAdapter binds the orchestrator's
+// promauto-registered cursor-stagnation counters to the
+// `conversationreadstate.StagnationCounter` interface. The adapter
+// applies the same bounded-label allowlist used by the chat-scroll
+// metrics so a session_mode that the sampler can't classify
+// collapses to "unknown" instead of bloating Prometheus' active
+// series.
+type conversationReadCursorCounterAdapter struct{}
+
+func (conversationReadCursorCounterAdapter) RecordStagnant(sessionMode, scope string) {
+	conversationReadCursorStagnantTotal.WithLabelValues(
+		chatScrollSessionModeLabel(sessionMode),
+		conversationReadCursorScopeLabel(scope),
+	).Inc()
+}
+
+func (conversationReadCursorCounterAdapter) RecordSkippedActiveTurn(sessionMode, scope string) {
+	conversationReadCursorSkippedActiveTurnTotal.WithLabelValues(
+		chatScrollSessionModeLabel(sessionMode),
+		conversationReadCursorScopeLabel(scope),
+	).Inc()
+}
+
+func (conversationReadCursorCounterAdapter) RecordSkippedIdleCaughtUp(sessionMode, scope string) {
+	conversationReadCursorSkippedCaughtUpTotal.WithLabelValues(
+		chatScrollSessionModeLabel(sessionMode),
+		conversationReadCursorScopeLabel(scope),
+	).Inc()
+}
+
+func (conversationReadCursorCounterAdapter) RecordSkippedMissingSession(scope string) {
+	conversationReadCursorSkippedMissingTotal.WithLabelValues(
+		conversationReadCursorScopeLabel(scope),
+	).Inc()
+}
+
+func (conversationReadCursorCounterAdapter) RecordSampleError(reason string) {
+	conversationReadCursorSampleErrorsTotal.WithLabelValues(
+		conversationReadCursorSampleErrorReasonLabel(reason),
+	).Inc()
+}
+
+// conversationReadCursorScopeLabel bounds the orchestrator's known
+// session scopes to a closed enum. Tank-operator runs one local
+// scope per replica (`default` in production, `slot-<N>` in test
+// slots); the sampler does not observe other scopes, but the
+// allowlist defends against a future code path that names one.
+func conversationReadCursorScopeLabel(scope string) string {
+	scope = strings.TrimSpace(scope)
+	switch scope {
+	case "":
+		return "unknown"
+	case "default":
+		return "default"
+	default:
+		// Slot scopes share a stable prefix; collapse to a single
+		// label so the metric stays bounded across an arbitrary
+		// number of test slots.
+		if strings.HasPrefix(scope, "slot-") {
+			return "slot"
+		}
+		return "other"
+	}
+}
+
+func conversationReadCursorSampleErrorReasonLabel(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "session_lookup", "read_state_lookup":
+		return reason
+	default:
+		return "other"
+	}
 }
 
 func debugConversationReadStateResultLabel(result string) string {
