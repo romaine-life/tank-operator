@@ -463,6 +463,39 @@ data:
               "legendFormat": "p99 {{`{{ terminal }}`}}"
             }
           ]
+        },
+        {
+          "id": 26,
+          "title": "Transcript navigation mode transitions",
+          "description": "Browser-side NavigationMode (live-tail / historical-anchor) transition rate by target. Pairs with the TankChatScrollUserAtBottomLatched alert — a sustained rate of entered-historical-anchor while users are not gesturing is the durable signature of the retired DOM-distance latch bug class. See docs/features/transcript-navigation/contract.md.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 112 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "sum by (event) (rate(tank_chat_scroll_client_events_total{event=~\"navigation-mode-entered-.*\",surface=\"session\"}[5m]))",
+              "legendFormat": "{{`{{ event }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 27,
+          "title": "Bottom-distance at chat-scroll events (p50 / p95)",
+          "description": "Distance from the transcript viewport bottom at the moment client-side chat-scroll events fire. Useful to confirm the retired latch's smoking-gun signature (p95 of bottom_distance in the 100–500 px range during followOutput smooth-scroll catch-up) is not recurring after the navigation-mode refactor.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 112 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "fieldConfig": { "defaults": { "unit": "short" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le, event) (rate(tank_chat_scroll_client_bottom_distance_pixels_bucket{surface=\"session\"}[10m])))",
+              "legendFormat": "p50 {{`{{ event }}`}}"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, event) (rate(tank_chat_scroll_client_bottom_distance_pixels_bucket{surface=\"session\"}[10m])))",
+              "legendFormat": "p95 {{`{{ event }}`}}"
+            }
+          ]
         }
       ]
     }

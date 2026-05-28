@@ -58,12 +58,28 @@ All metric names are prefixed `tank_`. The full namespace:
   `forbidden`, `store_error`, `not_configured`. `empty` is its own
   label so a wave of misdirected lookups (wrong scope, wrong id) is
   visible without grepping the audit slog line.
+- `tank_admin_debug_conversation_read_state_reads_total{result}` —
+  admin reads of `GET /api/debug/conversation-read-state` (the
+  per-session, per-owner read-cursor + activity-summary diagnostic
+  surface). Bounded `result` labels: `ok`, `empty`, `bad_request`,
+  `forbidden`, `store_error`, `not_configured`. Pair with the
+  `TankChatScrollUserAtBottomLatched` alert: when the alert fires,
+  the runbook points operators at this endpoint to resolve which
+  sessions are durably lagging.
 - `tank_chat_scroll_client_*` - browser-reported transcript scroll
   diagnostics ingested through `POST /api/client-metrics/chat-scroll`.
   Labels are server-bucketed only: `event`, `surface`, `session_mode`,
   `at_bottom`, and `has_scroll_parent`. The endpoint never exposes
   `session_id`, email, raw route paths, or user-supplied event names as
-  labels; unknown values collapse to `other` / `unknown`.
+  labels; unknown values collapse to `other` / `unknown`. Two
+  event-name buckets are bound to the durable NavigationMode state
+  machine in `frontend/src/navigationMode.ts`:
+  `navigation-mode-entered-live-tail` and
+  `navigation-mode-entered-historical-anchor`. Their rate is the
+  smoking-gun signal the `TankChatScrollUserAtBottomLatched` alert
+  watches; the structured slog line carries the bounded
+  `reason` (`user-scroll-up`, `up-button`, `keyboard-home`,
+  `session-open-anchored`, etc.) for per-transition diagnosis.
 - `tank_session_list_debug_capture_reports_total{result,reason}` —
   browser-reported session-list debug captures ingested through
   `POST /api/client-metrics/session-list-debug-capture`. The SPA sends
@@ -329,6 +345,50 @@ line per call (`caller_email`, `session_id`, `session_scope`,
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
 
+## Conversation Read State Debug Surface
+
+`GET /api/debug/conversation-read-state` (admin-only) returns the
+per-(owner, scope, session_id) durable read cursor alongside the
+session's durable `activity_summary` view. The endpoint is the
+per-session diagnostic counterpart to the transcript-navigation
+observability story: when the
+`TankChatScrollUserAtBottomLatched` alert fires, the runbook directs
+the operator here to compute the lag for a specific session.
+
+Query params:
+
+- `session_id` (required) — public session id (e.g. `269`).
+- `owner` — defaults to the caller; admin can target another user's
+  cursor. Cross-user reads increment
+  `tank_admin_cross_user_session_reads_total` like the per-session
+  ledger surface.
+- `session_scope` — defaults to this orchestrator's scope.
+
+Response fields the runbook uses:
+
+- `session_status` + `activity_status` — the durable
+  `sessions.activity_summary.status` snapshot. The session-269 case
+  (2026-05-27) had both at `"ready"`.
+- `active_turn_id` — `""` if no turn is active. Required to be empty
+  for the latch diagnosis (a live turn is expected to lag).
+- `last_durable_order_key` — the latest `session_events.order_key`
+  from `sessions.activity_summary.last_order_key`.
+- `last_read_order_key` — the cursor in `conversation_read_state`
+  for `(email, session_scope, session_id)`.
+- `cursor_lags` — `true` when `last_durable_order_key >
+  last_read_order_key`. With `active_turn_id=""` and
+  `session_status="ready"`, a `true` value is the durable footprint
+  of the bug the navigation-mode refactor retired.
+
+Counts as an admin cross-user audit read when `owner` differs from
+the caller. Emits a structured `slog` line per call
+(`caller_email`, `owner`, `session_scope`, `session_id`,
+`session_status`, `active_turn_id`, `last_durable_order_key`,
+`last_read_order_key`, `cursor_lags`) and increments
+`tank_admin_debug_conversation_read_state_reads_total{result}` at
+`/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
+`forbidden`, `store_error`, `not_configured`.
+
 ## Session List Capture Debug Surface
 
 `GET /api/debug/session-list-captures` (admin-only) returns durable
@@ -421,6 +481,18 @@ declares one rule group per subsystem:
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
+- **Transcript navigation**: `TankChatScrollUserAtBottomLatched` fires
+  when the browser-side NavigationMode state machine reports rising
+  "entered historical-anchor" transitions at a sustained rate. The
+  retired bug class read DOM-distance heuristics during
+  react-virtuoso's followOutput smooth-scroll catch-up window and
+  latched the navigation state into historical-anchor even when the
+  user was visually at the live tail; the new state machine
+  (`frontend/src/navigationMode.ts`) is driven by user-gesture
+  events only, with `virtuoso-at-bottom-true` as a one-way
+  return-to-tail signal. Runbook calls
+  `GET /api/debug/conversation-read-state` for the durable
+  per-session lag computation.
 - **Stop chain self-telling**: `TankStopNotDelivered` fires if the
   backend persists Stop requests faster than runners' control-plane
   consumer claims `interrupt_turn` commands (the data/control plane

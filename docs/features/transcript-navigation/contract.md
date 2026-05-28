@@ -84,14 +84,31 @@ yanking the viewport away from a user reading history.
 ## Observability
 
 - There must be a way to distinguish live-tail mode from historical-anchor mode
-  in client telemetry when diagnosing jumps or missed messages.
+  in client telemetry when diagnosing jumps or missed messages. The bounded
+  client events
+  `tank_chat_scroll_client_events_total{event="navigation-mode-entered-live-tail"|"navigation-mode-entered-historical-anchor"}`
+  emit on every transition; the structured slog line carries the bounded
+  transition reason.
 - Timeline page requests should log or count anchor type, direction, and
   cursor validity without logging message contents.
 - Resync, invalid cursor, anchor-not-found, and unexpected viewport-reset
-  cases should be observable as user-trust navigation failures.
+  cases should be observable as user-trust navigation failures. The
+  `TankChatScrollUserAtBottomLatched` alert is the named user-trust failure
+  for "user-visible navigation state contradicts durable read cursor"; its
+  runbook resolves to the durable diagnostic surface
+  `GET /api/debug/conversation-read-state`.
 - A report that "refresh moved me" or "new messages moved the transcript"
   should be diagnosable from durable cursor inputs plus client navigation
-  telemetry.
+  telemetry — without browser devtools. The durable inputs are
+  `conversation_read_state.last_read_order_key` and
+  `sessions.activity_summary.last_order_key`; the client telemetry is the
+  navigation-mode event stream named above.
+- Navigation mode is an explicit state machine
+  (`frontend/src/navigationMode.ts`), not a layout-state mirror. The
+  retired DOM-distance heuristic and its supporting boolean
+  (`userScrolledUp`, `transcriptVisuallyAtBottom`,
+  `TRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX`) are blocked from
+  reintroduction by `scripts/check-removed-chat-runtime.mjs`.
 
 ## Acceptance Checks
 

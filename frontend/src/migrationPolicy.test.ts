@@ -648,12 +648,90 @@ test("chat submit explicitly lands at the latest message", () => {
   assert.equal(startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'), true);
 });
 
-test("live transcript tail state checks the actual scroll container", () => {
-  assert.equal(appSource.includes("syncSdkVisualTailState"), true);
-  assert.equal(appSource.includes("transcriptVisuallyAtBottom"), true);
-  assert.match(appSource, /const atLiveTail = syncSdkVisualTailState\(\)/);
-  assert.match(appSource, /const atLiveTail = syncSdkVisualTailState\(\);[\s\S]{0,250}if \(!atLiveTail\)/);
+test("navigation mode owns live-tail vs historical-anchor explicitly", () => {
+  // The mode is an explicit state machine (see ./navigationMode.ts);
+  // it is NOT derived from continuous DOM measurement of the
+  // transcript scroll container. The retired bug (session 269,
+  // 2026-05-27) was a DOM-distance heuristic that latched true during
+  // react-virtuoso's followOutput smooth-scroll catch-up window,
+  // freezing both the scroll-to-bottom affordance and the durable
+  // conversation_read_state cursor. The new shape pins these
+  // invariants:
+  //
+  //   - The mode state is a NavigationMode literal, not a boolean
+  //     mirror of layout.
+  //   - The dispatcher is the only mutation surface.
+  //   - Read-cursor advance and pending-tail clearing happen on
+  //     mode entry into "live-tail" via the dispatcher's side
+  //     effects, not from a DOM-distance branch.
+  //   - The pending-tail counter only increments for kind ===
+  //     "message" rows; tool / reasoning / activity / meta rows do
+  //     not count toward the "N new messages below" affordance.
+  //   - Virtuoso's atBottomStateChange is consumed asymmetrically:
+  //     a true edge transitions back to live-tail, a false edge is
+  //     ignored (gestures own the leaving-tail direction).
+  assert.equal(appSource.includes("syncSdkVisualTailState"), false);
+  assert.equal(appSource.includes("transcriptVisuallyAtBottom"), false);
+  assert.equal(appSource.includes("setUserScrolledUp"), false);
+  assert.equal(appSource.includes("sdkAtBottomRef"), false);
+  assert.equal(
+    appSource.includes('from "./navigationMode"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes("function dispatchNavigationMode(reason: NavigationModeReason)"),
+    true,
+  );
+  assert.match(
+    appSource,
+    /if \(navigationModeRef\.current === "historical-anchor"\) \{[\s\S]{0,400}if \(row\.kind !== "message"\) continue;/,
+  );
+  assert.match(
+    appSource,
+    /function handleSdkAtBottomChange\(atBottom: boolean\): void \{[\s\S]{0,300}if \(atBottom\) \{[\s\S]{0,80}dispatchNavigationMode\("virtuoso-at-bottom-true"\)/,
+  );
   assert.equal(appSource.includes("sdkPendingTailRowIdsRef"), true);
+});
+
+test("user-scroll-up gestures are the only DOM-input mode transition", () => {
+  // The leaving-live-tail direction is owned by explicit user input
+  // events on the transcript scroll container (wheel / keydown /
+  // touchstart+touchmove). The contract test pins all three event
+  // attachments AND the live-tail mode gate that ensures gestures
+  // are no-ops while the user is already in historical-anchor — so
+  // the emitted telemetry stream represents real transitions.
+  assert.match(
+    appSource,
+    /target\.addEventListener\("wheel", onWheel, \{ passive: true \}\)/,
+  );
+  assert.match(appSource, /target\.addEventListener\("keydown", onKey\)/);
+  assert.match(
+    appSource,
+    /target\.addEventListener\("touchstart", onTouchStart, \{ passive: true \}\)/,
+  );
+  assert.match(
+    appSource,
+    /target\.addEventListener\("touchmove", onTouchMove, \{ passive: true \}\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(navigationModeRef\.current !== "live-tail"\) return;[\s\S]{0,80}dispatchNavigationMode\("user-scroll-up"\);/,
+  );
+});
+
+test("read-cursor advance gates on live-tail mode, not DOM distance", () => {
+  // conversation_read_state.last_read_order_key only moves when the
+  // user is reading the live tail. The gate must be the mode, not a
+  // DOM-distance check — pinning the durable contract that the
+  // session 269 case violated.
+  assert.match(
+    appSource,
+    /function scheduleSdkReadStateUpdate\(\): void \{[\s\S]{0,800}if \(navigationModeRef\.current !== "live-tail"\) return;/,
+  );
+  assert.match(
+    appSource,
+    /async function flushSdkReadStateUpdate\(\): Promise<void> \{[\s\S]{0,400}if \(navigationModeRef\.current !== "live-tail"\) return;/,
+  );
 });
 
 test("chat back-pagination keeps an explicit access path", () => {

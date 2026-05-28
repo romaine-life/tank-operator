@@ -66,6 +66,26 @@ const ignoredRelativePaths = new Set([
   // concat and doesn't trip the guard) — TS string concat isn't as
   // idiomatic, so the test pins the literal directly.
   "agent-runner/src/sessionbus/sessionBusSubjects.test.ts",
+  // navigationMode module — names the retired symbols in the
+  // explanatory module header (the comment block that documents
+  // which bug class the module was created to retire). Same
+  // exemption shape as docs/tank-conversation-protocol.md — prose,
+  // not live code reintroducing the retired path.
+  "frontend/src/navigationMode.ts",
+  "frontend/src/navigationMode.test.ts",
+  // Transcript-navigation contract — the Observability section names
+  // the retired symbols explicitly so future readers can find the
+  // migration guard from the contract.
+  "docs/features/transcript-navigation/contract.md",
+  // The new admin debug endpoint's source carries a header comment
+  // explaining the bug class it diagnoses, naming the retired
+  // userScrolledUp identifier. Same prose-not-code shape.
+  "backend-go/cmd/tank-operator/handlers_debug_conversation_read_state.go",
+  // The new alert + dashboard panel cite the retired constant by
+  // name in runbook/description prose so an operator following the
+  // runbook understands what was retired and why.
+  "k8s/templates/observability.yaml",
+  "k8s/templates/grafana-dashboard.yaml",
 ]);
 
 const blocked = [
@@ -357,6 +377,24 @@ const blocked = [
   // 24px threshold was the smoking-gun signature of the prior listener —
   // ban the literal so a future refactor can't reintroduce it.
   { name: "removed 24px scroll hysteresis listener", pattern: /distanceFromBottom\s*>\s*24/ },
+  // Transcript-navigation contract — the DOM-distance heuristic that
+  // latched the old userScrolledUp boolean during react-virtuoso's
+  // followOutput smooth-scroll catch-up window was retired (session
+  // 269 case, 2026-05-27). The replacement is an explicit
+  // NavigationMode state machine driven by user-gesture events; see
+  // ./frontend/src/navigationMode.ts and
+  // ./docs/features/transcript-navigation/contract.md. Block every
+  // symbol that participated in the retired DOM-override fallback so
+  // a future refactor can't quietly bring the layout-state-as-
+  // navigation-state pattern back.
+  { name: "retired userScrolledUp boolean", pattern: /\buserScrolledUp\b/ },
+  { name: "retired setUserScrolledUp setter", pattern: /\bsetUserScrolledUp\b/ },
+  { name: "retired sdkAtBottomRef bottom mirror", pattern: /\bsdkAtBottomRef\b/ },
+  { name: "retired syncSdkVisualTailState DOM check", pattern: /\bsyncSdkVisualTailState\b/ },
+  { name: "retired transcriptVisuallyAtBottom predicate", pattern: /\btranscriptVisuallyAtBottom\b/ },
+  { name: "retired transcriptBottomDistance helper", pattern: /\btranscriptBottomDistance\b/ },
+  { name: "retired TRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX constant", pattern: /\bTRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX\b/ },
+  { name: "retired transcriptScroll module file", pattern: /\bfrontend\/src\/transcriptScroll(?:\.test)?\.ts\b/ },
   // tank-operator#83 follow-up — the session-list typed-event surface
   // shipped with session_scope in the row + index but the read path,
   // NATS subject, and frontend reducer all keyed on email alone. Prod

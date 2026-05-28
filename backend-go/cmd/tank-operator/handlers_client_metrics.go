@@ -169,22 +169,24 @@ func validChatScrollMetricNumbers(event chatScrollMetricEvent) bool {
 }
 
 var chatScrollStructuredLogEvents = map[string]struct{}{
-	"keyboard-edge-navigation": {},
-	"timeline-request":         {},
-	"timeline-error":           {},
-	"timeline-stale":           {},
-	"timeline-loaded":          {},
-	"older-missing-cursor":     {},
-	"older-request":            {},
-	"older-error":              {},
-	"older-loaded":             {},
-	"older-no-visible-change":  {},
-	"prepend-preserve-scroll":  {},
-	"scroll-to-latest":         {},
-	"scroll-to-oldest":         {},
-	"start-reached":            {},
-	"at-bottom-change":         {},
-	"thinking-row-missing":     {},
+	"keyboard-edge-navigation":                      {},
+	"timeline-request":                              {},
+	"timeline-error":                                {},
+	"timeline-stale":                                {},
+	"timeline-loaded":                               {},
+	"older-missing-cursor":                          {},
+	"older-request":                                 {},
+	"older-error":                                   {},
+	"older-loaded":                                  {},
+	"older-no-visible-change":                       {},
+	"prepend-preserve-scroll":                       {},
+	"scroll-to-latest":                              {},
+	"scroll-to-oldest":                              {},
+	"start-reached":                                 {},
+	"at-bottom-change":                              {},
+	"thinking-row-missing":                          {},
+	"navigation-mode-entered-live-tail":             {},
+	"navigation-mode-entered-historical-anchor":     {},
 }
 
 func logChatScrollClientEvent(email string, event chatScrollMetricEvent) {
@@ -279,34 +281,46 @@ func metricLogFloat(value *float64) any {
 }
 
 var chatScrollMetricEventLabels = map[string]struct{}{
-	"keyboard-edge-navigation":      {},
-	"tail-bootstrap-reset":          {},
-	"timeline-request":              {},
-	"timeline-error":                {},
-	"timeline-stale":                {},
-	"timeline-loaded":               {},
-	"older-missing-cursor":          {},
-	"older-request":                 {},
-	"older-error":                   {},
-	"older-loaded":                  {},
-	"older-no-visible-change":       {},
-	"prepend-preserve-scroll":       {},
-	"virtuoso-window":               {},
-	"scroll-to-latest":              {},
-	"scroll-to-oldest":              {},
-	"start-reached":                 {},
-	"at-bottom-change":              {},
-	"thinking-row-missing":          {},
-	"scroll-parent-mounted":         {},
-	"scroll-parent-unmounted":       {},
-	"debug-scroll-parent-mounted":   {},
-	"debug-scroll-parent-unmounted": {},
-	"debug-reset-transcript":        {},
-	"debug-prepend-older":           {},
-	"debug-append-burst":            {},
-	"debug-mock-reply-stopped":      {},
-	"debug-submit-message":          {},
-	"debug-mock-reply-complete":     {},
+	"keyboard-edge-navigation":                  {},
+	"tail-bootstrap-reset":                      {},
+	"timeline-request":                          {},
+	"timeline-error":                            {},
+	"timeline-stale":                            {},
+	"timeline-loaded":                           {},
+	"older-missing-cursor":                      {},
+	"older-request":                             {},
+	"older-error":                               {},
+	"older-loaded":                              {},
+	"older-no-visible-change":                   {},
+	"prepend-preserve-scroll":                   {},
+	"virtuoso-window":                           {},
+	"scroll-to-latest":                          {},
+	"scroll-to-oldest":                          {},
+	"start-reached":                             {},
+	"at-bottom-change":                          {},
+	"thinking-row-missing":                      {},
+	"scroll-parent-mounted":                     {},
+	"scroll-parent-unmounted":                   {},
+	"debug-scroll-parent-mounted":               {},
+	"debug-scroll-parent-unmounted":             {},
+	"debug-reset-transcript":                    {},
+	"debug-prepend-older":                       {},
+	"debug-append-burst":                        {},
+	"debug-mock-reply-stopped":                  {},
+	"debug-submit-message":                      {},
+	"debug-mock-reply-complete":                 {},
+	// Navigation-mode transitions emitted from
+	// frontend/src/App.tsx → dispatchNavigationMode. Pairs with the
+	// TankChatScrollUserAtBottomLatched alert in
+	// k8s/templates/observability.yaml: a rising rate of
+	// navigation-mode-entered-historical-anchor during a session
+	// where the user is not gesturing is the durable signature of
+	// the retired DOM-distance latch bug class (session 269 case,
+	// 2026-05-27). See frontend/src/navigationMode.ts for the
+	// reason set; the bounded reason name rides in the structured
+	// log payload, not in metric labels.
+	"navigation-mode-entered-live-tail":         {},
+	"navigation-mode-entered-historical-anchor": {},
 }
 
 func chatScrollEventLabel(raw string) string {
