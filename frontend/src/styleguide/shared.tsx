@@ -404,9 +404,41 @@ export const pageTitleStyle: React.CSSProperties = {
   margin: "0 0 4px 0",
 };
 
+export const styleguideTopNavStyle: React.CSSProperties = {
+  ...captionStyle,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+  maxWidth: "none",
+  margin: "0 0 4px 0",
+};
+
+export function MainAppButton() {
+  return (
+    <a
+      href="/"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        minHeight: 28,
+        padding: "0 10px",
+        border: "1px solid var(--border-soft)",
+        borderRadius: "var(--radius-sm)",
+        color: "var(--text-body)",
+        background: "var(--bg-elevated)",
+        textDecoration: "none",
+        fontSize: "var(--text-xs)",
+      }}
+    >
+      Main app
+    </a>
+  );
+}
+
 export function BackLink() {
   return (
-    <p style={{ ...captionStyle, marginBottom: 4 }}>
+    <div style={styleguideTopNavStyle}>
       <a
         href="/_styleguide"
         style={{
@@ -416,7 +448,8 @@ export function BackLink() {
       >
         ← tank-operator — styleguide
       </a>
-    </p>
+      <MainAppButton />
+    </div>
   );
 }
 

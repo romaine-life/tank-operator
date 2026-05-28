@@ -493,12 +493,12 @@ export function StyleguidePortfolioTranscript() {
                 bodyAriaLabel={turnViewActive ? "Turn view" : "Transcript"}
                 floatingBetweenBodyAndComposer={
                   <button
-                    className="run-scroll-to-bottom run-scroll-to-bottom-pending"
+                    className="run-transcript-edge-cue run-transcript-edge-cue-bottom run-transcript-edge-cue-pending"
                     type="button"
-                    aria-label="Scroll to latest transcript entry"
+                    aria-label="2 new messages below"
+                    title="2 new messages below"
                   >
-                    <ArrowDownIcon size={15} aria-hidden="true" />
-                    <span className="run-scroll-to-bottom-count">2 new</span>
+                    <span className="run-transcript-edge-cue-rail" aria-hidden="true" />
                   </button>
                 }
                 composerAbove={

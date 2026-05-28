@@ -36,9 +36,7 @@ import {
 import {
   ActivityIcon,
   AlertCircleIcon,
-  ArrowDownIcon,
   ArrowLeftIcon,
-  ArrowUpIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -11626,19 +11624,15 @@ function ChatPane({
           </>
         )}
       </>)}
-      floatingBetweenBodyAndComposer={(<>
-      {/* Floating jump-to-start button — symmetric with jump-to-latest.
-          Slack/Discord ship the pair: ↑ takes you to the very first
-          message of the session (anchor=oldest), ↓ takes you back to the
-          live tail. Visible when the user isn't already at the head AND
-          the ledger isn't tiny enough that "start" is already on screen
-          (loaded window doesn't include the oldest event yet). Hidden
-          while scrolled-to-bottom on a fresh session so the at-tail UI
-          isn't cluttered. Sits above the scroll-to-bottom button. */}
+      floatingBetweenBodyAndComposer={activeTab === "chat" ? (<>
+      {/* Non-intrusive edge glows for transcript overflow. These keep the
+          explicit jump actions while avoiding floating arrow buttons over
+          avatars or message content while the navigation-mode signal is
+          still being hardened. */}
       {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && navigationMode === "historical-anchor" && (
         <button
           type="button"
-          className="run-scroll-to-top"
+          className="run-transcript-edge-cue run-transcript-edge-cue-top"
           onClick={() => {
             const reachOldest = async () => {
               dispatchNavigationMode("up-button");
@@ -11648,23 +11642,20 @@ function ChatPane({
             void reachOldest();
           }}
           aria-label="Scroll to beginning of conversation"
+          title="Scroll to beginning of conversation"
         >
-          <ArrowUpIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+          <span className="run-transcript-edge-cue-rail" aria-hidden="true" />
         </button>
       )}
 
-      {/* Floating scroll-to-bottom button — fades in when the user has
-          scrolled away from the live tail (atBottom=false). When new
-          events have streamed in during a back-read the button shows
-          "N new" so the user knows the conversation moved (Slack /
-          Discord pattern). Click reaches the live tail in one round-trip
-          — refetching the tail if the user back-paginated past it. */}
+      {/* The tail cue is deliberately just an edge glow. The aria-label
+          carries the exact pending count, but the visible UI stays quiet. */}
       {activeTab === "chat" && renderedEntries.length > 0 && (
         <button
           type="button"
-          className={`run-scroll-to-bottom${
-            navigationMode === "historical-anchor" || !sdkFoundNewest ? "" : " run-scroll-to-bottom-hidden"
-          }${sdkPendingTailCount > 0 ? " run-scroll-to-bottom-pending" : ""}`}
+          className={`run-transcript-edge-cue run-transcript-edge-cue-bottom${
+            navigationMode === "historical-anchor" || !sdkFoundNewest ? "" : " run-transcript-edge-cue-hidden"
+          }${sdkPendingTailCount > 0 ? " run-transcript-edge-cue-pending" : ""}`}
           onClick={() => {
             const reachNewest = async () => {
               dispatchNavigationMode("down-button");
@@ -11678,17 +11669,17 @@ function ChatPane({
               ? `${sdkPendingTailCount} new messages below`
               : "Scroll to latest"
           }
+          title={
+            sdkPendingTailCount > 0
+              ? `${sdkPendingTailCount} new messages below`
+              : "Scroll to latest"
+          }
         >
-          <ArrowDownIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-          {sdkPendingTailCount > 0 && (
-            <span className="run-scroll-to-bottom-count">
-              {sdkPendingTailCount > 99 ? "99+" : sdkPendingTailCount}
-            </span>
-          )}
+          <span className="run-transcript-edge-cue-rail" aria-hidden="true" />
         </button>
       )}
 
-      </>)}
+      </>) : null}
       composerAbove={(<>
           {dragActive && (
             <div className="run-composer-drop-overlay" aria-hidden="true">
