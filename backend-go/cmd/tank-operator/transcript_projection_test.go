@@ -212,8 +212,8 @@ func TestProjectTranscriptEventsCompactsInterruptedTurnIntoActivityShell(t *test
 			t.Fatalf("unexpected compacted id %q; assistant prose and tool must be compacted but meta entries must remain visible", id)
 		}
 	}
-	stopRequested := projection.Entries[2]
-	if got, want := transcriptMapString(transcriptMap(stopRequested, "meta"), "title"), "Stop requested"; got != want {
+	interruptRequestedMeta := projection.Entries[2]
+	if got, want := transcriptMapString(transcriptMap(interruptRequestedMeta, "meta"), "title"), "Stop requested"; got != want {
 		t.Fatalf("third entry meta.title = %v, want %v", got, want)
 	}
 	stopped := projection.Entries[3]
