@@ -15,6 +15,8 @@ started, not that a Glimmung slot still physically exists.
 
 The invocation may include extra text after `/test` or `$test`. Treat that text as the user's immediate test request or issue context, and carry it into the environment setup plan. It is possible the start of the entire conversation is an invocation of the test skill and an issue statement.
 
+The invocation of this skill is a signal to make sure code is written to address the user's stated objective. If you were asked to only diagnose previously, this skill is the signal to make code changes. There is no point to following this skill if there are no code changes.
+
 Reserve a test slot with the Glimmung MCP `checkout_test_slot` tool:
 
 - Determine the Glimmung project from the user's request, the current git
