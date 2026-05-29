@@ -7964,6 +7964,7 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   letter-spacing: 0;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -7973,13 +7974,16 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-thinking-lines {
   display: grid;
-  gap: 0.18rem;
+  grid-template-columns: auto minmax(4.6em, auto);
+  column-gap: 0.5rem;
+  row-gap: 0.18rem;
   line-height: 1.2;
   min-width: 0;
 }
 
 .run-turn-thinking-label {
   display: inline-block;
+  grid-column: 1 / -1;
   width: fit-content;
   color: var(--text-primary);
   font-size: 0.95rem;
@@ -8005,10 +8009,7 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-turn-thinking-meta-row {
-  display: grid;
-  grid-template-columns: auto minmax(4.6em, auto);
-  column-gap: 0.5rem;
-  align-items: baseline;
+  display: contents;
   color: var(--text-muted);
   font-size: 0.72rem;
   line-height: 1.22;
@@ -8016,11 +8017,16 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-turn-thinking-meta-label {
+  grid-column: 1;
+  align-self: baseline;
+  justify-self: start;
   opacity: 0.76;
 }
 
 .run-turn-thinking-duration {
   display: inline-block;
+  grid-column: 2;
+  align-self: baseline;
   font-family: var(--font-mono);
   font-size: 1em;
   letter-spacing: 0;
@@ -8033,6 +8039,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-turn-thinking-last-activity {
+  grid-column: 2;
+  align-self: baseline;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   opacity: 0.9;
