@@ -13,6 +13,13 @@ export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 8;
 /** Multiplicative step applied by the +/- zoom buttons. */
 export const ZOOM_STEP = 1.25;
+/** Multiplicative step applied by one normal mouse-wheel notch. */
+export const WHEEL_ZOOM_STEP = 1.1;
+
+const WHEEL_DELTA_PIXELS_PER_STEP = 100;
+const WHEEL_LINE_HEIGHT_PX = 40;
+const WHEEL_PAGE_HEIGHT_PX = 800;
+const MAX_WHEEL_STEPS_PER_EVENT = 6;
 
 export interface Size {
   width: number;
@@ -61,6 +68,26 @@ export function zoomOut(current: number): number {
 /** Apply an arbitrary multiplicative factor (used for wheel zoom). */
 export function zoomBy(current: number, factor: number): number {
   return clampScale(current * factor);
+}
+
+/**
+ * Convert a DOM wheel delta into a multiplicative zoom factor. Negative
+ * `deltaY` zooms in, positive zooms out. Small high-resolution trackpad
+ * deltas produce proportionally smaller zoom changes than a full wheel notch.
+ */
+export function wheelZoomFactor(deltaY: number, deltaMode = 0): number {
+  if (!Number.isFinite(deltaY) || deltaY === 0) return 1;
+  const unit =
+    deltaMode === 1
+      ? WHEEL_LINE_HEIGHT_PX
+      : deltaMode === 2
+        ? WHEEL_PAGE_HEIGHT_PX
+        : 1;
+  const steps = Math.max(
+    -MAX_WHEEL_STEPS_PER_EVENT,
+    Math.min(MAX_WHEEL_STEPS_PER_EVENT, (deltaY * unit) / WHEEL_DELTA_PIXELS_PER_STEP),
+  );
+  return Math.pow(WHEEL_ZOOM_STEP, -steps);
 }
 
 /** Whole-number percentage for the zoom indicator (e.g. 1.25 -> 125). */

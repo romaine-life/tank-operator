@@ -17,6 +17,7 @@ import {
   computeFitScale,
   formatZoomPercent,
   scalesEqual,
+  wheelZoomFactor,
   zoomBy,
   zoomIn as zoomInScale,
   zoomOut as zoomOutScale,
@@ -50,7 +51,7 @@ const NO_SIZE: Size = { width: 0, height: 0 };
  *  - "zoom": image is rendered at `naturalSize * scale` pixels and the
  *    surrounding viewport scrolls/pans, so users can inspect detail.
  *
- * Interactions: +/-/fit toolbar buttons, Ctrl/Cmd + wheel to zoom toward the
+ * Interactions: +/-/fit toolbar buttons, mouse wheel to zoom toward the
  * cursor, double-click to toggle fit vs. 100%, and click-drag to pan when the
  * image overflows the viewport. Pure zoom math lives in `./imageZoom`.
  */
@@ -154,10 +155,9 @@ export function FileImageViewer({ src, alt }: FileImageViewerProps) {
 
   const handleWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
-      // Plain wheel scrolls/pans a zoomed image; Ctrl/Cmd + wheel zooms.
-      if (!e.ctrlKey && !e.metaKey) return;
+      const factor = wheelZoomFactor(e.deltaY, e.deltaMode);
+      if (scalesEqual(factor, 1)) return;
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       applyScale(zoomBy(effectiveScale, factor), e.clientX, e.clientY);
     },
     [applyScale, effectiveScale],
@@ -282,7 +282,7 @@ export function FileImageViewer({ src, alt }: FileImageViewerProps) {
         <span
           className="run-files-image-zoom-level"
           aria-live="polite"
-          title="Current zoom (double-click image to toggle, Ctrl/⌘ + scroll to zoom)"
+          title="Current zoom (scroll to zoom, double-click image to toggle)"
         >
           {formatZoomPercent(effectiveScale)}%
         </span>

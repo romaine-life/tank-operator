@@ -5,10 +5,12 @@ import {
   MAX_SCALE,
   MIN_SCALE,
   ZOOM_STEP,
+  WHEEL_ZOOM_STEP,
   clampScale,
   computeFitScale,
   formatZoomPercent,
   scalesEqual,
+  wheelZoomFactor,
   zoomBy,
   zoomIn,
   zoomOut,
@@ -69,6 +71,22 @@ test("zoom steps saturate at the range bounds", () => {
 test("zoomBy applies an arbitrary factor with clamping", () => {
   assert.ok(scalesEqual(zoomBy(1, 2), 2));
   assert.equal(zoomBy(1, 1000), MAX_SCALE);
+});
+
+test("wheelZoomFactor maps mouse wheel direction to zoom direction", () => {
+  assert.ok(scalesEqual(wheelZoomFactor(-100), WHEEL_ZOOM_STEP));
+  assert.ok(scalesEqual(wheelZoomFactor(100), 1 / WHEEL_ZOOM_STEP));
+});
+
+test("wheelZoomFactor scales high-resolution and line-mode deltas", () => {
+  assert.ok(wheelZoomFactor(-10) > 1);
+  assert.ok(wheelZoomFactor(-10) < WHEEL_ZOOM_STEP);
+  assert.ok(scalesEqual(wheelZoomFactor(-3, 1), Math.pow(WHEEL_ZOOM_STEP, 1.2)));
+});
+
+test("wheelZoomFactor ignores empty or non-finite deltas", () => {
+  assert.equal(wheelZoomFactor(0), 1);
+  assert.equal(wheelZoomFactor(Number.NaN), 1);
 });
 
 test("formatZoomPercent renders whole-number percentages", () => {
