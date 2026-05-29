@@ -333,6 +333,88 @@ func (s *appServer) handleCreateAvatar(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, resp)
 }
 
+func (s *appServer) handleUpdateAvatar(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.requireAdmin(w, r, "update")
+	if !ok {
+		return
+	}
+	if s.avatars == nil || s.avatarImages == nil {
+		recordAvatarAssetRequest("update", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("avatar_id"))
+	if id == "" {
+		recordAvatarAssetRequest("update", "", "bad_request")
+		writeError(w, http.StatusBadRequest, "missing avatar id")
+		return
+	}
+	current, err := s.avatars.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, avatarassets.ErrNotFound) {
+			recordAvatarAssetRequest("update", "", "not_found")
+			writeError(w, http.StatusNotFound, "avatar not found")
+			return
+		}
+		recordAvatarAssetRequest("update", "", "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if strings.TrimSpace(current.AvatarBlobKey) == "" {
+		recordAvatarAssetRequest("update", current.Kind, "not_found")
+		writeError(w, http.StatusNotFound, "avatar image not found")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarMultipartBytes)
+	if err := r.ParseMultipartForm(maxAvatarMultipartBytes); err != nil {
+		_, _, detail := classifyAvatarMultipartFailure(err, avatarUploadContentTypeClass(r.Header.Get("Content-Type")))
+		recordAvatarAssetRequest("update", current.Kind, "bad_request")
+		writeError(w, http.StatusBadRequest, detail)
+		return
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" || len(name) > 80 {
+		recordAvatarAssetRequest("update", current.Kind, "bad_request")
+		writeError(w, http.StatusBadRequest, "name is required and must be 80 characters or fewer")
+		return
+	}
+	crop, err := parseAvatarCrop(r.FormValue("crop"))
+	if err != nil {
+		recordAvatarAssetRequest("update", current.Kind, "bad_request")
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	avatarBytes, avatarMIME, _, _, err := readAvatarUploadField(r, "avatar", maxAvatarCropBytes)
+	if err != nil {
+		recordAvatarAssetRequest("update", current.Kind, "bad_request")
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.avatarImages.Put(r.Context(), current.AvatarBlobKey, avatarassets.Image{MIME: avatarMIME, Bytes: avatarBytes}); err != nil {
+		recordAvatarAssetRequest("update", current.Kind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	meta, err := s.avatars.Update(r.Context(), id, avatarassets.UpdateAsset{
+		Name:       name,
+		Crop:       crop,
+		AvatarMIME: avatarMIME,
+	})
+	if err != nil {
+		if errors.Is(err, avatarassets.ErrNotFound) {
+			recordAvatarAssetRequest("update", current.Kind, "not_found")
+			writeError(w, http.StatusNotFound, "avatar not found")
+			return
+		}
+		recordAvatarAssetRequest("update", current.Kind, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordAvatarAssetRequest("update", meta.Kind, "ok")
+	writeJSON(w, http.StatusOK, avatarAssetResponseFromMeta(meta))
+}
+
 func (s *appServer) handleUpdateAvatarKind(w http.ResponseWriter, r *http.Request) {
 	_, ok := s.requireAdmin(w, r, "update_kind")
 	if !ok {
@@ -430,11 +512,15 @@ func (s *appServer) requireAdmin(w http.ResponseWriter, r *http.Request, operati
 
 func avatarAssetResponseFromMeta(meta avatarassets.Metadata) avatarAssetResponse {
 	escapedID := url.PathEscape(meta.ID)
+	avatarURL := "/api/avatars/" + escapedID + "/image"
+	if !meta.UpdatedAt.IsZero() {
+		avatarURL += "?v=" + fmt.Sprint(meta.UpdatedAt.UTC().UnixNano())
+	}
 	return avatarAssetResponse{
 		ID:         meta.ID,
 		Kind:       meta.Kind,
 		Name:       meta.Name,
-		AvatarURL:  "/api/avatars/" + escapedID + "/image",
+		AvatarURL:  avatarURL,
 		BackingURL: "/api/avatars/" + escapedID + "/backing",
 		Crop:       meta.Crop,
 		CreatedBy:  meta.CreatedBy,

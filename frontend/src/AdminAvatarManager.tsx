@@ -11,8 +11,10 @@ import {
   ArrowLeftRightIcon,
   ImagePlusIcon,
   Loader2Icon,
+  PencilIcon,
   Trash2Icon,
   UploadIcon,
+  XIcon,
 } from "lucide-react";
 import { authedFetch } from "./auth";
 import {
@@ -79,6 +81,11 @@ type PendingCropPlacement = {
   x: number;
   y: number;
   moved: boolean;
+};
+
+type SelectPhotoOptions = {
+  crop?: AvatarCrop;
+  clearEditing?: boolean;
 };
 
 const defaultCrop: AvatarCrop = {
@@ -211,6 +218,28 @@ export async function requestAvatarKindChange(
   return { ok: false, detail };
 }
 
+export type AvatarUpdateResult =
+  | { ok: true }
+  | { ok: false; detail: string };
+
+export async function requestAvatarUpdate(
+  id: string,
+  payload: FormData,
+): Promise<AvatarUpdateResult> {
+  const res = await authedFetch(`/api/admin/avatars/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+  if (res.ok) {
+    return { ok: true };
+  }
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = typeof body.detail === "string" && body.detail.trim()
+    ? body.detail.trim()
+    : `update failed: ${res.status}`;
+  return { ok: false, detail };
+}
+
 async function fetchAvatarDecks(): Promise<AvatarDeckKind[]> {
   const res = await authedFetch("/api/admin/avatar-decks");
   if (!res.ok) throw new Error(`avatar deck fetch failed: ${res.status}`);
@@ -258,6 +287,8 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [crop, setCrop] = useState<AvatarCrop>(defaultCrop);
+  const [editingAvatarID, setEditingAvatarID] = useState<string | null>(null);
+  const [loadingEditID, setLoadingEditID] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -360,6 +391,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     () => entries.filter((entry) => entry.kind === kind),
     [entries, kind],
   );
+  const isEditingAvatar = editingAvatarID !== null;
 
   const imagePointFromPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (!imageRect || !stageRef.current) return;
@@ -486,16 +518,49 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     }
   }, [imagePointFromPointer, imageRect]);
 
-  const selectPhoto = useCallback((file: File | null) => {
+  const selectPhoto = useCallback((file: File | null, options: SelectPhotoOptions = {}) => {
     setFormError(null);
+    if (options.clearEditing !== false) {
+      setEditingAvatarID(null);
+    }
     setPhotoFile(file);
     setImageSize({ width: 0, height: 0 });
-    setCrop(defaultCrop);
+    setCrop(options.crop ?? defaultCrop);
     setPhotoURL((current) => {
       if (current) URL.revokeObjectURL(current);
       return file ? URL.createObjectURL(file) : "";
     });
   }, []);
+
+  const cancelAvatarEdit = useCallback(() => {
+    setEditingAvatarID(null);
+    setName("");
+    selectPhoto(null, { clearEditing: false });
+  }, [selectPhoto]);
+
+  async function editAvatar(entry: AvatarView) {
+    setListError(null);
+    setFormError(null);
+    setLoadingEditID(entry.id);
+    try {
+      const res = await authedFetch(entry.backing_url);
+      if (!res.ok) throw new Error(`source image failed: ${res.status}`);
+      const blob = await res.blob();
+      const type = blob.type || "image/png";
+      const file = new File([blob], `${entry.id}-source.${extensionForImageType(type)}`, {
+        type,
+        lastModified: Date.now(),
+      });
+      setEditingAvatarID(entry.id);
+      setKind(entry.kind);
+      setName(entry.name);
+      selectPhoto(file, { crop: entry.crop, clearEditing: false });
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingEditID(null);
+    }
+  }
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
@@ -559,7 +624,6 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     try {
       const avatarBlob = await buildAvatarBlob();
       const payload = new FormData();
-      payload.set("kind", kind);
       payload.set("name", trimmedName);
       payload.set("crop", JSON.stringify({
         ...clampAvatarCrop(crop, imageRef.current?.naturalWidth, imageRef.current?.naturalHeight),
@@ -567,20 +631,28 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
         source_height: imageRef.current?.naturalHeight ?? 0,
       }));
       payload.set("avatar", avatarBlob, `${trimmedName}-avatar.png`);
-      payload.set("backing", photoFile, photoFile.name || `${trimmedName}-backing.png`);
-      const res = await authedFetch("/api/admin/avatars", {
-        method: "POST",
-        body: payload,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(avatarSaveErrorMessage(res.status, body));
+      const editingID = editingAvatarID;
+      if (editingID) {
+        const result = await requestAvatarUpdate(editingID, payload);
+        if (!result.ok) throw new Error(result.detail);
+      } else {
+        payload.set("kind", kind);
+        payload.set("backing", photoFile, photoFile.name || `${trimmedName}-backing.png`);
+        const res = await authedFetch("/api/admin/avatars", {
+          method: "POST",
+          body: payload,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(avatarSaveErrorMessage(res.status, body));
+        }
       }
+      setEditingAvatarID(null);
       setName("");
-      selectPhoto(null);
+      selectPhoto(null, { clearEditing: false });
       await reloadEntries();
       await reloadDecks();
-      await notifyCatalogChanged(setFormError, "Avatar saved");
+      await notifyCatalogChanged(setFormError, editingID ? "Avatar updated" : "Avatar saved");
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -621,10 +693,21 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   return (
     <div className="admin-avatar-manager">
       <div className="admin-avatar-layout">
-        <section className="admin-avatar-editor" aria-label="Add avatar">
+        <section className="admin-avatar-editor" aria-label={isEditingAvatar ? "Edit avatar" : "Add avatar"}>
           <div className="admin-avatar-editor-head">
-            <ImagePlusIcon size={18} aria-hidden="true" />
-            <h2>Add avatar</h2>
+            {isEditingAvatar ? <PencilIcon size={18} aria-hidden="true" /> : <ImagePlusIcon size={18} aria-hidden="true" />}
+            <h2>{isEditingAvatar ? "Edit avatar" : "Add avatar"}</h2>
+            {isEditingAvatar && (
+              <button
+                type="button"
+                className="admin-avatar-cancel-edit"
+                title="cancel edit"
+                aria-label="Cancel avatar edit"
+                onClick={cancelAvatarEdit}
+              >
+                <XIcon size={16} aria-hidden="true" />
+              </button>
+            )}
           </div>
           <div className="admin-avatar-kind" role="group" aria-label="Avatar type">
             {(["agent", "system"] as AvatarKind[]).map((option) => (
@@ -633,6 +716,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                 type="button"
                 className={kind === option ? "is-selected" : ""}
                 aria-pressed={kind === option}
+                disabled={isEditingAvatar}
                 onClick={() => setKind(option)}
               >
                 {option}
@@ -648,15 +732,22 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
               maxLength={80}
             />
           </label>
-          <label className="admin-avatar-file">
-            <UploadIcon size={16} aria-hidden="true" />
-            <span>{photoFile ? photoFile.name : "Choose or paste photo"}</span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"
-              onChange={(event) => selectPhoto(event.target.files?.[0] ?? null)}
-            />
-          </label>
+          {isEditingAvatar ? (
+            <div className="admin-avatar-file admin-avatar-file-static">
+              <ImagePlusIcon size={16} aria-hidden="true" />
+              <span>{photoFile ? photoFile.name : "Saved source image"}</span>
+            </div>
+          ) : (
+            <label className="admin-avatar-file">
+              <UploadIcon size={16} aria-hidden="true" />
+              <span>{photoFile ? photoFile.name : "Choose or paste photo"}</span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"
+                onChange={(event) => selectPhoto(event.target.files?.[0] ?? null)}
+              />
+            </label>
+          )}
 
           {photoURL && (
             <>
@@ -713,11 +804,11 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
           <button
             type="button"
             className="btn-primary admin-avatar-save"
-            disabled={saving || !photoFile}
+            disabled={saving || loadingEditID !== null || !photoFile}
             onClick={() => void saveAvatar()}
           >
             {saving ? <Loader2Icon size={16} className="spin" aria-hidden="true" /> : <UploadIcon size={16} aria-hidden="true" />}
-            <span>{saving ? "Saving" : "Save avatar"}</span>
+            <span>{saving ? (isEditingAvatar ? "Updating" : "Saving") : (isEditingAvatar ? "Update avatar" : "Save avatar")}</span>
           </button>
         </section>
 
@@ -832,6 +923,23 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                       }}
                     >
                       <ArrowLeftRightIcon size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="admin-avatar-edit"
+                      title="edit avatar"
+                      aria-label={`Edit ${entry.name}`}
+                      disabled={loadingEditID !== null}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void editAvatar(entry);
+                      }}
+                    >
+                      {loadingEditID === entry.id ? (
+                        <Loader2Icon size={15} className="spin" aria-hidden="true" />
+                      ) : (
+                        <PencilIcon size={15} aria-hidden="true" />
+                      )}
                     </button>
                     <button
                       type="button"

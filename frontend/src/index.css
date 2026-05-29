@@ -432,6 +432,23 @@ button:disabled {
   gap: var(--space-2);
 }
 
+.admin-avatar-cancel-edit {
+  margin-left: auto;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.admin-avatar-cancel-edit:hover,
+.admin-avatar-cancel-edit:focus-visible {
+  color: var(--text-bright);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .admin-avatar-editor-head h2,
 .admin-avatar-gallery-head h2 {
   font-size: var(--text-lg);
@@ -458,6 +475,10 @@ button:disabled {
 .admin-avatar-kind button.is-selected {
   background: var(--gray-100);
   color: var(--gray-900);
+}
+
+.admin-avatar-kind button:disabled {
+  cursor: default;
 }
 
 .admin-avatar-field,
@@ -499,6 +520,19 @@ button:disabled {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.admin-avatar-file span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-avatar-file-static {
+  cursor: default;
+  border-style: solid;
+  color: var(--text-muted);
 }
 
 .admin-avatar-crop-stage {
@@ -700,7 +734,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
-  padding-right: 1.6rem;
+  padding-right: 5.3rem;
 }
 
 .admin-avatar-card-name,
@@ -721,6 +755,7 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
+.admin-avatar-edit,
 .admin-avatar-swap,
 .admin-avatar-delete {
   position: absolute;
@@ -742,9 +777,22 @@ button:disabled {
   right: 2.3rem;
 }
 
+.admin-avatar-edit {
+  right: 4.15rem;
+}
+
+.admin-avatar-edit:hover:not(:disabled) {
+  color: var(--text-bright);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .admin-avatar-swap:hover {
   color: var(--text-bright);
   background: rgba(255, 255, 255, 0.08);
+}
+
+.admin-avatar-edit:disabled {
+  opacity: 0.6;
 }
 
 .admin-avatar-delete:hover {

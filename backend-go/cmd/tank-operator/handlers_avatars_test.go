@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,62 @@ func TestAvatarCreateAllowsSuperAdminServiceActor(t *testing.T) {
 	}
 	if created.CreatedBy != adminEmail {
 		t.Fatalf("created_by = %q, want actor email %q", created.CreatedBy, adminEmail)
+	}
+}
+
+func TestAvatarUpdateRefreshesNameCropAndImage(t *testing.T) {
+	app := newAvatarTestServer(t)
+	createReq := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Ada",
+		"crop": `{"center_x":0.4,"center_y":0.45,"size":0.5,"source_width":800,"source_height":600}`,
+	})
+	createReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	createResp := httptest.NewRecorder()
+	app.handleCreateAvatar(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	updatedImage := []byte("updated avatar image")
+	updateReq := avatarUpdateRequest(t, created.ID, map[string]string{
+		"name": "Ada Lovelace",
+		"crop": `{"center_x":0.6,"center_y":0.35,"size":0.32,"source_width":800,"source_height":600}`,
+	}, updatedImage)
+	updateReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	updateResp := httptest.NewRecorder()
+	app.handleUpdateAvatar(updateResp, updateReq)
+	if updateResp.Code != http.StatusOK {
+		t.Fatalf("update status = %d body = %s", updateResp.Code, updateResp.Body.String())
+	}
+	var updated avatarAssetResponse
+	if err := json.Unmarshal(updateResp.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != created.ID || updated.Kind != "agent" || updated.Name != "Ada Lovelace" {
+		t.Fatalf("updated = %#v", updated)
+	}
+	if updated.Crop.CenterX != 0.6 || updated.Crop.CenterY != 0.35 || updated.Crop.Size != 0.32 {
+		t.Fatalf("updated crop = %#v", updated.Crop)
+	}
+	if !strings.Contains(updated.AvatarURL, "?v=") {
+		t.Fatalf("updated avatar URL should include cache-busting version: %q", updated.AvatarURL)
+	}
+
+	imageReq := httptest.NewRequest(http.MethodGet, "/api/avatars/"+created.ID+"/image", nil)
+	imageReq.SetPathValue("avatar_id", created.ID)
+	imageReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	imageResp := httptest.NewRecorder()
+	app.handleGetAvatarImage(imageResp, imageReq)
+	if imageResp.Code != http.StatusOK {
+		t.Fatalf("image status = %d body = %s", imageResp.Code, imageResp.Body.String())
+	}
+	if !bytes.Equal(imageResp.Body.Bytes(), updatedImage) {
+		t.Fatalf("image body was not updated")
 	}
 }
 
@@ -465,6 +522,34 @@ func avatarCreateRequestWithFiles(t *testing.T, fields map[string]string, fileFi
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/avatars", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
+func avatarUpdateRequest(t *testing.T, id string, fields map[string]string, avatarBytes []byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="avatar"; filename="avatar.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(avatarBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPatch, "/api/admin/avatars/"+id, &body)
+	req.SetPathValue("avatar_id", id)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
 }
