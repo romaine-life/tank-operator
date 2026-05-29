@@ -90,6 +90,7 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		payload["attachments"] = attachments
 	}
 	originSessionID := strings.TrimSpace(args.OriginSessionID)
+	authorKind := strings.TrimSpace(args.AuthorKind)
 	for _, event := range events {
 		if args.SessionStorageKey != "" {
 			event["tank_session_id"] = args.SessionStorageKey
@@ -109,6 +110,14 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		// continues to render.
 		if originSessionID != "" && originSessionID != args.SessionID {
 			event["origin_session_id"] = originSessionID
+		}
+		// Authorship attribution for non-interactive principals (an
+		// auth.romaine.life bot token). Stamped on both boundary events so
+		// the durable user_message.created carries it for the renderer's
+		// avatar selection; human-typed turns leave it absent. See
+		// AuthorKind.
+		if authorKind != "" {
+			event["author_kind"] = authorKind
 		}
 	}
 	return turnID, events, nil
@@ -130,7 +139,13 @@ type UserSubmissionArgs struct {
 	// stamped on the emitted events when it differs from SessionID —
 	// a session sending a prompt to itself reads as a normal user turn.
 	OriginSessionID string
-	Now             time.Time
+	// AuthorKind marks a turn submitted by a non-interactive principal so
+	// the transcript attributes it to the session's system identity rather
+	// than the human owner. Empty for human-typed turns. Currently set to
+	// string(AuthorKindSystem) for auth.romaine.life bot tokens. See
+	// AuthorKind for the precedence rules vs OriginSessionID.
+	AuthorKind string
+	Now        time.Time
 }
 
 type UserMessageAttachment struct {

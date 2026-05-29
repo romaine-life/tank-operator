@@ -224,6 +224,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		FollowUp:           body.FollowUp,
 		OmitUserMessage:    body.ExistingUserMessage,
 		OriginSessionID:    body.OriginSessionID,
+		AuthorKind:         authorKindForUser(user),
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -643,6 +644,28 @@ type sdkTurnRequest struct {
 	// Threaded into UserSubmissionArgs so the persisted user_message.created
 	// event carries it for the frontend's avatar selection.
 	OriginSessionID string
+	// AuthorKind attributes the turn to a non-interactive principal (an
+	// auth.romaine.life bot token) so the transcript renders the session's
+	// system identity instead of the human owner's Gravatar. Empty for
+	// interactive human turns. Set via authorKindForUser at the HTTP edge.
+	AuthorKind string
+}
+
+// authorKindForUser maps an authenticated caller to the durable AuthorKind
+// stamped on the user_message.created event. Non-interactive principals — the
+// k8s-exchange service identity that programmatically launches sessions
+// (role=service, used by mcp-tank-operator spawn, Glimmung dispatch, and test
+// slots) and human-minted break-glass bot/service tokens (purpose=bot) — are
+// attributed to the session's system identity. Every interactive human caller
+// (role=user/admin without purpose=bot) returns empty so their Gravatar
+// continues to render. Returns a string (not the typed constant) because it
+// flows through sdkTurnRequest into the conversation event map as a plain
+// field.
+func authorKindForUser(user auth.User) string {
+	if user.IsService() || user.IsBot() {
+		return string(conversation.AuthorKindSystem)
+	}
+	return ""
 }
 
 type sessionRunConfig struct {
@@ -741,6 +764,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			Attachments:     displayAttachments,
 			SkillName:       validateSkillName(req.SkillName),
 			OmitUserMessage: req.OmitUserMessage,
+			AuthorKind:      strings.TrimSpace(req.AuthorKind),
 			Now:             createdAt,
 			OrderBase:       req.OrderBase,
 		})
@@ -807,6 +831,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Runtime:           provider,
 		SkillName:         skillName,
 		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
+		AuthorKind:        strings.TrimSpace(req.AuthorKind),
 		Now:               createdAt,
 	})
 	if err != nil {

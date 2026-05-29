@@ -28,6 +28,11 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   // this to pick the parent session's avatar instead of the human
   // owner's Gravatar. See conversationReducer.applyUserMessage.
   originSessionId?: string;
+  // Set when a user-role message was authored by a non-interactive
+  // principal (an auth.romaine.life bot token). "system" tells the renderer
+  // to draw the session's system identity instead of the human owner's
+  // Gravatar. originSessionId takes precedence when both are present.
+  authorKind?: string;
   // Severity tag for system-role messages — drives the renderer's
   // styling. Set on session.status:failed banners; absent on neutral
   // loading/ready notices. user/assistant messages ignore it.
@@ -101,6 +106,32 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
     detail?: string;
     severity?: "info" | "error";
   };
+  // metaKind specializes a meta entry into a distinguishable transcript
+  // surface without growing a top-level TranscriptEntry.kind value (which
+  // is shared with the sandbox-agent SDK). Renderers branch on metaKind
+  // before falling through to the generic RunMetaBlock — see App.tsx's
+  // renderItem dispatch for `needs_input_announcement`.
+  //
+  // The transcript contract permits this projection: AskUserQuestion is
+  // not provider tool output, reasoning, progress, failed work, or
+  // stopped work. It's a conversational handoff back to the user — the
+  // same protocol class as session.status and "Stop requested" entries
+  // that already land in the main transcript. See
+  // docs/features/transcript/contract.md → "promotion-only".
+  metaKind?: "needs_input_announcement";
+  // For needs_input_announcement entries: the AskUserQuestion item's
+  // provider id and the turn it lives on, so the renderer's click
+  // handler can navigate the user to the Turns tab scrolled to the
+  // right question. The handoff stays anchored to the durable item;
+  // local React state is not the source of truth.
+  announcement?: {
+    targetTurnId: string;
+    targetProviderItemId: string;
+    targetTimelineId?: string;
+    questionSummary: string;
+    questionCount: number;
+    answered: boolean;
+  };
 }
 
 interface ConversationEntryBase {
@@ -158,6 +189,7 @@ export function projectConversationState(
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,
             ...(message.originSessionId ? { originSessionId: message.originSessionId } : {}),
+            ...(message.authorKind ? { authorKind: message.authorKind } : {}),
             ...(message.severity ? { severity: message.severity } : {}),
             ...(message.action ? { action: message.action } : {}),
           },
@@ -169,15 +201,22 @@ export function projectConversationState(
         return [];
       }
       const entry = projectItem(item);
-      return entry
-        ? [
-            {
-              index: state.messages.length + index,
-              orderKey: item.orderKey,
-              entry,
-            },
-          ]
-        : [];
+      if (!entry) return [];
+      const baseIndex = state.messages.length + index;
+      const projected: Array<{ index: number; orderKey?: string; entry: ConversationViewEntry }> = [
+        { index: baseIndex, orderKey: item.orderKey, entry },
+      ];
+      // Per the transcript contract, AskUserQuestion is a handoff back to
+      // the user — it stops the agent until the user answers. Project a
+      // companion meta entry into the main transcript so chat (the
+      // settled-conversation surface) carries the "agent is waiting on
+      // you" signal alongside the durable tool entry that still owns the
+      // full question UI in Turn activity. Without this, the question
+      // lives only inside the collapsible activity group and the only
+      // attention signal in chat is the session-row dot.
+      const announcement = projectNeedsInputAnnouncement(item, baseIndex);
+      if (announcement) projected.push(announcement);
+      return projected;
     }),
     ...state.backgroundTasks.map((task, index) => {
       const entry = projectBackgroundTask(task);
@@ -320,6 +359,105 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
     sourceEventId: item.sourceEventId,
     orderKey: item.orderKey,
   };
+}
+
+// projectNeedsInputAnnouncement returns a synthesized meta entry that
+// promotes an AskUserQuestion item from Turn activity into the settled
+// main transcript as a handoff row. Returns null when the item is not an
+// AskUserQuestion tool call, or when the underlying tool.approval_requested
+// event hasn't materialized into the item's payload yet.
+//
+// The announcement orderKey is derived from the underlying item's
+// orderKey with a `~ann` suffix so it sorts immediately after the tool
+// entry in the durable stream — historical replay and live streaming
+// agree on placement without depending on wall-clock time.
+//
+// `answered` is sourced from the durable `tool.approval_resolved`
+// projection (item.payload.answers / item.status === "completed"), not
+// from a local "I submitted" flag — a fresh tab opened after the user
+// answered renders the same resolved state.
+function projectNeedsInputAnnouncement(
+  item: ConversationItem,
+  baseIndex: number,
+): { index: number; orderKey?: string; entry: ConversationViewEntry } | null {
+  if (!isAskUserQuestionItem(item)) return null;
+  const questions = askUserQuestionList(item);
+  if (questions.length === 0) return null;
+  const summary = askUserQuestionSummary(questions);
+  const answered =
+    item.status === "completed" ||
+    (item.payload?.answers && typeof item.payload.answers === "object");
+  return {
+    index: baseIndex + 0.5,
+    orderKey: item.orderKey ? `${item.orderKey}~needs_input_announcement` : undefined,
+    entry: {
+      id: `${item.id}:needs_input_announcement`,
+      kind: "meta",
+      metaKind: "needs_input_announcement",
+      meta: {
+        title: answered ? "Answered" : "Claude is waiting on you",
+        detail: summary,
+        severity: "info",
+      },
+      announcement: {
+        targetTurnId: item.turnId ?? "",
+        targetProviderItemId: item.providerItemId ?? "",
+        // `item.id` IS the timeline_id on a ConversationItem (set from
+        // `event.timeline_id` in conversationReducer.applyToolItem); a
+        // separate `timelineId` field does not exist on the type.
+        ...(item.id ? { targetTimelineId: item.id } : {}),
+        questionSummary: summary,
+        questionCount: questions.length,
+        answered: Boolean(answered),
+      },
+      turnId: item.turnId,
+      providerItemId: item.providerItemId,
+      time: item.startedAt ?? item.createdAt ?? "",
+      sourceEventId: item.sourceEventId,
+      orderKey: item.orderKey,
+    },
+  };
+}
+
+function isAskUserQuestionItem(item: ConversationItem): boolean {
+  if (item.kind !== "needs_input" && item.kind !== "tool" && item.kind !== "approval") {
+    return false;
+  }
+  const payloadName = stringPayload(item, "name");
+  if (payloadName === "AskUserQuestion") return true;
+  if (item.title === "AskUserQuestion") return true;
+  // Some adapters mark the item with payload.kind = "needs_input" but
+  // payload.name unset; fall back to detecting the questions[] payload
+  // that only AskUserQuestion produces.
+  const input = item.payload?.input;
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    const questions = (input as { questions?: unknown }).questions;
+    if (Array.isArray(questions) && questions.length > 0) return true;
+  }
+  return false;
+}
+
+function askUserQuestionList(item: ConversationItem): Array<Record<string, unknown>> {
+  const input = item.payload?.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
+  const questions = (input as { questions?: unknown }).questions;
+  if (!Array.isArray(questions)) return [];
+  return questions.filter(
+    (q): q is Record<string, unknown> => Boolean(q && typeof q === "object" && !Array.isArray(q)),
+  );
+}
+
+function askUserQuestionSummary(questions: Array<Record<string, unknown>>): string {
+  const first = questions[0];
+  const text =
+    (typeof first?.question === "string" && first.question) ||
+    (typeof first?.header === "string" && first.header) ||
+    "Open the Turns tab to answer.";
+  const trimmed = text.length > 140 ? `${text.slice(0, 137)}…` : text;
+  if (questions.length > 1) {
+    return `${trimmed} (+${questions.length - 1} more)`;
+  }
+  return trimmed;
 }
 
 function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBackgroundTaskEntry {
