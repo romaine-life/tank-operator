@@ -190,7 +190,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.InitialTurn != nil {
 		if initialTurn.Deferred {
-			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt); status != 0 {
+			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt, authorKindForUser(user)); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "persist deferred initial turn", detail)
 				writeError(w, status, detail)
 				return
@@ -210,6 +210,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 				SessionMode:        info.Mode,
 				CreatedAt:          launchTurnAt,
 				OrderBase:          launchTurnAt,
+				AuthorKind:         authorKindForUser(user),
 			}); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "submit initial turn", detail)
 				writeError(w, status, detail)
@@ -262,7 +263,7 @@ func (s *appServer) backfillProviderHealthBanner(ctx context.Context, owner stri
 	}
 }
 
-func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time) (int, string) {
+func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time, authorKind string) (int, string) {
 	info, err := s.mgr.GetByOwner(ctx, owner, sessionID)
 	if err != nil {
 		return http.StatusNotFound, "session not found"
@@ -282,6 +283,7 @@ func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, se
 		Attachments:       turn.DisplayAttachments,
 		Runtime:           runtime,
 		SkillName:         turn.SkillName,
+		AuthorKind:        strings.TrimSpace(authorKind),
 		Now:               createdAt.UTC(),
 	})
 	if err != nil {
@@ -812,6 +814,7 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		PermissionMode: body.PermissionMode,
 		SkillName:      body.SkillName,
 		FollowUp:       true,
+		AuthorKind:     authorKindForUser(user),
 	})
 	if detail != "" {
 		writeError(w, status, detail)

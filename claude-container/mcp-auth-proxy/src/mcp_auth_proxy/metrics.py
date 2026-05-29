@@ -58,6 +58,19 @@ auth_romaine_exchange_total = Counter(
     ["result"],
 )
 
+# Per-attempt retry counter. Outcomes:
+#   - transport_error: aiohttp.ClientError on the upstream call
+#   - transient_status: upstream returned 502 / 503 / 504
+#   - exhausted: all attempts failed; surfaced to the SDK as JSON-shaped 502
+# Non-zero rate is expected during normal upstream pod rotations; a
+# sustained high rate with no exhaustion means the retry budget is
+# masking a real upstream regression that operators should still see.
+proxy_retries_total = Counter(
+    "tank_mcp_auth_proxy_retries_total",
+    "Per-attempt retries the mcp-auth-proxy ran against an upstream MCP server.",
+    ["mcp_server", "outcome"],
+)
+
 
 def _status_class(status: int) -> str:
     if 200 <= status < 300:
@@ -83,6 +96,11 @@ def record_sa_token_read(result: str) -> None:
 def record_auth_romaine_exchange(result: str) -> None:
     """result is one of: success, http_error, exception, invalid_response, cache_hit."""
     auth_romaine_exchange_total.labels(result=result).inc()
+
+
+def record_proxy_retry(mcp_server: str, outcome: str) -> None:
+    """outcome is one of: transport_error, transient_status, exhausted."""
+    proxy_retries_total.labels(mcp_server=mcp_server, outcome=outcome).inc()
 
 
 @asynccontextmanager

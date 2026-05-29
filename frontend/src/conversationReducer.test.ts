@@ -148,6 +148,36 @@ test("user message without origin_session_id leaves originSessionId undefined", 
   assert.equal(state.messages[0]?.originSessionId, undefined);
 });
 
+test("author_kind on user message flows onto ConversationMessage", () => {
+  // Bot-token (purpose=bot) authored turn: the orchestrator stamps
+  // author_kind="system" so the renderer shows the session's system
+  // identity instead of the human owner's avatar.
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "bot-1",
+      payload: { text: "posted via bot token" },
+      author_kind: "system",
+    } as Partial<TankConversationEvent>),
+  ]);
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.authorKind, "system");
+});
+
+test("user message without author_kind leaves authorKind undefined", () => {
+  const state = reduceConversationEvents([
+    ev("1", "user_message.created", {
+      actor: "user",
+      client_nonce: "human-2",
+      payload: { text: "I typed this myself" },
+    }),
+  ]);
+
+  assert.equal(state.messages.length, 1);
+  assert.equal(state.messages[0]?.authorKind, undefined);
+});
+
 test("Tool lifecycle replays to a completed tool item", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started"),

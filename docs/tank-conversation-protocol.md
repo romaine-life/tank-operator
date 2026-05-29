@@ -834,6 +834,74 @@ codex-runner rejects `input_reply` commands when it is not running the
 app-server transport. Browser tabs must not send AskUserQuestion answers
 through a runner socket or any other non-durable control channel.
 
+Tank-canonical AskUserQuestion question shape:
+
+Both runner adapters normalize the provider's question payload into a single
+Tank-canonical shape before publishing `tool.approval_requested`. The frontend
+renders the Tank shape only — provider-specific fields never reach the
+renderer directly. Per
+[docs/product-inspirations.md](product-inspirations.md): "Provider-specific
+event streams are adapter inputs. The frontend renders the Tank conversation
+protocol, not raw provider wire formats."
+
+```json
+{
+  "question":      "Which auth method should we use?",
+  "header":        "Auth method",
+  "multiSelect":   false,
+  "options":       [{ "label": "OAuth", "description": "...", "preview": "..." }],
+  "allowFreeForm": true,
+  "secret":        false
+}
+```
+
+- `allowFreeForm` — when true, the question card surfaces an always-on
+  textarea for a "say something else" reply, and submit accepts text in lieu
+  of an option pick. Claude SDK questions: always `true` (mirrors Claude
+  Code's host-UI "Other" affordance). Codex app-server questions: mirrors the
+  raw `isOther` flag.
+- `secret` — when true, the textarea/input disables spell-check and
+  autocomplete. Codex app-server `isSecret` maps here; the Claude SDK has no
+  secret-input primitive today and always emits `secret: false`.
+- `options` — empty array allowed (codex permits pure free-form questions
+  with `options=null`; the codex adapter maps that to `[]`).
+- `multiSelect` — codex has no multi-select primitive today; codex adapter
+  emits `false`. If codex grows one, route the flag through the adapter so
+  Tank's shape stays the single rendered authority.
+
+Older durable rows (pre-cutover Claude events, pre-cutover codex events)
+do not carry `allowFreeForm` / `secret`; the renderer treats absent fields
+as `false`. Per [docs/migration-policy.md](migration-policy.md) -> "Old
+data does not justify runtime support," there is no runtime fallback that
+infers free-form support from the absence of those fields. A future
+backfill projects the existing durable rows into the canonical shape; the
+runtime read path stays Tank-shape-only.
+
+AskUserQuestion handoff is promoted to the main transcript:
+
+The transcript projection in `backend-go/cmd/tank-operator/transcript_projection.go`
+emits a companion meta-kind row per AskUserQuestion item (`metaKind:
+needs_input_announcement`, anchored to the item's `orderKey` with a
+`~needs_input_announcement` suffix). The row carries an `announcement`
+payload — `targetTurnId`, `targetProviderItemId`, `questionSummary`,
+`questionCount`, `answered` — sourced entirely from durable state. The
+SPA renders the row as `RunNeedsInputAnnouncement` in the chat stream
+with a click target that switches to the Turns tab.
+
+The announcement is excluded from the Turn-activity compact via
+`isProjectionNeedsInputAnnouncement` (same predicate seam as
+`isProjectedUserMessage`), so the handoff stays visible in the main
+transcript whether the activity group is open or closed. The
+AskUserQuestion tool item itself continues to render inside Turn
+activity, where the full question card with options and free-form lives.
+
+The promotion is consistent with
+[docs/features/transcript/contract.md](features/transcript/contract.md)
+-> "promotion-only": AskUserQuestion is a system-actor handoff back to
+the user, not provider tool output / reasoning / progress / failed work /
+stopped work. Same class as `session.status` and "Stop requested" entries
+that already promote to the main transcript.
+
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while
 the session pod itself is still live. Session-pod deletion or death is terminal

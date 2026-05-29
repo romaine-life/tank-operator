@@ -1,12 +1,98 @@
 package pgstore
 
 import (
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
 
+// TestMigrationEngineRetiredPathStaysOut is the reintroduction guard for the
+// crashloop class this engine replaced. The retired engine had no version
+// table and re-ran every statement on every boot; this test fails if a future
+// change reverts to that shape, so the durable-ledger contract can't silently
+// regress.
+func TestMigrationEngineRetiredPathStaysOut(t *testing.T) {
+	src, err := os.ReadFile("migrations.go")
+	if err != nil {
+		t.Fatalf("read migrations.go: %v", err)
+	}
+	source := string(src)
+
+	for _, forbidden := range []string{
+		// The retired self-description.
+		"there is no version table",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("migrations.go reintroduced the retired engine marker %q", forbidden)
+		}
+	}
+
+	for _, required := range []string{
+		// The durable ledger must be created, read, and consulted.
+		"schema_migrations",
+		"loadAppliedMigrations",
+		"migrationChecksum",
+		// Applied migrations must be skipped, not blindly re-executed.
+		"RecordMigrationSkipped",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("migrations.go is missing the ledger-engine anchor %q", required)
+		}
+	}
+}
+
+// TestMigrationIDsAreStableAndUnique pins the migration-identity contract: the
+// engine keys the durable ledger on these IDs, so they must be non-empty,
+// unique, and stable. They are sequential zero-padded ordinals in declaration
+// order; a gap or duplicate means an edit re-keyed an already-applied
+// migration, which would silently re-run one-shot backfills against live data.
+func TestMigrationIDsAreStableAndUnique(t *testing.T) {
+	seen := make(map[string]int, len(schemaMigrations))
+	for i, m := range schemaMigrations {
+		if strings.TrimSpace(m.ID) == "" {
+			t.Fatalf("migration at index %d has an empty ID", i)
+		}
+		if m.SQL == "" {
+			t.Fatalf("migration %q has empty SQL", m.ID)
+		}
+		if prev, dup := seen[m.ID]; dup {
+			t.Fatalf("migration ID %q is duplicated (indexes %d and %d)", m.ID, prev, i)
+		}
+		seen[m.ID] = i
+		if want := fmt.Sprintf("%04d", i+1); m.ID != want {
+			t.Fatalf("migration at index %d has ID %q, want sequential %q", i, m.ID, want)
+		}
+	}
+}
+
+// TestMigrationChecksumGuardsImmutability proves the checksum the ledger stores
+// is deterministic for identical SQL and changes when the SQL changes. This is
+// what lets RunMigrations refuse to boot if an already-applied migration's SQL
+// was edited in place instead of appended as a new migration.
+func TestMigrationChecksumGuardsImmutability(t *testing.T) {
+	const sql = `CREATE TABLE IF NOT EXISTS example (id text PRIMARY KEY)`
+	if migrationChecksum(sql) != migrationChecksum(sql) {
+		t.Fatal("checksum is not deterministic for identical SQL")
+	}
+	if migrationChecksum(sql) == migrationChecksum(sql+" -- edited") {
+		t.Fatal("checksum did not change when SQL changed")
+	}
+}
+
+// joinedMigrationSQL concatenates every migration's SQL in declaration order.
+// The string-content tests below assert on the SQL bodies and their relative
+// order, which is preserved by the []migration slice.
+func joinedMigrationSQL() string {
+	parts := make([]string, len(schemaMigrations))
+	for i, m := range schemaMigrations {
+		parts[i] = m.SQL
+	}
+	return strings.Join(parts, "\n")
+}
+
 func TestMigrationsEnforceMutualSkillState(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"test_state = NULL",
 		"sessions_skill_state_mutual_exclusion",
@@ -26,7 +112,7 @@ func TestMigrationsEnforceMutualSkillState(t *testing.T) {
 }
 
 func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"tank_upsert_session_status_event",
 		"tank_sessions_status_events_after_write",
@@ -62,7 +148,7 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 }
 
 func TestMigrationsPrepareAvatarBlobStorage(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"avatar_blob_key text",
 		"backing_blob_key text",
@@ -78,7 +164,7 @@ func TestMigrationsPrepareAvatarBlobStorage(t *testing.T) {
 }
 
 func TestMigrationsPersistAvatarDeckAssignments(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"ADD COLUMN IF NOT EXISTS agent_avatar_id text",
 		"ADD COLUMN IF NOT EXISTS system_avatar_id text",
@@ -100,7 +186,7 @@ func TestMigrationsPersistAvatarDeckAssignments(t *testing.T) {
 }
 
 func TestMigrationsPersistAvatarUploadAttempts(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"CREATE TABLE IF NOT EXISTS avatar_upload_attempts",
 		"content_type_class text NOT NULL",
@@ -119,7 +205,7 @@ func TestMigrationsPersistAvatarUploadAttempts(t *testing.T) {
 }
 
 func TestMigrationsPersistSessionListDebugCaptures(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"CREATE TABLE IF NOT EXISTS session_list_debug_captures",
 		"session_list_debug_captures_owner_created",
@@ -137,7 +223,7 @@ func TestMigrationsPersistSessionListDebugCaptures(t *testing.T) {
 }
 
 func TestMigrationsPersistHermesActiveRunPointer(t *testing.T) {
-	migrations := strings.Join(schemaMigrations, "\n")
+	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"ADD COLUMN IF NOT EXISTS hermes_active_run jsonb",
 		"session_events_turn_terminal_all",
