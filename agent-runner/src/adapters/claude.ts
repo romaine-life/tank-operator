@@ -151,7 +151,14 @@ export function canonicalEventsForClaudeMessage(
                 kind: "needs_input",
                 title: "Ask user question",
                 name,
-                input: item.input,
+                // The provider's question shape is adapter input; the
+                // frontend renders the Tank conversation protocol shape.
+                // claudeQuestionsToTankShape sets allowFreeForm=true on
+                // every question — Claude Code's native host UI always
+                // offers an "Other / say something else" affordance, so
+                // the Tank shape mirrors that semantic regardless of
+                // whether the SDK input exposed an explicit flag.
+                input: { questions: claudeQuestionsToTankShape(item.input) },
               },
             }),
           );
@@ -340,6 +347,85 @@ function providerEventID(message: ClaudeProviderEvent): string | undefined {
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+// claudeQuestionsToTankShape normalizes the Claude SDK's AskUserQuestion
+// `input.questions[]` payload into the Tank-canonical question shape the
+// frontend renders. Field names are stable across both runner adapters:
+// the codex runner emits the same shape from a different provider input.
+//
+// allowFreeForm=true on every Claude question mirrors Claude Code's native
+// host UI, which always offers a free-form "Other" reply. The host UI is
+// the contract; Tank renders that contract.
+//
+// secret=false because the Claude SDK has no secret-input flag on
+// AskUserQuestion. If that ever changes, route it through here so the
+// codex/claude shapes stay aligned at the adapter boundary.
+//
+// multiSelect, options[], header, question, and option label/description/
+// preview pass through with type-narrowing — no field is dropped silently,
+// and any unknown shape becomes an empty options[] rather than throwing,
+// so a malformed provider payload still produces a renderable Tank event
+// instead of a turn-failing crash.
+export function claudeQuestionsToTankShape(input: unknown): TankAskUserQuestion[] {
+  const questions = (input as { questions?: unknown })?.questions;
+  if (!Array.isArray(questions)) return [];
+  return questions.flatMap((q): TankAskUserQuestion[] => {
+    if (!q || typeof q !== "object") return [];
+    const record = q as Record<string, unknown>;
+    const question = typeof record.question === "string" ? record.question : "";
+    if (!question) return [];
+    const options = Array.isArray(record.options)
+      ? record.options.flatMap((opt): TankAskUserQuestionOption[] => {
+          if (!opt || typeof opt !== "object") return [];
+          const optRecord = opt as Record<string, unknown>;
+          const label = typeof optRecord.label === "string" ? optRecord.label : "";
+          if (!label) return [];
+          return [
+            {
+              label,
+              ...(typeof optRecord.description === "string" && optRecord.description
+                ? { description: optRecord.description }
+                : {}),
+              ...(typeof optRecord.preview === "string" && optRecord.preview
+                ? { preview: optRecord.preview }
+                : {}),
+            },
+          ];
+        })
+      : [];
+    return [
+      {
+        question,
+        ...(typeof record.header === "string" && record.header ? { header: record.header } : {}),
+        multiSelect: record.multiSelect === true,
+        options,
+        allowFreeForm: true,
+        secret: false,
+      },
+    ];
+  });
+}
+
+export interface TankAskUserQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
+export interface TankAskUserQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: TankAskUserQuestionOption[];
+  // True when the question allows a free-form / "say something else" reply
+  // instead of (or in addition to) selecting one of the listed options.
+  // Claude SDK: always true (Claude Code's host UI ships an Other path).
+  // Codex SDK: mirrors codex's isOther flag.
+  allowFreeForm: boolean;
+  // True when the answer should be masked in the UI (codex `isSecret`).
+  // No-op for Claude today; reserved for future SDK growth.
+  secret: boolean;
 }
 
 function claudeMessageContent(message: ClaudeProviderEvent): unknown[] {
