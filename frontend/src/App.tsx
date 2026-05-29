@@ -2689,24 +2689,19 @@ function appendSkillInvocation(
 ): TranscriptEntry[] {
   if (!name) return entries;
   const suffix = Date.parse(time) || Date.now();
-  const userAction = {
-    id: `skill-action-${name}-${suffix}`,
-    kind: "message" as const,
-    role: "user" as const,
-    text: skillActionText(name),
-    time,
-    messageKind: "skill-action",
-    skillName: name,
-    skillSupplementalText: supplementalText.trim(),
-  } as TranscriptEntry;
-  return appendMeta(
-    [...entries, userAction],
-    `skill-invocation-${name}-${suffix}`,
-    skillInvocationTitle(name),
-    undefined,
-    "info",
-    time,
-  );
+  return [
+    ...entries,
+    {
+      id: `skill-action-${name}-${suffix}`,
+      kind: "message" as const,
+      role: "user" as const,
+      text: skillActionText(name),
+      time,
+      messageKind: "skill-action",
+      skillName: name,
+      skillSupplementalText: supplementalText.trim(),
+    } as TranscriptEntry,
+  ];
 }
 
 function advanceTimelineCursor(current: string | null, next: string | null): string | null {
