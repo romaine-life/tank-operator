@@ -396,7 +396,10 @@ function projectNeedsInputAnnouncement(
       announcement: {
         targetTurnId: item.turnId ?? "",
         targetProviderItemId: item.providerItemId ?? "",
-        ...(item.timelineId ? { targetTimelineId: item.timelineId } : {}),
+        // `item.id` IS the timeline_id on a ConversationItem (set from
+        // `event.timeline_id` in conversationReducer.applyToolItem); a
+        // separate `timelineId` field does not exist on the type.
+        ...(item.id ? { targetTimelineId: item.id } : {}),
         questionSummary: summary,
         questionCount: questions.length,
         answered: Boolean(answered),
