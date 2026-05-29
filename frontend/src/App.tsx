@@ -2967,6 +2967,17 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 
 type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
+type TurnViewScrollAnchor = "bottom";
+
+type TurnPageOpenOptions = {
+  anchor?: TurnViewScrollAnchor;
+};
+
+type TurnViewScrollRequest = {
+  turnId: string;
+  anchor: TurnViewScrollAnchor;
+  signal: number;
+};
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -4412,7 +4423,7 @@ function TurnViewButton({
   onOpenTurn,
 }: {
   turnId: string;
-  onOpenTurn: (turnId: string) => void;
+  onOpenTurn: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   return (
     <button
@@ -4803,7 +4814,7 @@ function RunMessageBubble({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
-  onOpenTurn?: (turnId: string) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -5124,7 +5135,7 @@ function RunNeedsInputAnnouncement({
 }: {
   entry: TranscriptEntry;
   systemAvatar: AgentAvatar | null;
-  onOpenTurn?: (turnId: string) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   showTimestamps: boolean;
 }) {
   const announcement = entry.announcement;
@@ -6828,7 +6839,7 @@ function RunTurnThinkingBubble({
   userKey: string;
   turnId: string;
   avatar: AgentAvatar | null;
-  onOpenTurn?: (turnId: string) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
   return (
     <div
@@ -6846,7 +6857,7 @@ function RunTurnThinkingBubble({
         className="run-transcript-message-content run-turn-thinking-content"
         title="Open turn"
         aria-label="Open turn"
-        onClick={() => onOpenTurn?.(turnId)}
+        onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}
       >
         <span className="run-turn-thinking-dots" aria-hidden="true">
           <span>.</span>
@@ -7094,6 +7105,8 @@ function RunTurnActivityScreen({
   userKey,
   loadingActivityTurns,
   onOpenBackgroundTask,
+  scrollRequest,
+  onScrollRequestConsumed,
 }: {
   turns: TurnViewItem[];
   selectedTurnId: string | null;
@@ -7110,6 +7123,8 @@ function RunTurnActivityScreen({
   userKey: string;
   loadingActivityTurns: Record<string, boolean | undefined>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  scrollRequest?: TurnViewScrollRequest | null;
+  onScrollRequestConsumed?: (signal: number) => void;
 }) {
   const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
   const detailEntries = useMemo(
@@ -7125,6 +7140,8 @@ function RunTurnActivityScreen({
   );
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
   const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const consumedScrollRequestRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) => (
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
@@ -7136,6 +7153,24 @@ function RunTurnActivityScreen({
     ));
   }, []);
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
+  useLayoutEffect(() => {
+    if (!scrollRequest || !selected) return;
+    if (scrollRequest.turnId !== selected.turnId) return;
+    if (consumedScrollRequestRef.current === scrollRequest.signal) return;
+    if (scrollRequest.anchor !== "bottom") return;
+    if (loading && detailGroups.length === 0) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    consumedScrollRequestRef.current = scrollRequest.signal;
+    body.scrollTo({ top: body.scrollHeight, behavior: "auto" });
+    onScrollRequestConsumed?.(scrollRequest.signal);
+  }, [
+    detailGroups.length,
+    loading,
+    onScrollRequestConsumed,
+    scrollRequest,
+    selected,
+  ]);
   const renderGroup = (group: FlatEntryGroup, groupIndex: number) => {
     if (group.kind === "tools") {
       const groupKey = toolGroupStateKey(group.entries);
@@ -7254,7 +7289,11 @@ function RunTurnActivityScreen({
               />
             )}
           </div>
-          <div className="run-turn-view-body run-transcript run-transcript-claude" onCopy={handleTranscriptCopy}>
+          <div
+            className="run-turn-view-body run-transcript run-transcript-claude"
+            onCopy={handleTranscriptCopy}
+            ref={bodyRef}
+          >
             {loading && detailGroups.length === 0 ? (
               <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
                 <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
@@ -7391,7 +7430,7 @@ export function RunMessages({
   showDuration: boolean;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
-  onOpenTurn?: (turnId: string) => void;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -8474,6 +8513,9 @@ function ChatPane({
       enabled: false,
     });
   const [scrollToOldestSignal, setScrollToOldestSignal] = useState(0);
+  const turnViewScrollRequestSeqRef = useRef(0);
+  const [turnViewScrollRequest, setTurnViewScrollRequest] =
+    useState<TurnViewScrollRequest | null>(null);
   // Streaming-while-back-reading bookkeeping. While the user is in
   // historical-anchor mode, incoming SSE events get appended to the
   // window — Virtuoso correctly renders them at the bottom of the
@@ -8722,6 +8764,11 @@ function ChatPane({
       prev.enabled ? { ...prev, enabled: false } : prev,
     );
   }
+  const clearTurnViewScrollRequest = useCallback((signal: number): void => {
+    setTurnViewScrollRequest((prev) =>
+      prev?.signal === signal ? null : prev,
+    );
+  }, []);
   function resetSdkTimelineBootstrapState(
     reason: string,
     options: {
@@ -11212,12 +11259,20 @@ function ChatPane({
     if (!effectiveSelectedTurnId) return;
     ensureTurnActivityLoaded(effectiveSelectedTurnId);
   }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
-  const openTurnPage = useCallback((turnId?: string) => {
+  const openTurnPage = useCallback((turnId?: string, options?: TurnPageOpenOptions) => {
     const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
     if (target) {
       setPendingRouteTurnId(null);
       setSelectedTurnId(target);
       ensureTurnActivityLoaded(target);
+      if (options?.anchor) {
+        turnViewScrollRequestSeqRef.current += 1;
+        setTurnViewScrollRequest({
+          turnId: target,
+          anchor: options.anchor,
+          signal: turnViewScrollRequestSeqRef.current,
+        });
+      }
     }
     setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
@@ -11887,6 +11942,8 @@ function ChatPane({
             userKey={user?.sub ?? user?.email ?? "anon"}
             loadingActivityTurns={loadingActivityTurns}
             onOpenBackgroundTask={openBackgroundPage}
+            scrollRequest={turnViewScrollRequest}
+            onScrollRequestConsumed={clearTurnViewScrollRequest}
           />
         ) : activeTab === "background" ? (
           <BackgroundScreen
