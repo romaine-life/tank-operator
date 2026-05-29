@@ -5107,10 +5107,14 @@ function RunReasoningBlock({
 // resolved state.
 function RunNeedsInputAnnouncement({
   entry,
+  systemAvatar,
   onOpenTurn,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
+  systemAvatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string) => void;
+  showTimestamps: boolean;
 }) {
   const announcement = entry.announcement;
   const answered = announcement?.answered ?? false;
@@ -5124,44 +5128,70 @@ function RunNeedsInputAnnouncement({
   const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
   return (
     <div
-      className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
-      data-answered={answered ? "true" : "false"}
-      role="group"
-      aria-label={title}
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="needs-input-announcement"
+      data-message-id={entry.id}
     >
-      <span className="run-needs-input-announcement-icon" aria-hidden="true">
-        {answered ? (
-          <CheckIcon size={14} aria-hidden="true" />
+      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
         ) : (
-          <MessageSquareIcon size={14} aria-hidden="true" />
+          <BotIcon size={16} strokeWidth={2.1} />
         )}
       </span>
       <div className="run-needs-input-announcement-body">
-        <div className="run-needs-input-announcement-title">{title}</div>
-        {summary && (
-          <p className="run-needs-input-announcement-detail">{summary}</p>
+        <div
+          className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
+          data-slot="message-content"
+          data-answered={answered ? "true" : "false"}
+          role="group"
+          aria-label={title}
+        >
+          <span className="run-needs-input-announcement-icon" aria-hidden="true">
+            {answered ? (
+              <CheckIcon size={14} aria-hidden="true" />
+            ) : (
+              <MessageSquareIcon size={14} aria-hidden="true" />
+            )}
+          </span>
+          <div className="run-needs-input-announcement-copy" data-slot="message-text">
+            <div className="run-needs-input-announcement-title">{title}</div>
+            {summary && (
+              <p className="run-needs-input-announcement-detail">{summary}</p>
+            )}
+          </div>
+          {interactive && (
+            <button
+              type="button"
+              className="run-needs-input-announcement-cta"
+              onClick={handleOpen}
+              aria-label="Open the question in Turns"
+            >
+              Open in Turns
+            </button>
+          )}
+          {answered && targetTurnId && onOpenTurn && (
+            <button
+              type="button"
+              className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
+              onClick={handleOpen}
+              aria-label="View answered question in Turns"
+            >
+              View in Turns
+            </button>
+          )}
+        </div>
+        {showTimestamps && entry.time && (
+          <div className="run-msg-footer" data-always-visible="">
+            <div className="run-msg-timings">
+              <span className="run-msg-timing-row">{formatMessageTime(entry.time)}</span>
+            </div>
+          </div>
         )}
       </div>
-      {interactive && (
-        <button
-          type="button"
-          className="run-needs-input-announcement-cta"
-          onClick={handleOpen}
-          aria-label="Open the question in Turns"
-        >
-          Open in Turns
-        </button>
-      )}
-      {answered && targetTurnId && onOpenTurn && (
-        <button
-          type="button"
-          className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
-          onClick={handleOpen}
-          aria-label="View answered question in Turns"
-        >
-          View in Turns
-        </button>
-      )}
     </div>
   );
 }
@@ -7596,7 +7626,12 @@ export function RunMessages({
       if (g.kind === "meta") {
         if (g.entry.metaKind === "needs_input_announcement") {
           return (
-            <RunNeedsInputAnnouncement entry={g.entry} onOpenTurn={onOpenTurn} />
+            <RunNeedsInputAnnouncement
+              entry={g.entry}
+              systemAvatar={systemAvatar}
+              onOpenTurn={onOpenTurn}
+              showTimestamps={showTimestamps}
+            />
           );
         }
         return <RunMetaBlock entry={g.entry} />;

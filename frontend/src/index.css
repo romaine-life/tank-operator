@@ -6646,6 +6646,14 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-needs-input-announcement-body {
+  grid-column: 2;
+  grid-row: 1;
+  width: fit-content;
+  max-width: min(42rem, 100%);
+  min-width: 0;
+}
+
+.run-needs-input-announcement-copy {
   flex: 1 1 auto;
   min-width: 0;
 }
