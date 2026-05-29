@@ -101,7 +101,8 @@ test("reported usage wins over visible text fallback for the same turn", () => {
 
 test("formats compact composer costs", () => {
   assert.equal(formatComposerCostUsd(0), "$0.00");
-  assert.equal(formatComposerCostUsd(0.01234), "$0.0123");
-  assert.equal(formatComposerCostUsd(1.2345), "$1.234");
+  assert.equal(formatComposerCostUsd(0.01234), "$0.01");
+  assert.equal(formatComposerCostUsd(0.025), "$0.03");
+  assert.equal(formatComposerCostUsd(1.2345), "$1.23");
   assert.equal(formatComposerCostUsd(12.345), "$12.35");
 });

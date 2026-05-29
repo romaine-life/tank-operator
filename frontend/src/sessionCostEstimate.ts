@@ -107,9 +107,6 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
 
 export function formatComposerCostUsd(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
-  if (safeValue === 0) return "$0.00";
-  if (safeValue < 1) return `$${safeValue.toFixed(4)}`;
-  if (safeValue < 10) return `$${safeValue.toFixed(3)}`;
   return `$${safeValue.toFixed(2)}`;
 }
 
