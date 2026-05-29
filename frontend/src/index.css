@@ -5594,6 +5594,28 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.run-cost-estimate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.5rem;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border-radius: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--text-body);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+}
+
+.run-cost-estimate.is-placeholder {
+  color: var(--text-muted);
+  opacity: 0.72;
+}
+
 /* Comment badge — placeholder slot for thread/notes count. */
 .run-comments-badge {
   position: relative;

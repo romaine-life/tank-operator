@@ -194,6 +194,10 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import {
+  estimateTranscriptCostUSD,
+  formatComposerCostUsd,
+} from "./sessionCostEstimate";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -1432,6 +1436,39 @@ function ComposerUsageRing({
   );
 }
 
+interface ComposerCostEstimateProps {
+  amountUsd: number | null;
+  placeholder?: boolean;
+  title?: string;
+}
+
+function ComposerCostEstimate({
+  amountUsd,
+  placeholder = false,
+  title,
+}: ComposerCostEstimateProps) {
+  const unavailable = placeholder || amountUsd === null;
+  const label = unavailable ? "$--" : formatComposerCostUsd(amountUsd);
+  return (
+    <span
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      aria-label={
+        unavailable
+          ? "Session cost estimate unavailable"
+          : `Estimated session cost ${label}`
+      }
+      aria-disabled={unavailable || undefined}
+      title={title ?? (
+        unavailable
+          ? "Cost estimate appears after token usage is reported"
+          : `Estimated API-equivalent session token cost: ${label}`
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
 function sessionSkillStateClass(session: Session): string {
   const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
   if (currentSkill === "test") return " is-skill-test";
@@ -2503,6 +2540,11 @@ function DemoLanding() {
                         ariaLabel="Context usage preview"
                         title="Context usage appears after sign in"
                       />
+                      <ComposerCostEstimate
+                        amountUsd={null}
+                        placeholder
+                        title="Cost estimate appears after sign in"
+                      />
                       {GUI_ROLLOUT_MODES.has(selectedMode) && (
                         <button
                           type="button"
@@ -3026,6 +3068,10 @@ const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
   "claude-opus-4-7": 200_000,
   "claude-sonnet-4-6": 200_000,
   "claude-haiku-4-5": 200_000,
+  "gpt-5.5": 1_050_000,
+  "gpt-5.4": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gpt-5.3-codex": 400_000,
   "gpt-5": 128_000,
 };
 
@@ -11207,6 +11253,11 @@ function ChatPane({
     ? DEFAULT_CODEX_MODEL_ID
     : selectedModelId;
   const contextWindow = getContextWindow(modelForContext);
+  const modelForCostEstimate = appliedModelId || modelForContext;
+  const sessionCostEstimate = useMemo(
+    () => estimateTranscriptCostUSD(entries, modelForCostEstimate),
+    [entries, modelForCostEstimate],
+  );
 
   useEffect(() => {
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
@@ -12276,6 +12327,7 @@ function ChatPane({
                 tokensUsed={tokensUsed}
                 contextWindow={contextWindow}
               />
+              <ComposerCostEstimate amountUsd={sessionCostEstimate} />
               {GUI_ROLLOUT_MODES.has(session.mode) && (
                 <button
                   type="button"
@@ -15089,6 +15141,11 @@ export function App() {
                       placeholder
                       ariaLabel="Context usage preview"
                       title="Context usage appears after the session starts"
+                    />
+                    <ComposerCostEstimate
+                      amountUsd={null}
+                      placeholder
+                      title="Cost estimate appears after the session starts"
                     />
                     {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
                       <button

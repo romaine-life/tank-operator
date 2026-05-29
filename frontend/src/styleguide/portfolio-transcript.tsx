@@ -318,6 +318,9 @@ function ComposerToolButtons() {
         </svg>
         <span className="run-usage-ring-text">64</span>
       </span>
+      <span className="run-cost-estimate" aria-label="Estimated session cost" title="Estimated API-equivalent session token cost">
+        $0.1842
+      </span>
       <button
         className="run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready"
         type="button"
