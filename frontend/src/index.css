@@ -3579,7 +3579,9 @@ button:disabled {
 }
 
 .run-turn-view-summary .run-cost-estimate {
+  width: auto;
   min-width: auto;
+  flex: 0 0 auto;
   height: auto;
   box-shadow: none;
   font-variant-numeric: tabular-nums;
@@ -5654,7 +5656,8 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 3.5rem;
+  width: 4.75rem;
+  flex: 0 0 4.75rem;
   height: 2rem;
   padding: 0 0.45rem;
   border-radius: 0.5rem;
@@ -5662,6 +5665,7 @@ button:disabled {
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  white-space: nowrap;
   color: var(--text-body);
   background: rgba(255, 255, 255, 0.04);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);

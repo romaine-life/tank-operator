@@ -119,15 +119,18 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
 }
 
 export function formatComposerCostUsd(value: number): string {
-  const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
-  return `$${safeValue.toFixed(2)}`;
+  return formatCostUsdAtCents(value);
 }
 
 export function formatTurnCostUsd(value: number): string {
+  return formatCostUsdAtCents(value);
+}
+
+function formatCostUsdAtCents(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (safeValue === 0) return "$0.00";
   if (safeValue < 0.01) return "<$0.01";
-  return formatComposerCostUsd(safeValue);
+  return `$${safeValue.toFixed(2)}`;
 }
 
 function costFromTokens(tokens: number, ratePerMillion: number): number {
