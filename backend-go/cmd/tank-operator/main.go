@@ -24,6 +24,7 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstats"
@@ -35,7 +36,6 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
-	"github.com/nelsong6/tank-operator/backend-go/internal/conversationreadstate"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
@@ -235,19 +235,32 @@ func main() {
 	// nil and the build* helpers below fall back to in-memory stubs.
 	pgPool := buildPostgresPool(azCred)
 	if pgPool != nil {
-		// 30s was tight under contention on a B1ms Postgres when both
-		// orchestrator replicas restart simultaneously; 5m bounds the
-		// startup wait while still failing fast on a genuinely stuck
-		// migration. The migration set is idempotent — retry on
-		// subsequent boots is safe.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		if err := pgstore.RunMigrations(ctx, pgPool); err != nil {
-			cancel()
-			slog.Error("postgres schema migration failed", "error", err)
-			os.Exit(1)
-		}
-		cancel()
 		defer pgPool.Close()
+		// Test slots set RUN_MIGRATIONS=false in deployment.yaml. They share
+		// the production database for realistic read validation, but schema
+		// migrations are owned by the production deployment and validated in CI
+		// or against a restored production copy for heavy backfills. Defaults
+		// on so an unset or misspelled value cannot silently skip production
+		// migrations.
+		if envBoolDefault("RUN_MIGRATIONS", true) {
+			// The ledger-backed engine applies only un-recorded migrations, so a
+			// steady-state boot is a single SELECT — not the every-boot re-run of
+			// all statements (incl. full-table backfills) that crashlooped under
+			// the old engine. The generous overall budget covers the rare boot that
+			// introduces a new migration (each migration is independently bounded
+			// by pgstore.perMigrationTimeout); it stays bounded so an
+			// unreachable/stuck database crashloops visibly instead of hanging
+			// startup forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			if err := pgstore.RunMigrationsWithMetrics(ctx, pgPool, promMigrationMetrics{}); err != nil {
+				cancel()
+				slog.Error("postgres schema migration failed", "error", err)
+				os.Exit(1)
+			}
+			cancel()
+		} else {
+			slog.Warn("schema migrations disabled by RUN_MIGRATIONS=false; using existing shared schema unchanged")
+		}
 	}
 
 	// 4. Init profile store.
@@ -931,6 +944,20 @@ func envDefault(name, fallback string) string {
 func envBool(name string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// envBoolDefault reads a boolean env var, returning fallback when the value is
+// unset, empty, or unrecognized. Accepts "1"/"true"/"yes" and
+// "0"/"false"/"no" case-insensitively.
+func envBoolDefault(name string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes":
+		return true
+	case "0", "false", "no":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func currentPodNamespace() string {

@@ -2,33 +2,52 @@ package pgstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// schemaMigrations are run idempotently at backend startup under a Postgres
-// advisory lock so concurrent replicas don't race on CREATE statements. The
-// order is dependency-aware (no cross-table foreign keys today, so order is
-// largely cosmetic, but kept stable so future FKs can be added in-place).
+// migration is one immutable, identified schema change. Identity is the
+// stable string `ID` carried in source, never the slice index: an entry's ID
+// travels with it, so reordering or inserting never re-keys an already-applied
+// migration. Once a migration has been applied to any database its `SQL` is
+// frozen — RunMigrations refuses to start if the recorded checksum and the
+// in-code SQL diverge (see applyMigration / the schema_migrations ledger).
+type migration struct {
+	ID  string
+	SQL string
+}
+
+// schemaMigrations are applied in order at backend startup under a Postgres
+// advisory lock so concurrent replicas don't race. The order is
+// dependency-aware (no cross-table foreign keys today, so order is largely
+// cosmetic, but kept stable so future FKs can be added in-place).
 //
-// All schema definitions use `IF NOT EXISTS` so a re-run is a no-op. Schema
-// changes go in as new entries appended to this slice with their own
-// `IF NOT EXISTS` semantics â€” there is no version table.
-var schemaMigrations = []string{
+// Applied migrations are recorded in the durable `schema_migrations` ledger
+// and skipped on subsequent boots. This is the load-bearing contract: the
+// one-shot data backfills below (the `SELECT tank_upsert_session_status_event
+// (...) FROM sessions` rows and the `UPDATE session_events ...` normalizers)
+// run exactly once per database, not on every startup. New schema changes go
+// in as new entries appended to this slice with the next sequential ID; their
+// SQL must be idempotent on a fresh database (the `IF NOT EXISTS` semantics)
+// but is never re-executed once the ledger records it.
+var schemaMigrations = []migration{
 	// `profiles` â€” single row per user, keyed by email.
-	`CREATE TABLE IF NOT EXISTS profiles (
+	{ID: "0001", SQL: `CREATE TABLE IF NOT EXISTS profiles (
 		email           text PRIMARY KEY,
 		github_login    text,
 		installation_id bigint,
 		run_prefs       jsonb,
 		updated_at      timestamptz NOT NULL DEFAULT now()
-	)`,
+	)`},
 
 	// github_install_states stores opaque, single-use nonces for the
 	// GitHub App install callback. The callback records GitHub's
 	// installation_id; the authenticated SPA completion consumes it.
-	`CREATE TABLE IF NOT EXISTS github_install_states (
+	{ID: "0002", SQL: `CREATE TABLE IF NOT EXISTS github_install_states (
 		state           text PRIMARY KEY,
 		email           text NOT NULL,
 		installation_id bigint,
@@ -36,9 +55,9 @@ var schemaMigrations = []string{
 		expires_at      timestamptz NOT NULL,
 		callback_at     timestamptz,
 		consumed_at     timestamptz
-	)`,
-	`CREATE INDEX IF NOT EXISTS github_install_states_expires_at
-		ON github_install_states (expires_at)`,
+	)`},
+	{ID: "0003", SQL: `CREATE INDEX IF NOT EXISTS github_install_states_expires_at
+		ON github_install_states (expires_at)`},
 	// `sessions` â€” the session registry. One row per (email, scope, session_id).
 	// `visible` is the soft-delete flag the SPA's "delete session" toggles.
 	// stream_auth_tickets stores short-lived opaque tickets for browser-native
@@ -46,7 +65,7 @@ var schemaMigrations = []string{
 	// Authorization-bearing fetch, then EventSource uses only the opaque
 	// ticket in its URL because native EventSource cannot attach
 	// Authorization headers.
-	`CREATE TABLE IF NOT EXISTS stream_auth_tickets (
+	{ID: "0004", SQL: `CREATE TABLE IF NOT EXISTS stream_auth_tickets (
 		ticket        text PRIMARY KEY,
 		sub           text NOT NULL,
 		email         text NOT NULL,
@@ -59,9 +78,9 @@ var schemaMigrations = []string{
 		created_at    timestamptz NOT NULL DEFAULT now(),
 		expires_at    timestamptz NOT NULL,
 		last_used_at  timestamptz
-	)`,
-	`CREATE INDEX IF NOT EXISTS stream_auth_tickets_expires_at
-		ON stream_auth_tickets (expires_at)`,
+	)`},
+	{ID: "0005", SQL: `CREATE INDEX IF NOT EXISTS stream_auth_tickets_expires_at
+		ON stream_auth_tickets (expires_at)`},
 
 	// `avatar_assets` stores administrator-curated avatar metadata. The
 	// actual image bytes live in private blob storage; the backend reads
@@ -71,7 +90,7 @@ var schemaMigrations = []string{
 	// avatar_bytes/backing_bytes are nullable legacy columns kept only so
 	// startup can migrate branch/test databases that already inserted
 	// bytes before blob storage existed. New writes use *_blob_key.
-	`CREATE TABLE IF NOT EXISTS avatar_assets (
+	{ID: "0006", SQL: `CREATE TABLE IF NOT EXISTS avatar_assets (
 		id            text PRIMARY KEY,
 		kind          text NOT NULL CHECK (kind IN ('agent', 'system')),
 		name          text NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
@@ -86,12 +105,12 @@ var schemaMigrations = []string{
 		created_at    timestamptz NOT NULL DEFAULT now(),
 		updated_at    timestamptz NOT NULL DEFAULT now(),
 		deleted_at    timestamptz
-	)`,
-	`ALTER TABLE avatar_assets
-		ADD COLUMN IF NOT EXISTS avatar_blob_key text`,
-	`ALTER TABLE avatar_assets
-		ADD COLUMN IF NOT EXISTS backing_blob_key text`,
-	`DO $$
+	)`},
+	{ID: "0007", SQL: `ALTER TABLE avatar_assets
+		ADD COLUMN IF NOT EXISTS avatar_blob_key text`},
+	{ID: "0008", SQL: `ALTER TABLE avatar_assets
+		ADD COLUMN IF NOT EXISTS backing_blob_key text`},
+	{ID: "0009", SQL: `DO $$
 	BEGIN
 		IF EXISTS (
 			SELECT 1
@@ -113,15 +132,15 @@ var schemaMigrations = []string{
 			ALTER TABLE avatar_assets
 				ALTER COLUMN backing_bytes DROP NOT NULL;
 		END IF;
-	END $$`,
-	`CREATE INDEX IF NOT EXISTS avatar_assets_kind_active_created
+	END $$`},
+	{ID: "0010", SQL: `CREATE INDEX IF NOT EXISTS avatar_assets_kind_active_created
 		ON avatar_assets (kind, created_at DESC)
-		WHERE deleted_at IS NULL`,
+		WHERE deleted_at IS NULL`},
 
 	// avatar_upload_attempts is the durable support surface for avatar
 	// upload failures. It lets an operator diagnose a failed browser
 	// upload from an attempt id without asking the user for devtools.
-	`CREATE TABLE IF NOT EXISTS avatar_upload_attempts (
+	{ID: "0011", SQL: `CREATE TABLE IF NOT EXISTS avatar_upload_attempts (
 		id                 text PRIMARY KEY,
 		operation          text NOT NULL,
 		actor_email        text NOT NULL,
@@ -140,17 +159,17 @@ var schemaMigrations = []string{
 		diagnostics        jsonb NOT NULL DEFAULT '{}'::jsonb,
 		created_at         timestamptz NOT NULL DEFAULT now(),
 		updated_at         timestamptz NOT NULL DEFAULT now()
-	)`,
-	`CREATE INDEX IF NOT EXISTS avatar_upload_attempts_created_at
-		ON avatar_upload_attempts (created_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS avatar_upload_attempts_actor_created
-		ON avatar_upload_attempts (actor_email, created_at DESC)`,
+	)`},
+	{ID: "0012", SQL: `CREATE INDEX IF NOT EXISTS avatar_upload_attempts_created_at
+		ON avatar_upload_attempts (created_at DESC)`},
+	{ID: "0013", SQL: `CREATE INDEX IF NOT EXISTS avatar_upload_attempts_actor_created
+		ON avatar_upload_attempts (actor_email, created_at DESC)`},
 	// session_list_debug_captures is the durable client-side counterpart
 	// to /api/debug/session-list-state. The browser posts the bounded
 	// session-list debug ring when the user or operator explicitly
 	// captures the browser state or records a diagnostic window, so
 	// operators can diagnose without asking for devtools.
-	`CREATE TABLE IF NOT EXISTS session_list_debug_captures (
+	{ID: "0014", SQL: `CREATE TABLE IF NOT EXISTS session_list_debug_captures (
 		id            text PRIMARY KEY,
 		owner_email   text NOT NULL,
 		session_scope text NOT NULL,
@@ -164,12 +183,12 @@ var schemaMigrations = []string{
 		detail        jsonb NOT NULL DEFAULT '{}'::jsonb,
 		server_rows   jsonb NOT NULL DEFAULT '[]'::jsonb,
 		created_at    timestamptz NOT NULL DEFAULT now()
-	)`,
-	`CREATE INDEX IF NOT EXISTS session_list_debug_captures_owner_created
-		ON session_list_debug_captures (owner_email, session_scope, created_at DESC)`,
-	`CREATE INDEX IF NOT EXISTS session_list_debug_captures_session_created
-		ON session_list_debug_captures (owner_email, session_scope, session_id, created_at DESC)`,
-	`CREATE TABLE IF NOT EXISTS sessions (
+	)`},
+	{ID: "0015", SQL: `CREATE INDEX IF NOT EXISTS session_list_debug_captures_owner_created
+		ON session_list_debug_captures (owner_email, session_scope, created_at DESC)`},
+	{ID: "0016", SQL: `CREATE INDEX IF NOT EXISTS session_list_debug_captures_session_created
+		ON session_list_debug_captures (owner_email, session_scope, session_id, created_at DESC)`},
+	{ID: "0017", SQL: `CREATE TABLE IF NOT EXISTS sessions (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,
 		session_id      text NOT NULL,
@@ -181,9 +200,9 @@ var schemaMigrations = []string{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		updated_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (email, session_scope, session_id)
-	)`,
-	`CREATE INDEX IF NOT EXISTS sessions_email_scope_visible
-		ON sessions (email, session_scope, visible, created_at)`,
+	)`},
+	{ID: "0018", SQL: `CREATE INDEX IF NOT EXISTS sessions_email_scope_visible
+		ON sessions (email, session_scope, visible, created_at)`},
 
 	// Row-centric architecture (docs/session-list-redesign.md). The
 	// sidebar's status, ready_at, terminating_at, and activity_summary
@@ -203,19 +222,19 @@ var schemaMigrations = []string{
 	// The accompanying sessions_email_scope_row_version index is the
 	// catch-up read predicate for the row-update wire (Phase 3); add
 	// it now so Phase 3 doesn't need a separate schema migration.
-	`CREATE SEQUENCE IF NOT EXISTS sessions_row_version_seq`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'Pending'`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS ready_at timestamptz`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS terminating_at timestamptz`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS activity_summary jsonb`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS row_version bigint NOT NULL DEFAULT nextval('sessions_row_version_seq')`,
-	`CREATE INDEX IF NOT EXISTS sessions_email_scope_row_version
-		ON sessions (email, session_scope, row_version)`,
+	{ID: "0019", SQL: `CREATE SEQUENCE IF NOT EXISTS sessions_row_version_seq`},
+	{ID: "0020", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'Pending'`},
+	{ID: "0021", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS ready_at timestamptz`},
+	{ID: "0022", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS terminating_at timestamptz`},
+	{ID: "0023", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS activity_summary jsonb`},
+	{ID: "0024", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS row_version bigint NOT NULL DEFAULT nextval('sessions_row_version_seq')`},
+	{ID: "0025", SQL: `CREATE INDEX IF NOT EXISTS sessions_email_scope_row_version
+		ON sessions (email, session_scope, row_version)`},
 
 	// Durable sidebar ordering. The pre-migration SPA stored manual
 	// order in localStorage, which meant any row_version-sorted update
@@ -225,9 +244,9 @@ var schemaMigrations = []string{
 	// earlier; existing rows backfill newest-first and future creates
 	// get a sequence-backed value that naturally lands at the top until
 	// the user drags rows into a custom order.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS sidebar_position bigint`,
-	`WITH ranked AS (
+	{ID: "0026", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS sidebar_position bigint`},
+	{ID: "0027", SQL: `WITH ranked AS (
 		SELECT email, session_scope, session_id,
 			row_number() OVER (
 				PARTITION BY email, session_scope
@@ -241,13 +260,13 @@ var schemaMigrations = []string{
 	WHERE sessions.email = ranked.email
 	  AND sessions.session_scope = ranked.session_scope
 	  AND sessions.session_id = ranked.session_id
-	  AND sessions.sidebar_position IS NULL`,
-	`ALTER TABLE sessions
-		ALTER COLUMN sidebar_position SET DEFAULT nextval('sessions_row_version_seq')`,
-	`ALTER TABLE sessions
-		ALTER COLUMN sidebar_position SET NOT NULL`,
-	`CREATE INDEX IF NOT EXISTS sessions_email_scope_visible_sidebar_position
-		ON sessions (email, session_scope, visible, sidebar_position DESC, created_at DESC)`,
+	  AND sessions.sidebar_position IS NULL`},
+	{ID: "0028", SQL: `ALTER TABLE sessions
+		ALTER COLUMN sidebar_position SET DEFAULT nextval('sessions_row_version_seq')`},
+	{ID: "0029", SQL: `ALTER TABLE sessions
+		ALTER COLUMN sidebar_position SET NOT NULL`},
+	{ID: "0030", SQL: `CREATE INDEX IF NOT EXISTS sessions_email_scope_visible_sidebar_position
+		ON sessions (email, session_scope, visible, sidebar_position DESC, created_at DESC)`},
 
 	// Phase 2 (docs/session-list-redesign.md) â€” test_state and
 	// rollout_state move onto the row so Reader.List can build the
@@ -255,22 +274,22 @@ var schemaMigrations = []string{
 	// patched by Manager.SetTestState/SetRolloutState (the session-
 	// agent reads them at runtime via the projected downward-API
 	// volume); the column is the snapshot-facing replica.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS test_state jsonb`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS rollout_state jsonb`,
+	{ID: "0031", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS test_state jsonb`},
+	{ID: "0032", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS rollout_state jsonb`},
 	// Skill state is mutually exclusive at the durable row. The
 	// frontend renders the row as canonical truth; it must not repair
 	// both-active historical data locally. Prefer rollout when normalizing
 	// ambiguous rows because rollout is the deployment flow whose sidebar
 	// color was masked by the stale test marker.
-	`UPDATE sessions
+	{ID: "0033", SQL: `UPDATE sessions
 		SET test_state = NULL,
 			updated_at = now(),
 			row_version = nextval('sessions_row_version_seq')
 		WHERE test_state @> '{"active": true}'::jsonb
-		  AND rollout_state @> '{"active": true}'::jsonb`,
-	`DO $$
+		  AND rollout_state @> '{"active": true}'::jsonb`},
+	{ID: "0034", SQL: `DO $$
 	BEGIN
 		IF NOT EXISTS (
 			SELECT 1
@@ -285,7 +304,7 @@ var schemaMigrations = []string{
 					AND rollout_state @> '{"active": true}'::jsonb
 				));
 		END IF;
-	END $$`,
+	END $$`},
 
 	// Repo-selection columns. `repos` is the durable list of
 	// "owner/name" slugs the user picked at session creation; empty
@@ -297,10 +316,10 @@ var schemaMigrations = []string{
 	//  started_at?, finished_at?, path?}. Existing rows back-fill to
 	// '{}'/NULL respectively, matching the
 	// "0 repos selected" shape that has always been valid.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS repos text[] NOT NULL DEFAULT '{}'`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS clone_state jsonb`,
+	{ID: "0035", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS repos text[] NOT NULL DEFAULT '{}'`},
+	{ID: "0036", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS clone_state jsonb`},
 
 	// Session-owned model configuration. `model`/`effort` are the
 	// durable run options requested at session creation and used for
@@ -309,39 +328,39 @@ var schemaMigrations = []string{
 	// runner after it has handed the options to the executable/SDK,
 	// giving the UI an applied-config surface instead of echoing the
 	// launch picker.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS model text NOT NULL DEFAULT ''`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS effort text NOT NULL DEFAULT ''`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS runtime_model text NOT NULL DEFAULT ''`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS runtime_effort text NOT NULL DEFAULT ''`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`,
+	{ID: "0037", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS model text NOT NULL DEFAULT ''`},
+	{ID: "0038", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS effort text NOT NULL DEFAULT ''`},
+	{ID: "0039", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_model text NOT NULL DEFAULT ''`},
+	{ID: "0040", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_effort text NOT NULL DEFAULT ''`},
+	{ID: "0041", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`},
 
 	// Hermes/no-pod active run pointer. The bridge writes this before
 	// streaming /v1/runs/:id/events and clears it only after a durable
 	// terminal event lands, giving replica restarts a bounded recovery
 	// surface for hermes_gui turns.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS hermes_active_run jsonb`,
+	{ID: "0042", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS hermes_active_run jsonb`},
 
 	// Session-pinned avatar assignment. The avatar deck is mutable as
 	// administrators add/delete assets, but an existing session's visible
 	// identity should not reshuffle on refresh. These columns stay nullable so
 	// no-avatar system pools can be represented explicitly; the frontend must
 	// not synthesize a session identity when an assigned agent avatar is absent.
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS agent_avatar_id text`,
-	`ALTER TABLE sessions
-		ADD COLUMN IF NOT EXISTS system_avatar_id text`,
+	{ID: "0043", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS agent_avatar_id text`},
+	{ID: "0044", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS system_avatar_id text`},
 
 	// avatar_deck_entries is the durable shuffled traversal state for avatar
 	// assignment. A deck is scoped by owner + session scope + kind. Each cycle
 	// snapshots the active avatar IDs at cycle creation time; new additions wait
 	// until the next cycle by design.
-	`CREATE TABLE IF NOT EXISTS avatar_deck_entries (
+	{ID: "0045", SQL: `CREATE TABLE IF NOT EXISTS avatar_deck_entries (
 		email           text NOT NULL,
 		session_scope   text NOT NULL,
 		kind            text NOT NULL CHECK (kind IN ('agent', 'system')),
@@ -352,18 +371,18 @@ var schemaMigrations = []string{
 		used_at         timestamptz,
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (email, session_scope, kind, cycle, position)
-	)`,
-	`CREATE UNIQUE INDEX IF NOT EXISTS avatar_deck_entries_avatar_once_per_cycle
-		ON avatar_deck_entries (email, session_scope, kind, cycle, avatar_id)`,
-	`CREATE INDEX IF NOT EXISTS avatar_deck_entries_current
-		ON avatar_deck_entries (email, session_scope, kind, cycle DESC, position ASC)`,
+	)`},
+	{ID: "0046", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS avatar_deck_entries_avatar_once_per_cycle
+		ON avatar_deck_entries (email, session_scope, kind, cycle, avatar_id)`},
+	{ID: "0047", SQL: `CREATE INDEX IF NOT EXISTS avatar_deck_entries_current
+		ON avatar_deck_entries (email, session_scope, kind, cycle DESC, position ASC)`},
 
 	// `session_events` â€” the durable transcript ledger. Partition key in
 	// Cosmos was `tank_session_id`; in Postgres the same field is the high
 	// cardinality column we always filter and order by, so it leads the index.
 	// `order_key` is the canonical render-order watermark each event ships
 	// with; uniqueness is enforced per session.
-	`CREATE TABLE IF NOT EXISTS session_events (
+	{ID: "0048", SQL: `CREATE TABLE IF NOT EXISTS session_events (
 		tank_session_id text NOT NULL,
 		order_key       text NOT NULL,
 		event_id        text NOT NULL,
@@ -372,21 +391,21 @@ var schemaMigrations = []string{
 		payload         jsonb NOT NULL,
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, order_key)
-	)`,
-	`CREATE INDEX IF NOT EXISTS session_events_turn_terminal
+	)`},
+	{ID: "0049", SQL: `CREATE INDEX IF NOT EXISTS session_events_turn_terminal
 		ON session_events (tank_session_id, turn_id, order_key DESC)
-		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.interrupted')`,
-	`CREATE INDEX IF NOT EXISTS session_events_turn_terminal_all
+		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.interrupted')`},
+	{ID: "0050", SQL: `CREATE INDEX IF NOT EXISTS session_events_turn_terminal_all
 		ON session_events (tank_session_id, turn_id, order_key DESC)
-		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')`,
-	`CREATE INDEX IF NOT EXISTS session_events_event_id
-		ON session_events (tank_session_id, event_id)`,
-	`CREATE INDEX IF NOT EXISTS session_events_timeline_id_order_key
+		WHERE event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')`},
+	{ID: "0051", SQL: `CREATE INDEX IF NOT EXISTS session_events_event_id
+		ON session_events (tank_session_id, event_id)`},
+	{ID: "0052", SQL: `CREATE INDEX IF NOT EXISTS session_events_timeline_id_order_key
 		ON session_events (tank_session_id, (payload ->> 'timeline_id'), order_key DESC)
-		WHERE payload ? 'timeline_id'`,
-	`CREATE INDEX IF NOT EXISTS session_events_created_at
-		ON session_events (created_at)`,
-	`CREATE TABLE IF NOT EXISTS session_transcript_rows (
+		WHERE payload ? 'timeline_id'`},
+	{ID: "0053", SQL: `CREATE INDEX IF NOT EXISTS session_events_created_at
+		ON session_events (created_at)`},
+	{ID: "0054", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_rows (
 		tank_session_id text NOT NULL,
 		row_cursor      text NOT NULL,
 		row_id          text NOT NULL,
@@ -398,31 +417,31 @@ var schemaMigrations = []string{
 		payload         jsonb NOT NULL,
 		updated_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, row_id)
-	)`,
-	`CREATE INDEX IF NOT EXISTS session_transcript_rows_cursor
-			ON session_transcript_rows (tank_session_id, row_cursor)`,
-	`CREATE INDEX IF NOT EXISTS session_transcript_rows_end_order
-			ON session_transcript_rows (tank_session_id, end_order_key, row_cursor)`,
-	`CREATE INDEX IF NOT EXISTS session_transcript_rows_turn
+	)`},
+	{ID: "0055", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_cursor
+			ON session_transcript_rows (tank_session_id, row_cursor)`},
+	{ID: "0056", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_end_order
+			ON session_transcript_rows (tank_session_id, end_order_key, row_cursor)`},
+	{ID: "0057", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_turn
 			ON session_transcript_rows (tank_session_id, turn_id)
-			WHERE turn_id IS NOT NULL`,
-	`CREATE INDEX IF NOT EXISTS session_transcript_rows_activity_ids
+			WHERE turn_id IS NOT NULL`},
+	{ID: "0058", SQL: `CREATE INDEX IF NOT EXISTS session_transcript_rows_activity_ids
 		ON session_transcript_rows USING gin ((payload -> 'activityIds'))
-		WHERE payload ? 'activityIds'`,
-	`CREATE TABLE IF NOT EXISTS session_transcript_row_backfills (
+		WHERE payload ? 'activityIds'`},
+	{ID: "0059", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_row_backfills (
 		tank_session_id    text PRIMARY KEY,
 		projection_version integer NOT NULL,
 		completed_at       timestamptz NOT NULL DEFAULT now()
-	)`,
+	)`},
 	// Exact per-session row locks for transcript materialization. A refresh
 	// must serialize the event-ledger read, transcript projection, and row
 	// replacement as one critical section; otherwise a stale projection can
 	// survive after a terminal turn event.
-	`CREATE TABLE IF NOT EXISTS session_transcript_materialization_locks (
+	{ID: "0060", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_materialization_locks (
 		tank_session_id text PRIMARY KEY,
 		created_at      timestamptz NOT NULL DEFAULT now()
-	)`,
-	`CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
+	)`},
+	{ID: "0061", SQL: `CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
 		p_email text,
 		p_scope text,
 		p_session_id text,
@@ -552,8 +571,8 @@ var schemaMigrations = []string{
 			payload = EXCLUDED.payload,
 			updated_at = now();
 	END
-	$$`,
-	`CREATE OR REPLACE FUNCTION tank_sessions_status_events_after_write()
+	$$`},
+	{ID: "0062", SQL: `CREATE OR REPLACE FUNCTION tank_sessions_status_events_after_write()
 	RETURNS trigger
 	LANGUAGE plpgsql
 	AS $$
@@ -621,14 +640,14 @@ var schemaMigrations = []string{
 		END IF;
 		RETURN NEW;
 	END
-	$$`,
-	`DROP TRIGGER IF EXISTS tank_sessions_status_events_after_write ON sessions`,
-	`CREATE TRIGGER tank_sessions_status_events_after_write
+	$$`},
+	{ID: "0063", SQL: `DROP TRIGGER IF EXISTS tank_sessions_status_events_after_write ON sessions`},
+	{ID: "0064", SQL: `CREATE TRIGGER tank_sessions_status_events_after_write
 		AFTER INSERT OR UPDATE OF status, ready_at, terminating_at
 		ON sessions
 		FOR EACH ROW
-		EXECUTE FUNCTION tank_sessions_status_events_after_write()`,
-	`SELECT tank_upsert_session_status_event(
+		EXECUTE FUNCTION tank_sessions_status_events_after_write()`},
+	{ID: "0065", SQL: `SELECT tank_upsert_session_status_event(
 		email,
 		session_scope,
 		session_id,
@@ -638,8 +657,8 @@ var schemaMigrations = []string{
 		coalesce(requested_at, created_at),
 		NULL
 	)
-	FROM sessions`,
-	`SELECT tank_upsert_session_status_event(
+	FROM sessions`},
+	{ID: "0066", SQL: `SELECT tank_upsert_session_status_event(
 		email,
 		session_scope,
 		session_id,
@@ -650,8 +669,8 @@ var schemaMigrations = []string{
 		NULL
 	)
 	FROM sessions
-	WHERE status = 'Active' OR ready_at IS NOT NULL`,
-	`SELECT tank_upsert_session_status_event(
+	WHERE status = 'Active' OR ready_at IS NOT NULL`},
+	{ID: "0067", SQL: `SELECT tank_upsert_session_status_event(
 		email,
 		session_scope,
 		session_id,
@@ -662,13 +681,13 @@ var schemaMigrations = []string{
 		NULL
 	)
 	FROM sessions
-	WHERE status = 'Failed'`,
+	WHERE status = 'Failed'`},
 
 	// Normalize historical item outcomes after #561 split item-scoped
 	// failures from session failure. Tool results that completed with a bad
 	// provider result now stay item.completed and carry payload.outcome;
 	// item.failed is reserved for adapter/provider execution failures.
-	`UPDATE session_events
+	{ID: "0068", SQL: `UPDATE session_events
 		SET event_type = 'item.completed',
 		    payload = jsonb_set(
 		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
@@ -679,8 +698,8 @@ var schemaMigrations = []string{
 		WHERE event_type = 'item.failed'
 		  AND payload->>'source' = 'claude'
 		  AND payload->'payload'->>'kind' = 'tool_result'
-		  AND payload->'payload'->>'is_error' = 'true'`,
-	`UPDATE session_events
+		  AND payload->'payload'->>'is_error' = 'true'`},
+	{ID: "0069", SQL: `UPDATE session_events
 		SET event_type = 'item.completed',
 		    payload = jsonb_set(
 		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
@@ -692,8 +711,8 @@ var schemaMigrations = []string{
 		  AND payload->>'source' = 'codex'
 		  AND payload->'payload'->>'kind' = 'mcp_tool_call'
 		  AND jsonb_typeof(payload->'payload'->'error') = 'null'
-		  AND payload->'payload'->'raw_item'->>'status' = 'completed'`,
-	`UPDATE session_events
+		  AND payload->'payload'->'raw_item'->>'status' = 'completed'`},
+	{ID: "0070", SQL: `UPDATE session_events
 		SET event_type = 'item.completed',
 		    payload = jsonb_set(
 		      jsonb_set(payload, '{type}', to_jsonb('item.completed'::text), false),
@@ -705,8 +724,8 @@ var schemaMigrations = []string{
 		  AND payload->>'source' = 'codex'
 		  AND payload->'payload'->>'kind' = 'mcp_tool_call'
 		  AND jsonb_typeof(payload->'payload'->'error') = 'null'
-		  AND payload->'payload'->'raw_item'->>'status' = 'failed'`,
-	`UPDATE session_events
+		  AND payload->'payload'->'raw_item'->>'status' = 'failed'`},
+	{ID: "0071", SQL: `UPDATE session_events
 		SET payload = jsonb_set(
 		      jsonb_set(
 		        payload,
@@ -745,7 +764,7 @@ var schemaMigrations = []string{
 		) AS command_exit
 		WHERE session_events.tank_session_id = command_exit.tank_session_id
 		  AND session_events.order_key = command_exit.order_key
-		  AND command_exit.exit_code <> 0`,
+		  AND command_exit.exit_code <> 0`},
 
 	// Backfill the durable final-answer marker for completed historical turns
 	// before the projection stopped inferring finality at read time. This is a
@@ -754,7 +773,7 @@ var schemaMigrations = []string{
 	// item before a completed terminal, grouping same-provider-event text
 	// blocks for Claude-style multi-block final answers. If any non-final turn
 	// activity landed after that assistant message, the turn is left unmarked.
-	`WITH completed_terminals AS (
+	{ID: "0072", SQL: `WITH completed_terminals AS (
 		  SELECT tank_session_id, order_key AS terminal_order_key, turn_id
 		  FROM session_events
 		  WHERE event_type = 'turn.completed'
@@ -857,28 +876,28 @@ var schemaMigrations = []string{
 		FROM final_answers fa
 		WHERE se.tank_session_id = fa.tank_session_id
 		  AND se.order_key = fa.terminal_order_key
-		  AND se.payload#>'{payload,final_answer}' IS NULL`,
+		  AND se.payload#>'{payload,final_answer}' IS NULL`},
 
 	// `session_counters` â€” monotonic session-id allocator, one row per scope.
 	// Replaces the Cosmos `session-counter[:scope]` document the previous
 	// store kept under a sentinel email. The atomic INCREMENT-AND-RETURN
 	// happens via the UPSERT in sessionregistry.NextSessionID.
-	`CREATE TABLE IF NOT EXISTS session_counters (
+	{ID: "0073", SQL: `CREATE TABLE IF NOT EXISTS session_counters (
 		session_scope       text PRIMARY KEY,
 		next_session_number bigint NOT NULL DEFAULT 1,
 		created_at          timestamptz NOT NULL DEFAULT now(),
 		updated_at          timestamptz NOT NULL DEFAULT now()
-	)`,
+	)`},
 
 	// `conversation_read_state` â€” per-user, per-session render cursor.
-	`CREATE TABLE IF NOT EXISTS conversation_read_state (
+	{ID: "0074", SQL: `CREATE TABLE IF NOT EXISTS conversation_read_state (
 		email                text NOT NULL,
 		session_scope        text NOT NULL,
 		session_id           text NOT NULL,
 		last_read_order_key  text NOT NULL,
 		updated_at           timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (email, session_scope, session_id)
-	)`,
+	)`},
 
 	// session_lifecycle_events was the durable per-owner ledger that
 	// drove the sidebar before docs/session-list-redesign.md Phase 4.
@@ -891,7 +910,7 @@ var schemaMigrations = []string{
 	// session_id, event_id) constraint. The DROP is idempotent: a
 	// fresh database has nothing to drop; an upgraded database loses
 	// the table on the first migrations pass after this PR rolls.
-	`DROP TABLE IF EXISTS session_lifecycle_events`,
+	{ID: "0075", SQL: `DROP TABLE IF EXISTS session_lifecycle_events`},
 
 	// provider_credential_health — Layer 1 durable model for the
 	// transcript-surfaced "Codex / Claude sign-in expired" banner.
@@ -915,7 +934,7 @@ var schemaMigrations = []string{
 	// orchestrator subscriber UPSERTs against so two replicas racing
 	// on the same transition don't double-fan-out: only the writer
 	// that wins the version bump publishes the session.status events.
-	`CREATE TABLE IF NOT EXISTS provider_credential_health (
+	{ID: "0076", SQL: `CREATE TABLE IF NOT EXISTS provider_credential_health (
 		provider          text NOT NULL,
 		owner_scope       text NOT NULL,
 		status            text NOT NULL,
@@ -928,9 +947,9 @@ var schemaMigrations = []string{
 		last_succeeded_at timestamptz,
 		row_version       bigint NOT NULL DEFAULT 0,
 		PRIMARY KEY (provider, owner_scope)
-	)`,
-	`CREATE INDEX IF NOT EXISTS provider_credential_health_status
-		ON provider_credential_health (status, provider)`,
+	)`},
+	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
+		ON provider_credential_health (status, provider)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
@@ -938,9 +957,61 @@ var schemaMigrations = []string{
 // constant works as long as it doesn't collide with another caller's lock.
 const migrationsAdvisoryLockKey int64 = 7164301728471038113
 
-// RunMigrations applies every entry in schemaMigrations under a session-scoped
-// advisory lock. Safe to invoke at backend startup; idempotent on re-run.
+// perMigrationTimeout bounds each individual migration's apply transaction.
+// The previous engine wrapped the entire run in one 30s budget, so a single
+// slow one-shot backfill — re-executed on every boot because there was no
+// ledger — could exhaust the whole budget and crashloop the pod. Each
+// migration now gets its own budget, and steady-state boots apply zero
+// migrations (one ledger SELECT), so this ceiling only ever applies to the
+// rare boot that introduces a new migration.
+const perMigrationTimeout = 120 * time.Second
+
+// schemaMigrationsLedgerDDL creates the durable record of applied migrations.
+// It is the one statement the engine runs unconditionally; everything else is
+// gated on this ledger. It is intentionally not a member of schemaMigrations
+// (it must exist before the ledger can be read).
+const schemaMigrationsLedgerDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+	id         text PRIMARY KEY,
+	checksum   text NOT NULL,
+	applied_at timestamptz NOT NULL DEFAULT now()
+)`
+
+// MigrationMetrics receives counters from the migration engine. Optional;
+// wired to prometheus in cmd/tank-operator/observability.go. Migration IDs are
+// a small, bounded, slow-growing set, so emitting one only on the (rare)
+// failure path keeps cardinality within the docs/observability.md budget.
+type MigrationMetrics interface {
+	SetMigrationsPending(n int)
+	RecordMigrationApplied(seconds float64)
+	RecordMigrationSkipped()
+	RecordMigrationFailed(id string)
+}
+
+type noopMigrationMetrics struct{}
+
+func (noopMigrationMetrics) SetMigrationsPending(int)      {}
+func (noopMigrationMetrics) RecordMigrationApplied(float64) {}
+func (noopMigrationMetrics) RecordMigrationSkipped()        {}
+func (noopMigrationMetrics) RecordMigrationFailed(string)   {}
+
+// migrationChecksum is the immutability fingerprint of a migration's SQL.
+func migrationChecksum(sql string) string {
+	sum := sha256.Sum256([]byte(sql))
+	return hex.EncodeToString(sum[:])
+}
+
+// RunMigrations applies the un-applied entries in schemaMigrations under a
+// session-scoped advisory lock, recording each in the durable schema_migrations
+// ledger so it never runs twice. Safe to invoke at backend startup.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	return RunMigrationsWithMetrics(ctx, pool, noopMigrationMetrics{})
+}
+
+// RunMigrationsWithMetrics is RunMigrations with an observability sink.
+func RunMigrationsWithMetrics(ctx context.Context, pool *pgxpool.Pool, metrics MigrationMetrics) error {
+	if metrics == nil {
+		metrics = noopMigrationMetrics{}
+	}
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return fmt.Errorf("pgstore: acquire migration conn: %w", err)
@@ -951,13 +1022,100 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("pgstore: take migration lock: %w", err)
 	}
 	defer func() {
-		_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", migrationsAdvisoryLockKey)
+		// Unlock on a fresh context so a cancelled parent ctx can't strand
+		// the session-scoped advisory lock.
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrationsAdvisoryLockKey)
 	}()
 
-	for i, stmt := range schemaMigrations {
-		if _, err := conn.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("pgstore: migration %d failed: %w", i, err)
+	if _, err := conn.Exec(ctx, schemaMigrationsLedgerDDL); err != nil {
+		return fmt.Errorf("pgstore: ensure schema_migrations ledger: %w", err)
+	}
+
+	applied, err := loadAppliedMigrations(ctx, conn)
+	if err != nil {
+		return err
+	}
+
+	pending := 0
+	for _, m := range schemaMigrations {
+		if _, ok := applied[m.ID]; !ok {
+			pending++
 		}
 	}
+	metrics.SetMigrationsPending(pending)
+
+	for _, m := range schemaMigrations {
+		sum := migrationChecksum(m.SQL)
+		if recorded, ok := applied[m.ID]; ok {
+			if recorded != sum {
+				return fmt.Errorf(
+					"pgstore: migration %s checksum mismatch (ledger=%s code=%s): applied migrations are immutable; add a new migration instead of editing this one",
+					m.ID, recorded, sum,
+				)
+			}
+			metrics.RecordMigrationSkipped()
+			continue
+		}
+		if err := applyMigration(ctx, conn, m, sum, metrics); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadAppliedMigrations reads the ledger into an id->checksum map.
+func loadAppliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[string]string, error) {
+	rows, err := conn.Query(ctx, "SELECT id, checksum FROM schema_migrations")
+	if err != nil {
+		return nil, fmt.Errorf("pgstore: read schema_migrations ledger: %w", err)
+	}
+	defer rows.Close()
+
+	applied := make(map[string]string)
+	for rows.Next() {
+		var id, checksum string
+		if err := rows.Scan(&id, &checksum); err != nil {
+			return nil, fmt.Errorf("pgstore: scan schema_migrations row: %w", err)
+		}
+		applied[id] = checksum
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgstore: iterate schema_migrations rows: %w", err)
+	}
+	return applied, nil
+}
+
+// applyMigration runs one migration and records it in the ledger atomically:
+// the statement and its ledger row commit together, so a crash mid-migration
+// leaves neither a half-applied change nor a phantom ledger entry. The
+// advisory lock is held on the same session, so the per-migration transaction
+// does not relinquish serialization.
+func applyMigration(ctx context.Context, conn *pgxpool.Conn, m migration, sum string, metrics MigrationMetrics) error {
+	start := time.Now()
+	mctx, cancel := context.WithTimeout(ctx, perMigrationTimeout)
+	defer cancel()
+
+	tx, err := conn.Begin(mctx)
+	if err != nil {
+		metrics.RecordMigrationFailed(m.ID)
+		return fmt.Errorf("pgstore: migration %s begin: %w", m.ID, err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	if _, err := tx.Exec(mctx, m.SQL); err != nil {
+		metrics.RecordMigrationFailed(m.ID)
+		return fmt.Errorf("pgstore: migration %s failed: %w", m.ID, err)
+	}
+	if _, err := tx.Exec(mctx,
+		"INSERT INTO schema_migrations (id, checksum) VALUES ($1, $2)", m.ID, sum,
+	); err != nil {
+		metrics.RecordMigrationFailed(m.ID)
+		return fmt.Errorf("pgstore: record migration %s in ledger: %w", m.ID, err)
+	}
+	if err := tx.Commit(mctx); err != nil {
+		metrics.RecordMigrationFailed(m.ID)
+		return fmt.Errorf("pgstore: commit migration %s: %w", m.ID, err)
+	}
+	metrics.RecordMigrationApplied(time.Since(start).Seconds())
 	return nil
 }
