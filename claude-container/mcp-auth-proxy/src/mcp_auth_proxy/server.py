@@ -44,15 +44,61 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from aiohttp import ClientSession, ClientTimeout, web
+from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .metrics import (
     record_auth_romaine_exchange,
     record_proxy_request,
+    record_proxy_retry,
     record_sa_token_read,
     start_metrics_server,
     upstream_timer,
 )
+
+# Bounded retry budget for transient upstream failures (transport
+# errors, 502/503/504). The unrecoverable failure mode this exists to
+# prevent: aiohttp.ClientError or a 502 returned to the Claude agent
+# SDK lands a plain-text body that crashes the SDK's JSON parser, the
+# server gets marked "not connected", and no further calls are
+# attempted until the session restarts. Mirrors the OAuth-discovery
+# JSON-404 fix that already lives at the top of this file — same
+# class of unrecoverable SDK state, different trigger. See
+# nelsong6/tank-operator#... (this PR).
+#
+# Cap kept tight (3 attempts over ~1.3s total) so a genuinely dead
+# upstream surfaces fast, while a normal pod-rotation window (typically
+# 100-800ms) is invisible to the SDK.
+_MAX_UPSTREAM_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = (0.1, 0.3)
+_TRANSIENT_UPSTREAM_STATUSES = (502, 503, 504)
+
+
+def _retry_delay(attempt_index: int) -> float:
+    """Return the sleep duration before retry `attempt_index + 1`.
+    attempt_index is 0-indexed; the first retry sleeps
+    _RETRY_BACKOFF_SECONDS[0], the second sleeps [1], etc. Anything
+    beyond the table length re-uses the last value."""
+    if attempt_index < 0:
+        return 0.0
+    if attempt_index >= len(_RETRY_BACKOFF_SECONDS):
+        return _RETRY_BACKOFF_SECONDS[-1]
+    return _RETRY_BACKOFF_SECONDS[attempt_index]
+
+
+def _json_upstream_error(status: int, reason: str, *, mcp_label: str, attempts: int) -> web.Response:
+    """Terminal upstream failure response. JSON-shaped so the Claude
+    agent SDK's MCP transport parses it cleanly instead of landing on
+    a plain-text body that leaves the connection unrecoverable across
+    the session lifetime."""
+    return web.json_response(
+        {
+            "error": "upstream_unavailable",
+            "error_description": reason,
+            "mcp_server": mcp_label,
+            "attempts": attempts,
+        },
+        status=status,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -339,34 +385,134 @@ def _make_handler(
 
         body = await request.read()
         url = upstream + request.path_qs
-        try:
-            async with upstream_timer(mcp_label):
-                async with http.request(
-                    request.method,
-                    url,
-                    headers=forwarded_headers,
-                    data=body,
-                    allow_redirects=False,
-                ) as upstream_resp:
-                    status = upstream_resp.status
-                    response = web.StreamResponse(
-                        status=status,
-                        headers={
-                            k: v
-                            for k, v in upstream_resp.headers.items()
-                            if k.lower() not in _STRIP_RESPONSE_HEADERS
-                        },
+
+        # Bounded-retry loop. Two failure modes are retried because the
+        # SDK has no recovery for them within a session:
+        #   - aiohttp.ClientError before we start streaming (upstream
+        #     pod rotation: connection refused / reset / DNS flap).
+        #   - HTTP 502/503/504 from the upstream (kube-rbac-proxy
+        #     sidecar in front of the MCP returns 502 briefly while
+        #     the MCP container restarts).
+        # Anything past response.prepare() is mid-stream; we surface
+        # the broken stream rather than mask a real regression.
+        last_failure_reason = "all retry attempts failed"
+
+        for attempt in range(_MAX_UPSTREAM_ATTEMPTS):
+            started_streaming = False
+            try:
+                async with upstream_timer(mcp_label):
+                    async with http.request(
+                        request.method,
+                        url,
+                        headers=forwarded_headers,
+                        data=body,
+                        allow_redirects=False,
+                    ) as upstream_resp:
+                        status = upstream_resp.status
+
+                        # Transient upstream statuses get handled
+                        # entirely inside this branch BEFORE we call
+                        # response.prepare() — once streaming starts
+                        # we can't fail back into the loop without
+                        # leaving the SDK to parse a truncated body,
+                        # which is the exact unrecoverable state this
+                        # whole change exists to prevent.
+                        if status in _TRANSIENT_UPSTREAM_STATUSES:
+                            # Drain so the connection returns to the
+                            # pool cleanly rather than getting closed.
+                            await upstream_resp.read()
+                            record_proxy_retry(mcp_label, "transient_status")
+                            last_failure_reason = (
+                                f"upstream returned transient status {status}"
+                            )
+                            if attempt < _MAX_UPSTREAM_ATTEMPTS - 1:
+                                log.info(
+                                    "upstream %s returned %d on attempt %d/%d; retrying",
+                                    url,
+                                    status,
+                                    attempt + 1,
+                                    _MAX_UPSTREAM_ATTEMPTS,
+                                )
+                                await asyncio.sleep(_retry_delay(attempt))
+                                continue
+                            # Final attempt was still transient: do
+                            # NOT pass the upstream's body through —
+                            # an upstream "Bad Gateway" plain-text
+                            # body would crash the SDK's JSON parser
+                            # just as badly as a transport error.
+                            # Fall through to the exhaustion path
+                            # below.
+                            log.warning(
+                                "upstream %s returned %d on final attempt %d/%d",
+                                url,
+                                status,
+                                attempt + 1,
+                                _MAX_UPSTREAM_ATTEMPTS,
+                            )
+                            break
+
+                        response = web.StreamResponse(
+                            status=status,
+                            headers={
+                                k: v
+                                for k, v in upstream_resp.headers.items()
+                                if k.lower() not in _STRIP_RESPONSE_HEADERS
+                            },
+                        )
+                        await response.prepare(request)
+                        started_streaming = True
+                        async for chunk in upstream_resp.content.iter_any():
+                            await response.write(chunk)
+                        await response.write_eof()
+                record_proxy_request(mcp_label, status)
+                return response
+            except ClientError as exc:
+                if started_streaming:
+                    # Mid-stream drop. The wire is already committed
+                    # to a partial response; let it surface as the
+                    # broken stream it is rather than mask a real
+                    # upstream regression with a confusing retry that
+                    # writes JSON on top of partial bytes.
+                    log.warning(
+                        "upstream %s dropped mid-stream on attempt %d: %r",
+                        url,
+                        attempt + 1,
+                        exc,
                     )
-                    await response.prepare(request)
-                    async for chunk in upstream_resp.content.iter_any():
-                        await response.write(chunk)
-                    await response.write_eof()
-            record_proxy_request(mcp_label, status)
-            return response
-        except Exception:
-            log.exception("upstream request to %s failed", url)
-            record_proxy_request(mcp_label, 502)
-            return web.Response(status=502, text="upstream request failed")
+                    record_proxy_request(mcp_label, 502)
+                    raise
+                record_proxy_retry(mcp_label, "transport_error")
+                last_failure_reason = f"transport error: {exc!r}"
+                if attempt >= _MAX_UPSTREAM_ATTEMPTS - 1:
+                    log.warning(
+                        "upstream request to %s failed after %d attempts: %r",
+                        url,
+                        attempt + 1,
+                        exc,
+                    )
+                    break
+                log.info(
+                    "upstream request to %s failed on attempt %d/%d (%r); retrying",
+                    url,
+                    attempt + 1,
+                    _MAX_UPSTREAM_ATTEMPTS,
+                    exc,
+                )
+                await asyncio.sleep(_retry_delay(attempt))
+
+        # Retry budget exhausted. Return a JSON-shaped 502 so the SDK's
+        # MCP transport parser doesn't crash on a plain-text body and
+        # leave the connection unrecoverable for the rest of the
+        # session — same shape as the OAuth discovery 404 short-circuit
+        # at the top of this file.
+        record_proxy_retry(mcp_label, "exhausted")
+        record_proxy_request(mcp_label, 502)
+        return _json_upstream_error(
+            502,
+            last_failure_reason,
+            mcp_label=mcp_label,
+            attempts=_MAX_UPSTREAM_ATTEMPTS,
+        )
 
     return handler
 
