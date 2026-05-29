@@ -5777,6 +5777,25 @@ function ToolAskUserBody({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  // optimisticSubmit snapshots the answer the user *just submitted* so the
+  // UI can lock the card the moment the click lands — before the runner's
+  // tool.approval_resolved makes the round trip back through SSE. Without
+  // this, three regressions surface in the live slot:
+  //   (a) the submit button re-enables as soon as the HTTP POST resolves,
+  //       so the user can keep clicking
+  //   (b) the free-form textarea stays open because `answered` is still
+  //       false until the durable resolve arrives
+  //   (c) the selected option dot "vanishes" when the parent re-renders
+  //       with a stale activity-cache entry whose toolStatus is still
+  //       "started" — the durable cache for the Turns tab doesn't refresh
+  //       on its own (one-shot fetch in loadActivityForTurn).
+  // The optimistic snapshot is a *fallback*: durable state still wins when
+  // it eventually arrives, so a fresh tab opened later renders the same
+  // answer from the projection.
+  const [optimisticSubmit, setOptimisticSubmit] = useState<{
+    answers: Record<string, string[]>;
+    annotations: Record<string, { preview?: string; notes?: string }>;
+  } | null>(null);
 
   const questions = parseAskUserQuestions(input);
 
@@ -5784,27 +5803,42 @@ function ToolAskUserBody({
   // state — it comes from the `tool.approval_resolved` event's payload
   // via projection, so a fresh tab opened after the user answered (in
   // this or any other tab) still renders the selections. Local
-  // `selections` state only powers the in-flight click-to-submit UX.
+  // `selections` state only powers the pre-submit click-to-pick UX.
   const durableAnswers = entry.askUserAnswers;
   const hasDurableAnswers =
     !!durableAnswers && Object.keys(durableAnswers).length > 0;
-  const answered = hasDurableAnswers || entry.toolStatus === "completed";
+  // `answered` flips to true the instant the user submits, not just when
+  // the durable event lands. Otherwise the post-submit window leaves the
+  // card behaving as if the user hasn't answered: button re-clickable,
+  // textbox open, options re-selectable. The optimisticSubmit snapshot
+  // is what makes that lock honest about the user's pick.
+  const answered =
+    hasDurableAnswers ||
+    entry.toolStatus === "completed" ||
+    optimisticSubmit !== null;
 
   // After answering, the per-question UI stays rendered so the user
   // can scroll back in chat history and see exactly what was offered
-  // and what they picked. The durable answer payload drives the
-  // selected/muted state; local `selections` only matters before
-  // submit.
+  // and what they picked. Selection priority: durable answer (truth) →
+  // optimistic snapshot (user just submitted, durable not yet back) →
+  // local in-flight selection. This keeps the historical record honest
+  // for both the live submit window AND the activity-cache stale window.
   function selectedLabelsFor(q: AskUserQuestion): string[] {
-    if (answered && durableAnswers && durableAnswers[q.question]) {
+    if (durableAnswers && durableAnswers[q.question]) {
       return durableAnswers[q.question].labels;
+    }
+    if (optimisticSubmit && optimisticSubmit.answers[q.question]) {
+      return optimisticSubmit.answers[q.question];
     }
     return selections[q.question] ?? [];
   }
 
   function answeredNoteFor(question: string): string | undefined {
-    if (answered && durableAnswers && durableAnswers[question]) {
+    if (durableAnswers && durableAnswers[question]) {
       return durableAnswers[question].notes;
+    }
+    if (optimisticSubmit && optimisticSubmit.annotations[question]?.notes) {
+      return optimisticSubmit.annotations[question].notes;
     }
     return undefined;
   }
@@ -5823,11 +5857,12 @@ function ToolAskUserBody({
   }
   const isReady =
     !answered &&
+    !submitting &&
     questions.length > 0 &&
     questions.every((q) => questionHasResponse(q));
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
-    if (answered) return;
+    if (answered || submitting) return;
     setSelections((prev) => {
       const current = prev[q.question] ?? [];
       if (q.multiSelect) {
@@ -5847,9 +5882,7 @@ function ToolAskUserBody({
   }
 
   async function submit(): Promise<void> {
-    if (submitting || !isReady) return;
-    setSubmitting(true);
-    setReplyError(null);
+    if (submitting || answered || !isReady) return;
     const answers: Record<string, string[]> = {};
     const annotations: Record<string, { preview?: string; notes?: string }> = {};
     for (const q of questions) {
@@ -5877,10 +5910,19 @@ function ToolAskUserBody({
       if (notesText) ann.notes = notesText;
       if (ann.preview || ann.notes) annotations[q.question] = ann;
     }
+    // Lock the card BEFORE the await: the optimistic snapshot is the
+    // user-visible truth until the durable resolve arrives. We do not
+    // clear it on success — durable answers will take precedence in
+    // selectedLabelsFor as soon as the projection delivers them; on
+    // failure we clear it so the user can retry.
+    setSubmitting(true);
+    setReplyError(null);
+    setOptimisticSubmit({ answers, annotations });
     try {
       await sendInputReply(entry, { answers, annotations });
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : String(err));
+      setOptimisticSubmit(null);
     } finally {
       setSubmitting(false);
     }
@@ -5890,7 +5932,14 @@ function ToolAskUserBody({
   // events, or a non-input_reply completion path). The question UI is
   // still useful for context, but we tag the body so the styles can
   // make the unanswered options look inert.
-  const completedWithoutAnswers = answered && !hasDurableAnswers;
+  const completedWithoutAnswers =
+    entry.toolStatus === "completed" && !hasDurableAnswers && !optimisticSubmit;
+  // `confirmingSubmit` distinguishes "you just submitted, durable resolve
+  // pending" from "durable answer landed." Drives the status row copy so
+  // the user gets a clear "Submitted, waiting for Claude..." → "Your
+  // answer" progression instead of an instant green check that lies
+  // about durability.
+  const confirmingSubmit = optimisticSubmit !== null && !hasDurableAnswers;
 
   return (
     <div
@@ -5898,10 +5947,24 @@ function ToolAskUserBody({
       data-answered={answered ? "true" : "false"}
     >
       {answered && (
-        <div className="run-tool-ask-status" role="status">
-          <span className="run-tool-ask-status-icon" aria-hidden="true">✓</span>
+        <div
+          className={`run-tool-ask-status${confirmingSubmit ? " run-tool-ask-status-pending" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-tool-ask-status-icon" aria-hidden="true">
+            {confirmingSubmit ? (
+              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+            ) : (
+              "✓"
+            )}
+          </span>
           <span className="run-tool-ask-status-label">
-            {completedWithoutAnswers ? "Answered" : "Your answer"}
+            {confirmingSubmit
+              ? "Submitted — waiting for Claude…"
+              : completedWithoutAnswers
+                ? "Answered"
+                : "Your answer"}
           </span>
         </div>
       )}
@@ -11202,6 +11265,42 @@ function ChatPane({
         // Keep the status-only detail when the response is not JSON.
       }
       throw new Error(detail);
+    }
+    // Patch the Turns-tab activity cache with the answer the user just
+    // submitted. The Turns view's activityEntriesByTurn is a one-shot
+    // fetch (loadActivityForTurn), so without this update the cached
+    // AskUserQuestion entry stays at toolStatus="started" with no
+    // askUserAnswers — the durable tool.approval_resolved that the
+    // backend persists never makes it into the Turns render. Chat tab
+    // is fine because it consumes the SSE stream and keeps refreshing
+    // sdkServerProjectedEntriesRef; Turns is the regression surface.
+    // We mirror the shape projectionAskUserAnswers emits, so when the
+    // durable update eventually lands the entry is byte-identical.
+    const projected: Record<string, AskUserQuestionAnswer> = {};
+    for (const [question, labels] of Object.entries(payload.answers)) {
+      if (!Array.isArray(labels) || labels.length === 0) continue;
+      const ann = payload.annotations?.[question];
+      const answer: AskUserQuestionAnswer = { labels };
+      if (typeof ann?.preview === "string" && ann.preview) answer.preview = ann.preview;
+      if (typeof ann?.notes === "string" && ann.notes) answer.notes = ann.notes;
+      projected[question] = answer;
+    }
+    if (Object.keys(projected).length > 0) {
+      setActivityEntriesByTurn((prev) => {
+        const cached = prev[turnID];
+        if (!cached) return prev;
+        let mutated = false;
+        const next = cached.map((cachedEntry) => {
+          if (cachedEntry.id !== entry.id) return cachedEntry;
+          mutated = true;
+          return {
+            ...cachedEntry,
+            toolStatus: "completed",
+            askUserAnswers: projected,
+          } as TranscriptEntry;
+        });
+        return mutated ? { ...prev, [turnID]: next } : prev;
+      });
     }
   }
 

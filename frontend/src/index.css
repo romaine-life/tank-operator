@@ -7145,6 +7145,20 @@ textarea.run-files-viewer-editor:focus {
 .run-tool-ask-status-icon {
   font-size: 0.7rem;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* In-flight submit: optimistic snapshot is set, durable resolve not back
+ * yet. Switch the status pill to the orange "needs-input" palette and
+ * spin the icon so the user has unambiguous visual proof the submit
+ * registered. Without this, the status pill looks like the durable
+ * "✓ Your answer" green check which would lie about durability. */
+.run-tool-ask-status-pending {
+  background: color-mix(in oklch, var(--status-agent-needs-input) 14%, transparent);
+  border-color: color-mix(in oklch, var(--status-agent-needs-input) 60%, transparent);
+  color: var(--status-agent-needs-input);
 }
 
 .run-tool-ask-question {
