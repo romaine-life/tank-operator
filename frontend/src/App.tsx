@@ -196,6 +196,7 @@ import {
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
+const FileImageViewer = lazy(() => import("./FileImageViewer"));
 
 type SessionMode =
   | "api_key"
@@ -11654,25 +11655,37 @@ function ChatPane({
                     <span>Loading…</span>
                   </div>
                 ) : selectedFile.binary && isImagePath(selectedFile.path) ? (
-                  <div className="run-files-viewer-image-wrap">
-                    {fileRawImageLoading ? (
+                  fileRawImageLoading ? (
+                    <div className="run-files-viewer-image-wrap">
                       <div className="run-files-status">
                         <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
                         <span>Loading image...</span>
                       </div>
-                    ) : fileRawImageError ? (
+                    </div>
+                  ) : fileRawImageError ? (
+                    <div className="run-files-viewer-image-wrap">
                       <div className="run-files-status">
                         <AlertCircleIcon size={14} aria-hidden="true" />
                         <span>Image preview failed.</span>
                       </div>
-                    ) : fileRawImageUrl ? (
-                      <img
-                        className="run-files-viewer-image"
-                        alt={selectedFile.path}
+                    </div>
+                  ) : fileRawImageUrl ? (
+                    <Suspense fallback={(
+                      <div className="run-files-viewer-image-wrap">
+                        <div className="run-files-status">
+                          <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                          <span>Loading image...</span>
+                        </div>
+                      </div>
+                    )}>
+                      <FileImageViewer
                         src={fileRawImageUrl}
+                        alt={selectedFile.path}
                       />
-                    ) : null}
-                  </div>
+                    </Suspense>
+                  ) : (
+                    <div className="run-files-viewer-image-wrap" />
+                  )
                 ) : selectedFile.binary ? (
                   <div className="run-files-status">
                     <FileIcon size={14} aria-hidden="true" />
