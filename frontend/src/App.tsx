@@ -201,6 +201,11 @@ import {
   sessionModeSupportsWorkspaceFiles,
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
+import {
+  estimateTranscriptCost,
+  formatComposerCostUsd,
+  type SessionCostEstimateBasis,
+} from "./sessionCostEstimate";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
@@ -1439,6 +1444,42 @@ function ComposerUsageRing({
   );
 }
 
+interface ComposerCostEstimateProps {
+  amountUsd: number | null;
+  basis?: SessionCostEstimateBasis | null;
+  placeholder?: boolean;
+  title?: string;
+}
+
+function ComposerCostEstimate({
+  amountUsd,
+  basis = null,
+  placeholder = false,
+  title,
+}: ComposerCostEstimateProps) {
+  const unavailable = placeholder || amountUsd === null;
+  const label = unavailable ? "$--" : formatComposerCostUsd(amountUsd);
+  const defaultTitle = unavailable
+    ? "Cost estimate appears after token usage or transcript text is available"
+    : basis === "visible_transcript"
+      ? `Estimated API-equivalent session token cost from visible transcript text: ${label}`
+      : `Estimated API-equivalent session token cost from provider usage: ${label}`;
+  return (
+    <span
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      aria-label={
+        unavailable
+          ? "Session cost estimate unavailable"
+          : `Estimated session cost ${label}`
+      }
+      aria-disabled={unavailable || undefined}
+      title={title ?? defaultTitle}
+    >
+      {label}
+    </span>
+  );
+}
+
 function sessionSkillStateClass(session: Session): string {
   const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
   if (currentSkill === "test") return " is-skill-test";
@@ -2510,6 +2551,11 @@ function DemoLanding() {
                         ariaLabel="Context usage preview"
                         title="Context usage appears after sign in"
                       />
+                      <ComposerCostEstimate
+                        amountUsd={null}
+                        placeholder
+                        title="Cost estimate appears after sign in"
+                      />
                       {GUI_ROLLOUT_MODES.has(selectedMode) && (
                         <button
                           type="button"
@@ -3028,6 +3074,10 @@ const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
   "claude-opus-4-7": 200_000,
   "claude-sonnet-4-6": 200_000,
   "claude-haiku-4-5": 200_000,
+  "gpt-5.5": 1_050_000,
+  "gpt-5.4": 1_050_000,
+  "gpt-5.4-mini": 400_000,
+  "gpt-5.3-codex": 400_000,
   "gpt-5": 128_000,
 };
 
@@ -11129,6 +11179,11 @@ function ChatPane({
     ? DEFAULT_CODEX_MODEL_ID
     : selectedModelId;
   const contextWindow = getContextWindow(modelForContext);
+  const modelForCostEstimate = appliedModelId || modelForContext;
+  const sessionCostEstimate = useMemo(
+    () => estimateTranscriptCost(entries, modelForCostEstimate),
+    [entries, modelForCostEstimate],
+  );
 
   useEffect(() => {
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
@@ -12197,6 +12252,10 @@ function ChatPane({
               <ComposerUsageRing
                 tokensUsed={tokensUsed}
                 contextWindow={contextWindow}
+              />
+              <ComposerCostEstimate
+                amountUsd={sessionCostEstimate?.amountUsd ?? null}
+                basis={sessionCostEstimate?.basis ?? null}
               />
               {GUI_ROLLOUT_MODES.has(session.mode) && (
                 <button
@@ -15011,6 +15070,11 @@ export function App() {
                       placeholder
                       ariaLabel="Context usage preview"
                       title="Context usage appears after the session starts"
+                    />
+                    <ComposerCostEstimate
+                      amountUsd={null}
+                      placeholder
+                      title="Cost estimate appears after the session starts"
                     />
                     {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
                       <button
