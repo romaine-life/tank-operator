@@ -6703,7 +6703,7 @@ function formatThinkingLastActivity(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms)) return "pending";
   const clamped = ms > 0 ? ms : 0;
   const totalSeconds = Math.floor(clamped / 1000);
-  if (totalSeconds < 5) return "now";
+  if (totalSeconds === 0) return "0s";
   if (totalSeconds < 60) return `${totalSeconds}s ago`;
   const totalMinutes = Math.floor(totalSeconds / 60);
   if (totalMinutes < 60) return `${totalMinutes}m ago`;

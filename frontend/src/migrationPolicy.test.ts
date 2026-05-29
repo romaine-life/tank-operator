@@ -321,6 +321,8 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   assert.equal(appSource.includes("function formatThinkingElapsed"), true);
   assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
   assert.equal(appSource.includes("function formatThinkingLastActivity"), true);
+  assert.equal(appSource.includes('if (totalSeconds === 0) return "0s";'), true);
+  assert.equal(appSource.includes('if (totalSeconds < 5) return "now";'), false);
   assert.equal(appSource.includes("function RunTurnThinkingLastActivity"), true);
   assert.equal(appSource.includes("run-turn-thinking-duration"), true);
   assert.equal(appSource.includes("run-turn-thinking-last-activity"), true);
