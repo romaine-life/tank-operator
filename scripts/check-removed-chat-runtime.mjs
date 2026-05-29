@@ -395,6 +395,17 @@ const blocked = [
   { name: "retired transcriptBottomDistance helper", pattern: /\btranscriptBottomDistance\b/ },
   { name: "retired TRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX constant", pattern: /\bTRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX\b/ },
   { name: "retired transcriptScroll module file", pattern: /\bfrontend\/src\/transcriptScroll(?:\.test)?\.ts\b/ },
+  // Transcript-navigation contract — the hardcoded `followOutput="smooth"`
+  // on the transcript Virtuoso was retired. Smooth-animating the live-tail
+  // follow on every row-length change made the open/load/resync row storm
+  // read as the transcript "zipping around" before it settled, violating
+  // the contract's "Load, ready, reconnect, and resync do not introduce
+  // scroll jumps" acceptance check. The follow is now gated on the durable
+  // NavigationMode (live-tail → instant "auto"; historical-anchor →
+  // disabled) via the followLiveTail prop. Explicit user gestures still
+  // animate through the scrollToLatest signal. Block the hardcoded smooth
+  // follow so a refactor can't quietly bring the animated chase back.
+  { name: "retired hardcoded smooth followOutput", pattern: /followOutput\s*=\s*["']smooth["']|followOutput\s*=\s*\{\s*["']smooth["']\s*\}/ },
   // tank-operator#83 follow-up — the session-list typed-event surface
   // shipped with session_scope in the row + index but the read path,
   // NATS subject, and frontend reducer all keyed on email alone. Prod
