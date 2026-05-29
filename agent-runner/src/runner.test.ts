@@ -509,10 +509,10 @@ test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first
   // The defaults must stay in lockstep with the constants in runner.ts.
   // If the product moves the default to a different model, both this
   // assertion and the SPA's DEFAULT_RUN_PREFS need to update together.
-  assert.equal(runner.pinnedModel, "claude-opus-4-7");
+  assert.equal(runner.pinnedModel, "claude-opus-4-8");
   assert.equal(runner.pinnedEffort, "high");
   assert.ok(captured.opts);
-  assert.equal(captured.opts.model, "claude-opus-4-7");
+  assert.equal(captured.opts.model, "claude-opus-4-8");
   assert.equal(captured.opts.effort, "high");
 });
 

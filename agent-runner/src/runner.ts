@@ -339,7 +339,7 @@ export function joinAnswersForSDK(answers: Record<string, string[]>): Record<str
 //   - frontend/src/App.tsx CLAUDE_MODELS / CLAUDE_EFFORTS (UI surface)
 //   - backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts
 //     (server-side allowlist)
-const DEFAULT_MODEL = "claude-opus-4-7";
+const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_EFFORT: EffortLevel = "high";
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each

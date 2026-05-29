@@ -636,10 +636,10 @@ type AnsiSegment = {
 
 const DEMO_CLAUDE_LINES = [
   "\x1b[31m ▐\x1b[40m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mClaude Code\x1b[22m \x1b[37mv2.1.126\x1b[39m",
-  "\x1b[31m▝▜\x1b[40m█████\x1b[49m▛▘\x1b[39m  \x1b[37mOpus 4.7 (1M context) · Claude Max\x1b[39m",
+  "\x1b[31m▝▜\x1b[40m█████\x1b[49m▛▘\x1b[39m  \x1b[37mOpus 4.8 (1M context) · Claude Max\x1b[39m",
   "\x1b[31m  ▘▘ ▝▝  \x1b[39m  \x1b[37m/workspace\x1b[39m",
   "",
-  "  \x1b[1m\x1b[91mWelcome to Opus 4.7 xhigh!\x1b[22m\x1b[37m · /effort to tune speed vs. intelligence\x1b[39m",
+  "  \x1b[1m\x1b[91mWelcome to Opus 4.8 xhigh!\x1b[22m\x1b[37m · /effort to tune speed vs. intelligence\x1b[39m",
   "",
   "",
   "",
@@ -2958,10 +2958,14 @@ function isImagePath(path: string): boolean {
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
 // hasn't sent any text deltas yet.
-// Context-window sizes per model. Used for the usage % ring. The 1M
-// variant of Opus is a separate id; for everything else, 200k is the
-// shipping default.
+// Context-window sizes per model. Used for the usage % ring. Opus 4.8
+// ships with the 1M context window enabled by default on the Claude API
+// (no separate id), so the menu only exposes a single claude-opus-4-8
+// entry. Opus 4.7 keeps its split between the standard 200k id and the
+// dedicated claude-opus-4-7-1m id because that is how Anthropic shipped
+// it; for everything else, 200k is the shipping default.
 const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
+  "claude-opus-4-8": 1_000_000,
   "claude-opus-4-7-1m": 1_000_000,
   "claude-opus-4-7": 200_000,
   "claude-sonnet-4-6": 200_000,
@@ -3086,12 +3090,16 @@ interface ModelOption {
 const CODEX_ACCOUNT_DEFAULT_MODEL_ID = "codex-account-default";
 
 // CLAUDE_MODELS is ordered with the agent-runner's DEFAULT_MODEL first
-// (claude-opus-4-7) so a fresh session lands on the strongest model by
-// default. The id strings are forwarded straight to the SDK's
-// options.model via the bus; tightening to an allowlist lives in the
-// agent-runner's pinning code, not here, because adding a model should
-// be a one-line UI change.
+// (claude-opus-4-8) so a fresh session lands on the strongest model by
+// default. Opus 4.7 stays listed as a secondary option for the first
+// few weeks after 4.8 ships so users have an escape hatch if 4.8
+// misbehaves on day one; drop it once 4.8 has bedded in. The id
+// strings are forwarded straight to the SDK's options.model via the
+// bus; tightening to an allowlist lives in the agent-runner's pinning
+// code, not here, because adding a model should be a one-line UI
+// change.
 const CLAUDE_MODELS: ModelOption[] = [
+  { id: "claude-opus-4-8", label: "Claude · Opus 4.8" },
   { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
   { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
   { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
@@ -3121,10 +3129,10 @@ const CLAUDE_EFFORTS: EffortOption[] = [
   { id: "low", label: "Low", hint: "Fastest, minimal thinking" },
   { id: "medium", label: "Medium", hint: "Moderate thinking" },
   { id: "high", label: "High", hint: "Deep reasoning (default)" },
-  { id: "xhigh", label: "Extra High", hint: "Opus 4.7 only; ~2× tokens" },
-  { id: "max", label: "Max", hint: "Opus 4.6/4.7, Sonnet 4.6 only" },
+  { id: "xhigh", label: "Extra High", hint: "Opus 4.7/4.8 only; ~2× tokens" },
+  { id: "max", label: "Max", hint: "Opus 4.6/4.7/4.8, Sonnet 4.6 only" },
 ];
-const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";
+const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
 const DEFAULT_CLAUDE_EFFORT_ID = "high";
 const CODEX_EFFORTS: EffortOption[] = [
   { id: "low", label: "Low", hint: "Fast responses with lighter reasoning" },
