@@ -235,7 +235,12 @@ func main() {
 	// nil and the build* helpers below fall back to in-memory stubs.
 	pgPool := buildPostgresPool(azCred)
 	if pgPool != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// 30s was tight under contention on a B1ms Postgres when both
+		// orchestrator replicas restart simultaneously; 5m bounds the
+		// startup wait while still failing fast on a genuinely stuck
+		// migration. The migration set is idempotent — retry on
+		// subsequent boots is safe.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		if err := pgstore.RunMigrations(ctx, pgPool); err != nil {
 			cancel()
 			slog.Error("postgres schema migration failed", "error", err)

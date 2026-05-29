@@ -274,11 +274,38 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // RunMessageBubble uses this as an agent-authored signal, but it must
   // not synthesize a local avatar identity from the id.
   originSessionId?: string;
+  // For user-role messages submitted by a non-interactive principal (an
+  // auth.romaine.life bot token): "system". RunMessageBubble renders the
+  // session's system identity for these instead of the human owner's
+  // Gravatar. originSessionId takes precedence when both are present.
+  authorKind?: string;
   // Durable AskUserQuestion answers + annotations, sourced from the
   // `tool.approval_resolved` event payload via conversationProjection.
   // ToolAskUserBody reads this for the answered state so the UI matches
   // the durable ledger and not local React optimism.
   askUserAnswers?: Record<string, AskUserQuestionAnswer>;
+  // metaKind specializes a meta-kind row into a distinguishable transcript
+  // surface without growing the shared `kind` enum (which comes from the
+  // sandbox-agent SDK). renderItem branches on metaKind before falling
+  // through to the generic RunMetaBlock. Server projection sets metaKind
+  // on rows it wants surfaced specially in chat — see
+  // backend-go/cmd/tank-operator/transcript_projection.go →
+  // projectNeedsInputAnnouncement.
+  metaKind?: "needs_input_announcement";
+  // For `needs_input_announcement` rows: the AskUserQuestion item's
+  // provider id and the turn it lives on, so RunNeedsInputAnnouncement's
+  // click handler can navigate the user to the Turns tab scrolled to the
+  // right question. The handoff stays anchored to the durable item —
+  // local React state never becomes the source of truth for "is the
+  // agent still waiting on me."
+  announcement?: {
+    targetTurnId: string;
+    targetProviderItemId: string;
+    targetTimelineId?: string;
+    questionSummary: string;
+    questionCount: number;
+    answered: boolean;
+  };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
   taskSummary?: string;
@@ -3483,6 +3510,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
       return {
         kind: entry.kind,
         meta: entry.meta,
+        metaKind: entry.metaKind,
+        announcement: entry.announcement,
         turnTerminalStatus: entry.turnTerminalStatus,
         turnTerminalAt: entry.turnTerminalAt,
         turnTerminalOrderKey: entry.turnTerminalOrderKey,
@@ -5013,6 +5042,22 @@ function RunMessageBubble({
             </span>
           );
         }
+        // Bot-authored turn (auth.romaine.life bot token). Attribute it to
+        // the session's system identity rather than borrowing the human
+        // owner's Gravatar. Mirrors the system-message avatar (the
+        // configured system avatar, BotIcon fallback) so automation reads
+        // as the system user that launches the session.
+        if (entry.authorKind === "system") {
+          return (
+            <span className="run-msg-avatar" data-author-kind="system">
+              {systemAvatar ? (
+                <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+              ) : (
+                <BotIcon size={16} strokeWidth={2.1} />
+              )}
+            </span>
+          );
+        }
         return user ? (
           <span className="run-msg-avatar">
             <Avatar user={user} />
@@ -5102,6 +5147,79 @@ function RunReasoningBlock({
         <RunMarkdown>{text}</RunMarkdown>
       </div>
     </details>
+  );
+}
+
+// RunNeedsInputAnnouncement renders the AskUserQuestion handoff row in
+// the main transcript stream. The question card itself stays inside Turn
+// activity (where every other tool entry lives); this row is the
+// conversational handoff back to the user — "Claude is waiting on you"
+// — so it has to surface where the user is reading.
+//
+// The click target switches to the Turns tab scrolled to the right turn
+// so the user reaches the question card with no extra navigation. The
+// announcement state (`Claude is waiting on you` vs `Answered`) is read
+// off the durable projection's `announcement.answered` flag, not a local
+// React flag, so a fresh tab opened after the answer arrived shows the
+// resolved state.
+function RunNeedsInputAnnouncement({
+  entry,
+  onOpenTurn,
+}: {
+  entry: TranscriptEntry;
+  onOpenTurn?: (turnId: string) => void;
+}) {
+  const announcement = entry.announcement;
+  const answered = announcement?.answered ?? false;
+  const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
+  const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
+  const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
+  const handleOpen = (): void => {
+    if (!targetTurnId) return;
+    onOpenTurn?.(targetTurnId);
+  };
+  const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
+  return (
+    <div
+      className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
+      data-answered={answered ? "true" : "false"}
+      role="group"
+      aria-label={title}
+    >
+      <span className="run-needs-input-announcement-icon" aria-hidden="true">
+        {answered ? (
+          <CheckIcon size={14} aria-hidden="true" />
+        ) : (
+          <MessageSquareIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <div className="run-needs-input-announcement-body">
+        <div className="run-needs-input-announcement-title">{title}</div>
+        {summary && (
+          <p className="run-needs-input-announcement-detail">{summary}</p>
+        )}
+      </div>
+      {interactive && (
+        <button
+          type="button"
+          className="run-needs-input-announcement-cta"
+          onClick={handleOpen}
+          aria-label="Open the question in Turns"
+        >
+          Open in Turns
+        </button>
+      )}
+      {answered && targetTurnId && onOpenTurn && (
+        <button
+          type="button"
+          className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
+          onClick={handleOpen}
+          aria-label="View answered question in Turns"
+        >
+          View in Turns
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -5662,23 +5780,35 @@ interface AskUserQuestion {
   header?: string;
   multiSelect: boolean;
   options: Array<{ label: string; description?: string; preview?: string }>;
+  // allowFreeForm and secret are projected from the Tank-canonical
+  // question shape produced by the runner adapters. Claude maps every
+  // question to allowFreeForm=true (mirroring Claude Code's host UI's
+  // built-in "Other" affordance); codex maps from its native `isOther`
+  // and `isSecret` flags. Older durable events without these fields
+  // render as if both flags were false — they predate the adapter
+  // normalization and intentionally do not get a free-form path
+  // retrofitted at read time. See docs/migration-policy.md → "Old data
+  // does not justify runtime support."
+  allowFreeForm: boolean;
+  secret: boolean;
 }
 
 function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQuestion[] {
   if (!Array.isArray(input?.questions)) return [];
   return (input.questions as Array<Record<string, unknown>>).map((q) => {
-    const options = Array.isArray(q.options)
-      ? (q.options as Array<Record<string, unknown>>).map((opt) => ({
-          label: String(opt.label ?? ""),
-          description: typeof opt.description === "string" ? opt.description : undefined,
-          preview: typeof opt.preview === "string" ? opt.preview : undefined,
-        }))
-      : [];
+    const rawOptions = Array.isArray(q.options) ? q.options : [];
+    const options = (rawOptions as Array<Record<string, unknown>>).map((opt) => ({
+      label: String(opt.label ?? ""),
+      description: typeof opt.description === "string" ? opt.description : undefined,
+      preview: typeof opt.preview === "string" ? opt.preview : undefined,
+    }));
     return {
       question: String(q.question ?? ""),
       header: typeof q.header === "string" && q.header ? q.header : undefined,
       multiSelect: q.multiSelect === true,
       options,
+      allowFreeForm: q.allowFreeForm === true,
+      secret: q.secret === true,
     } satisfies AskUserQuestion;
   });
 }
@@ -5699,6 +5829,25 @@ function ToolAskUserBody({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  // optimisticSubmit snapshots the answer the user *just submitted* so the
+  // UI can lock the card the moment the click lands — before the runner's
+  // tool.approval_resolved makes the round trip back through SSE. Without
+  // this, three regressions surface in the live slot:
+  //   (a) the submit button re-enables as soon as the HTTP POST resolves,
+  //       so the user can keep clicking
+  //   (b) the free-form textarea stays open because `answered` is still
+  //       false until the durable resolve arrives
+  //   (c) the selected option dot "vanishes" when the parent re-renders
+  //       with a stale activity-cache entry whose toolStatus is still
+  //       "started" — the durable cache for the Turns tab doesn't refresh
+  //       on its own (one-shot fetch in loadActivityForTurn).
+  // The optimistic snapshot is a *fallback*: durable state still wins when
+  // it eventually arrives, so a fresh tab opened later renders the same
+  // answer from the projection.
+  const [optimisticSubmit, setOptimisticSubmit] = useState<{
+    answers: Record<string, string[]>;
+    annotations: Record<string, { preview?: string; notes?: string }>;
+  } | null>(null);
 
   const questions = parseAskUserQuestions(input);
 
@@ -5706,38 +5855,66 @@ function ToolAskUserBody({
   // state — it comes from the `tool.approval_resolved` event's payload
   // via projection, so a fresh tab opened after the user answered (in
   // this or any other tab) still renders the selections. Local
-  // `selections` state only powers the in-flight click-to-submit UX.
+  // `selections` state only powers the pre-submit click-to-pick UX.
   const durableAnswers = entry.askUserAnswers;
   const hasDurableAnswers =
     !!durableAnswers && Object.keys(durableAnswers).length > 0;
-  const answered = hasDurableAnswers || entry.toolStatus === "completed";
+  // `answered` flips to true the instant the user submits, not just when
+  // the durable event lands. Otherwise the post-submit window leaves the
+  // card behaving as if the user hasn't answered: button re-clickable,
+  // textbox open, options re-selectable. The optimisticSubmit snapshot
+  // is what makes that lock honest about the user's pick.
+  const answered =
+    hasDurableAnswers ||
+    entry.toolStatus === "completed" ||
+    optimisticSubmit !== null;
 
   // After answering, the per-question UI stays rendered so the user
   // can scroll back in chat history and see exactly what was offered
-  // and what they picked. The durable answer payload drives the
-  // selected/muted state; local `selections` only matters before
-  // submit.
+  // and what they picked. Selection priority: durable answer (truth) →
+  // optimistic snapshot (user just submitted, durable not yet back) →
+  // local in-flight selection. This keeps the historical record honest
+  // for both the live submit window AND the activity-cache stale window.
   function selectedLabelsFor(q: AskUserQuestion): string[] {
-    if (answered && durableAnswers && durableAnswers[q.question]) {
+    if (durableAnswers && durableAnswers[q.question]) {
       return durableAnswers[q.question].labels;
+    }
+    if (optimisticSubmit && optimisticSubmit.answers[q.question]) {
+      return optimisticSubmit.answers[q.question];
     }
     return selections[q.question] ?? [];
   }
 
   function answeredNoteFor(question: string): string | undefined {
-    if (answered && durableAnswers && durableAnswers[question]) {
+    if (durableAnswers && durableAnswers[question]) {
       return durableAnswers[question].notes;
+    }
+    if (optimisticSubmit && optimisticSubmit.annotations[question]?.notes) {
+      return optimisticSubmit.annotations[question].notes;
     }
     return undefined;
   }
 
+  // A question is answerable when the user has picked at least one
+  // option OR provided free-form text (when the question's allowFreeForm
+  // flag is set). The legacy gate required ≥1 selection per question,
+  // which left codex questions with options=null+isOther=true
+  // unanswerable. The Tank-canonical projection makes that gap explicit:
+  // the renderer surfaces a free-form textarea whenever allowFreeForm
+  // is true, and submit accepts text without an option pick.
+  function questionHasResponse(q: AskUserQuestion): boolean {
+    if ((selections[q.question]?.length ?? 0) > 0) return true;
+    if (q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0) return true;
+    return false;
+  }
   const isReady =
     !answered &&
+    !submitting &&
     questions.length > 0 &&
-    questions.every((q) => (selections[q.question]?.length ?? 0) > 0);
+    questions.every((q) => questionHasResponse(q));
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
-    if (answered) return;
+    if (answered || submitting) return;
     setSelections((prev) => {
       const current = prev[q.question] ?? [];
       if (q.multiSelect) {
@@ -5757,26 +5934,47 @@ function ToolAskUserBody({
   }
 
   async function submit(): Promise<void> {
-    if (submitting || !isReady) return;
-    setSubmitting(true);
-    setReplyError(null);
+    if (submitting || answered || !isReady) return;
     const answers: Record<string, string[]> = {};
     const annotations: Record<string, { preview?: string; notes?: string }> = {};
     for (const q of questions) {
-      const labels = selections[q.question];
-      if (!labels || labels.length === 0) continue;
-      answers[q.question] = labels;
-      const notesText = notes[q.question]?.trim();
+      const labels = selections[q.question] ?? [];
+      const notesText = q.allowFreeForm ? notes[q.question]?.trim() ?? "" : "";
+      // The wire shape requires `answers[question]` to be a non-empty
+      // string array. When the user only typed free-form text, we
+      // synthesize a single "Other" label so the answers map stays
+      // valid; the actual free-form text rides in
+      // `annotations[question].notes`, which is the Claude Agent SDK's
+      // blessed channel for caller-supplied context on a tool answer.
+      // The runner's canUseTool allow path returns both halves to the
+      // SDK, and `tool.approval_resolved` mirrors them back into the
+      // durable ledger.
+      if (labels.length > 0) {
+        answers[q.question] = labels;
+      } else if (notesText) {
+        answers[q.question] = ["Other"];
+      } else {
+        continue;
+      }
       const preview = q.options.find((opt) => labels.includes(opt.label))?.preview;
       const ann: { preview?: string; notes?: string } = {};
       if (preview) ann.preview = preview;
       if (notesText) ann.notes = notesText;
       if (ann.preview || ann.notes) annotations[q.question] = ann;
     }
+    // Lock the card BEFORE the await: the optimistic snapshot is the
+    // user-visible truth until the durable resolve arrives. We do not
+    // clear it on success — durable answers will take precedence in
+    // selectedLabelsFor as soon as the projection delivers them; on
+    // failure we clear it so the user can retry.
+    setSubmitting(true);
+    setReplyError(null);
+    setOptimisticSubmit({ answers, annotations });
     try {
       await sendInputReply(entry, { answers, annotations });
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : String(err));
+      setOptimisticSubmit(null);
     } finally {
       setSubmitting(false);
     }
@@ -5786,7 +5984,14 @@ function ToolAskUserBody({
   // events, or a non-input_reply completion path). The question UI is
   // still useful for context, but we tag the body so the styles can
   // make the unanswered options look inert.
-  const completedWithoutAnswers = answered && !hasDurableAnswers;
+  const completedWithoutAnswers =
+    entry.toolStatus === "completed" && !hasDurableAnswers && !optimisticSubmit;
+  // `confirmingSubmit` distinguishes "you just submitted, durable resolve
+  // pending" from "durable answer landed." Drives the status row copy so
+  // the user gets a clear "Submitted, waiting for Claude..." → "Your
+  // answer" progression instead of an instant green check that lies
+  // about durability.
+  const confirmingSubmit = optimisticSubmit !== null && !hasDurableAnswers;
 
   return (
     <div
@@ -5794,10 +5999,24 @@ function ToolAskUserBody({
       data-answered={answered ? "true" : "false"}
     >
       {answered && (
-        <div className="run-tool-ask-status" role="status">
-          <span className="run-tool-ask-status-icon" aria-hidden="true">✓</span>
+        <div
+          className={`run-tool-ask-status${confirmingSubmit ? " run-tool-ask-status-pending" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-tool-ask-status-icon" aria-hidden="true">
+            {confirmingSubmit ? (
+              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+            ) : (
+              "✓"
+            )}
+          </span>
           <span className="run-tool-ask-status-label">
-            {completedWithoutAnswers ? "Answered" : "Your answer"}
+            {confirmingSubmit
+              ? "Submitted — waiting for Claude…"
+              : completedWithoutAnswers
+                ? "Answered"
+                : "Your answer"}
           </span>
         </div>
       )}
@@ -5805,14 +6024,23 @@ function ToolAskUserBody({
         const selectedLabels = selectedLabelsFor(q);
         const answeredNote = answeredNoteFor(q.question);
         const liveNote = notes[q.question] ?? "";
-        const showPreNotesField =
-          !answered &&
-          selectedLabels.length > 0 &&
-          q.options.some((opt) => opt.preview);
+        // The free-form textarea is always reachable when the question
+        // declares allowFreeForm=true. The legacy code gated this on
+        // "an option with a preview has been selected," which made the
+        // free-form path unreachable for the wild codex case
+        // (options=null + isOther=true → no preview, no selection → no
+        // textarea). Tank's Other path is a first-class affordance,
+        // not a side-effect of preview content.
+        const showFreeForm = !answered && q.allowFreeForm;
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
             {q.question && <p className="run-tool-ask-text">{q.question}</p>}
+            {q.options.length === 0 && q.allowFreeForm && !answered && (
+              <p className="run-tool-ask-text run-tool-ask-text-muted">
+                No options offered — answer below.
+              </p>
+            )}
             <div
               className="run-tool-ask-options"
               role={q.multiSelect ? "group" : "radiogroup"}
@@ -5871,16 +6099,25 @@ function ToolAskUserBody({
                 <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
               </div>
             )}
-            {showPreNotesField && (
+            {showFreeForm && (
               <label className="run-tool-ask-notes-label">
-                <span>Notes (optional)</span>
+                <span>
+                  {q.options.length === 0
+                    ? "Your answer"
+                    : "Say something else (optional)"}
+                </span>
                 <textarea
                   className="run-tool-ask-notes"
-                  rows={2}
+                  rows={q.options.length === 0 ? 4 : 2}
                   value={liveNote}
                   disabled={submitting}
                   onChange={(e) => setNoteFor(q.question, e.target.value)}
-                  placeholder="Add any context Claude should consider…"
+                  placeholder={
+                    q.options.length === 0
+                      ? "Type your answer…"
+                      : "Add a free-form reply or extra context…"
+                  }
+                  {...(q.secret ? { spellCheck: false, autoComplete: "off" } : {})}
                 />
               </label>
             )}
@@ -7380,6 +7617,11 @@ export function RunMessages({
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
       }
       if (g.kind === "meta") {
+        if (g.entry.metaKind === "needs_input_announcement") {
+          return (
+            <RunNeedsInputAnnouncement entry={g.entry} onOpenTurn={onOpenTurn} />
+          );
+        }
         return <RunMetaBlock entry={g.entry} />;
       }
       if (g.kind === "background_task") {
@@ -11098,6 +11340,42 @@ function ChatPane({
         // Keep the status-only detail when the response is not JSON.
       }
       throw new Error(detail);
+    }
+    // Patch the Turns-tab activity cache with the answer the user just
+    // submitted. The Turns view's activityEntriesByTurn is a one-shot
+    // fetch (loadActivityForTurn), so without this update the cached
+    // AskUserQuestion entry stays at toolStatus="started" with no
+    // askUserAnswers — the durable tool.approval_resolved that the
+    // backend persists never makes it into the Turns render. Chat tab
+    // is fine because it consumes the SSE stream and keeps refreshing
+    // sdkServerProjectedEntriesRef; Turns is the regression surface.
+    // We mirror the shape projectionAskUserAnswers emits, so when the
+    // durable update eventually lands the entry is byte-identical.
+    const projected: Record<string, AskUserQuestionAnswer> = {};
+    for (const [question, labels] of Object.entries(payload.answers)) {
+      if (!Array.isArray(labels) || labels.length === 0) continue;
+      const ann = payload.annotations?.[question];
+      const answer: AskUserQuestionAnswer = { labels };
+      if (typeof ann?.preview === "string" && ann.preview) answer.preview = ann.preview;
+      if (typeof ann?.notes === "string" && ann.notes) answer.notes = ann.notes;
+      projected[question] = answer;
+    }
+    if (Object.keys(projected).length > 0) {
+      setActivityEntriesByTurn((prev) => {
+        const cached = prev[turnID];
+        if (!cached) return prev;
+        let mutated = false;
+        const next = cached.map((cachedEntry) => {
+          if (cachedEntry.id !== entry.id) return cachedEntry;
+          mutated = true;
+          return {
+            ...cachedEntry,
+            toolStatus: "completed",
+            askUserAnswers: projected,
+          } as TranscriptEntry;
+        });
+        return mutated ? { ...prev, [turnID]: next } : prev;
+      });
     }
   }
 

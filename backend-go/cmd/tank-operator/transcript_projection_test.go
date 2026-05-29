@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	events := []map[string]any{
@@ -274,6 +277,145 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 			t.Fatalf("activity child leaked into main transcript: %#v", entry)
 		}
 	}
+}
+
+// TestProjectTranscriptEventsPromotesAskUserQuestionHandoff verifies the
+// projection synthesizes a meta-kind `needs_input_announcement` row in the
+// main transcript stream whenever an AskUserQuestion tool item is present,
+// and that the announcement is kept OUT of the Turn-activity compact so the
+// handoff stays visible whether the activity group is open or closed.
+//
+// Coverage:
+//   - announcement row's metaKind, title, and detail map from the question text
+//   - announcement.targetTurnId / targetProviderItemId / answered fields exist
+//   - announcement orderKey sorts immediately after the underlying tool item
+//   - the original tool item is still emitted (the question card lives in
+//     Turn activity; the announcement is a separate promotion row)
+//   - the announcement is excluded from terminalProjectedActivities and
+//     activeProjectedActivities — same opt-out shape as a user message
+func TestProjectTranscriptEventsPromotesAskUserQuestionHandoff(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "which?",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("ask-start", "002", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"kind":  "tool",
+			"name":  "AskUserQuestion",
+			"title": "AskUserQuestion",
+			"input": map[string]any{
+				"questions": []any{
+					map[string]any{
+						"question":      "Which auth method?",
+						"header":        "Auth",
+						"multiSelect":   false,
+						"allowFreeForm": true,
+						"secret":        false,
+						"options": []any{
+							map[string]any{"label": "OAuth", "description": "Use OAuth"},
+							map[string]any{"label": "API key", "description": "Use API key"},
+						},
+					},
+				},
+			},
+		}),
+		projectionTestEvent("ask-approval", "003", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"kind": "needs_input",
+			"name": "AskUserQuestion",
+			"input": map[string]any{
+				"questions": []any{
+					map[string]any{
+						"question":      "Which auth method?",
+						"header":        "Auth",
+						"multiSelect":   false,
+						"allowFreeForm": true,
+						"secret":        false,
+					},
+				},
+			},
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	var ann map[string]any
+	for _, entry := range projection.Entries {
+		if entry["metaKind"] == "needs_input_announcement" {
+			ann = entry
+			break
+		}
+	}
+	if ann == nil {
+		t.Fatalf("expected needs_input_announcement entry, got entries: %#v", projection.Entries)
+	}
+	meta, _ := ann["meta"].(map[string]any)
+	if meta["title"] != "Claude is waiting on you" {
+		t.Errorf("announcement title = %q, want Claude is waiting on you", meta["title"])
+	}
+	if got := meta["detail"]; got != "Which auth method?" {
+		t.Errorf("announcement detail = %q, want question text", got)
+	}
+	announcement, _ := ann["announcement"].(map[string]any)
+	if announcement["targetTurnId"] != "turn-1" {
+		t.Errorf("targetTurnId = %v, want turn-1", announcement["targetTurnId"])
+	}
+	if announcement["answered"] != false {
+		t.Errorf("answered = %v, want false for unresolved announcement", announcement["answered"])
+	}
+	if announcement["questionCount"] != 1 {
+		t.Errorf("questionCount = %v, want 1", announcement["questionCount"])
+	}
+	// Announcement orderKey must sort immediately after the tool item's
+	// orderKey so historical replay and live streaming agree on placement.
+	if !strings.HasSuffix(ann["orderKey"].(string), "~needs_input_announcement") {
+		t.Errorf("announcement orderKey = %q, want suffix ~needs_input_announcement", ann["orderKey"])
+	}
+}
+
+// TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution mirrors the
+// behavior the SPA depends on for historical context: after the user
+// answers, the announcement row keeps rendering with the "Answered" title
+// so a scroll-back through chat history shows where Claude paused and
+// that the user responded. The answered flag must come from durable
+// projection state (item.status == "completed" after the resolved event),
+// not from any in-flight React flag.
+func TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "decide",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("ask-approval", "002", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"kind": "needs_input",
+			"name": "AskUserQuestion",
+			"input": map[string]any{
+				"questions": []any{
+					map[string]any{
+						"question":      "Pick one",
+						"allowFreeForm": true,
+					},
+				},
+			},
+		}),
+		projectionTestEvent("ask-resolved", "003", "tool.approval_resolved", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"kind":     "needs_input",
+			"resolved": true,
+			"answers":  map[string]any{"Pick one": []any{"A"}},
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	for _, entry := range projection.Entries {
+		if entry["metaKind"] == "needs_input_announcement" {
+			meta := entry["meta"].(map[string]any)
+			if meta["title"] != "Answered" {
+				t.Errorf("answered announcement title = %q, want Answered", meta["title"])
+			}
+			ann := entry["announcement"].(map[string]any)
+			if ann["answered"] != true {
+				t.Errorf("answered = %v, want true after tool.approval_resolved", ann["answered"])
+			}
+			return
+		}
+	}
+	t.Fatalf("missing needs_input_announcement entry after resolution: %#v", projection.Entries)
 }
 
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {

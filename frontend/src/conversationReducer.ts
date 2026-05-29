@@ -36,6 +36,12 @@ export interface ConversationMessage {
   // agent-authored signal, but avatar identity still has to come from a
   // durable assigned avatar id rather than a client-side hash.
   originSessionId?: string;
+  // Authorship attribution for user-role messages submitted by a
+  // non-interactive principal (an auth.romaine.life bot token). "system"
+  // tells the renderer to draw the session's system identity instead of the
+  // human owner's Gravatar. Orthogonal to originSessionId, which takes
+  // precedence when both are present. See backend conversation.AuthorKind.
+  authorKind?: string;
   // Severity tag for system-role messages. session.status:failed events
   // with the extended payload (failure_scope=provider) carry this so
   // the renderer can style the bubble as an error rather than a
@@ -351,6 +357,7 @@ function applyUserMessage(
   const text = stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
   if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text) return state;
   const originSessionId = stringTopLevel(event, "origin_session_id");
+  const authorKind = stringTopLevel(event, "author_kind");
   const message: ConversationMessage = {
     id: event.timeline_id,
     role: "user",
@@ -363,6 +370,7 @@ function applyUserMessage(
     sourceEventId: event.event_id,
     createdAt: event.created_at,
     ...(originSessionId ? { originSessionId } : {}),
+    ...(authorKind ? { authorKind } : {}),
   };
   return {
     ...state,
