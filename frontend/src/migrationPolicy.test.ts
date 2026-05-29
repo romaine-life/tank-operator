@@ -377,6 +377,33 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   );
 });
 
+test("thinking bubble opens the turn view at the live turn bottom", () => {
+  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom"'), true);
+  assert.equal(
+    appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
+    true,
+  );
+  assert.equal(
+    appSource.includes("const [turnViewScrollRequest, setTurnViewScrollRequest]"),
+    true,
+  );
+  assert.equal(appSource.includes("scrollRequest?: TurnViewScrollRequest | null;"), true);
+  assert.equal(
+    appSource.includes("onScrollRequestConsumed?: (signal: number) => void;"),
+    true,
+  );
+  assert.equal(appSource.includes("scrollRequest={turnViewScrollRequest}"), true);
+  assert.equal(
+    appSource.includes("onScrollRequestConsumed={clearTurnViewScrollRequest}"),
+    true,
+  );
+  assert.equal(appSource.includes("if (loading && detailGroups.length === 0) return;"), true);
+  assert.equal(
+    appSource.includes('body.scrollTo({ top: body.scrollHeight, behavior: "auto" });'),
+    true,
+  );
+});
+
 test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
