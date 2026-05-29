@@ -55,6 +55,12 @@ type NewAsset struct {
 	CreatedBy      string
 }
 
+type UpdateAsset struct {
+	Name       string
+	Crop       Crop
+	AvatarMIME string
+}
+
 type Image struct {
 	MIME  string
 	Bytes []byte
@@ -65,6 +71,7 @@ type Store interface {
 	Get(ctx context.Context, id string) (Metadata, error)
 	Create(ctx context.Context, asset NewAsset) (Metadata, error)
 	Ensure(ctx context.Context, asset NewAsset) error
+	Update(ctx context.Context, id string, asset UpdateAsset) (Metadata, error)
 	Delete(ctx context.Context, id string) (Metadata, error)
 	// UpdateKind flips an avatar's kind between "agent" and "system".
 	// Implementations that own a per-owner shuffled deck (pgstore) MUST
@@ -146,6 +153,21 @@ func (s *MemoryStore) Ensure(_ context.Context, asset NewAsset) error {
 	}
 	s.createLocked(asset)
 	return nil
+}
+
+func (s *MemoryStore) Update(_ context.Context, id string, asset UpdateAsset) (Metadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, ok := s.records[id]
+	if !ok {
+		return Metadata{}, ErrNotFound
+	}
+	meta.Name = asset.Name
+	meta.Crop = asset.Crop
+	meta.AvatarMIME = asset.AvatarMIME
+	meta.UpdatedAt = time.Now().UTC()
+	s.records[id] = meta
+	return meta, nil
 }
 
 func (s *MemoryStore) createLocked(asset NewAsset) Metadata {

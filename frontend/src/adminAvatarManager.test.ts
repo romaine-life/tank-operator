@@ -4,6 +4,7 @@ import {
   avatarSaveErrorMessage,
   fetchAvatarViews,
   requestAvatarKindChange,
+  requestAvatarUpdate,
 } from "./AdminAvatarManager";
 
 test("avatar save errors include server attempt references", () => {
@@ -161,6 +162,66 @@ test("requestAvatarKindChange PATCHes /api/admin/avatars/{id}/kind with the requ
     assert.equal(observedBody, JSON.stringify({ kind: "system" }));
     assert.equal(observedAuth, "Bearer jwt");
     assert.equal(observedContentType, "application/json");
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
+  }
+});
+
+test("requestAvatarUpdate PATCHes /api/admin/avatars/{id} with multipart payload", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocalStorage = (globalThis as { localStorage?: Storage }).localStorage;
+  const storage = new Map<string, string>([["auth-romaine-jwt", "jwt"]]);
+
+  (globalThis as { localStorage?: Storage }).localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  } as Storage;
+
+  let observedMethod = "";
+  let observedURL = "";
+  let observedAuth = "";
+  let observedBody: BodyInit | null | undefined = null;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    observedURL = String(input);
+    observedMethod = String(init?.method ?? "GET");
+    observedBody = init?.body;
+    observedAuth = new Headers(init?.headers).get("Authorization") ?? "";
+    return jsonResponse({
+      id: "av_1",
+      kind: "agent",
+      name: "Ada",
+      avatar_url: "/api/avatars/av_1/image?v=123",
+      backing_url: "/api/avatars/av_1/backing",
+      crop: { center_x: 0.6, center_y: 0.4, size: 0.5 },
+      created_by: "admin@example.test",
+      created_at: "2026-05-25T00:00:00Z",
+      updated_at: "2026-05-25T00:01:00Z",
+    });
+  }) as typeof fetch;
+
+  try {
+    const payload = new FormData();
+    payload.set("name", "Ada");
+    payload.set("avatar", new Blob(["png"], { type: "image/png" }), "avatar.png");
+
+    const result = await requestAvatarUpdate("av_1", payload);
+
+    assert.deepEqual(result, { ok: true });
+    assert.equal(observedMethod, "PATCH");
+    assert.equal(observedURL, "/api/admin/avatars/av_1");
+    assert.equal(observedAuth, "Bearer jwt");
+    assert.equal(observedBody, payload);
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;

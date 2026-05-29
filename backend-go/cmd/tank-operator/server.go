@@ -144,6 +144,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/avatars/{avatar_id}/backing", s.handleGetAvatarBacking)
 	mux.HandleFunc("GET /api/admin/avatar-decks", s.handleGetAvatarDecks)
 	mux.HandleFunc("POST /api/admin/avatars", s.handleCreateAvatar)
+	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}", s.handleUpdateAvatar)
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}/kind", s.handleUpdateAvatarKind)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
 	// Admin-only durable support surface for avatar upload failures. The

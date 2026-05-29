@@ -122,6 +122,32 @@ func (s *AvatarAssetStore) Ensure(ctx context.Context, asset avatarassets.NewAss
 	return err
 }
 
+func (s *AvatarAssetStore) Update(ctx context.Context, id string, asset avatarassets.UpdateAsset) (avatarassets.Metadata, error) {
+	cropJSON, err := json.Marshal(asset.Crop)
+	if err != nil {
+		return avatarassets.Metadata{}, err
+	}
+	const q = `
+		UPDATE avatar_assets
+		SET name = $2,
+			crop = $3,
+			avatar_mime = $4,
+			updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL
+		RETURNING id, kind, name, crop, created_by, created_at, updated_at,
+			avatar_mime, coalesce(avatar_blob_key, ''),
+			backing_mime, coalesce(backing_blob_key, '')
+	`
+	meta, err := scanAvatarMetadata(s.pool.QueryRow(ctx, q, id, asset.Name, cropJSON, asset.AvatarMIME))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return avatarassets.Metadata{}, avatarassets.ErrNotFound
+		}
+		return avatarassets.Metadata{}, err
+	}
+	return meta, nil
+}
+
 // UpdateKind flips an avatar's kind and atomically removes the avatar's
 // unused entries from the OLD kind's deck cycles. Used deck entries stay
 // as historical record of which avatar was drawn for which session. The
