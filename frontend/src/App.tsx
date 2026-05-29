@@ -1,6 +1,7 @@
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AnchorHTMLAttributes,
+  ClipboardEvent as ReactClipboardEvent,
   ComponentProps,
   CSSProperties,
   DragEvent as ReactDragEvent,
@@ -187,6 +188,7 @@ import {
   workspacePathFromHref,
   type WorkspacePathTarget,
 } from "./workspaceLinks";
+import { normalizeTranscriptCopyText } from "./transcriptCopy";
 import {
   sessionContainerAvailable,
   sessionFilesAvailable,
@@ -7249,7 +7251,7 @@ function RunTurnActivityScreen({
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
           </div>
-          <div className="run-turn-view-body run-transcript run-transcript-claude">
+          <div className="run-turn-view-body run-transcript run-transcript-claude" onCopy={handleTranscriptCopy}>
             {loading && detailGroups.length === 0 ? (
               <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
                 <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
@@ -7276,6 +7278,40 @@ function RunTurnActivityScreen({
       )}
     </div>
   );
+}
+
+function rangeIntersectsNode(range: Range, node: Node): boolean {
+  try {
+    return range.intersectsNode(node);
+  } catch {
+    return false;
+  }
+}
+
+function selectionIntersectsTranscriptMessageText(
+  selection: Selection,
+  transcriptRoot: Element,
+): boolean {
+  const messageTextNodes = transcriptRoot.querySelectorAll('[data-slot="message-text"]');
+  for (let rangeIndex = 0; rangeIndex < selection.rangeCount; rangeIndex += 1) {
+    const range = selection.getRangeAt(rangeIndex);
+    for (const node of messageTextNodes) {
+      if (rangeIntersectsNode(range, node)) return true;
+    }
+  }
+  return false;
+}
+
+function handleTranscriptCopy(e: ReactClipboardEvent<HTMLElement>): void {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return;
+  const selectedText = selection.toString();
+  if (!selectedText) return;
+  const normalizedText = normalizeTranscriptCopyText(selectedText);
+  if (normalizedText === selectedText) return;
+  if (!selectionIntersectsTranscriptMessageText(selection, e.currentTarget)) return;
+  e.clipboardData.setData("text/plain", normalizedText);
+  e.preventDefault();
 }
 
 // RunMessages renders the durable transcript through react-virtuoso so the
@@ -7775,6 +7811,7 @@ export function RunMessages({
       ref={virtuosoRef}
       className="run-transcript run-transcript-claude"
       data-slot="root"
+      onCopy={handleTranscriptCopy}
       data={groups}
       customScrollParent={scrollParent ?? undefined}
       computeItemKey={computeKey}
