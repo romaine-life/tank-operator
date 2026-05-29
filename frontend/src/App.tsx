@@ -258,6 +258,7 @@ type TurnActivitySummary = {
   compactedEntryIds?: string[];
   startedAt?: string;
   completedAt?: string;
+  lastActivityAt?: string;
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
@@ -3654,6 +3655,7 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
     compactedEntryIds: normalizeStringArray(record.compactedEntryIds),
     startedAt: stringRecordValue(record, "startedAt"),
     completedAt: stringRecordValue(record, "completedAt"),
+    lastActivityAt: stringRecordValue(record, "lastActivityAt"),
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
@@ -3788,7 +3790,7 @@ type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string; lastActivityAt?: string }
   | {
       kind: "activity";
       id: string;
@@ -3862,6 +3864,7 @@ function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<Ent
     turnId,
     shell,
     startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,
+    lastActivityAt: turnActivityLastActivityAt(shell),
   };
 }
 
@@ -6555,10 +6558,41 @@ type TurnViewItem = {
   costEstimate: SessionCostEstimate | null;
   startedAt?: string;
   completedAt?: string;
+  lastActivityAt?: string;
 };
 
 function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
   return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
+}
+
+function turnEntryLastActivityTimestamp(entry: TranscriptEntry): string | undefined {
+  return entry.completedAt ?? entry.updatedAt ?? entry.turnTerminalAt ?? entry.time ?? entry.startedAt;
+}
+
+function latestTurnActivityTimestamp(entries: TranscriptEntry[]): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const timestamp = turnEntryLastActivityTimestamp(entries[index]!);
+    if (timestamp) return timestamp;
+  }
+  return undefined;
+}
+
+function turnActivityLastActivityAt(
+  shell: TranscriptEntry | undefined,
+  entries: TranscriptEntry[] = [],
+): string | undefined {
+  return (
+    shell?.activity?.lastActivityAt ??
+    latestTurnActivityTimestamp(entries) ??
+    // Older materialized turn_activity rows used completedAt as the active
+    // shell's latest child timestamp. Keep reading it so old rows still show
+    // a useful last-activity signal until they are re-projected.
+    shell?.activity?.completedAt ??
+    shell?.updatedAt ??
+    shell?.completedAt ??
+    shell?.time ??
+    shell?.startedAt
+  );
 }
 
 function buildTurnViewItems(
@@ -6618,6 +6652,7 @@ function buildTurnViewItems(
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.completedAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
+      const lastActivityAt = turnActivityLastActivityAt(shell, turnEntries);
       const isActive = turnId === active;
       const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
@@ -6631,16 +6666,16 @@ function buildTurnViewItems(
         costEstimate: isActive ? null : estimateTurnCost(costRows, modelId, turnId),
         startedAt,
         completedAt,
+        lastActivityAt,
       };
     });
 }
 
-// Formats elapsed milliseconds for the thinking indicator. Stays compact so
-// it sits naturally alongside the bouncing dots: sub-minute renders as
-// "12s", under an hour renders as "6m 12s", and an hour or longer collapses
-// the seconds slot to keep the visual width bounded ("1h 4m"). Negative
-// inputs clamp to zero so a clock skew between client and server never
-// produces a weird "-3s" while a turn is genuinely live.
+// Formats elapsed milliseconds for the thinking indicator. Stays compact:
+// sub-minute renders as "12s", under an hour renders as "6m 12s", and an
+// hour or longer collapses the seconds slot to keep the visual width bounded
+// ("1h 4m"). Negative inputs clamp to zero so a clock skew between client and
+// server never produces a weird "-3s" while a turn is genuinely live.
 function formatThinkingElapsed(ms: number): string {
   const clamped = ms > 0 ? ms : 0;
   const totalSeconds = Math.floor(clamped / 1000);
@@ -6651,6 +6686,26 @@ function formatThinkingElapsed(ms: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return `${hours}h ${minutes}m`;
+}
+
+function formatThinkingLastActivity(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms)) return "pending";
+  const clamped = ms > 0 ? ms : 0;
+  const totalSeconds = Math.floor(clamped / 1000);
+  if (totalSeconds < 5) return "now";
+  if (totalSeconds < 60) return `${totalSeconds}s ago`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ago`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h ago`;
+  const days = Math.floor(totalHours / 24);
+  return `${days}d ago`;
+}
+
+function parseOptionalTimestampMs(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // =====================================================================
@@ -6819,14 +6874,40 @@ function RunTurnThinkingDuration({
   );
 }
 
+function RunTurnThinkingLastActivity({
+  lastActivityAt,
+  turnId,
+}: {
+  lastActivityAt?: string;
+  turnId: string;
+}) {
+  const now = useTurnThinkingNow();
+  const activityMs = parseOptionalTimestampMs(lastActivityAt);
+  const value = formatThinkingLastActivity(activityMs === null ? null : now - activityMs);
+  const fullTime = lastActivityAt ? formatToolFullTime(lastActivityAt) : "";
+  return (
+    <span
+      className="run-turn-thinking-last-activity"
+      aria-live="off"
+      data-design-element="thinking-last-activity"
+      data-turn-id={turnId}
+      title={fullTime ? `Last activity ${fullTime}` : "Waiting for first projected activity"}
+    >
+      {value}
+    </span>
+  );
+}
+
 function RunTurnThinkingBubble({
   userKey,
   turnId,
+  lastActivityAt,
   avatar,
   onOpenTurn,
 }: {
   userKey: string;
   turnId: string;
+  lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string) => void;
 }) {
@@ -6848,12 +6929,17 @@ function RunTurnThinkingBubble({
         aria-label="Open turn"
         onClick={() => onOpenTurn?.(turnId)}
       >
-        <span className="run-turn-thinking-dots" aria-hidden="true">
-          <span>.</span>
-          <span>.</span>
-          <span>.</span>
+        <span className="run-turn-thinking-lines">
+          <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Runtime</span>
+            <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
+          </span>
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Last activity</span>
+            <RunTurnThinkingLastActivity lastActivityAt={lastActivityAt} turnId={turnId} />
+          </span>
         </span>
-        <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
       </button>
     </div>
   );
@@ -7262,12 +7348,17 @@ function RunTurnActivityScreen({
               </div>
             ) : selected.active && detailGroups.length === 0 ? (
               <div className="run-turn-view-thinking" aria-label="Turn is running">
-                <span className="run-turn-thinking-dots" aria-hidden="true">
-                  <span>.</span>
-                  <span>.</span>
-                  <span>.</span>
+                <span className="run-turn-thinking-lines">
+                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
+                  <span className="run-turn-thinking-meta-row">
+                    <span className="run-turn-thinking-meta-label">Runtime</span>
+                    <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
+                  </span>
+                  <span className="run-turn-thinking-meta-row">
+                    <span className="run-turn-thinking-meta-label">Last activity</span>
+                    <RunTurnThinkingLastActivity lastActivityAt={selected.lastActivityAt} turnId={selected.turnId} />
+                  </span>
                 </span>
-                <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
               </div>
             ) : detailGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
@@ -7698,6 +7789,7 @@ export function RunMessages({
           <RunTurnThinkingBubble
             userKey={userKey}
             turnId={g.turnId}
+            lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
           />

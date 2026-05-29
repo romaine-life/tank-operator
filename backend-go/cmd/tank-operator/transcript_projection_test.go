@@ -41,6 +41,9 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	if activity["toolCount"] != 1 || activity["childCount"] != 2 {
 		t.Fatalf("activity summary = %#v, want one tool and two child log entries", activity)
 	}
+	if activity["lastActivityAt"] == "" {
+		t.Fatalf("activity summary missing lastActivityAt: %#v", activity)
+	}
 	if activity["active"] == true || activity["status"] == "active" {
 		t.Fatalf("completed turn activity rendered active: %#v", activity)
 	}
@@ -181,6 +184,9 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 	activity := projection.Entries[1]["activity"].(map[string]any)
 	if activity["active"] != true {
 		t.Fatalf("activity summary active = %v, want true", activity["active"])
+	}
+	if activity["lastActivityAt"] == "" {
+		t.Fatalf("active activity summary missing lastActivityAt: %#v", activity)
 	}
 	if projection.Entries[0]["id"] == "turn-1:item:note" {
 		t.Fatalf("active assistant prose rendered as settled transcript row")
