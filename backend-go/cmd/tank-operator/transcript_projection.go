@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -482,6 +483,28 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 				index:    baseIndex + idx,
 			})
 		}
+		// Per the transcript contract, AskUserQuestion is a handoff back
+		// to the user — the agent stops until the user answers. Emit a
+		// companion meta-kind entry so the main transcript surface
+		// carries the "Claude is waiting on you" signal alongside the
+		// durable tool item that owns the full question UI in Turn
+		// activity. Without this, the question lives only inside the
+		// collapsible activity group, and the only chat-level attention
+		// signal is the session-row status dot.
+		//
+		// The announcement sorts immediately after the tool item via a
+		// derived orderKey suffix so historical replay and live streaming
+		// agree on placement. It is excluded from the Turn-activity
+		// compact (see isProjectionNeedsInputAnnouncement) so it stays
+		// in the main transcript stream regardless of whether the
+		// activity group is open or closed.
+		if announcement := projectNeedsInputAnnouncement(item); announcement != nil {
+			items = append(items, projectedEntryItem{
+				entry:    announcement,
+				orderKey: transcriptMapString(announcement, "orderKey"),
+				index:    baseIndex + idx,
+			})
+		}
 	}
 	baseIndex += len(s.items)
 	for idx, task := range s.backgroundTasks {
@@ -773,7 +796,8 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		var activityEntries []map[string]any
 		for _, idx := range indexes {
 			entry := entries[idx]
-			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) {
+			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
+				isProjectionNeedsInputAnnouncement(entry) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
@@ -795,7 +819,10 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string) []
 	}
 	var activityEntries []map[string]any
 	for _, entry := range entries {
-		if transcriptMapString(entry, "turnId") == activeTurnID && transcriptMapString(entry, "turnTerminalStatus") == "" && !isProjectedUserMessage(entry) {
+		if transcriptMapString(entry, "turnId") == activeTurnID &&
+			transcriptMapString(entry, "turnTerminalStatus") == "" &&
+			!isProjectedUserMessage(entry) &&
+			!isProjectionNeedsInputAnnouncement(entry) {
 			activityEntries = append(activityEntries, entry)
 		}
 	}
@@ -909,6 +936,136 @@ func projectedEntryIndex(entries []map[string]any, target map[string]any) int {
 
 func isProjectedUserMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "user"
+}
+
+// isProjectionNeedsInputAnnouncement is the activity-compact opt-out for
+// the AskUserQuestion handoff row projected by projectNeedsInputAnnouncement.
+// The announcement is a transcript-level handoff, not Turn-activity noise,
+// so terminalProjectedActivities and activeProjectedActivities must not
+// fold it into the activity compact. Same shape as the existing
+// isProjectedUserMessage opt-out — user messages and handoff
+// announcements both anchor the main transcript surface.
+func isProjectionNeedsInputAnnouncement(entry map[string]any) bool {
+	return transcriptMapString(entry, "kind") == "meta" &&
+		transcriptMapString(entry, "metaKind") == "needs_input_announcement"
+}
+
+// projectNeedsInputAnnouncement returns a meta-kind row that promotes an
+// AskUserQuestion item into the settled main transcript as a handoff
+// announcement, or nil if the item is not an AskUserQuestion tool call.
+//
+// Anchoring on the underlying item's orderKey (with a `~ann` suffix) keeps
+// historical replay and live streaming aligned on the same insertion point
+// — the announcement always renders immediately after the tool item it
+// references. `answered` is sourced from the durable item status, not from
+// any local "I submitted" flag, so a fresh tab opened after the user
+// answered shows the resolved announcement.
+func projectNeedsInputAnnouncement(item *projectionItem) map[string]any {
+	if !isProjectionAskUserQuestion(item) {
+		return nil
+	}
+	questions := projectionAskUserQuestionList(item)
+	if len(questions) == 0 {
+		return nil
+	}
+	summary := projectionAskUserQuestionSummary(questions)
+	answered := item.Status == "completed"
+	title := "Claude is waiting on you"
+	if answered {
+		title = "Answered"
+	}
+	orderKey := item.OrderKey
+	if orderKey != "" {
+		orderKey = orderKey + "~needs_input_announcement"
+	}
+	entry := map[string]any{
+		"id":             item.ID + ":needs_input_announcement",
+		"kind":           "meta",
+		"metaKind":       "needs_input_announcement",
+		"turnId":         item.TurnID,
+		"providerItemId": item.ProviderItemID,
+		"time":           projectionFirstNonEmpty(item.StartedAt, item.CreatedAt),
+		"orderKey":       orderKey,
+		"sourceEventId":  item.SourceEventID,
+		"meta": map[string]any{
+			"title":    title,
+			"detail":   summary,
+			"severity": "info",
+		},
+		"announcement": map[string]any{
+			"targetTurnId":           item.TurnID,
+			"targetProviderItemId":   item.ProviderItemID,
+			"targetTimelineId":       item.ID,
+			"questionSummary":        summary,
+			"questionCount":          len(questions),
+			"answered":               answered,
+		},
+	}
+	return entry
+}
+
+func isProjectionAskUserQuestion(item *projectionItem) bool {
+	if item == nil {
+		return false
+	}
+	if transcriptMapString(item.Payload, "name") == "AskUserQuestion" {
+		return true
+	}
+	if item.Title == "AskUserQuestion" {
+		return true
+	}
+	// Some adapter paths set payload.kind = needs_input without a name;
+	// fall back to detecting the questions[] payload that only
+	// AskUserQuestion produces.
+	if input := transcriptAnyMap(item.Payload["input"]); input != nil {
+		if questions, ok := input["questions"].([]any); ok && len(questions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func projectionAskUserQuestionList(item *projectionItem) []map[string]any {
+	if item == nil {
+		return nil
+	}
+	input := transcriptAnyMap(item.Payload["input"])
+	if input == nil {
+		return nil
+	}
+	raw, ok := input["questions"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, q := range raw {
+		if record, ok := q.(map[string]any); ok {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func projectionAskUserQuestionSummary(questions []map[string]any) string {
+	if len(questions) == 0 {
+		return "Open the Turns tab to answer."
+	}
+	first := questions[0]
+	text := transcriptMapString(first, "question")
+	if text == "" {
+		text = transcriptMapString(first, "header")
+	}
+	if text == "" {
+		text = "Open the Turns tab to answer."
+	}
+	if len([]rune(text)) > 140 {
+		runes := []rune(text)
+		text = string(runes[:137]) + "…"
+	}
+	if len(questions) > 1 {
+		return fmt.Sprintf("%s (+%d more)", text, len(questions)-1)
+	}
+	return text
 }
 
 func isProjectedAssistantMessage(entry map[string]any) bool {
