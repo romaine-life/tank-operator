@@ -74,6 +74,19 @@ export function estimateTranscriptCostUSD(rows: UsageRow[], modelId: string): nu
   return estimateTranscriptCost(rows, modelId)?.amountUsd ?? null;
 }
 
+export function estimateTurnCost(
+  rows: UsageRow[],
+  modelId: string,
+  turnId: string,
+): SessionCostEstimate | null {
+  const targetTurnId = turnId.trim();
+  if (!targetTurnId) return null;
+  return estimateTranscriptCost(
+    rows.filter((row) => row.turnId === targetTurnId),
+    modelId,
+  );
+}
+
 export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
   let total = 0;
   let reportedTurns = 0;
@@ -106,7 +119,17 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
 }
 
 export function formatComposerCostUsd(value: number): string {
+  return formatCostUsdAtCents(value);
+}
+
+export function formatTurnCostUsd(value: number): string {
+  return formatCostUsdAtCents(value);
+}
+
+function formatCostUsdAtCents(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (safeValue === 0) return "$0.00";
+  if (safeValue < 0.01) return "<$0.01";
   return `$${safeValue.toFixed(2)}`;
 }
 

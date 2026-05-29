@@ -203,7 +203,10 @@ import {
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 import {
   estimateTranscriptCost,
+  estimateTurnCost,
   formatComposerCostUsd,
+  formatTurnCostUsd,
+  type SessionCostEstimate,
   type SessionCostEstimateBasis,
 } from "./sessionCostEstimate";
 
@@ -1448,6 +1451,7 @@ interface ComposerCostEstimateProps {
   amountUsd: number | null;
   basis?: SessionCostEstimateBasis | null;
   placeholder?: boolean;
+  scopeLabel?: string;
   title?: string;
 }
 
@@ -1455,22 +1459,29 @@ function ComposerCostEstimate({
   amountUsd,
   basis = null,
   placeholder = false,
+  scopeLabel = "session",
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder || amountUsd === null;
-  const label = unavailable ? "$--" : formatComposerCostUsd(amountUsd);
+  const normalizedScope = scopeLabel.trim() || "session";
+  const label = unavailable
+    ? "$--"
+    : normalizedScope === "turn"
+      ? formatTurnCostUsd(amountUsd)
+      : formatComposerCostUsd(amountUsd);
+  const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage or transcript text is available"
     : basis === "visible_transcript"
-      ? `Estimated API-equivalent session token cost from visible transcript text: ${label}`
-      : `Estimated API-equivalent session token cost from provider usage: ${label}`;
+      ? `Estimated API-equivalent ${normalizedScope} token cost from visible transcript text: ${label}`
+      : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
       aria-label={
         unavailable
-          ? "Session cost estimate unavailable"
-          : `Estimated session cost ${label}`
+          ? `${sentenceScope} cost estimate unavailable`
+          : `Estimated ${normalizedScope} cost ${label}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
@@ -6541,6 +6552,7 @@ type TurnViewItem = {
   shell?: TranscriptEntry;
   active: boolean;
   loaded: boolean;
+  costEstimate: SessionCostEstimate | null;
   startedAt?: string;
   completedAt?: string;
 };
@@ -6553,13 +6565,26 @@ function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+  modelId: string,
 ): TurnViewItem[] {
   const order = new Map<string, number>();
   const shells = new Map<string, TranscriptEntry>();
   const rawEntries = new Map<string, TranscriptEntry[]>();
+  const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
+  const addCostRow = (entry: TranscriptEntry) => {
+    const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+    if (!turnId) return;
+    let rows = costRowsByTurn.get(turnId);
+    if (!rows) {
+      rows = new Map<string, TranscriptEntry>();
+      costRowsByTurn.set(turnId, rows);
+    }
+    rows.set(entry.id, entry);
+  };
   entries.forEach((entry, index) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
+    addCostRow(entry);
     if (!order.has(turnId)) order.set(turnId, index);
     if (isTurnActivityEntry(entry)) {
       shells.set(turnId, entry);
@@ -6570,6 +6595,9 @@ function buildTurnViewItems(
     bucket.push(entry);
     rawEntries.set(turnId, bucket);
   });
+  for (const loadedEntries of Object.values(activityEntriesByTurn)) {
+    for (const entry of loadedEntries ?? []) addCostRow(entry);
+  }
 
   const active = activeTurnId?.trim() ?? "";
   if (active && !order.has(active)) order.set(active, entries.length);
@@ -6590,6 +6618,8 @@ function buildTurnViewItems(
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.completedAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
+      const isActive = turnId === active;
+      const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
         turnId,
         label: `Turn ${index + 1}`,
@@ -6598,6 +6628,7 @@ function buildTurnViewItems(
         shell,
         active: turnId === active,
         loaded: Boolean(loadedEntries),
+        costEstimate: isActive ? null : estimateTurnCost(costRows, modelId, turnId),
         startedAt,
         completedAt,
       };
@@ -7215,6 +7246,13 @@ function RunTurnActivityScreen({
             <span>{selected.summary}</span>
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+            {!selected.active && selected.costEstimate && (
+              <ComposerCostEstimate
+                amountUsd={selected.costEstimate.amountUsd}
+                basis={selected.costEstimate.basis}
+                scopeLabel="turn"
+              />
+            )}
           </div>
           <div className="run-turn-view-body run-transcript run-transcript-claude" onCopy={handleTranscriptCopy}>
             {loading && detailGroups.length === 0 ? (
@@ -11084,9 +11122,19 @@ function ChatPane({
     ],
     [activeBackgroundEntries, detachedShellEntries],
   );
+  const appliedModelId = (session.runtime_model ?? "").trim();
+  const modelForContext = selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
+    ? DEFAULT_CODEX_MODEL_ID
+    : selectedModelId;
+  const modelForCostEstimate = appliedModelId || modelForContext;
   const turnViewItems = useMemo(
-    () => buildTurnViewItems(renderedEntries, renderedActiveTurnId, activityEntriesByTurn),
-    [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
+    () => buildTurnViewItems(
+      renderedEntries,
+      renderedActiveTurnId,
+      activityEntriesByTurn,
+      modelForCostEstimate,
+    ),
+    [activityEntriesByTurn, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -11193,7 +11241,6 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
-  const appliedModelId = (session.runtime_model ?? "").trim();
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredDisplayModelId =
@@ -11210,11 +11257,7 @@ function ChatPane({
   const modelChipTitle = hasAppliedRuntimeConfig
     ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
-  const modelForContext = selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
-    ? DEFAULT_CODEX_MODEL_ID
-    : selectedModelId;
   const contextWindow = getContextWindow(modelForContext);
-  const modelForCostEstimate = appliedModelId || modelForContext;
   const sessionCostEstimate = useMemo(
     () => estimateTranscriptCost(entries, modelForCostEstimate),
     [entries, modelForCostEstimate],

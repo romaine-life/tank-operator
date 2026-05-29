@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   estimateTranscriptCost,
   estimateTranscriptCostUSD,
+  estimateTurnCost,
   estimateUsageCostUSD,
   formatComposerCostUsd,
+  formatTurnCostUsd,
 } from "./sessionCostEstimate";
 
 function assertNearlyEqual(actual: number | null, expected: number): void {
@@ -99,10 +101,31 @@ test("reported usage wins over visible text fallback for the same turn", () => {
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
 });
 
+test("estimates one selected turn from mixed transcript rows", () => {
+  const estimate = estimateTurnCost([
+    { id: "a", turnId: "turn-1", turnUsage: { input_tokens: 10_000, output_tokens: 10_000 } },
+    { id: "b", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
+    { id: "c", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
+  ], "gpt-5.4-mini", "turn-2");
+
+  assert.equal(estimate?.basis, "reported_usage");
+  assertNearlyEqual(estimate?.amountUsd ?? null, 0.0105);
+});
+
 test("formats compact composer costs", () => {
   assert.equal(formatComposerCostUsd(0), "$0.00");
+  assert.equal(formatComposerCostUsd(0.00012), "<$0.01");
+  assert.equal(formatComposerCostUsd(0.0012), "<$0.01");
   assert.equal(formatComposerCostUsd(0.01234), "$0.01");
   assert.equal(formatComposerCostUsd(0.025), "$0.03");
   assert.equal(formatComposerCostUsd(1.2345), "$1.23");
   assert.equal(formatComposerCostUsd(12.345), "$12.35");
+});
+
+test("formats tiny turn costs without rounding nonzero usage to zero", () => {
+  assert.equal(formatTurnCostUsd(0), "$0.00");
+  assert.equal(formatTurnCostUsd(0.000012), "<$0.01");
+  assert.equal(formatTurnCostUsd(0.00012), "<$0.01");
+  assert.equal(formatTurnCostUsd(0.0012), "<$0.01");
+  assert.equal(formatTurnCostUsd(0.012), "$0.01");
 });
