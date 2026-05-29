@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  answersForCodexAppServer,
   dispatch,
   interruptTargetMatchesTurn,
   Runner,
@@ -176,6 +177,20 @@ test("pending Codex interrupts are consumed when their turn becomes current", ()
     { target_turn_id: "client-other", client_nonce: "client-other" },
   ]);
   assert.equal(takePendingInterruptForTurn(pendingInterrupts, turn), null);
+});
+
+test("answersForCodexAppServer includes free-form notes in provider-visible answers", () => {
+  assert.deepEqual(
+    answersForCodexAppServer(["Personality (Recommended)"], {
+      notes: "ask about chat box behavior",
+    }),
+    ["Personality (Recommended)", "Additional context: ask about chat box behavior"],
+  );
+  assert.deepEqual(
+    answersForCodexAppServer(["Other"], { notes: "use this as the answer" }),
+    ["use this as the answer"],
+  );
+  assert.deepEqual(answersForCodexAppServer(["Care"], { notes: "   " }), ["Care"]);
 });
 
 test("threadOptionsForCommand forwards first-turn Codex model and effort", () => {
