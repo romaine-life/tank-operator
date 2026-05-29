@@ -2801,6 +2801,11 @@ function isToolSearchEntry(entry: TranscriptEntry): boolean {
   return normalized.includes("toolsearch");
 }
 
+function isWebToolName(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  return normalized === "websearch" || normalized === "webfetch";
+}
+
 /** Map a tool entry to a Lucide icon + badge treatment. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
@@ -2840,7 +2845,7 @@ function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   if (name === "ExitPlanMode" || name === "EnterPlanMode") {
     return { Icon: ClipboardListIcon, colorClass: "tool-color-plan", tooltip: "Planning mode tool call" };
   }
-  if (name === "WebFetch" || name === "WebSearch") {
+  if (isWebToolName(name)) {
     return { Icon: GlobeIcon, colorClass: "tool-color-search", tooltip: "Web tool call" };
   }
   if (name === "Monitor") {

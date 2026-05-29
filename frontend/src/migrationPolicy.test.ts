@@ -589,6 +589,17 @@ test("background stop controls exclude untracked detached shells", () => {
   assert.match(appSource, /\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/);
 });
 
+test("web search transcript tools use the web glyph", () => {
+  assert.match(
+    appSource,
+    /function isWebToolName\(name: string\): boolean \{[\s\S]*normalized === "websearch"[\s\S]*normalized === "webfetch"[\s\S]*\}/,
+  );
+  assert.match(
+    appSource,
+    /if \(isWebToolName\(name\)\) \{\s+return \{ Icon: GlobeIcon, colorClass: "tool-color-search", tooltip: "Web tool call" \};\s+\}/,
+  );
+});
+
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
