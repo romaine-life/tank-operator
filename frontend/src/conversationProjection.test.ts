@@ -630,6 +630,26 @@ test("canonical duplicate delivery converges before projection", () => {
   assert.equal(projection.failed, false);
 });
 
+test("projects author_kind onto the user message entry", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        timeline_id: "turn-1:user",
+        client_nonce: "bot-1",
+        payload: { text: "posted via bot token" },
+        author_kind: "system",
+      } as Partial<TankConversationEvent>),
+    ]),
+  );
+
+  assert.equal(projection.entries.length, 1);
+  assert.equal(projection.entries[0]?.kind, "message");
+  if (projection.entries[0]?.kind === "message") {
+    assert.equal(projection.entries[0].authorKind, "system");
+  }
+});
+
 test("projects durable skill invocation display metadata", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

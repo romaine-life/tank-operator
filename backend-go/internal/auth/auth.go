@@ -38,6 +38,16 @@ type User struct {
 	// be owned by the same human who owns pod X's parent session).
 	// Empty for human roles; the human's own email is in Email.
 	ActorEmail string
+	// Purpose mirrors the optional auth.romaine.life `purpose` claim. The
+	// only value tank-operator acts on is "bot": auth.romaine.life's
+	// "Mint bot token" break-glass flow stamps purpose=bot on a 24h
+	// admin JWT that carries the admin's own email (no actor_email - it
+	// is not a service principal). Tank uses this purely to attribute
+	// turns submitted by automation rather than an interactive human, so
+	// the transcript renders the session's system identity instead of the
+	// human owner's Gravatar. It grants no authority of its own; the role
+	// claim is still the access gate. Empty for ordinary browser sign-ins.
+	Purpose string
 }
 
 const (
@@ -45,6 +55,10 @@ const (
 	RoleUser    = "user"
 	RoleService = "service"
 )
+
+// PurposeBot is the auth.romaine.life `purpose` claim value carried by
+// admin "bot" tokens minted through the break-glass console. See User.Purpose.
+const PurposeBot = "bot"
 
 // allowedRoles is the closed set of roles this service accepts from
 // auth.romaine.life. auth.romaine.life mints `pending` by default for any
@@ -60,6 +74,12 @@ var allowedRoles = map[string]struct{}{
 
 // IsService reports whether the user is a k8s service principal.
 func (u User) IsService() bool { return u.Role == RoleService }
+
+// IsBot reports whether the caller authenticated with an auth.romaine.life
+// bot token (purpose=bot). Used only for transcript authorship attribution -
+// a bot-authored turn is rendered as the session's system identity rather
+// than the human owner. Not an authorization signal.
+func (u User) IsBot() bool { return u.Purpose == PurposeBot }
 
 // IsHuman reports whether the user is a human (admin or user, not a
 // service principal). Use this to gate routes that must reject service
@@ -125,10 +145,11 @@ func (v *Verifier) Decode(tokenString string) (User, error) {
 		return User{}, errHTTP{status: http.StatusForbidden, message: "role not accepted: " + role}
 	}
 	user := User{
-		Sub:   stringClaim(claims, "sub"),
-		Email: email,
-		Name:  stringClaim(claims, "name"),
-		Role:  role,
+		Sub:     stringClaim(claims, "sub"),
+		Email:   email,
+		Name:    stringClaim(claims, "name"),
+		Role:    role,
+		Purpose: strings.ToLower(strings.TrimSpace(stringClaim(claims, "purpose"))),
 	}
 	if role == RoleService {
 		// Service principals MUST carry an actor_email claim - without it

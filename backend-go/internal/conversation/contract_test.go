@@ -126,6 +126,82 @@ func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
 	}
 }
 
+func TestUserSubmissionEventMapsStampsAuthorKind(t *testing.T) {
+	// A turn submitted by a non-interactive principal (an auth.romaine.life
+	// bot token) carries author_kind=system on both boundary events so the
+	// frontend attributes the user bubble to the session's system identity
+	// instead of the human owner's Gravatar. Human-typed turns leave the
+	// field absent, which is indistinguishable from today's behavior.
+	tests := []struct {
+		name     string
+		kind     string
+		expected string
+	}{
+		{name: "bot authored", kind: string(AuthorKindSystem), expected: string(AuthorKindSystem)},
+		{name: "human authored", kind: "", expected: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, events, err := UserSubmissionEventMaps(UserSubmissionArgs{
+				SessionID:   "63",
+				Email:       "human@example.com",
+				ClientNonce: "nonce-1",
+				Text:        "hello",
+				Runtime:     "claude",
+				AuthorKind:  tt.kind,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("want 2 events, got %d", len(events))
+			}
+			for _, event := range events {
+				got, _ := event["author_kind"].(string)
+				if got != tt.expected {
+					t.Fatalf("event %q author_kind = %q, want %q", event["type"], got, tt.expected)
+				}
+				// validateEventMap must accept the stamped user_message.created.
+				if event["type"] == string(EventUserMessageCreated) {
+					if err := ValidateEventMap(event); err != nil {
+						t.Fatalf("validate user_message.created: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestValidateUserMessageRejectsUnknownAuthorKind(t *testing.T) {
+	// Backend is the sole producer of these events and only ever stamps the
+	// known value; an unknown author_kind signals a producer regression and
+	// must be rejected loudly rather than silently rendered.
+	_, events, err := UserSubmissionEventMaps(UserSubmissionArgs{
+		SessionID:   "63",
+		Email:       "human@example.com",
+		ClientNonce: "nonce-1",
+		Text:        "hello",
+		Runtime:     "claude",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userMessage map[string]any
+	for _, event := range events {
+		if event["type"] == string(EventUserMessageCreated) {
+			userMessage = event
+			break
+		}
+	}
+	if userMessage == nil {
+		t.Fatal("user_message.created event missing")
+	}
+	userMessage["author_kind"] = "intern"
+	if err := ValidateEventMap(userMessage); err == nil {
+		t.Fatal("expected validation to reject unknown author_kind, got nil")
+	}
+}
+
 func TestValidateEventMapRejectsMalformedPerTypeEvents(t *testing.T) {
 	valid := map[string]any{
 		"event_id":     "evt-1",

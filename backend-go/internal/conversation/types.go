@@ -20,6 +20,30 @@ const (
 	ActorRunner    Actor = "runner"
 )
 
+// AuthorKind classifies the principal that authored a user-side turn when it
+// is NOT the interactive human session owner. It rides as the top-level
+// `author_kind` field on user_message.created (and turn.submitted) events and
+// is orthogonal to origin_session_id:
+//
+//   - absent          -> the interactive human owner typed it; the renderer
+//     draws the owner's Gravatar (unchanged default).
+//   - AuthorKindSystem -> a non-interactive principal submitted it: the
+//     k8s-exchange service identity that launches
+//     sessions (role=service) or a human-minted
+//     break-glass token (purpose=bot). The renderer
+//     draws the session's system identity instead of
+//     the human owner. See cmd/tank-operator
+//     authorKindForUser for the edge mapping.
+//
+// origin_session_id (a sibling tank-operator session via the mcp-tank-operator
+// handoff) takes precedence when both are present. AuthorKind carries no
+// authority; it is purely a durable authorship signal for the transcript.
+type AuthorKind string
+
+const (
+	AuthorKindSystem AuthorKind = "system"
+)
+
 type Source string
 
 const (
@@ -243,6 +267,9 @@ func validateUserMessageCreated(event map[string]any) error {
 	}
 	if Actor(stringField(event, "actor")) != ActorUser || Source(stringField(event, "source")) != SourceTank {
 		return fmt.Errorf("user_message.created must be actor=user source=tank")
+	}
+	if kind := stringField(event, "author_kind"); kind != "" && AuthorKind(kind) != AuthorKindSystem {
+		return fmt.Errorf("author_kind must be empty or %q, got %q", AuthorKindSystem, kind)
 	}
 	payload, err := requirePayload(event)
 	if err != nil {

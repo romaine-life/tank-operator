@@ -274,6 +274,11 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // RunMessageBubble uses this as an agent-authored signal, but it must
   // not synthesize a local avatar identity from the id.
   originSessionId?: string;
+  // For user-role messages submitted by a non-interactive principal (an
+  // auth.romaine.life bot token): "system". RunMessageBubble renders the
+  // session's system identity for these instead of the human owner's
+  // Gravatar. originSessionId takes precedence when both are present.
+  authorKind?: string;
   // Durable AskUserQuestion answers + annotations, sourced from the
   // `tool.approval_resolved` event payload via conversationProjection.
   // ToolAskUserBody reads this for the answered state so the UI matches
@@ -5011,6 +5016,22 @@ function RunMessageBubble({
                 avatar={getSessionAvatarByID(null)}
                 className="run-msg-ai-icon"
               />
+            </span>
+          );
+        }
+        // Bot-authored turn (auth.romaine.life bot token). Attribute it to
+        // the session's system identity rather than borrowing the human
+        // owner's Gravatar. Mirrors the system-message avatar (the
+        // configured system avatar, BotIcon fallback) so automation reads
+        // as the system user that launches the session.
+        if (entry.authorKind === "system") {
+          return (
+            <span className="run-msg-avatar" data-author-kind="system">
+              {systemAvatar ? (
+                <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+              ) : (
+                <BotIcon size={16} strokeWidth={2.1} />
+              )}
             </span>
           );
         }
