@@ -122,8 +122,8 @@ test("formats compact composer costs", () => {
 
 test("formats tiny turn costs without rounding nonzero usage to zero", () => {
   assert.equal(formatTurnCostUsd(0), "$0.00");
-  assert.equal(formatTurnCostUsd(0.000012), "<$0.0001");
-  assert.equal(formatTurnCostUsd(0.00012), "$0.0001");
-  assert.equal(formatTurnCostUsd(0.0012), "$0.001");
+  assert.equal(formatTurnCostUsd(0.000012), "<$0.01");
+  assert.equal(formatTurnCostUsd(0.00012), "<$0.01");
+  assert.equal(formatTurnCostUsd(0.0012), "<$0.01");
   assert.equal(formatTurnCostUsd(0.012), "$0.01");
 });

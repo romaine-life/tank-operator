@@ -126,9 +126,7 @@ export function formatComposerCostUsd(value: number): string {
 export function formatTurnCostUsd(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (safeValue === 0) return "$0.00";
-  if (safeValue < 0.0001) return "<$0.0001";
-  if (safeValue < 0.001) return `$${safeValue.toFixed(4)}`;
-  if (safeValue < 0.01) return `$${safeValue.toFixed(3)}`;
+  if (safeValue < 0.01) return "<$0.01";
   return formatComposerCostUsd(safeValue);
 }
 
