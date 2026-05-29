@@ -82,6 +82,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   placeholder for that turn. The browser must not hide the `...` row while
   waiting for a separately-delivered activity summary to set the same active
   turn id.
+- The running placeholder's active state comes from that shell, but its chat
+  placement follows the latest visible row for the same turn. Companion rows
+  that intentionally stay in the main transcript, such as answered
+  AskUserQuestion handoffs, must not be visually overtaken by a placeholder
+  anchored to the shell's earlier compacted-activity order.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.

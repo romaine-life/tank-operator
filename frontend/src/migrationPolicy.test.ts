@@ -265,6 +265,14 @@ test("server-projected active turn activity shells own thinking row active state
   assert.equal(chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'), true);
 });
 
+test("active turn thinking row follows the latest visible turn row", () => {
+  assert.equal(appSource.includes("function insertActiveTurnThinkingGroups"), true);
+  assert.equal(appSource.includes("function entryGroupIncludesTurn"), true);
+  assert.equal(appSource.includes("pendingThinkingFallbackIndexes.set(group.turnId, groups.length)"), true);
+  assert.equal(appSource.includes("latestTurnGroupIndex + 1"), true);
+  assert.equal(appSource.includes("groups.push(turnThinkingGroup(group.turnId, entry));"), false);
+});
+
 test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
   assert.equal(appSource.includes("buildTurnViewItems"), true);
