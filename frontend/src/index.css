@@ -6217,6 +6217,7 @@ textarea.run-files-viewer-editor:focus {
   font-size: var(--run-chat-font-code-xs);
   color: var(--text-muted);
   opacity: 0;
+  user-select: none;
   transition: opacity var(--motion-fast, 140ms) ease;
 }
 
