@@ -310,11 +310,14 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   // indicator keeps "Thinking..." as the primary state, with duration and
   // last-activity metadata under it.
   //
-  // Runtime prefers the durable projected turn start once it is available,
-  // with a client-observed stopwatch as the pre-projection fallback. It
-  // must never be shorter than the last-activity age, so the resolver clamps
-  // the start candidate to the last-activity timestamp when activity is older
-  // than the current start.
+  // The timer is a purely client-side stopwatch anchored to the first
+  // moment the UI renders the bubble for a (user, turn) pair. Backend
+  // timestamps are intentionally NOT consulted — earlier revisions tried
+  // and kept getting ambushed by a moving `activity.startedAt`, stale
+  // sessionStorage from previous tabs, or empty values during the
+  // pre-projection window. The anchor is captured eagerly on first read
+  // and mirrored to sessionStorage so a mid-turn refresh keeps counting
+  // from the same baseline.
   assert.equal(appSource.includes("function formatThinkingElapsed"), true);
   assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
   assert.equal(appSource.includes("function formatThinkingLastActivity"), true);
@@ -324,27 +327,26 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   assert.equal(appSource.includes("run-turn-thinking-duration"), true);
   assert.equal(appSource.includes("run-turn-thinking-last-activity"), true);
   assert.equal(appSource.includes("lastActivityAt"), true);
-  assert.equal(appSource.includes("startedAt"), true);
   assert.match(
     appSource,
-    /<RunTurnThinkingBubble[\s\S]{0,320}userKey=\{userKey\}[\s\S]{0,120}turnId=\{g\.turnId\}[\s\S]{0,120}startedAt=\{g\.startedAt\}/,
+    /<RunTurnThinkingBubble[\s\S]{0,260}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/,
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingDuration[\s\S]{0,160}userKey=\{userKey\}[\s\S]{0,80}turnId=\{selected\.turnId\}[\s\S]{0,120}startedAt=\{selected\.startedAt\}[\s\S]{0,120}lastActivityAt=\{selected\.lastActivityAt\}/,
+    /<RunTurnThinkingDuration userKey=\{userKey\} turnId=\{selected\.turnId\}/,
   );
   assert.match(
     appSource,
     /<RunTurnThinkingLastActivity lastActivityAt=\{selected\.lastActivityAt\} turnId=\{selected\.turnId\}/,
   );
+  // No backend timestamp should leak into the timer's anchor — the
+  // resolver takes only (userKey, turnId) and never reads a startedAt
+  // prop. If a future refactor tries to add one back, this assertion
+  // makes it visible.
   assert.match(
     appSource,
-    /function resolveTurnThinkingStart\(\s*userKey: string,\s*turnId: string,\s*startedAt: string \| undefined,\s*lastActivityAt: string \| undefined,\s*\): number/,
+    /function resolveTurnThinkingStart\(userKey: string, turnId: string\): number/,
   );
-  assert.equal(appSource.includes("const projectedStartMs = parseOptionalTimestampMs(startedAt);"), true);
-  assert.equal(appSource.includes("const lastActivityMs = parseOptionalTimestampMs(lastActivityAt);"), true);
-  assert.equal(appSource.includes("if (lastActivityMs !== null && lastActivityMs < startMs)"), true);
-  assert.equal(appSource.includes("function resolveClientTurnThinkingStart"), true);
   assert.equal(appSource.includes("turnThinkingStartCache"), true);
   assert.equal(appSource.includes("resolveTurnThinkingStart"), true);
   assert.equal(

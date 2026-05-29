@@ -6722,19 +6722,25 @@ function parseOptionalTimestampMs(value: string | undefined): number | null {
 // =====================================================================
 // Thinking-bubble elapsed-time timer.
 //
-// Runtime and last activity need to agree semantically: the turn runtime
-// cannot be shorter than "last activity ago." The preferred anchor is the
-// durable `activity.startedAt` timestamp. Before that projection lands, the
-// UI falls back to a client-observed stopwatch anchored to the first render
-// for a given (user, turn) pair and mirrored to `sessionStorage` so a mid-turn
-// refresh keeps counting from the same local baseline.
+// Earlier revisions tried to anchor the timer to the backend's
+// projected `activity.startedAt`. That source kept ambushing the timer
+// — it could be empty before the first activity event landed, it could
+// flip values mid-flight when the projection's `first` entry changed,
+// and any stale `sessionStorage` from a previous tab could end up
+// pinned at an "earlier than reality" baseline. Symptoms included
+// "stuck at 0s forever", "stuck at a value that's higher than time
+// since submit", and "lag before the seconds start ticking up".
 //
-// The final runtime anchor is clamped to the last-activity timestamp when
-// activity predates the current start candidate. That covers the bootstrap
-// window where the UI first sees a running turn after activity has already
-// been projected, preventing impossible readouts like "Runtime 10s" with
-// "Last activity 20s ago." A `useSyncExternalStore` ticker drives one-second
-// re-renders for every concurrent bubble off a single shared interval.
+// New approach (per user direction): the timer is a purely client-side
+// stopwatch anchored to **the first moment the UI renders the bubble
+// for a given (user, turn) pair**. Backend timestamps are no longer
+// consulted. The anchor is captured eagerly in module-level state on
+// the first read for the pair and mirrored to `sessionStorage` so a
+// mid-turn refresh keeps the same anchor. A `useSyncExternalStore`
+// ticker drives one-second re-renders for every concurrent bubble off
+// a single shared interval — there is no per-component setInterval,
+// so Virtuoso remounting an item can never clear the interval before
+// it fires.
 //
 // Keying by user email avoids cross-account contamination: if user A
 // signs out and user B signs in within the same browser tab,
@@ -6774,9 +6780,9 @@ function writePersistedTurnThinkingStart(cacheKey: string, value: number): void 
 
 // Lazily capture the very first wall-clock moment the UI renders the
 // thinking bubble for a (user, turn) pair. The capture is idempotent —
-// subsequent calls always return the same number. This local anchor is only
-// used while the durable turn-start timestamp is unavailable.
-function resolveClientTurnThinkingStart(userKey: string, turnId: string): number {
+// subsequent calls always return the same number. This is the entire
+// anchor for the stopwatch; no backend timestamp participates.
+function resolveTurnThinkingStart(userKey: string, turnId: string): number {
   const cacheKey = turnThinkingStartCacheKey(userKey, turnId);
   const fromMemory = turnThinkingStartCache.get(cacheKey);
   if (fromMemory != null) return fromMemory;
@@ -6789,21 +6795,6 @@ function resolveClientTurnThinkingStart(userKey: string, turnId: string): number
   turnThinkingStartCache.set(cacheKey, now);
   writePersistedTurnThinkingStart(cacheKey, now);
   return now;
-}
-
-function resolveTurnThinkingStart(
-  userKey: string,
-  turnId: string,
-  startedAt: string | undefined,
-  lastActivityAt: string | undefined,
-): number {
-  const projectedStartMs = parseOptionalTimestampMs(startedAt);
-  const lastActivityMs = parseOptionalTimestampMs(lastActivityAt);
-  let startMs = projectedStartMs ?? resolveClientTurnThinkingStart(userKey, turnId);
-  if (lastActivityMs !== null && lastActivityMs < startMs) {
-    startMs = lastActivityMs;
-  }
-  return startMs;
 }
 
 // Shared 1-second ticker driven through `useSyncExternalStore`. One
@@ -6874,25 +6865,20 @@ function useTurnThinkingNow(): number {
 function RunTurnThinkingDuration({
   userKey,
   turnId,
-  startedAt,
-  lastActivityAt,
 }: {
   userKey: string;
   turnId: string;
-  startedAt?: string;
-  lastActivityAt?: string;
 }) {
-  const startMs = resolveTurnThinkingStart(userKey, turnId, startedAt, lastActivityAt);
+  const startMs = resolveTurnThinkingStart(userKey, turnId);
   const now = useTurnThinkingNow();
   const elapsed = formatThinkingElapsed(now - startMs);
-  const startIso = new Date(startMs).toISOString();
   return (
     <span
       className="run-turn-thinking-duration"
       aria-live="off"
       data-design-element="thinking-duration"
       data-turn-id={turnId}
-      title={`Runtime since ${formatToolFullTime(startIso)}`}
+      title={`UI timer started ${new Date(startMs).toLocaleTimeString()}`}
     >
       {elapsed}
     </span>
@@ -6926,14 +6912,12 @@ function RunTurnThinkingLastActivity({
 function RunTurnThinkingBubble({
   userKey,
   turnId,
-  startedAt,
   lastActivityAt,
   avatar,
   onOpenTurn,
 }: {
   userKey: string;
   turnId: string;
-  startedAt?: string;
   lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
@@ -6960,12 +6944,7 @@ function RunTurnThinkingBubble({
           <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Runtime</span>
-            <RunTurnThinkingDuration
-              userKey={userKey}
-              turnId={turnId}
-              startedAt={startedAt}
-              lastActivityAt={lastActivityAt}
-            />
+            <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
           </span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Last activity</span>
@@ -7412,12 +7391,7 @@ function RunTurnActivityScreen({
                   <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
                   <span className="run-turn-thinking-meta-row">
                     <span className="run-turn-thinking-meta-label">Runtime</span>
-                    <RunTurnThinkingDuration
-                      userKey={userKey}
-                      turnId={selected.turnId}
-                      startedAt={selected.startedAt}
-                      lastActivityAt={selected.lastActivityAt}
-                    />
+                    <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
                   </span>
                   <span className="run-turn-thinking-meta-row">
                     <span className="run-turn-thinking-meta-label">Last activity</span>
@@ -7854,7 +7828,6 @@ export function RunMessages({
           <RunTurnThinkingBubble
             userKey={userKey}
             turnId={g.turnId}
-            startedAt={g.startedAt}
             lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
