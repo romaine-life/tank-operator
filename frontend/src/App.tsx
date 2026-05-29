@@ -3932,12 +3932,16 @@ function isTurnActivityEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "turn_activity" && Boolean(entry.turnId);
 }
 
+function transcriptEntryTurnId(entry: TranscriptEntry): string {
+  return (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+}
+
 function createTurnActivityEntryGroup(
   entry: TranscriptEntry,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
   activeTurnId: string | null,
 ): Extract<EntryGroup, { kind: "activity" }> | null {
-  const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+  const turnId = transcriptEntryTurnId(entry);
   if (!turnId) return null;
   const entries = activityEntriesByTurn[turnId] ?? [];
   return {
@@ -3971,6 +3975,43 @@ function groupFlatTranscriptEntries(entries: TranscriptEntry[]): FlatEntryGroup[
   return groups;
 }
 
+function entryGroupIncludesTurn(group: EntryGroup, turnId: string): boolean {
+  if (!turnId) return false;
+  if (group.kind === "thinking" || group.kind === "activity") {
+    return group.turnId === turnId;
+  }
+  if (group.kind === "tools" || group.kind === "message_group") {
+    return group.entries.some((entry) => transcriptEntryTurnId(entry) === turnId);
+  }
+  return transcriptEntryTurnId(group.entry) === turnId;
+}
+
+function insertActiveTurnThinkingGroups(
+  groups: EntryGroup[],
+  thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
+  fallbackIndexes: Map<string, number>,
+): EntryGroup[] {
+  if (thinkingGroups.length === 0) return groups;
+  const out = [...groups];
+  for (const thinking of thinkingGroups) {
+    const turnId = thinking.turnId.trim();
+    let latestTurnGroupIndex = -1;
+    for (let index = 0; index < out.length; index += 1) {
+      if (entryGroupIncludesTurn(out[index]!, turnId)) {
+        latestTurnGroupIndex = index;
+      }
+    }
+    const fallbackIndex = Math.min(
+      Math.max(fallbackIndexes.get(turnId) ?? out.length, 0),
+      out.length,
+    );
+    const insertIndex =
+      latestTurnGroupIndex >= 0 ? latestTurnGroupIndex + 1 : fallbackIndex;
+    out.splice(insertIndex, 0, thinking);
+  }
+  return out;
+}
+
 function groupTranscriptEntries(
   entries: TranscriptEntry[],
   condenseCompletedTurns = true,
@@ -3984,6 +4025,8 @@ function groupTranscriptEntries(
   const activityHiddenEntryIds = new Set<string>();
   if (hasProjectedTurnActivity) {
     const insertedThinkingTurnIds = new Set<string>();
+    const pendingThinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[] = [];
+    const pendingThinkingFallbackIndexes = new Map<string, number>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
@@ -3991,7 +4034,8 @@ function groupTranscriptEntries(
         if (group) {
           for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
           if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
-            groups.push(turnThinkingGroup(group.turnId, entry));
+            pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
+            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
         }
@@ -4001,7 +4045,11 @@ function groupTranscriptEntries(
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
-    return groups;
+    return insertActiveTurnThinkingGroups(
+      groups,
+      pendingThinkingGroups,
+      pendingThinkingFallbackIndexes,
+    );
   }
   for (const entry of entries) {
     pushTranscriptEntryGroup(groups, entry, bucket);
