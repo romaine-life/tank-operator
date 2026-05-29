@@ -5378,6 +5378,7 @@ button:disabled {
 .run-composer-textarea {
   min-height: 3rem !important;
   max-height: 14rem !important;
+  resize: none !important;
   padding: 0.75rem 1rem !important;
   font-family: var(--font-primary) !important;
   font-size: var(--run-chat-font-sm) !important;
@@ -7498,7 +7499,7 @@ textarea.run-files-viewer-editor:focus {
 .run-composer textarea {
   min-height: 7rem;
   max-height: 14rem;
-  resize: vertical;
+  resize: none;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
