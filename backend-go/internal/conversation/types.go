@@ -27,9 +27,13 @@ const (
 //
 //   - absent          -> the interactive human owner typed it; the renderer
 //     draws the owner's Gravatar (unchanged default).
-//   - AuthorKindSystem -> an auth.romaine.life automation (bot) token
-//     submitted it; the renderer draws the session's
-//     system identity instead of the human owner.
+//   - AuthorKindSystem -> a non-interactive principal submitted it: the
+//     k8s-exchange service identity that launches
+//     sessions (role=service) or a human-minted
+//     break-glass token (purpose=bot). The renderer
+//     draws the session's system identity instead of
+//     the human owner. See cmd/tank-operator
+//     authorKindForUser for the edge mapping.
 //
 // origin_session_id (a sibling tank-operator session via the mcp-tank-operator
 // handoff) takes precedence when both are present. AuthorKind carries no

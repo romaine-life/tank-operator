@@ -652,13 +652,17 @@ type sdkTurnRequest struct {
 }
 
 // authorKindForUser maps an authenticated caller to the durable AuthorKind
-// stamped on the user_message.created event. Bot tokens (purpose=bot) are
-// attributed to the session's system identity; every interactive human caller
-// returns empty so their Gravatar continues to render. Returns a string (not
-// the typed constant) because it flows through sdkTurnRequest into the
-// conversation event map as a plain field.
+// stamped on the user_message.created event. Non-interactive principals — the
+// k8s-exchange service identity that programmatically launches sessions
+// (role=service, used by mcp-tank-operator spawn, Glimmung dispatch, and test
+// slots) and human-minted break-glass bot/service tokens (purpose=bot) — are
+// attributed to the session's system identity. Every interactive human caller
+// (role=user/admin without purpose=bot) returns empty so their Gravatar
+// continues to render. Returns a string (not the typed constant) because it
+// flows through sdkTurnRequest into the conversation event map as a plain
+// field.
 func authorKindForUser(user auth.User) string {
-	if user.IsBot() {
+	if user.IsService() || user.IsBot() {
 		return string(conversation.AuthorKindSystem)
 	}
 	return ""

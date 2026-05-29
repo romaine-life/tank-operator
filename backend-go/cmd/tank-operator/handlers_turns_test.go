@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
 	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
@@ -685,6 +686,34 @@ func TestEnqueueSessionTurnStampsOriginSessionID(t *testing.T) {
 		if got, _ := event["origin_session_id"].(string); got != "42" {
 			t.Fatalf("event %q origin_session_id = %q, want 42", event["type"], got)
 		}
+	}
+}
+
+// TestAuthorKindForUser pins the principal taxonomy that maps an authenticated
+// caller to the durable author_kind stamped on user_message.created. The two
+// non-interactive principals — the k8s-exchange service identity that launches
+// sessions (role=service) and human-minted break-glass tokens (purpose=bot) —
+// resolve to "system"; ordinary interactive humans resolve to empty so their
+// Gravatar still renders. A drift here is exactly the "user bubble borrows the
+// wrong avatar" regression this feature exists to prevent.
+func TestAuthorKindForUser(t *testing.T) {
+	tests := []struct {
+		name string
+		user auth.User
+		want string
+	}{
+		{name: "service principal", user: auth.User{Role: auth.RoleService, ActorEmail: "owner@example.com"}, want: string(conversation.AuthorKindSystem)},
+		{name: "admin bot token", user: auth.User{Role: auth.RoleAdmin, Purpose: auth.PurposeBot}, want: string(conversation.AuthorKindSystem)},
+		{name: "service bot token", user: auth.User{Role: auth.RoleService, Purpose: auth.PurposeBot, ActorEmail: "owner@example.com"}, want: string(conversation.AuthorKindSystem)},
+		{name: "interactive user", user: auth.User{Role: auth.RoleUser, Email: "human@example.com"}, want: ""},
+		{name: "interactive admin", user: auth.User{Role: auth.RoleAdmin, Email: "admin@example.com"}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := authorKindForUser(tt.user); got != tt.want {
+				t.Fatalf("authorKindForUser(%+v) = %q, want %q", tt.user, got, tt.want)
+			}
+		})
 	}
 }
 
