@@ -42,6 +42,7 @@ import {
   BotIcon,
   BrainIcon,
   CalendarIcon,
+  CameraIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
@@ -2801,11 +2802,32 @@ function isToolSearchEntry(entry: TranscriptEntry): boolean {
   return normalized.includes("toolsearch");
 }
 
+function normalizeToolIconName(value: string | undefined): string {
+  return (value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isScreenshotToolEntry(entry: TranscriptEntry): boolean {
+  const action = normalizeToolIconName(entry.toolAction);
+  if (action === "screenshot" || action.endsWith("screenshot")) {
+    return true;
+  }
+  const name = normalizeToolIconName(entry.toolName);
+  return (
+    name === "screenshot" ||
+    name.endsWith("screenshot") ||
+    name.includes("takescreenshot") ||
+    name.includes("capturescreenshot")
+  );
+}
+
 /** Map a tool entry to a Lucide icon + badge treatment. */
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
   if (isToolSearchEntry(entry)) {
     return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
+  }
+  if (isScreenshotToolEntry(entry)) {
+    return { Icon: CameraIcon, colorClass: "tool-color-search", tooltip: "Screenshot tool call" };
   }
   if (entry.toolKind === "mcp") {
     return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };

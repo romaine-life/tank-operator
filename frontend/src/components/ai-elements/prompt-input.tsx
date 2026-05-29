@@ -42,9 +42,9 @@ import {
 import { cn } from "@/lib/utils";
 import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
+  CameraIcon,
   CornerDownLeftIcon,
   ImageIcon,
-  Monitor,
   PlusIcon,
   SquareIcon,
   XIcon,
@@ -475,7 +475,7 @@ export const PromptInputActionAddScreenshot = ({
 
   return (
     <DropdownMenuItem {...props} onSelect={handleSelect}>
-      <Monitor className="mr-2 size-4" />
+      <CameraIcon className="mr-2 size-4" />
       {label}
     </DropdownMenuItem>
   );

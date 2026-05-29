@@ -5,6 +5,7 @@
 
 import {
   BotIcon,
+  CameraIcon,
   ClipboardListIcon,
   FileDiffIcon,
   FileTextIcon,
@@ -36,6 +37,7 @@ const TOOL_ICON_SAMPLES: { Icon: LucideIcon; colorClass: string; label: string }
   { Icon: FileDiffIcon, colorClass: "tool-color-edit", label: "diff" },
   { Icon: SearchIcon, colorClass: "tool-color-search", label: "search" },
   { Icon: GlobeIcon, colorClass: "tool-color-search", label: "web" },
+  { Icon: CameraIcon, colorClass: "tool-color-search", label: "screenshot" },
   { Icon: ListChecksIcon, colorClass: "tool-color-todo", label: "todo" },
   { Icon: MessageSquareIcon, colorClass: "tool-color-todo", label: "ask" },
   { Icon: BotIcon, colorClass: "tool-color-task", label: "task" },
