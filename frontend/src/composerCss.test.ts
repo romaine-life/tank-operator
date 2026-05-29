@@ -19,3 +19,14 @@ test("chat composer textarea does not expose a native resize handle", () => {
   assert.match(cssRule(".run-composer textarea"), /resize:\s*none;/);
   assert.doesNotMatch(cssRule(".run-composer textarea"), /resize:\s*vertical;/);
 });
+
+test("chat composer cost estimate keeps a fixed-width footprint", () => {
+  const composerRule = cssRule(".run-cost-estimate");
+  assert.match(composerRule, /width:\s*4\.75rem;/);
+  assert.match(composerRule, /flex:\s*0\s+0\s+4\.75rem;/);
+  assert.match(composerRule, /white-space:\s*nowrap;/);
+
+  const turnRule = cssRule(".run-turn-view-summary .run-cost-estimate");
+  assert.match(turnRule, /width:\s*auto;/);
+  assert.match(turnRule, /flex:\s*0\s+0\s+auto;/);
+});
