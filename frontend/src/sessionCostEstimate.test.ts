@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   estimateTranscriptCost,
   estimateTranscriptCostUSD,
+  estimateTurnCost,
   estimateUsageCostUSD,
   formatComposerCostUsd,
 } from "./sessionCostEstimate";
@@ -97,6 +98,17 @@ test("reported usage wins over visible text fallback for the same turn", () => {
 
   assert.equal(estimate?.basis, "reported_usage");
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
+});
+
+test("estimates one selected turn from mixed transcript rows", () => {
+  const estimate = estimateTurnCost([
+    { id: "a", turnId: "turn-1", turnUsage: { input_tokens: 10_000, output_tokens: 10_000 } },
+    { id: "b", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
+    { id: "c", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
+  ], "gpt-5.4-mini", "turn-2");
+
+  assert.equal(estimate?.basis, "reported_usage");
+  assertNearlyEqual(estimate?.amountUsd ?? null, 0.0105);
 });
 
 test("formats compact composer costs", () => {

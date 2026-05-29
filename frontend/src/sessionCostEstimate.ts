@@ -74,6 +74,19 @@ export function estimateTranscriptCostUSD(rows: UsageRow[], modelId: string): nu
   return estimateTranscriptCost(rows, modelId)?.amountUsd ?? null;
 }
 
+export function estimateTurnCost(
+  rows: UsageRow[],
+  modelId: string,
+  turnId: string,
+): SessionCostEstimate | null {
+  const targetTurnId = turnId.trim();
+  if (!targetTurnId) return null;
+  return estimateTranscriptCost(
+    rows.filter((row) => row.turnId === targetTurnId),
+    modelId,
+  );
+}
+
 export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
   let total = 0;
   let reportedTurns = 0;

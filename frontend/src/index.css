@@ -3578,6 +3578,13 @@ button:disabled {
   color: #bfdbfe;
 }
 
+.run-turn-view-summary .run-cost-estimate {
+  min-width: auto;
+  height: auto;
+  box-shadow: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .run-turn-view-body {
   min-height: 0;
   overflow: auto;

@@ -245,9 +245,11 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         </Select>
       </div>
       <div className="run-turn-view-summary">
-        <span data-active="true">running</span>
-        <span>1 running shell / 1 edit candidate / 2 progress notes</span>
+        <span>complete</span>
+        <span>1 shell / 1 edit candidate / 2 progress notes</span>
         <span>19:04:14</span>
+        <span>19:10:26</span>
+        <span className="run-cost-estimate" aria-label="Estimated turn cost">$0.12</span>
       </div>
       <div className="run-turn-view-body run-transcript run-transcript-claude">
         <RunningTool highlighted={highlighted} />
