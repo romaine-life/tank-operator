@@ -16,6 +16,11 @@ import {
   type Components as StreamdownComponents,
 } from "streamdown";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
+import {
+  mergeSdkTranscript,
+  pruneLocalRealtimeEchoes,
+  pruneRealtimeEntries,
+} from "./transcriptMerge";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
@@ -3585,122 +3590,7 @@ function numericRecordValue(record: Record<string, unknown>, key: string): numbe
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function entryMessageFingerprint(entry: TranscriptEntry): string | null {
-  if (entry.kind !== "message" || !entry.role || !entry.text) return null;
-  const text = entry.text.trim();
-  return text ? `${entry.role}:${text}` : null;
-}
-
-function entryMetaFingerprint(entry: TranscriptEntry): string | null {
-  if (entry.kind !== "meta") return null;
-  return [
-    entry.meta?.title ?? "",
-    entry.meta?.detail ?? "",
-    entry.meta?.severity ?? "",
-  ].join("\u0000");
-}
-
-function shouldDropRealtimeEntry(
-  entry: TranscriptEntry,
-  serverIds: Set<string>,
-  serverEventIds: Set<string>,
-  serverMetaFingerprints: Set<string>,
-  serverMessageFingerprints: Set<string>,
-): boolean {
-  if (serverIds.has(entry.id)) return true;
-  if (entry.sourceEventId && serverEventIds.has(entry.sourceEventId)) return true;
-  const messageFingerprint = entryMessageFingerprint(entry);
-  if (
-    entry.localOnly &&
-    messageFingerprint &&
-    serverMessageFingerprints.has(messageFingerprint)
-  ) {
-    return true;
-  }
-  const metaFingerprint = entryMetaFingerprint(entry);
-  return Boolean(
-    metaFingerprint &&
-      entry.localOnly &&
-      serverMetaFingerprints.has(metaFingerprint),
-  );
-}
-
-function pruneRealtimeEntries(
-  server: TranscriptEntry[],
-  realtime: TranscriptEntry[],
-): TranscriptEntry[] {
-  if (server.length === 0) return realtime;
-  const serverIds = new Set(server.map((entry) => entry.id));
-  const serverEventIds = new Set(
-    server.map((entry) => entry.sourceEventId).filter((id): id is string => Boolean(id)),
-  );
-  const serverMetaFingerprints = new Set(
-    server
-      .map(entryMetaFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  const serverMessageFingerprints = new Set(
-    server
-      .map(entryMessageFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  return realtime.filter(
-    (entry) =>
-      !shouldDropRealtimeEntry(
-        entry,
-        serverIds,
-        serverEventIds,
-        serverMetaFingerprints,
-        serverMessageFingerprints,
-      ),
-  );
-}
-
-function pruneLocalRealtimeEchoes(realtime: TranscriptEntry[]): TranscriptEntry[] {
-  const nonLocalMessageFingerprints = new Set(
-    realtime
-      .filter((entry) => !entry.localOnly)
-      .map(entryMessageFingerprint)
-      .filter((fingerprint): fingerprint is string => fingerprint !== null),
-  );
-  if (nonLocalMessageFingerprints.size === 0) return realtime;
-  return realtime.filter((entry) => {
-    if (!entry.localOnly) return true;
-    const fingerprint = entryMessageFingerprint(entry);
-    return !fingerprint || !nonLocalMessageFingerprints.has(fingerprint);
-  });
-}
-
-function dedupeAdjacentAssistantEchoes(entries: TranscriptEntry[]): TranscriptEntry[] {
-  const out: TranscriptEntry[] = [];
-  for (const entry of entries) {
-    const prev = out[out.length - 1];
-    if (
-      prev?.kind === "message" &&
-      entry.kind === "message" &&
-      prev.role === "assistant" &&
-      entry.role === "assistant" &&
-      prev.text?.trim() &&
-      prev.text.trim() === entry.text?.trim()
-    ) {
-      out[out.length - 1] = entry.transcriptSource === "server" ? entry : prev;
-      continue;
-    }
-    out.push(entry);
-  }
-  return out;
-}
-
-function mergeSdkTranscript(
-  server: TranscriptEntry[],
-  realtime: TranscriptEntry[],
-): TranscriptEntry[] {
-  if (realtime.length === 0) return server;
-  const extra = pruneRealtimeEntries(server, realtime);
-  if (server.length === 0) return dedupeAdjacentAssistantEchoes(extra);
-  if (extra.length === 0) return server;
-  return dedupeAdjacentAssistantEchoes([...server, ...extra]);
-}
+// Transcript merge/dedup helpers live in ./transcriptMerge (extracted for unit tests).
 
 function mergeProjectedTranscriptWindows(
   older: TranscriptEntry[],
