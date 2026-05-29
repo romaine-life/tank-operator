@@ -137,6 +137,12 @@ spec:
               value: {{ .Values.postgres.database | quote }}
             - name: POSTGRES_USER
               value: {{ .Values.postgres.user | quote }}
+            # Production owns the shared schema. Test slots still read the
+            # shared database for realistic validation data, but must not apply
+            # unmerged schema migrations to it. This is derived from isTestEnv
+            # so new slots inherit the invariant automatically.
+            - name: RUN_MIGRATIONS
+              value: {{ ternary "false" "true" (eq (include "tank-operator.isTestEnv" .) "true") | quote }}
             # Private avatar image object storage. Postgres stores only
             # metadata/blob keys; the orchestrator reads and writes blobs
             # through workload identity and serves them via authenticated

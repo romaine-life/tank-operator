@@ -381,3 +381,34 @@ func signedMainToken(t *testing.T, _ /*unused secret arg*/, email string) string
 	}
 	return tok
 }
+
+func TestEnvBoolDefaultRunMigrationsContract(t *testing.T) {
+	const key = "RUN_MIGRATIONS_TEST_FLAG"
+	cases := []struct {
+		name string
+		set  bool
+		val  string
+		want bool
+	}{
+		{name: "unset defaults on", set: false, want: true},
+		{name: "empty defaults on", set: true, val: "", want: true},
+		{name: "garbage defaults on", set: true, val: "maybe", want: true},
+		{name: "explicit false disables", set: true, val: "false", want: false},
+		{name: "zero disables", set: true, val: "0", want: false},
+		{name: "no disables", set: true, val: "NO", want: false},
+		{name: "true enables", set: true, val: "true", want: true},
+		{name: "one enables", set: true, val: "1", want: true},
+		{name: "yes enables", set: true, val: "  Yes  ", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Unsetenv(key)
+			if tc.set {
+				t.Setenv(key, tc.val)
+			}
+			if got := envBoolDefault(key, true); got != tc.want {
+				t.Fatalf("envBoolDefault(%q=%q, true) = %v, want %v", key, tc.val, got, tc.want)
+			}
+		})
+	}
+}
