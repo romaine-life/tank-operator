@@ -218,6 +218,29 @@ All metric names are prefixed `tank_`. The full namespace:
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
+- `tank_schema_migration*` — startup schema-migration engine
+  (`pgstore.RunMigrationsWithMetrics`) counters emitted once per boot,
+  before the HTTP/`/metrics` server comes up. `tank_schema_migrations_pending`
+  (gauge) is the count detected un-applied at this process's boot;
+  `tank_schema_migrations_applied_total` / `tank_schema_migrations_skipped_total`
+  count migrations applied vs. skipped-as-already-recorded;
+  `tank_schema_migration_apply_duration_seconds` (histogram) times each
+  applied migration. The steady-state contract these prove: every boot
+  skips the full set and applies zero — the durable `schema_migrations`
+  ledger replaced the retired engine that re-ran all statements (incl.
+  full-table backfills) on every boot under one shared timeout and
+  crashlooped on the slow ones. `tank_schema_migration_failures_total{id}`
+  carries the bounded, slow-growing migration `id` (`0001`…), within the
+  cardinality budget. Caveat: a failed migration `os.Exit(1)`s *before*
+  the metrics server starts, so a failure is not scrapeable — the
+  observable failure signal is the pod crashloop (kube-prometheus-stack's
+  `KubePodCrashLooping`) plus the orchestrator slog
+  `postgres schema migration failed` line, which names the failing
+  migration id and the underlying error. The apply-once-then-skip
+  behavior itself is proven by the DSN-gated
+  `TestLedgerAppliesOnceThenSkips` integration test, and the engine shape
+  is pinned by the `TestMigrationEngineRetiredPathStaysOut` reintroduction
+  guard.
 
 ## Scripted access via Grafana
 

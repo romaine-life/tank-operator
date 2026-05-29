@@ -1731,6 +1731,55 @@ func hermesTranslatorErrorLabel(raw string) string {
 	}
 }
 
+// --- Schema-migration engine metrics ---
+//
+// Steady-state expectation: pending gauge sits at 0, the applied counter is
+// flat, and the duration histogram is empty — a healthy boot applies no
+// migrations (one ledger SELECT). A new-migration deploy bumps applied and
+// records duration once per database. The failure counter is the alerting
+// surface for the crashloop class this engine replaced; it carries the
+// migration ID (a bounded, slow-growing set) only on the rare failure path,
+// within the docs/observability.md cardinality budget.
+var (
+	schemaMigrationsPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_schema_migrations_pending",
+		Help: "Migrations not yet recorded in the schema_migrations ledger at the start of the most recent run.",
+	})
+	schemaMigrationsAppliedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_schema_migrations_applied_total",
+		Help: "Migrations applied and recorded in the durable ledger (each runs exactly once per database).",
+	})
+	schemaMigrationsSkippedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_schema_migrations_skipped_total",
+		Help: "Already-applied migrations skipped via the ledger (the steady-state path that replaced re-running every statement on every boot).",
+	})
+	schemaMigrationApplyDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_schema_migration_apply_duration_seconds",
+		Help:    "Per-migration apply duration, including the one-shot data backfills.",
+		Buckets: []float64{.01, .05, .1, .5, 1, 5, 15, 30, 60, 120},
+	})
+	schemaMigrationFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_schema_migration_failures_total",
+		Help: "Migration apply failures at startup, labeled by migration ID. Any non-zero value precedes a crashloop.",
+	}, []string{"id"})
+)
+
+// promMigrationMetrics satisfies pgstore.MigrationMetrics so the migration
+// engine can record startup behavior without importing prometheus.
+type promMigrationMetrics struct{}
+
+func (promMigrationMetrics) SetMigrationsPending(n int) {
+	schemaMigrationsPending.Set(float64(n))
+}
+func (promMigrationMetrics) RecordMigrationApplied(seconds float64) {
+	schemaMigrationsAppliedTotal.Inc()
+	schemaMigrationApplyDurationSeconds.Observe(seconds)
+}
+func (promMigrationMetrics) RecordMigrationSkipped() { schemaMigrationsSkippedTotal.Inc() }
+func (promMigrationMetrics) RecordMigrationFailed(id string) {
+	schemaMigrationFailuresTotal.WithLabelValues(id).Inc()
+}
+
 // promNATSConnectionMetrics satisfies sessionbus.ConnectionMetrics so the
 // bus can record connection lifecycle events without importing prometheus.
 type promNATSConnectionMetrics struct{}
@@ -1758,6 +1807,7 @@ var (
 	_ sessionbus.WakeMetrics                    = promWakeMetrics{}
 	_ sessionbus.ConnectionMetrics              = promNATSConnectionMetrics{}
 	_ pgstore.SQLMetrics                        = promPGMetrics{}
+	_ pgstore.MigrationMetrics                  = promMigrationMetrics{}
 	_ pgstats.Metrics                           = promPGStatsMetrics{}
 	_ sessioncontroller.K8sWatchMetrics         = promK8sWatchMetrics{}
 	_ sessioncontroller.RowWriterMetrics        = promRowWriterMetrics{}

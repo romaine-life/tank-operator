@@ -235,13 +235,16 @@ func main() {
 	// nil and the build* helpers below fall back to in-memory stubs.
 	pgPool := buildPostgresPool(azCred)
 	if pgPool != nil {
-		// 30s was tight under contention on a B1ms Postgres when both
-		// orchestrator replicas restart simultaneously; 5m bounds the
-		// startup wait while still failing fast on a genuinely stuck
-		// migration. The migration set is idempotent — retry on
-		// subsequent boots is safe.
+		// The ledger-backed engine applies only un-recorded migrations, so a
+		// steady-state boot is a single SELECT — not the every-boot re-run of
+		// all statements (incl. full-table backfills) that crashlooped under
+		// the old engine. The generous overall budget covers the rare boot that
+		// introduces a new migration (each migration is independently bounded
+		// by pgstore.perMigrationTimeout); it stays bounded so an
+		// unreachable/stuck database crashloops visibly instead of hanging
+		// startup forever.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		if err := pgstore.RunMigrations(ctx, pgPool); err != nil {
+		if err := pgstore.RunMigrationsWithMetrics(ctx, pgPool, promMigrationMetrics{}); err != nil {
 			cancel()
 			slog.Error("postgres schema migration failed", "error", err)
 			os.Exit(1)
