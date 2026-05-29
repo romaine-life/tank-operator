@@ -7,6 +7,7 @@ import {
   estimateTurnCost,
   estimateUsageCostUSD,
   formatComposerCostUsd,
+  formatTurnCostUsd,
 } from "./sessionCostEstimate";
 
 function assertNearlyEqual(actual: number | null, expected: number): void {
@@ -117,4 +118,12 @@ test("formats compact composer costs", () => {
   assert.equal(formatComposerCostUsd(0.025), "$0.03");
   assert.equal(formatComposerCostUsd(1.2345), "$1.23");
   assert.equal(formatComposerCostUsd(12.345), "$12.35");
+});
+
+test("formats tiny turn costs without rounding nonzero usage to zero", () => {
+  assert.equal(formatTurnCostUsd(0), "$0.00");
+  assert.equal(formatTurnCostUsd(0.000012), "<$0.0001");
+  assert.equal(formatTurnCostUsd(0.00012), "$0.0001");
+  assert.equal(formatTurnCostUsd(0.0012), "$0.001");
+  assert.equal(formatTurnCostUsd(0.012), "$0.01");
 });

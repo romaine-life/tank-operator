@@ -123,6 +123,15 @@ export function formatComposerCostUsd(value: number): string {
   return `$${safeValue.toFixed(2)}`;
 }
 
+export function formatTurnCostUsd(value: number): string {
+  const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (safeValue === 0) return "$0.00";
+  if (safeValue < 0.0001) return "<$0.0001";
+  if (safeValue < 0.001) return `$${safeValue.toFixed(4)}`;
+  if (safeValue < 0.01) return `$${safeValue.toFixed(3)}`;
+  return formatComposerCostUsd(safeValue);
+}
+
 function costFromTokens(tokens: number, ratePerMillion: number): number {
   return (Math.max(0, tokens) / PER_MILLION) * ratePerMillion;
 }

@@ -205,6 +205,7 @@ import {
   estimateTranscriptCost,
   estimateTurnCost,
   formatComposerCostUsd,
+  formatTurnCostUsd,
   type SessionCostEstimate,
   type SessionCostEstimateBasis,
 } from "./sessionCostEstimate";
@@ -1462,8 +1463,12 @@ function ComposerCostEstimate({
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder || amountUsd === null;
-  const label = unavailable ? "$--" : formatComposerCostUsd(amountUsd);
   const normalizedScope = scopeLabel.trim() || "session";
+  const label = unavailable
+    ? "$--"
+    : normalizedScope === "turn"
+      ? formatTurnCostUsd(amountUsd)
+      : formatComposerCostUsd(amountUsd);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage or transcript text is available"
