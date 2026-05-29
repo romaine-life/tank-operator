@@ -429,6 +429,29 @@ function writeSessionViewScopePreference(scope: string): void {
   }
 }
 
+// Initial value for the prod-session-view override. A `?session_view=prod`
+// query param is an admin deep-link into the prod-session view: it sets the
+// override before first render and persists it so in-app navigation keeps the
+// choice. `?session_view=local` (or any other value) clears it. The deep-link
+// exists so the view is reachable without the Settings toggle — bookmarkable
+// for admins, and drivable by URL-only browser automation (the slot Playwright
+// inspector can seed a URL but not click the toggle). The admin-capability
+// gate (`canViewProdSessions`) still applies downstream, so a non-admin
+// deep-link is inert and gets reconciled away by the clearing effect.
+function readInitialSessionViewScopeOverride(): string {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("session_view");
+    if (raw !== null) {
+      const next = raw === "prod" ? PROD_SESSION_SCOPE : "";
+      writeSessionViewScopePreference(next);
+      return next;
+    }
+  } catch {
+    // ignore malformed URL / missing window
+  }
+  return readSessionViewScopePreference();
+}
+
 function appendQueryParam(path: string, key: string, value: string): string {
   const [base, query = ""] = path.split("?");
   const params = new URLSearchParams(query);
@@ -7285,6 +7308,7 @@ export function RunMessages({
   scrollParent,
   onStartReached,
   onAtBottomChange,
+  followLiveTail = true,
   scrollToLatestSignal,
   scrollToLatestBehavior = "smooth",
   scrollToLatestReason = "manual",
@@ -7327,6 +7351,13 @@ export function RunMessages({
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
   onAtBottomChange?: (atBottom: boolean) => void;
+  // Durable navigation mode projected to a single layout decision: should
+  // the virtualized list stick to the live tail as new rows append? This is
+  // sourced from the NavigationMode state machine (live-tail vs
+  // historical-anchor), NOT from a DOM at-bottom heuristic. When false the
+  // list never auto-scrolls on output — a reader anchored in history is not
+  // yanked to the tail by load/ready/resync row growth.
+  followLiveTail?: boolean;
   scrollToLatestSignal?: number;
   scrollToLatestBehavior?: ScrollToLatestBehavior;
   scrollToLatestReason?: ScrollToLatestReason;
@@ -7713,11 +7744,24 @@ export function RunMessages({
     },
     [entries.length, groups, onAtBottomChange, scrollParent, sessionId, sessionMode, telemetrySurface],
   );
-  // followOutput="smooth" keeps the user stuck to the live tail when they
-  // ARE at the bottom; releases when they scroll up. Returning false from
-  // followOutput's callback would let us suppress auto-scroll mid-render,
-  // but the default behavior matches what ChatPane wants today (sticky
-  // when at bottom; the buffered pill in ChatPane handles back-read).
+  // followOutput is gated on the durable navigation mode, not on a
+  // hardcoded "smooth" or a DOM at-bottom heuristic:
+  //
+  //   - live-tail  → "auto" (instant stick to the tail as rows append).
+  //     Instant, not smooth: smooth animated every length change during
+  //     the open/load/resync row storm, which read to users as the
+  //     transcript "zipping around" before it settled. An instant snap to
+  //     the measured bottom reads as "it's just at the bottom" and
+  //     satisfies the contract's "load/ready/resync must not introduce
+  //     scroll jumps" check (a settle to the correct bottom is not a
+  //     jump; an animated chase is).
+  //   - historical-anchor → false (never auto-scroll). A reader anchored
+  //     in history is never yanked to the tail by row growth; the buffered
+  //     pill in ChatPane surfaces new activity instead.
+  //
+  // Explicit user gestures (End key, scroll-to-latest button, jump-latest)
+  // still animate via the scrollToLatest signal with behavior="smooth" —
+  // that motion is intended and requested, unlike the implicit follow.
   // startReached fires when the user scrolls within ~`overscan` of the
   // top — Virtuoso debounces this so rapid scroll doesn't spam fetches.
   return (
@@ -7729,18 +7773,19 @@ export function RunMessages({
       customScrollParent={scrollParent ?? undefined}
       computeItemKey={computeKey}
       itemContent={renderItem}
-      followOutput="smooth"
+      followOutput={followLiveTail ? "auto" : false}
       startReached={handleStartReached}
       atBottomStateChange={handleAtBottomChange}
       // Render two extra screens worth above and below the viewport so
       // tool-group expansion and markdown reflow don't expose unrendered
       // gaps mid-scroll.
       overscan={{ main: 800, reverse: 800 }}
-      // Default initialTopMostItemIndex is the first item; we want the
-      // bottom so caught-up sessions land at the live tail. The minus-1
-      // safeguards against empty arrays (Virtuoso accepts negative indices
-      // as "no anchor").
-      initialTopMostItemIndex={Math.max(groups.length - 1, 0)}
+      // Land deterministically at the bottom on first data application:
+      // bottom-align the last group rather than making it the topmost item.
+      // Virtuoso resolves this after it measures row heights, so a caught-up
+      // session lands at the true live tail in one step instead of landing
+      // short and then correcting. The Math.max safeguards empty arrays.
+      initialTopMostItemIndex={{ index: Math.max(groups.length - 1, 0), align: "end" }}
     />
   );
 }
@@ -8954,8 +8999,9 @@ function ChatPane({
     });
   }, [queuedMessages.length, running, session.mode]);
 
-  // Scroll behavior is owned by react-virtuoso now: `followOutput="smooth"`
-  // keeps the user pinned to the live tail when at-bottom, and
+  // Scroll behavior is owned by react-virtuoso now: followOutput is gated
+  // on the durable navigation mode (live-tail → instant follow,
+  // historical-anchor → no follow) via the followLiveTail prop, and
   // `atBottomStateChange(true)` is the one-way signal that returns the
   // navigation mode to live-tail when the user manually scrolls all
   // the way down. `atBottomStateChange(false)` is intentionally NOT
@@ -11896,6 +11942,7 @@ function ChatPane({
                 void loadSdkOlderEvents();
               }}
               onAtBottomChange={handleSdkAtBottomChange}
+              followLiveTail={navigationMode === "live-tail"}
               scrollToLatestSignal={
                 scrollToLatestRequest.enabled ? scrollToLatestRequest.signal : 0
               }
@@ -12401,6 +12448,7 @@ export function App() {
   const [booted, setBooted] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
+  const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -12592,7 +12640,7 @@ export function App() {
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
-    readSessionViewScopePreference,
+    readInitialSessionViewScopeOverride,
   );
   // The home composer's permission-mode pick. Carries into the first turn
   // when the user types a prompt and presses Enter from the home screen,
@@ -12778,7 +12826,10 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void fetchAppPublicConfig().then((config) => {
-      if (!cancelled) setAppConfig(config);
+      if (!cancelled) {
+        setAppConfig(config);
+        setAppConfigLoaded(true);
+      }
     });
     return () => {
       cancelled = true;
@@ -12786,10 +12837,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Only reconcile the persisted prod-view preference once we actually
+    // know the caller's admin capability and the live session scope. During
+    // the auth/config bootstrap window canViewProdSessions is transiently
+    // false (user === null, appConfig === {}), so clearing here would destroy
+    // an admin's persisted "view prod sessions" choice on every reload or
+    // deep link — the toggle would never survive a refresh. Gate on both the
+    // auth bootstrap (booted) and the public-config fetch (appConfigLoaded).
+    if (!booted || !appConfigLoaded) return;
     if (canViewProdSessions || !sessionViewScopeOverride) return;
     setSessionViewScopeOverride("");
     writeSessionViewScopePreference("");
-  }, [canViewProdSessions, sessionViewScopeOverride]);
+  }, [booted, appConfigLoaded, canViewProdSessions, sessionViewScopeOverride]);
 
   useEffect(() => {
     bootstrapAuth()

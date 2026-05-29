@@ -642,6 +642,30 @@ test("mounted chat reactivation resets local timeline state before bootstrap", (
   assert.match(appSource, /if \(timelineBootstrap\.status !== "idle"\) return;/);
 });
 
+test("live-tail follow is durable-mode gated and never hardcoded smooth", () => {
+  // Transcript-navigation contract — "Load, ready, reconnect, and resync do
+  // not introduce scroll jumps." The transcript's followOutput used to be a
+  // hardcoded "smooth", which animated the live-tail catch-up on every
+  // row-length change during the open/load/resync row storm. Users saw the
+  // transcript "zip around" before it settled. The follow is now:
+  //   - gated on the durable NavigationMode via the followLiveTail prop, so
+  //     a reader in historical-anchor is never auto-scrolled to the tail;
+  //   - instant ("auto"), so a live-tail settle to the measured bottom is a
+  //     single snap, not an animated chase.
+  // The hardcoded smooth follow is also blocked from reintroduction by
+  // scripts/check-removed-chat-runtime.mjs.
+  assert.equal(appSource.includes('followOutput="smooth"'), false);
+  assert.equal(appSource.includes('followOutput={followLiveTail ? "auto" : false}'), true);
+  assert.equal(appSource.includes('followLiveTail={navigationMode === "live-tail"}'), true);
+  // Deterministic single landing: the last group is bottom-aligned on first
+  // data application instead of being made the topmost item, so a caught-up
+  // session lands at the true tail in one measured step.
+  assert.match(
+    appSource,
+    /initialTopMostItemIndex=\{\{ index: Math\.max\(groups\.length - 1, 0\), align: "end" \}\}/,
+  );
+});
+
 test("chat submit explicitly lands at the latest message", () => {
   const startRunMatch = appSource.match(/function startRun\([\s\S]*?\n  \}/);
   assert.ok(startRunMatch, "startRun should be present");
